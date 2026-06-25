@@ -8,6 +8,8 @@ See the full [Technical Plan](Events-Attendance-Monitoring-System-Technical-Plan
 > **Status:** early mock build. Backend and frontend run independently on seeded mock data;
 > they are not yet wired together.
 
+🌐 **Live demo (web admin, mock data):** https://karl0308.github.io/EventAttendance/
+
 ## Repository layout
 
 | Folder | What | Stack |
