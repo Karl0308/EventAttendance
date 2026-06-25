@@ -1,0 +1,26 @@
+# --- .NET ---
+[Bb]in/
+[Oo]bj/
+*.user
+.vs/
+
+# --- Node / React ---
+node_modules/
+dist/
+dist-ssr/
+*.local
+
+# --- Logs ---
+*.log
+npm-debug.log*
+
+# --- Editor / OS ---
+.DS_Store
+Thumbs.db
+.idea/
+.qodo/
+
+# --- Env ---
+.env
+.env.*
+!.env.example
