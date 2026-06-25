@@ -1,5 +1,7 @@
 # Events Attendance Monitoring System (EAMS)
 
+[![CI](https://github.com/Karl0308/EventAttendance/actions/workflows/ci.yml/badge.svg)](https://github.com/Karl0308/EventAttendance/actions/workflows/ci.yml)
+
 Attendance monitoring for students with RFID integration — University of San Agustin / CICSS.
 See the full [Technical Plan](Events-Attendance-Monitoring-System-Technical-Plan.md).
 
