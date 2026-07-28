@@ -245,6 +245,105 @@ public class EventRosterTests : IntegrationTest
         await Assert.ThrowsAsync<DbUpdateException>(() => second.SaveChangesAsync());
     }
 
+    /// <summary>
+    /// <b>And the service's half, which is the one that was missing.</b> The index above protects the
+    /// data, but the service met the violation it raises with a bare <c>SaveChangesAsync</c> — so the
+    /// scenario <c>EamsDbContext</c> names in the index's own comment, an organizer double-submitting a
+    /// slow form, produced an unhandled <c>DbUpdateException</c> and a 500 on the losing request.
+    ///
+    /// <para>
+    /// The race is opened deterministically with EF's <c>SavingChanges</c> event, the same technique
+    /// <c>ManualOverrideTests</c> uses: it fires after the service has read what is attached and before
+    /// the insert reaches SQL Server, so the conflicting row is guaranteed to land inside the window
+    /// rather than probably landing there. A timing-based version would pass on a fast machine with the
+    /// defect still present.
+    /// </para>
+    ///
+    /// <para>
+    /// The assertion that carries the weight is the <em>shape</em> of the response, not merely that it
+    /// did not throw: the loser must return the idempotent <c>alreadyAttached</c> answer a sequential
+    /// re-post already returns, because that is what makes the two indistinguishable to a caller — which
+    /// is the entire claim in <c>IEventService.AttachAudienceAsync</c>'s "two concurrent posts cannot
+    /// both win".
+    /// </para>
+    /// </summary>
+    [Fact]
+    public async Task A_concurrent_double_submit_is_idempotent_rather_than_a_server_error()
+    {
+        var world = await ArrangeAsync();
+
+        await using var db = NewDbContext();
+        var raced = false;
+        db.SavingChanges += (_, _) =>
+        {
+            if (raced) return; // Only the first save — the retry's own insert must be allowed to land.
+            raced = true;
+
+            // The other submission of the same form, committing first.
+            using var rival = NewDbContext();
+            rival.EventGroups.Add(
+                new EventGroup { EventId = world.EventId, StudentGroupId = world.GroupA });
+            rival.SaveChanges();
+        };
+
+        var response = await EventsOn(db).AttachAudienceAsync(world.EventId, Groups(world.GroupA));
+
+        Assert.True(raced, "The race never fired, so this test proved nothing about it.");
+        Assert.Equal(EventWriteOutcome.Saved, response.Outcome);
+
+        // Exactly the shape a sequential re-post returns: nothing attached by us, one already there.
+        Assert.Equal(0, response.Result!.GroupsAttached);
+        Assert.Equal(1, response.Result.GroupsAlreadyAttached);
+        Assert.Equal(2, response.Result.Expected);
+
+        // And the rival's row is the only one — no duplicate, and nothing lost.
+        await using var read = NewDbContext();
+        Assert.Equal(world.GroupA, Assert.Single(await read.EventGroups.AsNoTracking().ToListAsync())
+            .StudentGroupId);
+    }
+
+    /// <summary>
+    /// A partially-overlapping double submit. Because the whole <c>SaveChanges</c> is one transaction,
+    /// losing on the shared group rolls back the un-shared one too — so a retry that assumed a total
+    /// loss and reported everything as already-attached would silently drop it. The diff is recomputed
+    /// against what is now committed instead, and the un-shared group really is attached.
+    /// </summary>
+    [Fact]
+    public async Task A_partially_overlapping_double_submit_still_attaches_the_rest()
+    {
+        var world = await ArrangeAsync();
+
+        await using var db = NewDbContext();
+        var raced = false;
+        db.SavingChanges += (_, _) =>
+        {
+            if (raced) return;
+            raced = true;
+
+            using var rival = NewDbContext();
+            rival.EventGroups.Add(
+                new EventGroup { EventId = world.EventId, StudentGroupId = world.GroupA });
+            rival.SaveChanges();
+        };
+
+        // We asked for both; the rival took A out from under us.
+        var response = await EventsOn(db).AttachAudienceAsync(
+            world.EventId, Groups(world.GroupA, world.GroupB));
+
+        Assert.True(raced, "The race never fired, so this test proved nothing about it.");
+        Assert.Equal(EventWriteOutcome.Saved, response.Outcome);
+        Assert.Equal(1, response.Result!.GroupsAttached);
+        Assert.Equal(1, response.Result.GroupsAlreadyAttached);
+        // All three students across both sections, de-duplicated.
+        Assert.Equal(3, response.Result.Expected);
+
+        await using var read = NewDbContext();
+        Assert.Equal(
+            new HashSet<Guid> { world.GroupA, world.GroupB },
+            (await read.EventGroups.AsNoTracking().ToListAsync())
+                .Select(eg => eg.StudentGroupId!.Value).ToHashSet());
+    }
+
     [Fact]
     public async Task An_empty_payload_is_a_no_op_rather_than_an_error()
     {
@@ -256,6 +355,45 @@ public class EventRosterTests : IntegrationTest
 
         Assert.Equal(EventWriteOutcome.Saved, response.Outcome);
         Assert.Equal(0, response.Result!.Expected);
+    }
+
+    /// <summary>
+    /// <b>An all-zero-GUID payload is a rejection, not a no-op.</b>
+    ///
+    /// <para>
+    /// <c>Guid.Empty</c> used to be filtered out silently while de-duplicating, and because the
+    /// requested count was taken <em>after</em> the drop, a payload naming nothing but zero GUIDs came
+    /// back "Saved, 0 attached" — a success for a request that referenced nothing that exists. It is
+    /// now indistinguishable from any other unresolvable id, which is what it is: a client sending one
+    /// has a bug, and being told beats being congratulated.
+    /// </para>
+    ///
+    /// <para>
+    /// Note this is <em>not</em> the same as the empty-list case above. Sending no ids is an organizer
+    /// clearing the form; sending a zero GUID is a caller that lost an id somewhere.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public async Task A_payload_of_zero_guids_is_refused_rather_than_silently_dropped()
+    {
+        var world = await ArrangeAsync();
+
+        await using var db = NewDbContext();
+        var events = EventsOn(db);
+
+        var groups = await events.AttachAudienceAsync(world.EventId, Groups(Guid.Empty));
+        Assert.Equal(EventWriteOutcome.UnknownReference, groups.Outcome);
+        Assert.Contains(Guid.Empty.ToString(), groups.Message, StringComparison.Ordinal);
+
+        var students = await events.AttachAudienceAsync(world.EventId, Students(Guid.Empty));
+        Assert.Equal(EventWriteOutcome.UnknownReference, students.Outcome);
+
+        // A zero GUID alongside a real id takes the whole payload with it, like any unknown reference.
+        var mixed = await events.AttachAudienceAsync(world.EventId, Groups(world.GroupA, Guid.Empty));
+        Assert.Equal(EventWriteOutcome.UnknownReference, mixed.Outcome);
+
+        await using var read = NewDbContext();
+        Assert.Equal(0, await read.EventGroups.CountAsync());
     }
 
     // ----------------------------------------------------------------------- refusals
@@ -700,6 +838,140 @@ public class EventRosterTests : IntegrationTest
         var summary = await EventsOn(read).GetSummaryAsync(world.EventId);
         Assert.Equal(roster.Present, summary!.Present);
         Assert.Equal(roster.Expected, summary.Expected);
+        Assert.Equal(roster.Unexpected, summary.Unexpected);
+    }
+
+    /// <summary>
+    /// <b>A walk-in cannot push the attendance rate above 100, and is still visible in the totals.</b>
+    ///
+    /// <para>
+    /// The rate used to divide every <c>Present</c> and <c>Late</c> row — walk-ins included — by a
+    /// denominator counting only the invited, so two tapping alumni on a fully-attended event of 29
+    /// produced 106.9%. Every underlying row was truthful and the headline number was impossible, which
+    /// is the same class of defect this phase existed to remove, arriving from the other direction.
+    /// </para>
+    ///
+    /// <para>
+    /// The signal is not discarded, it is moved somewhere that can carry it: <c>Unexpected</c> says how
+    /// many turned up uninvited, and the roster names them. Folding them into the rate said "something
+    /// is off" while corrupting the one number an operator reads first.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public async Task A_walk_in_cannot_push_the_attendance_rate_above_one_hundred()
+    {
+        var world = await ArrangeAsync();
+
+        await using (var db = NewDbContext())
+        {
+            // Everybody invited attends: the two students of section A.
+            await EventsOn(db).AttachAudienceAsync(world.EventId, Groups(world.GroupA));
+
+            db.AttendanceRecords.AddRange(
+                new AttendanceRecord
+                {
+                    EventId = world.EventId, StudentId = world.OnlyInA,
+                    CheckInAt = TestData.Now, Status = AttendanceStatus.Present,
+                },
+                new AttendanceRecord
+                {
+                    EventId = world.EventId, StudentId = world.InBoth,
+                    CheckInAt = TestData.Now, Status = AttendanceStatus.Present,
+                },
+                // And one who was never invited taps anyway — the alumnus at the turnstile.
+                new AttendanceRecord
+                {
+                    EventId = world.EventId, StudentId = world.OnlyInB,
+                    CheckInAt = TestData.Now, Status = AttendanceStatus.Present,
+                });
+            await db.SaveChangesAsync();
+        }
+
+        await using var read = NewDbContext();
+        var summary = await EventsOn(read).GetSummaryAsync(world.EventId);
+
+        Assert.Equal(2, summary!.Expected);
+        // Three rows exist and the buckets still count all three, so the summary keeps reconciling
+        // with GET /attendance?eventId=. It is the rate that narrowed, not the evidence.
+        Assert.Equal(3, summary.Present);
+        // Two of two invited students attended. Before the fix this read 150.
+        Assert.Equal(100, summary.AttendanceRate);
+        // The walk-in is surfaced rather than folded in or dropped.
+        Assert.Equal(1, summary.Unexpected);
+
+        // And the roster agrees about the same event — it always computed the denominator correctly,
+        // so the two used to disagree.
+        var roster = await EventsOn(read).GetRosterAsync(world.EventId);
+        Assert.Equal(summary.Expected, roster!.Expected);
+        Assert.Equal(summary.Unexpected, roster.Unexpected);
+        Assert.False(Assert.Single(roster.Entries, e => e.StudentId == world.OnlyInB).IsExpected);
+    }
+
+    /// <summary>
+    /// A partially-attended event with a walk-in: the rate reflects only the invited, so a walk-in
+    /// cannot inflate it at all — not merely "cannot take it past 100". One expected student of two
+    /// attended, and a third person tapping does not make that 100%.
+    /// </summary>
+    [Fact]
+    public async Task A_walk_in_does_not_inflate_a_partial_attendance_rate()
+    {
+        var world = await ArrangeAsync();
+
+        await using (var db = NewDbContext())
+        {
+            await EventsOn(db).AttachAudienceAsync(world.EventId, Groups(world.GroupA));
+            db.AttendanceRecords.AddRange(
+                new AttendanceRecord
+                {
+                    EventId = world.EventId, StudentId = world.OnlyInA,
+                    CheckInAt = TestData.Now, Status = AttendanceStatus.Present,
+                },
+                new AttendanceRecord
+                {
+                    EventId = world.EventId, StudentId = world.OnlyInB,
+                    CheckInAt = TestData.Now, Status = AttendanceStatus.Late,
+                });
+            await db.SaveChangesAsync();
+        }
+
+        await using var read = NewDbContext();
+        var summary = await EventsOn(read).GetSummaryAsync(world.EventId);
+
+        Assert.Equal(2, summary!.Expected);
+        Assert.Equal(1, summary.Present);
+        Assert.Equal(1, summary.Late);
+        Assert.Equal(1, summary.Unexpected);
+        // One invited attendee of two. The uninvited Late row is counted in the bucket and excluded
+        // from the numerator; before the fix this read 100.
+        Assert.Equal(50, summary.AttendanceRate);
+    }
+
+    /// <summary>
+    /// The numerator counts <c>Late</c> as attendance, which is the §12 definition and must survive the
+    /// narrowing. Pinned separately because an intersection written against <c>Present</c> alone would
+    /// pass every test above.
+    /// </summary>
+    [Fact]
+    public async Task An_invited_student_arriving_late_still_counts_as_attending()
+    {
+        var world = await ArrangeAsync();
+
+        await using (var db = NewDbContext())
+        {
+            await EventsOn(db).AttachAudienceAsync(world.EventId, Groups(world.GroupA));
+            db.AttendanceRecords.Add(new AttendanceRecord
+            {
+                EventId = world.EventId, StudentId = world.OnlyInA,
+                CheckInAt = TestData.Now.AddMinutes(30), Status = AttendanceStatus.Late,
+            });
+            await db.SaveChangesAsync();
+        }
+
+        await using var read = NewDbContext();
+        var summary = await EventsOn(read).GetSummaryAsync(world.EventId);
+
+        Assert.Equal(50, summary!.AttendanceRate);
+        Assert.Equal(0, summary.Unexpected);
     }
 
     /// <summary>

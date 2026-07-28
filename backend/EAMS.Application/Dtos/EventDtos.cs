@@ -94,18 +94,39 @@ public record EventAudienceResultDto(
 /// </summary>
 /// <param name="Expected">
 /// The invited population: every student in an attached group, plus every individually attached
-/// student, de-duplicated, excluding the soft-deleted. This is the denominator §4.5 and §12 mean, and
-/// it is <em>not</em> the length of <see cref="Entries"/> — a student who tapped without being invited
-/// is listed with <c>IsExpected = false</c> and is not counted here.
+/// student, de-duplicated. This is the denominator §4.5 and §12 mean, and it is <em>not</em> the length
+/// of <see cref="Entries"/> — a student who tapped without being invited is listed with
+/// <c>IsExpected = false</c> and is not counted here.
+///
+/// <para>
+/// While the event is live the soft-deleted are excluded: a student the roster says does not exist
+/// cannot be expected to attend. Once <see cref="IsFrozen"/> they are included, because by then this
+/// is a written-down record of who was invited and a student deleted next year must not retroactively
+/// shrink a past event's denominator.
+/// </para>
 /// </param>
 /// <param name="NotRecorded">
 /// Expected students with no attendance row at all. While the event is live this is the running
-/// absentee list; after the close it is zero, because closing materializes every one of them as an
-/// <c>Absent</c> record.
+/// absentee list; after a <em>close</em> it is zero, because closing materializes every one of them as
+/// an <c>Absent</c> record. After a <em>cancellation</em> it is the whole audience, and that is the
+/// honest answer: the invitation list was frozen, and nobody attended because the event did not happen.
+/// </param>
+/// <param name="Unexpected">
+/// Entries flagged <c>IsExpected = false</c> — recorded but never invited. The same number
+/// <c>GET /events/{id}/summary</c> reports under the same name, so the two views of one event agree
+/// about how many walk-ins it had.
 /// </param>
 /// <param name="IsFrozen">
-/// True once the event is <c>Closed</c>. The published statement that these numbers can no longer move
-/// on their own — a later roster import that adds students to an attached section does not change them.
+/// True once this event's audience has been snapshotted — both terminal statuses. The published
+/// statement that these numbers can no longer move on their own: a later roster import that adds
+/// students to an attached section does not change them.
+///
+/// <para>
+/// <b>It covers <c>Cancelled</c> as well as <c>Closed</c>, and did not always.</b> Cancelling now
+/// writes the resolved audience down exactly as closing does — it simply materializes no absentees —
+/// so a cancelled event's denominator is as fixed as a closed one's. Reporting <c>false</c> for it
+/// would be the same class of plausible-but-wrong published number this phase exists to remove.
+/// </para>
 /// </param>
 public record EventRosterDto(
     Guid EventId,
@@ -118,6 +139,7 @@ public record EventRosterDto(
     int Absent,
     int Excused,
     int NotRecorded,
+    int Unexpected,
     IReadOnlyList<EventRosterEntryDto> Entries);
 
 /// <summary>

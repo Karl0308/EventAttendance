@@ -58,17 +58,39 @@ public record TapResult(
 /// does not name. That is deliberate: these four must reconcile with
 /// <c>GET /attendance?eventId=</c> and with the roster, or the summary becomes a fifth opinion.
 /// </param>
-/// <param name="AttendanceRate">
-/// <c>(Present + Late) / Expected</c>, as a percentage to one decimal place; zero when
-/// <paramref name="Expected"/> is zero.
+/// <param name="Unexpected">
+/// Attendees who were recorded but never invited — walk-ins. Counted as <em>people</em>, so it is
+/// exactly the number of <c>GET /events/{id}/roster</c> entries flagged <c>isExpected: false</c>.
 ///
 /// <para>
-/// <b>It can exceed 100</b>, when more people tapped than were invited, and it is left uncapped on
-/// purpose. A rate over 100 is a self-describing signal that the audience is wrong or incomplete, and
-/// the roster names the walk-ins responsible; capping it, or narrowing the numerator to the invited
-/// students, would hide exactly that.
+/// <b>This is where the over-100% signal went, and it is a better one than the rate was.</b>
+/// <paramref name="AttendanceRate"/> used to divide every Present and Late row — walk-ins included —
+/// by a denominator that counted only the invited, so twenty-nine expected, twenty-nine present and
+/// two tapping alumni read 106.9%. Every underlying row was truthful and the headline number was
+/// impossible. Folding the walk-ins into the rate was the wrong place to surface them: it corrupted
+/// the one number an operator reads first, and it said "something is off" without saying how many or
+/// who. Counting them here says both, and the roster names them.
+/// </para>
+/// </param>
+/// <param name="AttendanceRate">
+/// The share of the <em>invited</em> who turned up: invited students with a <c>Present</c> or
+/// <c>Late</c> record, over <paramref name="Expected"/>, as a percentage to one decimal place. Zero
+/// when <paramref name="Expected"/> is zero.
+///
+/// <para>
+/// <b>It cannot exceed 100, structurally rather than by clamping.</b> Numerator and denominator are
+/// both computed over the expected set — the numerator as a SQL <c>INTERSECT</c> against it, which is
+/// distinct on both sides — so the numerator is a subset of the denominator by construction. No cap is
+/// applied and none is needed; a clamp would have hidden the arithmetic rather than fixed it.
+/// </para>
+///
+/// <para>
+/// Walk-ins are therefore <em>not</em> in this number. They are not discarded: see
+/// <paramref name="Unexpected"/>, and note that <paramref name="Present"/> and
+/// <paramref name="Late"/> still count every row on the event, so the buckets keep reconciling with
+/// <c>GET /attendance?eventId=</c> while the rate answers the question it is named for.
 /// </para>
 /// </param>
 public record EventSummaryDto(
     Guid EventId, string EventName, int Expected, int Present, int Late,
-    int Absent, int Excused, double AttendanceRate);
+    int Absent, int Excused, int Unexpected, double AttendanceRate);

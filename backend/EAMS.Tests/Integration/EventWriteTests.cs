@@ -336,9 +336,9 @@ public class EventWriteTests : IntegrationTest
     }
 
     /// <summary>
-    /// A cancelled event <em>can</em> be edited, and the asymmetry with the closed case is deliberate:
-    /// nothing was computed from a cancelled event, and "cancelled — venue flooded" is a legitimate
-    /// edit that the alternative would forbid for no gain.
+    /// A cancelled event's <em>descriptive</em> fields can still be edited. "Cancelled — venue flooded"
+    /// is the legitimate edit the allowance exists for, and it costs a well-behaved caller nothing: a
+    /// full PUT that leaves the scheduling fields as they are changes none of them.
     /// </summary>
     [Fact]
     public async Task A_cancelled_event_can_still_be_edited()
@@ -351,6 +351,95 @@ public class EventWriteTests : IntegrationTest
             eventId, Request(description: "Cancelled — venue flooded."));
 
         Assert.Equal(EventWriteOutcome.Saved, response.Outcome);
+
+        await using var read = NewDbContext();
+        Assert.Equal("Cancelled — venue flooded.",
+            (await read.Events.AsNoTracking().SingleAsync()).Description);
+    }
+
+    /// <summary>
+    /// <b>But its window and grace period cannot.</b> The allowance used to be justified as "nothing was
+    /// computed from a cancelled event", and that is false for <c>Open → Cancelled</c>: taps can already
+    /// exist by then, and <c>StartAt + GraceMinutes</c> has already decided Present-versus-Late for every
+    /// one of them. Moving them afterwards changes what those rows mean without changing the rows —
+    /// which is the exact reason a <c>Closed</c> event refuses the same edit.
+    /// </summary>
+    [Theory]
+    [InlineData("startAt")]
+    [InlineData("graceMinutes")]
+    [InlineData("attendanceMode")]
+    public async Task A_cancelled_events_attendance_rules_cannot_be_edited(string field)
+    {
+        var schoolId = await ArrangeSchoolAsync();
+        var eventId = await ArrangeEventAsync(schoolId, EventStatus.Cancelled);
+
+        var request = field switch
+        {
+            "startAt" => Request(startAt: TestData.Now.AddDays(1)),
+            "graceMinutes" => Request(graceMinutes: 45),
+            "attendanceMode" => Request(attendanceMode: AttendanceMode.TimeInOut),
+            _ => throw new ArgumentOutOfRangeException(nameof(field), field, "Unmapped field."),
+        };
+
+        await using var db = NewDbContext();
+        var response = await EventsOn(db).UpdateAsync(eventId, request);
+
+        Assert.Equal(EventWriteOutcome.EventLocked, response.Outcome);
+        // The message names what the caller tried to change, so "why was this refused" is answerable
+        // without reading the source.
+        Assert.Contains(field, response.Message, StringComparison.OrdinalIgnoreCase);
+
+        await using var read = NewDbContext();
+        var stored = await read.Events.AsNoTracking().SingleAsync();
+        Assert.Equal(TestData.Now, stored.StartAt);
+        Assert.Equal(15, stored.GraceMinutes);
+        Assert.Equal(AttendanceMode.Single, stored.AttendanceMode);
+    }
+
+    /// <summary>
+    /// The rule is gated on status rather than on "does this event have attendance rows", so it holds
+    /// for <c>Draft → Cancelled</c> too — where there are no taps, but no reason to move the window of
+    /// something that never happened either. Pinned because a row-count gate would pass every other test
+    /// here and fail this one.
+    /// </summary>
+    [Fact]
+    public async Task A_cancelled_event_with_no_attendance_still_refuses_a_schedule_edit()
+    {
+        var schoolId = await ArrangeSchoolAsync();
+        var eventId = await ArrangeEventAsync(schoolId, EventStatus.Draft);
+
+        await using (var db = NewDbContext())
+            await EventsOn(db).ChangeStatusAsync(eventId, EventStatus.Cancelled);
+
+        await using var write = NewDbContext();
+        Assert.Equal(0, await write.AttendanceRecords.CountAsync());
+
+        var response = await EventsOn(write).UpdateAsync(
+            eventId, Request(startAt: TestData.Now.AddDays(1)));
+
+        Assert.Equal(EventWriteOutcome.EventLocked, response.Outcome);
+    }
+
+    /// <summary>
+    /// A live event's scheduling fields remain fully editable — the control that shows the rule above is
+    /// about the terminal status and not a blanket lock.
+    /// </summary>
+    [Theory]
+    [InlineData(EventStatus.Draft)]
+    [InlineData(EventStatus.Open)]
+    public async Task A_live_events_attendance_rules_can_still_be_edited(string status)
+    {
+        var schoolId = await ArrangeSchoolAsync();
+        var eventId = await ArrangeEventAsync(schoolId, status);
+
+        await using var db = NewDbContext();
+        var response = await EventsOn(db).UpdateAsync(
+            eventId, Request(startAt: TestData.Now.AddDays(1), graceMinutes: 45));
+
+        Assert.Equal(EventWriteOutcome.Saved, response.Outcome);
+
+        await using var read = NewDbContext();
+        Assert.Equal(45, (await read.Events.AsNoTracking().SingleAsync()).GraceMinutes);
     }
 
     [Fact]

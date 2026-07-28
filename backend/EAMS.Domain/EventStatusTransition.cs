@@ -96,7 +96,8 @@ public static class EventStatusTransition
     public static bool IsTerminal(string? status) => AllowedFrom(status).Count == 0;
 
     /// <summary>
-    /// Whether this transition is the one that materializes the expected roster.
+    /// Whether this transition is the one that materializes the expected roster — the audience
+    /// snapshot <em>and</em> an <c>Absent</c> record for every expected student who has none.
     ///
     /// <para>
     /// <b><c>from != to</c> is the load-bearing half.</b> Re-running the freeze on an event that is
@@ -104,9 +105,50 @@ public static class EventStatusTransition
     /// attached sections since — which is precisely the movement the freeze exists to prevent, arriving
     /// through the mechanism meant to stop it.
     /// </para>
+    ///
+    /// <para>
+    /// Strictly narrower than <see cref="SnapshotsAudience"/>: every transition that freezes the roster
+    /// also snapshots the audience, and <c>→ Cancelled</c> snapshots without materializing anything.
+    /// </para>
     /// </summary>
     public static bool FreezesRoster(string? from, string? to) =>
         to == EventStatus.Closed && !string.Equals(from, to, StringComparison.Ordinal);
+
+    /// <summary>
+    /// Whether this transition must write the resolved audience down as individual §4.8 rows.
+    ///
+    /// <para>
+    /// <b>Both terminal statuses, which is the correction this predicate exists to carry.</b> Closing
+    /// obviously freezes: the denominator becomes rows in a table. Cancelling was left resolving
+    /// through live group membership, so an <c>Open → Cancelled</c> event that had already taken taps
+    /// kept a denominator that walked with every later import — a rate changing month over month for an
+    /// event that is over, with no absentee list to explain it. That is the exact failure the freeze
+    /// exists to prevent, surviving on the other terminal status.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>Cancelling snapshots but writes no absentees</b> — see <see cref="FreezesRoster"/>, which is
+    /// false for it. Nobody was expected to attend an event that did not happen, so marking a cohort
+    /// <c>Absent</c> would put them on record as having missed something nobody held; but <em>who was
+    /// invited</em> is still worth keeping, and the number must stop moving. The two halves of that
+    /// sentence are these two predicates.
+    /// </para>
+    /// </summary>
+    public static bool SnapshotsAudience(string? from, string? to) =>
+        IsTerminal(to) && !string.Equals(from, to, StringComparison.Ordinal);
+
+    /// <summary>
+    /// Whether this event's audience is read from written-down rows rather than resolved through live
+    /// group membership. The read-side counterpart of <see cref="SnapshotsAudience"/>.
+    ///
+    /// <para>
+    /// It coincides with <see cref="IsTerminal"/> and is stated separately anyway, because the two say
+    /// different things: <c>IsTerminal</c> is about the status graph having no outbound edge, this is
+    /// about where the denominator comes from. A future status could be one without being the other,
+    /// and a call site reading <c>IsTerminal</c> to decide how to count would not say why.
+    /// </para>
+    /// </summary>
+    public static bool HasFrozenAudience(string? status) => IsTerminal(status);
 
     /// <summary>
     /// Whether the event's audience may still be changed.
@@ -127,14 +169,40 @@ public static class EventStatusTransition
         status == EventStatus.Draft || status == EventStatus.Open;
 
     /// <summary>
-    /// Whether the event's own fields — name, window, mode, grace — may still be edited.
+    /// Whether the event may be edited at all — that is, whether its <em>descriptive</em> fields (name,
+    /// description, location) may still change.
     ///
     /// <para>
-    /// Everything except <c>Closed</c>. <c>StartAt</c> and <c>GraceMinutes</c> are the inputs that
-    /// decided Present-versus-Late for every row already recorded, so editing them after the close
-    /// silently changes what those rows mean without changing the rows. <c>Cancelled</c> is editable on
-    /// purpose: nothing was computed from it, and "cancelled — venue flooded" is a legitimate edit.
+    /// Everything except <c>Closed</c>. "Cancelled — venue flooded" is a legitimate edit and this is
+    /// what permits it. Which fields that licence extends to is <see cref="AcceptsAttendanceRuleEdits"/>.
     /// </para>
     /// </summary>
     public static bool AcceptsEdits(string? status) => status != EventStatus.Closed;
+
+    /// <summary>
+    /// Whether the four fields that decide what an attendance row <em>means</em> — <c>StartAt</c>,
+    /// <c>EndAt</c>, <c>GraceMinutes</c>, <c>AttendanceMode</c> — may still be edited. Plus
+    /// <c>RequireRegistration</c>, which governs who may be captured at all.
+    ///
+    /// <para>
+    /// <b>Draft and Open only, and the exclusion of <c>Cancelled</c> is a correction.</b> The licence to
+    /// edit a cancelled event used to be justified as "nothing was computed from it". That is false for
+    /// <c>Open → Cancelled</c>: taps can already exist by then, and <c>StartAt + GraceMinutes</c> has
+    /// already decided Present-versus-Late for every one of them. Moving the window afterwards changes
+    /// what those rows mean without changing the rows — the identical silent movement that makes the
+    /// same edit illegal on a <c>Closed</c> event, and it does not become harmless because the event was
+    /// cancelled rather than held.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>Why this is gated on status rather than on "does the event have attendance rows".</b> A
+    /// row-count gate would make the same request succeed or fail on data the caller cannot see, and it
+    /// would be a race: <c>POST /attendance/manual</c> does not require an open event, so a row can
+    /// appear between the check and the write. Gating on status is decidable from the event alone,
+    /// needs no query, and is the stronger rule — it is also right for <c>Draft → Cancelled</c>, where
+    /// there are no taps but no reason to move the window of something that never happened either.
+    /// </para>
+    /// </summary>
+    public static bool AcceptsAttendanceRuleEdits(string? status) =>
+        status == EventStatus.Draft || status == EventStatus.Open;
 }

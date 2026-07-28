@@ -30,6 +30,15 @@ internal sealed class EventService : IEventService
     /// </summary>
     private const int FreezeRetryLimit = 1;
 
+    /// <summary>
+    /// How many times <see cref="AttachMissingAsync"/> will re-diff and retry after losing an insert to
+    /// a concurrent post. One, for the same reason as <see cref="FreezeRetryLimit"/>: the window is the
+    /// microseconds between reading what is attached and committing, and after one re-read the winner's
+    /// rows are visible, so a second violation is not a race but a wrong assumption about which index
+    /// fired — which should surface as an error rather than spin.
+    /// </summary>
+    private const int AttachRetryLimit = 1;
+
     private readonly EamsDbContext _db;
     private readonly ISchoolContext _school;
 
@@ -68,14 +77,27 @@ internal sealed class EventService : IEventService
     }
 
     /// <summary>
-    /// §6.7/§12's summary. Three round trips: the event, the four buckets, the denominator.
+    /// §6.7/§12's summary. Five round trips: the event, the four buckets, the denominator, the
+    /// numerator, and the walk-ins. Every one after the first is an aggregate — no attendance row is
+    /// materialized at any point.
     ///
     /// <para>
     /// <b>It used to materialize every attendance row, tracked, to compute four integers.</b> On an
     /// institution-wide event that is tens of thousands of entities loaded into the change tracker to
     /// produce eight numbers — and the change tracking was pure cost, because nothing was written. The
     /// counts are now four conditional aggregates in a single statement over
-    /// <c>IX_Attendance_EventId_Status</c>, and no row is materialized at all.
+    /// <c>IX_Attendance_EventId_Status</c>.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>The numerator is its own query rather than a subtraction, and that is what bounds the rate.</b>
+    /// It used to be <c>counts.Present + counts.Late</c> — buckets counted over <em>every</em> row on
+    /// the event, walk-ins included — divided by a denominator counting only the invited. Twenty-nine
+    /// expected, twenty-nine present and two tapping alumni produced 106.9%: a rate above 100 with every
+    /// underlying row truthful, reachable on an open event with taps alone, and the same class of
+    /// plausible-but-wrong number this phase exists to remove. It also put the summary and the roster
+    /// into open disagreement about one event, because <see cref="GetRosterAsync"/> had always counted
+    /// the right thing.
     /// </para>
     /// </summary>
     public async Task<EventSummaryDto?> GetSummaryAsync(Guid id, CancellationToken ct = default)
@@ -84,13 +106,17 @@ internal sealed class EventService : IEventService
             .FirstOrDefaultAsync(x => x.Id == id && !x.IsDeleted, ct);
         if (e is null) return null;
 
+        var expectedIds = ExpectedStudentIds(id, e.Status);
+
         var counts = await CountByStatusAsync(id, ct);
-        var expected = await ExpectedStudentIds(id, e.Status).CountAsync(ct);
+        var expected = await expectedIds.CountAsync(ct);
+        var attended = await expectedIds.Intersect(AttendedStudentIds(id)).CountAsync(ct);
+        var unexpected = await RecordedStudentIds(id).Except(expectedIds).CountAsync(ct);
 
         return new EventSummaryDto(
             e.Id, e.Name, expected,
-            counts.Present, counts.Late, counts.Absent, counts.Excused,
-            RateOf(counts, expected));
+            counts.Present, counts.Late, counts.Absent, counts.Excused, unexpected,
+            RateOf(attended, expected));
     }
 
     /// <summary>The four §4.9 buckets for one event, as one aggregate.</summary>
@@ -134,8 +160,40 @@ internal sealed class EventService : IEventService
         return counts;
     }
 
-    private static double RateOf(StatusCounts counts, int expected) =>
-        expected == 0 ? 0 : Math.Round((double)(counts.Present + counts.Late) / expected * 100, 1);
+    /// <summary>
+    /// Students with a <c>Present</c> or <c>Late</c> record on this event, invited or not. Intersected
+    /// with the expected set to form the rate's numerator.
+    ///
+    /// <para>
+    /// The status comparison happens in SQL, so it uses the database collation and is case-insensitive
+    /// by default — matching <see cref="CountByStatusAsync"/> exactly, which is the point. A row stored
+    /// as <c>"present"</c> must land in the same place in both, or the rate and the buckets would
+    /// disagree for a reason invisible in either.
+    /// </para>
+    /// </summary>
+    private IQueryable<Guid> AttendedStudentIds(Guid eventId) =>
+        _db.AttendanceRecords
+            .Where(a => a.EventId == eventId
+                     && (a.Status == AttendanceStatus.Present || a.Status == AttendanceStatus.Late))
+            .Select(a => a.StudentId);
+
+    /// <summary>Every student with any attendance row on this event. <c>EXCEPT</c> the expected set gives the walk-ins.</summary>
+    private IQueryable<Guid> RecordedStudentIds(Guid eventId) =>
+        _db.AttendanceRecords.Where(a => a.EventId == eventId).Select(a => a.StudentId);
+
+    /// <summary>
+    /// <c>(invited students who attended) / (invited students)</c>, to one decimal place.
+    ///
+    /// <para>
+    /// <b>The numerator is a count of people drawn from the denominator's own set</b>, produced by
+    /// <c>Intersect</c> — SQL <c>INTERSECT</c>, distinct on both sides — so it cannot exceed
+    /// <paramref name="expected"/> however many rows exist or how they are shaped. That is why there is
+    /// no clamp here: a <c>Math.Min</c> would have capped a number that was still being computed wrongly
+    /// and hidden the walk-ins that made it wrong. They are reported separately instead.
+    /// </para>
+    /// </summary>
+    private static double RateOf(int attended, int expected) =>
+        expected == 0 ? 0 : Math.Round((double)attended / expected * 100, 1);
 
     // ------------------------------------------------------------------------- the denominator
 
@@ -147,8 +205,15 @@ internal sealed class EventService : IEventService
     /// <b>It answers the same question two different ways depending on the event's status, and that is
     /// the whole design.</b> While the event is live the audience is <em>resolved</em>: group rows are
     /// followed into current section membership, so a student enrolled by an import tomorrow is
-    /// expected tomorrow. Once the event is <c>Closed</c> the audience is <em>read</em>: only the
-    /// individual student rows count, and the close is what writes them.
+    /// expected tomorrow. Once the event reaches a terminal status the audience is <em>read</em>: only
+    /// the individual student rows count, and the transition is what writes them.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>Both terminal statuses, not only <c>Closed</c>.</b> <c>Cancelled</c> used to take the live
+    /// branch, so an <c>Open → Cancelled</c> event that had already taken taps carried a denominator
+    /// that walked with every later import — a rate changing month over month for an event that is
+    /// over, and no absentee list to explain it. See <c>EventStatusTransition.SnapshotsAudience</c>.
     /// </para>
     ///
     /// <para>
@@ -177,7 +242,7 @@ internal sealed class EventService : IEventService
     /// </para>
     /// </summary>
     private IQueryable<Guid> ExpectedStudentIds(Guid eventId, string status) =>
-        status == EventStatus.Closed
+        EventStatusTransition.HasFrozenAudience(status)
             ? AttachedStudentIds(eventId, includeDeleted: true)
             : GroupMemberStudentIds(eventId).Union(AttachedStudentIds(eventId, includeDeleted: false));
 
@@ -277,13 +342,18 @@ internal sealed class EventService : IEventService
 
         return new EventRosterDto(
             ev.Id, ev.Name, ev.Status,
-            IsFrozen: ev.Status == EventStatus.Closed,
+            IsFrozen: EventStatusTransition.HasFrozenAudience(ev.Status),
             Expected: entries.Count(e => e.IsExpected),
             Present: entries.Count(e => e.Status == AttendanceStatus.Present),
             Late: entries.Count(e => e.Status == AttendanceStatus.Late),
             Absent: entries.Count(e => e.Status == AttendanceStatus.Absent),
             Excused: entries.Count(e => e.Status == AttendanceStatus.Excused),
             NotRecorded: entries.Count(e => e.IsExpected && e.Status is null),
+            // The same people GetSummaryAsync counts as Unexpected, arrived at from the other side: it
+            // runs recorded EXCEPT expected in SQL, this counts the rows that survived the same test in
+            // the projection above. The two must agree or the roster and the summary describe different
+            // events, which is the disagreement CONDITION 1 removed from the rate.
+            Unexpected: entries.Count(e => !e.IsExpected),
             entries);
     }
 
@@ -337,6 +407,21 @@ internal sealed class EventService : IEventService
                 $"Event is {ev.Status}. Its window and grace period decided Present versus Late for " +
                 "every row already recorded, so editing them now would change what those rows mean " +
                 "without changing the rows.", null);
+        }
+
+        // A Cancelled event may be renamed and re-described — "cancelled, venue flooded" is the whole
+        // point of it being editable at all — but not re-scheduled. See
+        // EventStatusTransition.AcceptsAttendanceRuleEdits: an Open -> Cancelled event can already hold
+        // taps whose Present-versus-Late was decided by StartAt + GraceMinutes, so moving those is the
+        // same silent rewrite of existing rows that a Closed event refuses.
+        if (!EventStatusTransition.AcceptsAttendanceRuleEdits(ev.Status)
+            && AttendanceRuleChanges(request, ev) is { Count: > 0 } changed)
+        {
+            return new EventWriteResponse(EventWriteOutcome.EventLocked,
+                $"Event is {ev.Status}, so {string.Join(", ", changed)} cannot be changed — those are " +
+                "the fields that decide what an attendance row means, and this event may already hold " +
+                "rows they were computed from. Its name, description and location can still be edited; " +
+                "re-send those with the scheduling fields left as they are.", null);
         }
 
         Apply(request, ev);
@@ -403,17 +488,28 @@ internal sealed class EventService : IEventService
         ev.Status = target;
         ev.UpdatedAt = DateTime.UtcNow;
 
-        if (!EventStatusTransition.FreezesRoster(current, target))
+        if (!EventStatusTransition.SnapshotsAudience(current, target))
         {
             await _db.SaveChangesAsync(ct);
             return Saved(ev, $"Event is now {target}.");
         }
 
-        var frozen = await CloseAndFreezeAsync(ev, ct);
+        var materializeAbsentees = EventStatusTransition.FreezesRoster(current, target);
+        var frozen = await FreezeAsync(ev.Id, materializeAbsentees, ct);
+
+        if (!materializeAbsentees)
+        {
+            return Saved(ev,
+                $"Event is now {target}. Its audience of {frozen.Expected} " +
+                $"{(frozen.Expected == 1 ? "student" : "students")} has been written down and can no " +
+                "longer move; no attendance was recorded, because nobody was expected to attend an " +
+                "event that did not happen.");
+        }
+
         return Saved(ev,
-            $"Event is now {target}. {frozen} expected {(frozen == 1 ? "attendee" : "attendees")} " +
-            "with no record were marked Absent; this event's denominator and absentee list are now " +
-            "fixed.");
+            $"Event is now {target}. {frozen.Absentees} expected " +
+            $"{(frozen.Absentees == 1 ? "attendee" : "attendees")} with no record were marked Absent; " +
+            "this event's denominator and absentee list are now fixed.");
     }
 
     /// <summary>
@@ -440,15 +536,33 @@ internal sealed class EventService : IEventService
     /// retried once.
     /// </para>
     /// </summary>
-    private async Task<int> CloseAndFreezeAsync(Event ev, CancellationToken ct)
+    /// <param name="materializeAbsentees">
+    /// True for <c>→ Closed</c>, false for <c>→ Cancelled</c>. The single difference between the two
+    /// transitions: both write the audience down, only one turns it into an absentee list. A flag rather
+    /// than two near-identical methods because the retry, the detach and the staging are the whole body
+    /// and they are shared — duplicating them is how one copy learns about a new race and the other does
+    /// not, which is the divergence <c>SqlServerErrors</c> was extracted to prevent.
+    /// </param>
+    private async Task<FrozenAudience> FreezeAsync(
+        Guid eventId, bool materializeAbsentees, CancellationToken ct)
     {
         for (var attempt = 0; ; attempt++)
         {
-            var staged = await StageFrozenRosterAsync(ev.Id, ct);
+            // Staged together and saved together because they are one statement about the event —
+            // "these people were expected, and these of them did not come". Committing the absentees
+            // without the snapshot would leave a closed event whose absentee list is fixed and whose
+            // denominator still drifts: the two would disagree, and the disagreement would look like an
+            // arithmetic bug rather than a missing write.
+            var pending = new List<object>();
+            var expected = await SnapshotAudienceAsync(eventId, pending, ct);
+            var absentees = materializeAbsentees
+                ? await StageAbsenteesAsync(eventId, expected, pending, ct)
+                : 0;
+
             try
             {
                 await _db.SaveChangesAsync(ct);
-                return staged.Absentees;
+                return new FrozenAudience(expected.Count, absentees);
             }
             catch (DbUpdateException ex)
                 when (attempt < FreezeRetryLimit && SqlServerErrors.IsUniqueViolation(ex))
@@ -457,35 +571,14 @@ internal sealed class EventService : IEventService
                 // very rows that just collided — and a tracked Added row with the same key would also
                 // shadow the re-read through identity resolution. The same detach the tap flow's
                 // ResolveLostInsertRaceAsync performs, for the same reason.
-                foreach (var entity in staged.Pending)
+                foreach (var entity in pending)
                     _db.Entry(entity).State = EntityState.Detached;
             }
         }
     }
 
-    /// <summary>What one attempt at the freeze staged, so a lost race can detach exactly that.</summary>
-    private readonly record struct StagedFreeze(int Absentees, IReadOnlyList<object> Pending);
-
-    /// <summary>
-    /// Stages both halves of the freeze: the audience snapshot and the absentee records.
-    ///
-    /// <para>
-    /// They are staged together and saved together because they are one statement about the event —
-    /// "these people were expected, and these of them did not come". Committing the absentees without
-    /// the snapshot would leave a closed event whose absentee list is fixed and whose denominator still
-    /// drifts, which is a worse state than either alone: the two would disagree, and the disagreement
-    /// would look like an arithmetic bug rather than a missing write.
-    /// </para>
-    /// </summary>
-    private async Task<StagedFreeze> StageFrozenRosterAsync(Guid eventId, CancellationToken ct)
-    {
-        var pending = new List<object>();
-
-        var expected = await SnapshotAudienceAsync(eventId, pending, ct);
-        var absentees = await StageAbsenteesAsync(eventId, expected, pending, ct);
-
-        return new StagedFreeze(absentees, pending);
-    }
+    /// <summary>What the freeze wrote down: how many were expected, and how many of them were absent.</summary>
+    private readonly record struct FrozenAudience(int Expected, int Absentees);
 
     /// <summary>
     /// Resolves the live audience once and writes it down as individual §4.8 rows.
@@ -510,12 +603,32 @@ internal sealed class EventService : IEventService
     /// group are added; <c>UX_EventGroups_Event_Student</c> would reject a second copy anyway, which is
     /// what makes this safe to retry.
     /// </para>
+    ///
+    /// <para>
+    /// <b>It resolves with <c>includeDeleted: true</c>, which is deliberately <em>not</em> what the live
+    /// read does, and the asymmetry is the whole reason this line is load-bearing.</b> The frozen read
+    /// counts every individual §4.8 row regardless of the student's deleted flag — it has to, because
+    /// nothing in the schema distinguishes a student deleted before the close from one deleted after,
+    /// and the second must never retroactively shrink a past event's denominator. So if the snapshot
+    /// resolved with <c>includeDeleted: false</c>, an already-soft-deleted individually-attached student
+    /// would get no <c>Absent</c> row while their pre-existing row still counted in the denominator: the
+    /// event would close with <c>Present + Late + Absent + Excused</c> permanently one short of
+    /// <c>Expected</c>, and <c>NotRecorded</c> reading 1 on a frozen event — which is precisely the
+    /// state the freeze exists to make impossible.
+    /// </para>
+    ///
+    /// <para>
+    /// Group-reached students are still filtered by <see cref="GroupMemberStudentIds"/>, and that stays
+    /// right: a soft-deleted student in an attached section was never in the live denominator and gets
+    /// no row here, so the frozen read will not find one either. The two halves agree at the boundary,
+    /// which is the property that matters — not that both are permissive.
+    /// </para>
     /// </summary>
     private async Task<IReadOnlyList<Guid>> SnapshotAudienceAsync(
         Guid eventId, List<object> pending, CancellationToken ct)
     {
         var expected = await GroupMemberStudentIds(eventId)
-            .Union(AttachedStudentIds(eventId, includeDeleted: false))
+            .Union(AttachedStudentIds(eventId, includeDeleted: true))
             .ToListAsync(ct);
 
         var alreadyAttached = await AttachedStudentIds(eventId, includeDeleted: true).ToListAsync(ct);
@@ -650,35 +763,91 @@ internal sealed class EventService : IEventService
             return UnknownReference("student", studentIds.Where(s => !found.Contains(s)));
         }
 
-        var attached = await _db.EventGroups.AsNoTracking()
-            .Where(eg => eg.EventId == id)
-            .Select(eg => new { eg.StudentGroupId, eg.StudentId })
-            .ToListAsync(ct);
-
-        var attachedGroups = attached.Where(a => a.StudentGroupId != null)
-            .Select(a => a.StudentGroupId!.Value).ToHashSet();
-        var attachedStudents = attached.Where(a => a.StudentId != null)
-            .Select(a => a.StudentId!.Value).ToHashSet();
-
-        var newGroups = groupIds.Where(g => !attachedGroups.Contains(g)).ToList();
-        var newStudents = studentIds.Where(s => !attachedStudents.Contains(s)).ToList();
-
-        foreach (var groupId in newGroups)
-            _db.EventGroups.Add(new EventGroup { EventId = id, StudentGroupId = groupId });
-        foreach (var studentId in newStudents)
-            _db.EventGroups.Add(new EventGroup { EventId = id, StudentId = studentId });
-
-        if (newGroups.Count > 0 || newStudents.Count > 0)
-            await _db.SaveChangesAsync(ct);
+        var delta = await AttachMissingAsync(id, groupIds, studentIds, ct);
 
         var warnings = await TermWarningsAsync(ev.SchoolId, groups.Select(g => (g.Name, g.TermId)), ct);
         var expected = await ExpectedStudentIds(id, ev.Status).CountAsync(ct);
 
         return new EventAudienceResponse(EventWriteOutcome.Saved, "Audience updated.",
             new EventAudienceResultDto(
-                id, newGroups.Count, newStudents.Count,
-                groupIds.Count - newGroups.Count, studentIds.Count - newStudents.Count,
+                id, delta.Groups, delta.Students,
+                groupIds.Count - delta.Groups, studentIds.Count - delta.Students,
                 expected, warnings));
+    }
+
+    /// <summary>How much of the requested selection this call actually inserted.</summary>
+    private readonly record struct AudienceDelta(int Groups, int Students);
+
+    /// <summary>
+    /// Inserts whichever of the requested attachments are not already there, and survives losing that
+    /// insert to a concurrent post.
+    ///
+    /// <para>
+    /// <b>The read-then-insert alone was never the guarantee, and this is the half that was missing.</b>
+    /// <c>EamsDbContext</c> adds <c>UX_EventGroups_Event_Group</c> and
+    /// <c>UX_EventGroups_Event_Student</c> for exactly this reason — in its own words, idempotency that
+    /// lives only in a service's read-then-insert loses to two concurrent posts — and the indexes do
+    /// protect the data. But the service did not handle the violation they raise, so the scenario the
+    /// schema comment names, an organizer double-submitting a slow form, produced an unhandled
+    /// <c>DbUpdateException</c> and a 500 on the request that lost. A sequential re-post of the same
+    /// selection has always returned a cheerful <c>alreadyAttached</c>; the concurrent one now returns
+    /// the same thing, which is what "idempotent" has to mean to be worth claiming.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>The retry re-reads rather than assuming a total loss.</b> Two posts can overlap partially —
+    /// one attaches sections A and B, the other B and C — and because the whole <c>SaveChanges</c> is a
+    /// single transaction, losing on B rolls back C as well. Reporting everything as already-attached
+    /// would silently drop C. So the diff is recomputed against what is now committed and the save is
+    /// retried, which converges: whatever the winner wrote is excluded, and what remains is ours alone.
+    /// One retry, bounded for the reason <see cref="FreezeRetryLimit"/> gives — a second violation is no
+    /// longer a race but a wrong assumption about which index fired, and it should surface.
+    /// </para>
+    /// </summary>
+    private async Task<AudienceDelta> AttachMissingAsync(
+        Guid eventId, IReadOnlyList<Guid> groupIds, IReadOnlyList<Guid> studentIds, CancellationToken ct)
+    {
+        for (var attempt = 0; ; attempt++)
+        {
+            var attached = await _db.EventGroups.AsNoTracking()
+                .Where(eg => eg.EventId == eventId)
+                .Select(eg => new { eg.StudentGroupId, eg.StudentId })
+                .ToListAsync(ct);
+
+            var attachedGroups = attached.Where(a => a.StudentGroupId != null)
+                .Select(a => a.StudentGroupId!.Value).ToHashSet();
+            var attachedStudents = attached.Where(a => a.StudentId != null)
+                .Select(a => a.StudentId!.Value).ToHashSet();
+
+            var newGroups = groupIds.Where(g => !attachedGroups.Contains(g)).ToList();
+            var newStudents = studentIds.Where(s => !attachedStudents.Contains(s)).ToList();
+
+            if (newGroups.Count == 0 && newStudents.Count == 0) return new AudienceDelta(0, 0);
+
+            var pending = new List<EventGroup>();
+            foreach (var groupId in newGroups)
+                pending.Add(new EventGroup { EventId = eventId, StudentGroupId = groupId });
+            foreach (var studentId in newStudents)
+                pending.Add(new EventGroup { EventId = eventId, StudentId = studentId });
+
+            _db.EventGroups.AddRange(pending);
+
+            try
+            {
+                await _db.SaveChangesAsync(ct);
+                return new AudienceDelta(newGroups.Count, newStudents.Count);
+            }
+            catch (DbUpdateException ex)
+                when (attempt < AttachRetryLimit && SqlServerErrors.IsUniqueViolation(ex))
+            {
+                // EF leaves failed inserts Added. Without detaching, the next SaveChanges would retry
+                // the very rows that just collided, and the re-read above would be shadowed by them
+                // through identity resolution — so the diff would come back empty and this would report
+                // a successful attach that never happened. Same reason as the freeze, same fix.
+                foreach (var row in pending)
+                    _db.Entry(row).State = EntityState.Detached;
+            }
+        }
     }
 
     /// <summary>
@@ -851,13 +1020,66 @@ internal sealed class EventService : IEventService
         ev.EndAt = UtcTime.Normalize(request.EndAt);
         ev.GraceMinutes = request.GraceMinutes;
         ev.RequireRegistration = request.RequireRegistration;
-        ev.AttendanceMode = AttendanceMode.TryNormalize(request.AttendanceMode, out var mode)
-            ? mode
-            : AttendanceMode.Single;
+        ev.AttendanceMode = ResolveMode(request.AttendanceMode);
     }
 
+    /// <summary>
+    /// De-duplicates a requested id list. A UI that lets an organizer tick the same section through two
+    /// different pickers sends it twice, and hitting a unique index with that would be a 500 where the
+    /// obvious thing is to attach it once.
+    ///
+    /// <para>
+    /// <b><c>Guid.Empty</c> used to be filtered out here, and removing that filter is the fix.</b>
+    /// Dropping it silently meant a payload of nothing but empty GUIDs became an empty list, and because
+    /// the requested count was taken <em>after</em> the drop, the caller was told "Saved, 0 attached"
+    /// — a success for a request that named nothing that exists. It now falls through to the same
+    /// existence check every other id faces and comes back as <c>UnknownReference</c> naming the zero
+    /// GUID, because a client sending one has a bug and being told about it is the point. No special
+    /// case is needed for that: <c>Guid.Empty</c> matches no row, since every id in this schema comes
+    /// from <c>Guid.NewGuid()</c>.
+    /// </para>
+    /// </summary>
     private static IReadOnlyList<Guid> Distinct(IReadOnlyList<Guid>? ids) =>
-        ids is null ? [] : ids.Where(id => id != Guid.Empty).Distinct().ToList();
+        ids is null ? [] : ids.Distinct().ToList();
+
+    /// <summary>
+    /// Which of the attendance-defining fields this request would change. Empty when the request leaves
+    /// all of them exactly as they are, which is what a name-and-description edit sent as a full PUT
+    /// looks like — so the narrow allowance on a <c>Cancelled</c> event costs a well-behaved caller
+    /// nothing.
+    ///
+    /// <para>
+    /// <c>StartAt</c> and <c>EndAt</c> are compared after normalizing, because the same instant arrives
+    /// with different <c>Kind</c>s from one JSON body — <c>"2026-08-01T09:00:00Z"</c> and
+    /// <c>"2026-08-01T12:00:00+08:00"</c> — and comparing those raw would report a change that is not
+    /// one, rejecting an edit that altered nothing. <c>UtcTime</c> records the whole trap.
+    /// <c>AttendanceMode</c> is compared after resolving through <see cref="ResolveMode"/> for the same
+    /// reason: null and <c>""</c> both mean <c>Single</c>, and only the resolved value is what
+    /// <see cref="Apply"/> would store.
+    /// </para>
+    /// </summary>
+    private static IReadOnlyList<string> AttendanceRuleChanges(EventWriteRequest request, Event ev)
+    {
+        var changed = new List<string>();
+
+        if (UtcTime.Normalize(request.StartAt) != ev.StartAt) changed.Add(nameof(Event.StartAt));
+        if (UtcTime.Normalize(request.EndAt) != ev.EndAt) changed.Add(nameof(Event.EndAt));
+        if (request.GraceMinutes != ev.GraceMinutes) changed.Add(nameof(Event.GraceMinutes));
+        if (ResolveMode(request.AttendanceMode) != ev.AttendanceMode) changed.Add(nameof(Event.AttendanceMode));
+        if (request.RequireRegistration != ev.RequireRegistration)
+            changed.Add(nameof(Event.RequireRegistration));
+
+        return changed;
+    }
+
+    /// <summary>
+    /// §4.5's <c>AttendanceMode</c> default, in one place so <see cref="Apply"/> and
+    /// <see cref="AttendanceRuleChanges"/> cannot disagree about what a null or blank mode resolves to.
+    /// If they did, a request omitting the field would read as a change to a locked event and be
+    /// refused for a field the caller never mentioned.
+    /// </summary>
+    private static string ResolveMode(string? requested) =>
+        AttendanceMode.TryNormalize(requested, out var mode) ? mode : AttendanceMode.Single;
 
     private static EventWriteResponse Saved(Event ev, string message) =>
         new(EventWriteOutcome.Saved, message, ToDto(ev));

@@ -484,9 +484,15 @@ public class EventCloseFreezeTests : IntegrationTest
     }
 
     /// <summary>
-    /// Cancelling does <em>not</em> freeze. An event that did not happen has no attendance to fix, and
-    /// materializing a roster of absentees for it would put a cohort of people on record as having
-    /// missed something nobody held.
+    /// Cancelling materializes no <em>absentees</em>. An event that did not happen has no attendance to
+    /// fix, and marking a cohort <c>Absent</c> for it would put people on record as having missed
+    /// something nobody held.
+    ///
+    /// <para>
+    /// It does still snapshot the audience — see
+    /// <see cref="Cancelling_freezes_the_audience_without_writing_absentees"/> for the other half, and
+    /// why the two are not the same thing.
+    /// </para>
     /// </summary>
     [Fact]
     public async Task Cancelling_an_event_does_not_materialize_a_roster()
@@ -498,7 +504,209 @@ public class EventCloseFreezeTests : IntegrationTest
 
         await using var read = NewDbContext();
         Assert.Equal(0, await read.AttendanceRecords.CountAsync());
-        Assert.False((await EventsOn(read).GetRosterAsync(world.EventId))!.IsFrozen);
+
+        var roster = await EventsOn(read).GetRosterAsync(world.EventId);
+
+        // Frozen, because the denominator can no longer move — not because absentees were written.
+        // IsFrozen is the published statement "these numbers are fixed", and after the audience
+        // snapshot that is as true of a cancelled event as of a closed one.
+        Assert.True(roster!.IsFrozen);
+        Assert.Equal(0, roster.Absent);
+        // Nobody attended, and every expected student is simply un-recorded. That is the honest shape
+        // for an event that did not happen: an invitation list and no attendance.
+        Assert.Equal(2, roster.NotRecorded);
+    }
+
+    /// <summary>
+    /// <b>Cancelling freezes the audience, and that is a correction rather than a refinement.</b>
+    ///
+    /// <para>
+    /// <c>Cancelled</c> is terminal and its audience is already locked against edits, but the
+    /// denominator was still being <em>resolved</em> through live group membership — so an
+    /// <c>Open → Cancelled</c> event that had already taken taps had an expected count that walked with
+    /// every later import. A rate changing month over month for an event that is over, with no absentee
+    /// list to explain it: exactly the failure the close freeze exists to prevent, surviving on the
+    /// other terminal status.
+    /// </para>
+    ///
+    /// <para>
+    /// The invite record is kept rather than nulled. Who was invited to an event that was called off is
+    /// a real question — it is who needs telling — so the answer is preserved and simply stops moving.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public async Task Cancelling_freezes_the_audience_without_writing_absentees()
+    {
+        var world = await ArrangeAsync();
+
+        await using (var read = NewDbContext())
+        {
+            // Before: one group row and no individual rows, same as the close case starts from.
+            var rows = await read.EventGroups.AsNoTracking().ToListAsync();
+            Assert.Equal(world.GroupId, Assert.Single(rows).StudentGroupId);
+        }
+
+        await using (var db = NewDbContext())
+        {
+            var response = await EventsOn(db).ChangeStatusAsync(world.EventId, EventStatus.Cancelled);
+            Assert.Equal(EventWriteOutcome.Saved, response.Outcome);
+        }
+
+        await using var after = NewDbContext();
+        var attachments = await after.EventGroups.AsNoTracking().ToListAsync();
+
+        // The group row survives — it is the only record of which section was invited.
+        Assert.Single(attachments, a => a.StudentGroupId == world.GroupId);
+        // And the resolved audience is now written down beside it.
+        Assert.Equal(
+            new HashSet<Guid> { world.Tapper, world.Absentee },
+            attachments.Where(a => a.StudentId != null).Select(a => a.StudentId!.Value).ToHashSet());
+
+        // Absentees, specifically, were not written. That is the whole difference from a close.
+        Assert.Equal(0, await after.AttendanceRecords.CountAsync());
+    }
+
+    /// <summary>
+    /// The freeze proven the only way it can be: by pushing on it. A student enrolled into the attached
+    /// section after the cancellation does not move the cancelled event's expected count, while the
+    /// projection demonstrably did add them to the group.
+    /// </summary>
+    [Fact]
+    public async Task A_cancelled_events_expected_count_does_not_drift_across_a_later_import()
+    {
+        var world = await ArrangeAsync();
+        await TapAsync(world.EventId);
+
+        await using (var db = NewDbContext())
+            await EventsOn(db).ChangeStatusAsync(world.EventId, EventStatus.Cancelled);
+
+        EventSummaryDto before;
+        await using (var read = NewDbContext())
+            before = (await EventsOn(read).GetSummaryAsync(world.EventId))!;
+
+        Assert.Equal(2, before.Expected);
+
+        var latecomer = await EnrolAnotherStudentAsync(world, "2023-0099");
+
+        // The import really did land, or this test proves nothing.
+        await using (var read = NewDbContext())
+        {
+            Assert.Contains(
+                await read.StudentGroupMembers.AsNoTracking()
+                    .Where(m => m.StudentGroupId == world.GroupId)
+                    .Select(m => m.StudentId)
+                    .ToListAsync(),
+                id => id == latecomer);
+        }
+
+        await using var after = NewDbContext();
+
+        Assert.Equal(before, await EventsOn(after).GetSummaryAsync(world.EventId));
+
+        var roster = await EventsOn(after).GetRosterAsync(world.EventId);
+        Assert.Equal(2, roster!.Expected);
+        Assert.DoesNotContain(roster.Entries, e => e.StudentId == latecomer);
+    }
+
+    // ------------------------------------------------------- the soft-delete boundary
+
+    /// <summary>
+    /// <b>The close resolves its audience including soft-deleted students, and the reason is that the
+    /// frozen read has no choice but to.</b>
+    ///
+    /// <para>
+    /// A closed event's denominator counts every individual §4.8 row regardless of the student's deleted
+    /// flag — it must, because nothing distinguishes a student deleted before the close from one deleted
+    /// after, and the second must never shrink a past event's numbers. If the snapshot had resolved
+    /// <em>excluding</em> the deleted, an already-deleted individually-attached student would carry a
+    /// pre-existing row into the denominator while receiving no <c>Absent</c> record: the totals would
+    /// be permanently one short of expected, and <c>NotRecorded</c> would read 1 on a frozen event —
+    /// the state the freeze exists to make impossible.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public async Task A_student_soft_deleted_before_the_close_still_gets_an_absent_row()
+    {
+        var world = await ArrangeAsync();
+
+        // Attach a third student individually, then soft-delete them before the event closes.
+        Guid deleted;
+        await using (var db = NewDbContext())
+        {
+            var student = TestData.NewStudent(world.SchoolId, "2023-0050", lastName: "Departed");
+            db.Students.Add(student);
+            await db.SaveChangesAsync();
+            deleted = student.Id;
+
+            var attach = await EventsOn(db).AttachAudienceAsync(
+                world.EventId, new EventAudienceRequest(null, [student.Id]));
+            Assert.Equal(EventWriteOutcome.Saved, attach.Outcome);
+        }
+
+        await using (var db = NewDbContext())
+        {
+            var student = await db.Students.SingleAsync(s => s.Id == deleted);
+            student.IsDeleted = true;
+            await db.SaveChangesAsync();
+        }
+
+        // While live they are correctly not expected: a student the roster says does not exist cannot
+        // be expected to attend.
+        await using (var read = NewDbContext())
+            Assert.Equal(2, (await EventsOn(read).GetSummaryAsync(world.EventId))!.Expected);
+
+        await using (var db = NewDbContext())
+            await EventsOn(db).ChangeStatusAsync(world.EventId, EventStatus.Closed);
+
+        await using var after = NewDbContext();
+        var summary = await EventsOn(after).GetSummaryAsync(world.EventId);
+
+        // The frozen denominator counts their attachment row, so the close had to write their absence.
+        Assert.Equal(3, summary!.Expected);
+        Assert.Equal(3, summary.Present + summary.Late + summary.Absent + summary.Excused);
+
+        var roster = await EventsOn(after).GetRosterAsync(world.EventId);
+        Assert.True(roster!.IsFrozen);
+        // The assertion that would have failed before the fix.
+        Assert.Equal(0, roster.NotRecorded);
+        Assert.Equal(AttendanceStatus.Absent,
+            Assert.Single(roster.Entries, e => e.StudentId == deleted).Status);
+    }
+
+    /// <summary>
+    /// The case the whole soft-delete asymmetry exists for, and which nothing pinned until now: a
+    /// student deleted <em>after</em> the close must not shrink the denominator. "Frozen" has to mean
+    /// frozen against every later edit, not only against enrollment.
+    /// </summary>
+    [Fact]
+    public async Task A_student_soft_deleted_after_the_close_does_not_shrink_the_denominator()
+    {
+        var world = await ArrangeAsync();
+        await TapAsync(world.EventId);
+
+        await using (var db = NewDbContext())
+            await EventsOn(db).ChangeStatusAsync(world.EventId, EventStatus.Closed);
+
+        EventSummaryDto before;
+        await using (var read = NewDbContext())
+            before = (await EventsOn(read).GetSummaryAsync(world.EventId))!;
+
+        Assert.Equal(2, before.Expected);
+        Assert.Equal(50, before.AttendanceRate);
+
+        await using (var db = NewDbContext())
+        {
+            var student = await db.Students.SingleAsync(s => s.Id == world.Absentee);
+            student.IsDeleted = true;
+            await db.SaveChangesAsync();
+        }
+
+        await using var after = NewDbContext();
+
+        // Unchanged in every number, including the rate — which would have risen to 100% if the
+        // denominator had followed the deletion.
+        Assert.Equal(before, await EventsOn(after).GetSummaryAsync(world.EventId));
+        Assert.Equal(2, (await EventsOn(after).GetRosterAsync(world.EventId))!.Expected);
     }
 
     /// <summary>

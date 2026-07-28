@@ -187,6 +187,125 @@ public class ManualOverrideTests : IntegrationTest
         Assert.Single(await AllRecordsAsync());
     }
 
+    // ------------------------------------------------------- the post-close correction path
+
+    /// <summary>
+    /// <b>An override still applies to a <c>Closed</c> event, and this is the assumption the terminal
+    /// status rests on.</b>
+    ///
+    /// <para>
+    /// <c>EventStatusTransition</c> has no edge out of <c>Closed</c>, and the reasoning it records for
+    /// refusing a re-open is explicitly that this path remains open: "any individual student's status
+    /// can still be corrected afterwards — deliberately, one row at a time, attributed through
+    /// <c>RecordedByUserId</c>". Recorded as ADR-003 D-17, manual override is the sanctioned post-close
+    /// mutation path and the entire counterweight to <c>Closed</c> being a dead end.
+    /// </para>
+    ///
+    /// <para>
+    /// Nothing proved it. <see cref="ManualAsync"/> checks that the event exists and is not deleted and
+    /// never looks at its status, so the behaviour is correct today by omission rather than by
+    /// intention — and a later, entirely plausible "tighten the override to require an open event"
+    /// would turn the terminal status into a trap with no recovery route at all, while every test
+    /// stayed green. This converts the assumption into something the suite defends.
+    /// </para>
+    ///
+    /// <para>
+    /// The correction is applied to the <c>Absent</c> row the close materialized, which is the real
+    /// shape of the scenario: a student who was marked absent by the freeze turns out to have had a
+    /// medical certificate.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public async Task An_override_still_corrects_a_student_on_a_closed_event()
+    {
+        var world = await ArrangeAsync();
+
+        Guid closerId;
+        await using (var db = NewDbContext())
+        {
+            var user = TestData.NewUser(world.SchoolId, "registrar@test.local");
+            db.Users.Add(user);
+            await db.SaveChangesAsync();
+            closerId = user.Id;
+
+            // Invite the student, so the close materializes an Absent row for them to correct.
+            var attach = await EventsOn(db).AttachAudienceAsync(
+                world.EventId, new EventAudienceRequest(null, [world.StudentId]));
+            Assert.Equal(EventWriteOutcome.Saved, attach.Outcome);
+        }
+
+        await using (var db = NewDbContext())
+        {
+            var closed = await EventsOn(db).ChangeStatusAsync(world.EventId, EventStatus.Closed);
+            Assert.Equal(EventWriteOutcome.Saved, closed.Outcome);
+        }
+
+        await using (var read = NewDbContext())
+        {
+            var frozen = Assert.Single(await read.AttendanceRecords.AsNoTracking().ToListAsync());
+            Assert.Equal(AttendanceStatus.Absent, frozen.Status);
+        }
+
+        CurrentUser.UserId = closerId;
+
+        await using (var db = NewDbContext())
+        {
+            var response = await AttendanceOn(db).ManualAsync(
+                world.EventId, world.StudentId, AttendanceStatus.Excused, "Medical certificate.");
+
+            Assert.Equal(ManualOutcome.Saved, response.Outcome);
+            Assert.True(response.Result.Success);
+        }
+
+        var record = Assert.Single(await AllRecordsAsync());
+        Assert.Equal(AttendanceStatus.Excused, record.Status);
+        Assert.Equal("Medical certificate.", record.Notes);
+        // §6.4 calls this endpoint audited, and an override on a closed event is precisely the action
+        // somebody will later want explained.
+        Assert.Equal(closerId, record.RecordedByUserId);
+
+        // The correction moves the buckets, and the denominator does not move with it — which is what
+        // makes this a safe recovery route rather than a hole in the freeze.
+        await using var after = NewDbContext();
+        var summary = await EventsOn(after).GetSummaryAsync(world.EventId);
+
+        Assert.Equal(1, summary!.Expected);
+        Assert.Equal(0, summary.Absent);
+        Assert.Equal(1, summary.Excused);
+    }
+
+    /// <summary>
+    /// The same path on a <c>Cancelled</c> event. Both terminal statuses need the recovery route, and
+    /// cancelling now snapshots its audience — so this also pins that a correction does not disturb the
+    /// frozen denominator.
+    /// </summary>
+    [Fact]
+    public async Task An_override_still_corrects_a_student_on_a_cancelled_event()
+    {
+        var world = await ArrangeAsync();
+
+        await using (var db = NewDbContext())
+        {
+            await EventsOn(db).AttachAudienceAsync(
+                world.EventId, new EventAudienceRequest(null, [world.StudentId]));
+            await EventsOn(db).ChangeStatusAsync(world.EventId, EventStatus.Cancelled);
+        }
+
+        await using (var db = NewDbContext())
+        {
+            var response = await AttendanceOn(db).ManualAsync(
+                world.EventId, world.StudentId, AttendanceStatus.Present, "Attended the rescheduled run.");
+            Assert.Equal(ManualOutcome.Saved, response.Outcome);
+        }
+
+        await using var after = NewDbContext();
+        var summary = await EventsOn(after).GetSummaryAsync(world.EventId);
+
+        Assert.Equal(1, summary!.Expected);
+        Assert.Equal(1, summary.Present);
+        Assert.Equal(0, summary.Unexpected);
+    }
+
     // ---------------------------------------------------------------- the shared lookup
 
     /// <summary>
