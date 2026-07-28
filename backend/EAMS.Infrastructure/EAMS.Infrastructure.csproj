@@ -1,0 +1,50 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- TargetFramework / Nullable / ImplicitUsings come from backend/Directory.Build.props. -->
+
+  <!--
+    EAMS.Tests needs EamsDbContext to arrange rows and assert what SQL Server actually stored, and
+    needs the service implementations to exercise them without booting a web host. Granting one
+    named test assembly access keeps the layering rule intact where it matters: EAMS.Api still
+    cannot see these types, which is the boundary the rule exists to protect (CS0122 on any
+    controller that tries). The tests hold the services as their Application-layer interfaces
+    (IAttendanceService and friends) rather than as concrete types, so the published contract stays
+    the thing under test.
+  -->
+  <ItemGroup>
+    <InternalsVisibleTo Include="EAMS.Tests" />
+  </ItemGroup>
+
+  <!--
+    Layering rule (Technical Plan §3): Infrastructure implements Application/Domain
+    interfaces. It owns every EF Core dependency; no other project references EF directly.
+    Every type here is internal except DependencyInjection, so the boundary is a compile
+    error rather than a convention.
+  -->
+  <!--
+    Excel reading for the §10 roster import.
+
+    ClosedXML is MIT. EPPlus is deliberately NOT used: it relicensed at version 5 to a commercial
+    licence for any non-personal use, and this is client work — so the licence, not the API, decides.
+    Nothing else in the backend reads spreadsheets, and this reference is confined to
+    EAMS.Infrastructure/Sis: the Application and Domain layers never see a workbook type.
+  -->
+  <ItemGroup>
+    <PackageReference Include="ClosedXML" Version="0.105.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.EntityFrameworkCore.SqlServer" Version="9.0.1" />
+    <!-- Required by `dotnet ef`; PrivateAssets keeps it out of the runtime dependency graph. -->
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Design" Version="9.0.1">
+      <PrivateAssets>all</PrivateAssets>
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+    </PackageReference>
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\EAMS.Application\EAMS.Application.csproj" />
+    <ProjectReference Include="..\EAMS.Domain\EAMS.Domain.csproj" />
+  </ItemGroup>
+
+</Project>

@@ -1,12 +1,17 @@
-using EAMS.Api.Domain;
+using EAMS.Domain;
+using Microsoft.EntityFrameworkCore;
 
-namespace EAMS.Api.Data;
+namespace EAMS.Infrastructure.Data;
 
-public static class SeedData
+/// <summary>
+/// Dev-only convenience data. The guard is the school row: on a persistent database the second and
+/// every later start finds it and returns without writing, so seeding stays a no-op once applied.
+/// </summary>
+internal static class SeedData
 {
-    public static void Initialize(EamsDbContext db)
+    public static async Task InitializeAsync(EamsDbContext db, CancellationToken ct = default)
     {
-        if (db.Schools.Any()) return;
+        if (await db.Schools.AnyAsync(ct)) return;
 
         var school = new School
         {
@@ -45,9 +50,11 @@ public static class SeedData
                 YearLevel = s.Year,
                 Section = s.Section,
                 Gender = s.Gender,
+                // ADR-001 "Accepted Context": a synthetic value, not a real Mastersoft key.
                 SisExternalId = $"SIS-{s.No}",
             };
-            student.Cards.Add(new RfidCard { CardUid = s.Uid, Label = "Primary ID" });
+            // SchoolId is denormalized onto the card (ADR-001 D-3) and must match the owner's.
+            student.Cards.Add(new RfidCard { SchoolId = school.Id, CardUid = s.Uid, Label = "Primary ID" });
             students.Add(student);
         }
         db.Students.AddRange(students);
@@ -61,9 +68,9 @@ public static class SeedData
             Location = "USA Gymnasium",
             StartAt = now.AddMinutes(-30),
             EndAt = now.AddHours(2),
-            AttendanceMode = "Single",
+            AttendanceMode = AttendanceMode.Single,
             GraceMinutes = 15,
-            Status = "Open",
+            Status = EventStatus.Open,
         };
         var pastEvent = new Event
         {
@@ -73,9 +80,9 @@ public static class SeedData
             Location = "AVR 2",
             StartAt = now.AddDays(-3),
             EndAt = now.AddDays(-3).AddHours(3),
-            AttendanceMode = "Single",
+            AttendanceMode = AttendanceMode.Single,
             GraceMinutes = 10,
-            Status = "Closed",
+            Status = EventStatus.Closed,
         };
         db.Events.AddRange(openEvent, pastEvent);
 
@@ -85,18 +92,20 @@ public static class SeedData
             {
                 EventId = openEvent.Id, StudentId = students[0].Id,
                 RfidCardId = students[0].Cards.First().Id,
-                CheckInAt = now.AddMinutes(-25), Status = "Present", CaptureMethod = "Rfid",
+                CheckInAt = now.AddMinutes(-25), Status = AttendanceStatus.Present,
+                CaptureMethod = CaptureMethod.Rfid,
                 DeviceTapId = Guid.NewGuid().ToString(),
             },
             new AttendanceRecord
             {
                 EventId = openEvent.Id, StudentId = students[1].Id,
                 RfidCardId = students[1].Cards.First().Id,
-                CheckInAt = now.AddMinutes(-5), Status = "Late", CaptureMethod = "Rfid",
+                CheckInAt = now.AddMinutes(-5), Status = AttendanceStatus.Late,
+                CaptureMethod = CaptureMethod.Rfid,
                 DeviceTapId = Guid.NewGuid().ToString(),
             }
         );
 
-        db.SaveChanges();
+        await db.SaveChangesAsync(ct);
     }
 }

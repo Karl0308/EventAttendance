@@ -35,8 +35,21 @@ jobs:
       - name: Build
         run: dotnet build EAMS.sln --configuration Release --no-restore
 
-      # No test project yet (core-slice mock build); this passes with zero tests
-      # and starts running suites automatically once EAMS.Tests is added.
+      # EAMS.Tests splits into unit tests (pure logic, no database) and integration tests
+      # (real SQL Server). The integration half starts its own SQL Server 2022 container via
+      # Testcontainers — ubuntu-latest runners ship with Docker, so no service container,
+      # no health-check polling, and no connection string in this file. The suite creates a
+      # run-scoped database, applies the Section4Baseline migration, and drops it afterwards.
+      #
+      # CI=true is set by GitHub Actions. SqlServerFixture reads it and refuses to fall back
+      # to a local SQL Server if Docker is unreachable: the behaviours these tests cover
+      # (filtered unique indexes, NULL equality inside a unique index, unique-violation races)
+      # exist only on real SQL Server, so a run that quietly tested something else — or
+      # skipped — would report confidence it had not earned. A missing Docker fails the job.
+      #
+      # The first run on a fresh runner pulls mcr.microsoft.com/mssql/server:2022-latest
+      # (~700 MB) and waits for the server to accept connections, so budget a couple of
+      # minutes more than the build itself takes.
       - name: Test
         run: dotnet test EAMS.sln --configuration Release --no-build --verbosity normal
 

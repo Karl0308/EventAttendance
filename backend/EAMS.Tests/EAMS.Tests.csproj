@@ -1,0 +1,52 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- TargetFramework / Nullable / ImplicitUsings come from backend/Directory.Build.props. -->
+
+  <PropertyGroup>
+    <IsPackable>false</IsPackable>
+    <IsTestProject>true</IsTestProject>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />
+    <PackageReference Include="xunit" Version="2.9.3" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="3.1.5">
+      <PrivateAssets>all</PrivateAssets>
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+    </PackageReference>
+
+    <!-- WebApplicationFactory<Program>: the UTC assertions have to read what the HTTP layer emits. -->
+    <PackageReference Include="Microsoft.AspNetCore.Mvc.Testing" Version="9.0.14" />
+
+    <!--
+      Pinned to 4.10.0 deliberately. Later 4.x lines stopped defaulting an image tag on some
+      builders, so an unpinned bump can silently start pulling a different SQL Server. The image is
+      also named explicitly in SqlServerFixture, so neither half depends on the other.
+    -->
+    <PackageReference Include="Testcontainers.MsSql" Version="4.10.0" />
+
+    <!--
+      Same version EAMS.Infrastructure ships, and referenced here for one reason: the import fixture
+      is *generated* rather than committed. The real roster holds 52 students' names and institutional
+      e-mail addresses; putting it in a GitHub repository is a disclosure that cannot be undone, and a
+      .gitignore is one careless `git add -f` away from failing. Building an equivalent workbook in
+      memory also makes every dirty case explicit and named, which a binary fixture never is.
+    -->
+    <PackageReference Include="ClosedXML" Version="0.105.0" />
+  </ItemGroup>
+
+  <!--
+    Deliberately absent: FluentAssertions (v8+ is commercially licensed for non-OSS use) and any
+    EF Core package. EF Core and Microsoft.Data.SqlClient arrive transitively from EAMS.Infrastructure
+    at exactly the version the application ships (9.0.1) — pinning them again here would let the
+    tests drift onto a different provider than production runs on, which is the one thing an
+    integration suite must not do.
+  -->
+  <ItemGroup>
+    <ProjectReference Include="..\EAMS.Api\EAMS.Api.csproj" />
+    <ProjectReference Include="..\EAMS.Application\EAMS.Application.csproj" />
+    <ProjectReference Include="..\EAMS.Domain\EAMS.Domain.csproj" />
+    <ProjectReference Include="..\EAMS.Infrastructure\EAMS.Infrastructure.csproj" />
+  </ItemGroup>
+
+</Project>

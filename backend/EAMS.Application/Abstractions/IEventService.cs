@@ -1,0 +1,174 @@
+using EAMS.Application.Dtos;
+
+namespace EAMS.Application.Abstractions;
+
+/// <summary>
+/// Why the outcome is an enum rather than an exception or a bare bool — the same reasoning
+/// <see cref="TapOutcome"/> records: the write surface has several non-exceptional failures that map to
+/// different HTTP statuses, and the service owns the decision while the controller owns only the
+/// translation.
+/// </summary>
+public enum EventWriteOutcome
+{
+    /// <summary>The write happened, or the request asked for a state the event was already in.</summary>
+    Saved,
+
+    /// <summary>No such event, or it is soft-deleted. 404.</summary>
+    NotFound,
+
+    /// <summary>
+    /// A field failed a §4.5 rule — a blank or over-length name, an end before its start, an
+    /// undocumented <c>AttendanceMode</c> or <c>Status</c> value, a negative grace period. 400, and the
+    /// message names the field.
+    ///
+    /// <para>
+    /// One member rather than one per field on purpose. <see cref="ManualOutcome.InvalidStatus"/> and
+    /// <see cref="ManualOutcome.InvalidNotes"/> are split because each records a distinct shipped defect
+    /// worth naming; these are a validation layer written all at once, they all map to 400, and eight
+    /// enum members that a controller treats identically would be eight things to keep in sync for no
+    /// reader's benefit.
+    /// </para>
+    /// </summary>
+    ValidationFailed,
+
+    /// <summary>
+    /// The requested status is not reachable from the current one — see <c>EventStatusTransition</c>.
+    /// 400 rather than a silent write, and the message lists what <em>is</em> reachable.
+    /// </summary>
+    IllegalTransition,
+
+    /// <summary>
+    /// The event's state forbids this change: its audience cannot move once it is <c>Closed</c> or
+    /// <c>Cancelled</c>, and its own fields cannot be edited once it is <c>Closed</c>. 409, not 400 —
+    /// the request is well formed and would be legal against the same event in another state, which is
+    /// the distinction <c>SisImportController</c> already draws between "cannot be run" and "malformed".
+    /// </summary>
+    EventLocked,
+
+    /// <summary>
+    /// A <c>studentGroupId</c> or <c>studentId</c> in the payload does not resolve to a row belonging to
+    /// this event's school. 400, listing the ids. Covers the unknown id and the other tenant's id
+    /// identically and on purpose: telling a caller which of the two it was confirms the existence of a
+    /// row in a school they cannot see.
+    /// </summary>
+    UnknownReference,
+
+    /// <summary>
+    /// The payload named a derived <c>Section</c> group whose key is <c>AcademicKey.Unspecified</c>.
+    /// 400. The projection deliberately never creates one — a union of every offering whose section
+    /// cell was blank is not a cohort anybody could have meant to invite — so this can only be a
+    /// hand-written row, and inviting it would put an arbitrary slice of the institution in a
+    /// denominator.
+    /// </summary>
+    NotACohort,
+
+    /// <summary>
+    /// A new event cannot be filed against a school. 409. Only reachable in the pre-auth build with no
+    /// tenant pinned and zero or several <c>Schools</c> rows; Phase 6 makes it unreachable by resolving
+    /// the tenant from claims before the request gets this far.
+    /// </summary>
+    NoSchoolResolved,
+}
+
+/// <summary>The result of a write against one event. <paramref name="Event"/> is null unless it saved.</summary>
+public record EventWriteResponse(EventWriteOutcome Outcome, string Message, EventDto? Event);
+
+/// <summary>The result of an audience change. <paramref name="Result"/> is null unless it saved.</summary>
+public record EventAudienceResponse(
+    EventWriteOutcome Outcome, string Message, EventAudienceResultDto? Result);
+
+/// <summary>Technical Plan §6.3 and the §6.7/§12 event summary and roster.</summary>
+public interface IEventService
+{
+    Task<IReadOnlyList<EventDto>> ListAsync(string? status, CancellationToken ct = default);
+
+    Task<EventDto?> GetAsync(Guid id, CancellationToken ct = default);
+
+    Task<EventSummaryDto?> GetSummaryAsync(Guid id, CancellationToken ct = default);
+
+    /// <summary>
+    /// §6.3 <c>POST /events</c>. The event is created <c>Draft</c> — always, and regardless of what the
+    /// caller wants — because <see cref="ChangeStatusAsync"/> is the only path that can freeze a roster.
+    /// See <see cref="EventWriteRequest"/>.
+    /// </summary>
+    Task<EventWriteResponse> CreateAsync(EventWriteRequest request, CancellationToken ct = default);
+
+    /// <summary>
+    /// §6.3 <c>PUT /events/{id}</c>. A full replacement of the event's own fields; it does not touch
+    /// <c>Status</c>, <c>SchoolId</c>, <c>IsDeleted</c>, or the audience. Refused on a <c>Closed</c>
+    /// event — see <c>EventStatusTransition.AcceptsEdits</c>.
+    /// </summary>
+    Task<EventWriteResponse> UpdateAsync(
+        Guid id, EventWriteRequest request, CancellationToken ct = default);
+
+    /// <summary>
+    /// §6.3 <c>PATCH /events/{id}/status</c> — Open / Close / Cancel.
+    ///
+    /// <para>
+    /// <b>The transition to <c>Closed</c> materializes the expected roster</b>: every expected student
+    /// with no attendance record gets one, <c>Absent</c> / <c>Import</c>. That is what fixes the
+    /// denominator and the absentee list in place, so no later roster import can move a past event's
+    /// numbers. Idempotent by construction — <c>UNIQUE(EventId, StudentId, OccurrenceId)</c> — and
+    /// skipped entirely when the event is already <c>Closed</c>.
+    /// </para>
+    /// </summary>
+    Task<EventWriteResponse> ChangeStatusAsync(
+        Guid id, string status, CancellationToken ct = default);
+
+    /// <summary>
+    /// §6.3 <c>DELETE /events/{id}</c> — soft, per §4.5's <c>IsDeleted</c>. Attendance rows are left
+    /// exactly where they are: every FK in this model is <c>Restrict</c>, and an attendance trail must
+    /// not vanish because someone tidied a calendar.
+    /// </summary>
+    Task<EventWriteResponse> DeleteAsync(Guid id, CancellationToken ct = default);
+
+    /// <summary>
+    /// §6.3 <c>POST /events/{id}/attendees</c> — writes §4.8 <c>EventGroups</c> rows.
+    ///
+    /// <para>
+    /// <b>Idempotent.</b> Re-posting the same selection attaches nothing and reports the ids as already
+    /// attached. Backed by two filtered unique indexes rather than by this method remembering to check,
+    /// so two concurrent posts cannot both win.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>Cross-school references are refused</b> (<see cref="EventWriteOutcome.UnknownReference"/>) and
+    /// so is the <c>(unspecified)</c> section group (<see cref="EventWriteOutcome.NotACohort"/>).
+    /// </para>
+    ///
+    /// <para>
+    /// <b>A group from another term warns rather than refuses,</b> and the asymmetry with the two
+    /// refusals above is the decision worth recording. An <c>Event</c> carries no <c>TermId</c> — §4.5
+    /// has no such column — so "another term" can only mean "not the term currently flagged
+    /// <c>IsCurrent</c>", which is a property of the school right now and not of the event. Refusing on
+    /// it would make the identical request succeed today and fail after the registrar advances the
+    /// term, for an event nobody touched; it would also foreclose two legitimate cases, an event
+    /// prepared for next term and an event that deliberately invites a past cohort. The mistake is
+    /// visible without help — every derived group's name carries its term, so the attached list reads
+    /// "BSCRIM 2-A (2024-2025-2)" — and it is fully reversible with one <c>DELETE</c>. Contrast the
+    /// <c>(unspecified)</c> group, which has no legitimate reading at all, and a cross-school group,
+    /// which is a tenancy breach rather than a judgement call. This follows ADR-001 D-5's line: the
+    /// import pipeline warns on anomalies and hard-fails only where the alternative is unrecoverable.
+    /// </para>
+    /// </summary>
+    Task<EventAudienceResponse> AttachAudienceAsync(
+        Guid id, EventAudienceRequest request, CancellationToken ct = default);
+
+    /// <summary>
+    /// Removes an attached group. Succeeds whether or not the group was attached — the postcondition
+    /// ("this group is not in this event's audience") holds either way, so a retry is safe. A missing
+    /// <em>event</em> is still a 404: that one is named by the URL.
+    /// </summary>
+    Task<EventAudienceResponse> DetachGroupAsync(
+        Guid id, Guid studentGroupId, CancellationToken ct = default);
+
+    /// <inheritdoc cref="DetachGroupAsync"/>
+    Task<EventAudienceResponse> DetachStudentAsync(
+        Guid id, Guid studentId, CancellationToken ct = default);
+
+    /// <summary>
+    /// §6.3 <c>GET /events/{id}/roster</c> — expected versus actual, de-duplicated across attached
+    /// groups. Null when there is no such event.
+    /// </summary>
+    Task<EventRosterDto?> GetRosterAsync(Guid id, CancellationToken ct = default);
+}

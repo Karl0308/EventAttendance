@@ -1,0 +1,10 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- TargetFramework / Nullable / ImplicitUsings come from backend/Directory.Build.props. -->
+
+  <!--
+    Layering rule (Technical Plan §3): Domain is the innermost layer.
+    It must never reference another EAMS project or a persistence/web package.
+  -->
+
+</Project>

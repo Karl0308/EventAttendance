@@ -1,0 +1,26 @@
+<Project>
+
+  <!--
+    Shared build settings for every project under backend/. These three properties were copy-pasted
+    identically into EAMS.Api, EAMS.Application, EAMS.Domain and EAMS.Infrastructure; EAMS.Tests
+    would have made five. Hoisting them means a framework bump is one edit, and a new project
+    inherits the settings instead of remembering them.
+
+    MSBuild imports this file *before* the .csproj, so a project can still override any of these
+    locally (none does today). Only settings that must hold for the whole backend belong here —
+    package references and per-project switches stay in their own .csproj.
+  -->
+  <PropertyGroup>
+    <TargetFramework>net9.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+  </PropertyGroup>
+
+  <!--
+    Build servers are not developer machines: a warning nobody reads on a laptop is a warning
+    nobody reads in a PR either. Left off deliberately for now (TreatWarningsAsErrors) because
+    turning it on is a behaviour change to four existing projects, not a test-project concern —
+    flagged in the Phase 0c QA report instead of decided here.
+  -->
+
+</Project>

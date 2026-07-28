@@ -1,0 +1,13 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- TargetFramework / Nullable / ImplicitUsings come from backend/Directory.Build.props. -->
+
+  <!--
+    Layering rule (Technical Plan §3): Application depends on Domain only.
+    No EF Core, no ASP.NET Core packages here.
+  -->
+  <ItemGroup>
+    <ProjectReference Include="..\EAMS.Domain\EAMS.Domain.csproj" />
+  </ItemGroup>
+
+</Project>

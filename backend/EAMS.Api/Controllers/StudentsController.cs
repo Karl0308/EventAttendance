@@ -1,55 +1,49 @@
-using EAMS.Api.Data;
-using EAMS.Api.Domain;
-using EAMS.Api.Dtos;
+using EAMS.Api.Authorization;
+using EAMS.Application.Abstractions;
+using EAMS.Application.Dtos;
 using Microsoft.AspNetCore.Mvc;
-using Microsoft.EntityFrameworkCore;
 
 namespace EAMS.Api.Controllers;
 
+// Permission codes are Technical Plan §6.2's, action for action. ADR-001 D-6's bargain was that
+// endpoints get decorated as they are written so Phase 6 wires enforcement rather than re-deriving
+// what each endpoint should have demanded — and the attribute enforces nothing, so this is a
+// declaration of intent and not a change in behaviour. See HasPermissionNotEnforcedAttribute.
 [ApiController]
 [Route("api/v1/students")]
 public class StudentsController : ControllerBase
 {
-    private readonly EamsDbContext _db;
-    public StudentsController(EamsDbContext db) => _db = db;
-
-    private static StudentDto ToDto(Student s) => new(
-        s.Id, s.StudentNumber, s.FullName, s.Email, s.Course, s.YearLevel, s.Section, s.Status,
-        s.Cards.Select(c => new CardDto(c.Id, c.CardUid, c.Label, c.IsActive)));
+    private readonly IStudentService _students;
+    public StudentsController(IStudentService students) => _students = students;
 
     [HttpGet]
+    [HasPermissionNotEnforced("students.read")]
     public async Task<ActionResult<IEnumerable<StudentDto>>> List(
-        [FromQuery] string? search, [FromQuery] string? course, [FromQuery] string? status)
-    {
-        var q = _db.Students.Include(s => s.Cards).Where(s => !s.IsDeleted);
-
-        if (!string.IsNullOrWhiteSpace(search))
-            q = q.Where(s => s.FirstName.Contains(search) || s.LastName.Contains(search)
-                          || s.StudentNumber.Contains(search));
-        if (!string.IsNullOrWhiteSpace(course)) q = q.Where(s => s.Course == course);
-        if (!string.IsNullOrWhiteSpace(status)) q = q.Where(s => s.Status == status);
-
-        var list = await q.OrderBy(s => s.LastName).ToListAsync();
-        return Ok(list.Select(ToDto));
-    }
+        [FromQuery] string? search, [FromQuery] string? course, [FromQuery] string? status,
+        CancellationToken ct)
+        => Ok(await _students.ListAsync(search, course, status, ct));
 
     [HttpGet("{id:guid}")]
-    public async Task<ActionResult<StudentDto>> Get(Guid id)
+    [HasPermissionNotEnforced("students.read")]
+    public async Task<ActionResult<StudentDto>> Get(Guid id, CancellationToken ct)
     {
-        var s = await _db.Students.Include(x => x.Cards).FirstOrDefaultAsync(x => x.Id == id && !x.IsDeleted);
-        return s is null ? NotFound() : Ok(ToDto(s));
+        var s = await _students.GetAsync(id, ct);
+        return s is null ? NotFound() : Ok(s);
     }
 
     // GET /students/by-card/{cardUid} — UID→student resolution for the mobile scan screen.
+    // The service normalizes the UID; callers may pass any reader format.
+    //
+    // `attendance.capture`, not `students.read` — §6.2 assigns this one endpoint the capture
+    // permission because its caller is the reader/mobile scan screen, which must resolve a UID
+    // without being trusted to browse the roster. A device API key is scoped to `attendance.capture`
+    // alone (§11), so reading it as a student permission would lock the kiosks out of the one lookup
+    // they exist to perform.
     [HttpGet("by-card/{cardUid}")]
-    public async Task<ActionResult<StudentDto>> ByCard(string cardUid)
+    [HasPermissionNotEnforced("attendance.capture")]
+    public async Task<ActionResult<StudentDto>> ByCard(string cardUid, CancellationToken ct)
     {
-        var uid = Normalize(cardUid);
-        var card = await _db.RfidCards.Include(c => c.Student!).ThenInclude(s => s.Cards)
-            .FirstOrDefaultAsync(c => c.CardUid == uid && c.IsActive);
-        return card?.Student is null ? NotFound("No active card matches that UID.") : Ok(ToDto(card.Student));
+        var s = await _students.GetByCardUidAsync(cardUid, ct);
+        return s is null ? NotFound("No active card matches that UID.") : Ok(s);
     }
-
-    internal static string Normalize(string uid) =>
-        new string(uid.Where(char.IsLetterOrDigit).ToArray()).ToUpperInvariant();
 }
