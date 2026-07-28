@@ -271,7 +271,7 @@ public class StudentGroupProjectionTests : IntegrationTest
             .ToListAsync();
 
         // Invitable: the offering group exists and holds the student.
-        var offeringGroup = Assert.Single(derived.Where(g => g.SourceEntityId == offeringId));
+        var offeringGroup = Assert.Single(derived, g => g.SourceEntityId == offeringId);
         Assert.Contains(offeringGroup.Members, m => m.StudentId == world.SantosId);
 
         // But no cohort was fabricated from the sentinel.
