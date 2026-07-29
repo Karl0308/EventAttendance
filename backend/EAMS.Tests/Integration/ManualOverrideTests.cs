@@ -504,7 +504,7 @@ public class ManualOverrideTests : IntegrationTest
             world.EventId, world.StudentId, AttendanceStatus.Present,
             new string('x', AttendanceNotes.MaxLength + 1));
 
-        Assert.Equal(ManualOutcome.InvalidNoteText, response.Outcome);
+        Assert.Equal(ManualOutcome.InvalidNotes, response.Outcome);
         Assert.Empty(await AllRecordsAsync());
     }
 

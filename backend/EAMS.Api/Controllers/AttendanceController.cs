@@ -422,9 +422,6 @@ public class AttendanceController : ControllerBase
     /// <response code="404"><c>EventNotFound</c> or <c>StudentNotFound</c>, same body shape.</response>
     [HttpPost("manual")]
     [HasPermissionNotEnforced("attendance.write")]
-    [ProducesResponseType(typeof(TapResult), StatusCodes.Status200OK)]
-    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status400BadRequest)]
-    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status404NotFound)]
     public async Task<ActionResult<TapResult>> Manual(
         [FromQuery] Guid eventId, [FromQuery] Guid studentId,
         [FromQuery] string status = "Present",
@@ -507,7 +504,7 @@ public class AttendanceController : ControllerBase
         ManualOutcome.EventNotFound => "Event not found.",
         ManualOutcome.StudentNotFound => "Student not found.",
         ManualOutcome.InvalidStatus => "That attendance status is not one of the documented values.",
-        ManualOutcome.InvalidNoteText => "Those notes are too long.",
+        ManualOutcome.InvalidNotes => "Those notes are too long.",
         _ => "The manual entry could not be saved.",
     };
 
@@ -608,7 +605,7 @@ public class AttendanceController : ControllerBase
         // Syntactically valid requests that failed a §4.9 column rule — 400, not 500, and not a
         // cheerful 200 with the bad value persisted.
         ManualOutcome.InvalidStatus
-            or ManualOutcome.InvalidNoteText => StatusCodes.Status400BadRequest,
+            or ManualOutcome.InvalidNotes => StatusCodes.Status400BadRequest,
 
         _ => throw new ArgumentOutOfRangeException(
             nameof(outcome), outcome,
