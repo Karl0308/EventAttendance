@@ -69,6 +69,13 @@ public static class DependencyInjection
         // the host has already configured providers this changes nothing at all.
         services.AddLogging();
 
+        // The D-29 live endpoint's poll interval, resolved here because this is the seam that already
+        // holds the IConfiguration — the Application layer defines the record but takes no dependency on
+        // Microsoft.Extensions.Options (Technical Plan §3). Singleton: it is immutable and read once per
+        // response, so a change is a restart, which is the documented behaviour.
+        services.AddSingleton(
+            AttendanceLiveOptions.Resolve(configuration[AttendanceLiveOptions.ConfigurationKey]));
+
         services.AddScoped<IStudentService, StudentService>();
         services.AddScoped<IEventService, EventService>();
         services.AddScoped<IAttendanceService, AttendanceService>();
@@ -95,7 +102,43 @@ public static class DependencyInjection
         await db.Database.MigrateAsync(ct);
         if (seed) await SeedData.InitializeAsync(db, ct);
 
+        ReportLivePollConfiguration(scope.ServiceProvider);
+
         await PinDevelopmentSchoolAsync(scope.ServiceProvider, db, ct);
+    }
+
+    /// <summary>
+    /// Says out loud when a configured D-29 poll interval was thrown away.
+    ///
+    /// <para>
+    /// <c>AttendanceLiveOptions.Resolve</c> falls back to the published default for anything
+    /// unparseable or out of range, which is the right behaviour — a typo in a poll interval must not
+    /// stop the dashboard — and a silent one. Without this line the operator who set
+    /// <c>Attendance:LivePollAfterSeconds</c> to <c>5000</c> and is still seeing five-second polls has
+    /// no way to find out why except by reading source.
+    /// </para>
+    ///
+    /// <para>
+    /// Deliberately <em>not</em> the same severity argument as the D-36 tap window, which logs every
+    /// candidate it could not parse: that one changes which taps are accepted and is discovered from a
+    /// report weeks later. This one changes a refresh rate and is visible in seconds. One line at
+    /// startup is the proportionate answer.
+    /// </para>
+    /// </summary>
+    private static void ReportLivePollConfiguration(IServiceProvider scoped)
+    {
+        var live = scoped.GetRequiredService<AttendanceLiveOptions>();
+        if (live.RejectedConfiguredValue is not { } rejected) return;
+
+        scoped.GetRequiredService<ILoggerFactory>()
+            .CreateLogger("EAMS.Attendance")
+            .LogInformation(
+                "'{Setting}' is '{Value}', which is not a whole number of seconds between {Min} and " +
+                "{Max}. Live attendance polling is using the default of {Default}s until the setting " +
+                "is corrected.",
+                AttendanceLiveOptions.ConfigurationKey, rejected,
+                AttendanceLiveOptions.MinPollAfterSeconds, AttendanceLiveOptions.MaxPollAfterSeconds,
+                live.PollAfterSeconds);
     }
 
     /// <summary>

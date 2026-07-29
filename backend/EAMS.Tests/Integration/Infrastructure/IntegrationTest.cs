@@ -142,7 +142,16 @@ public abstract class IntegrationTest : IAsyncLifetime
     /// another school's rows.
     /// </para>
     /// </summary>
-    internal IEventService EventsOn(EamsDbContext db) => new EventService(db, School, CurrentUser);
+    internal IEventService EventsOn(EamsDbContext db) => EventsOn(db, AttendanceLiveOptions.Default);
+
+    /// <summary>
+    /// The same service with an explicit D-29 poll interval, for the one test that asserts the value in
+    /// the live body is the configured one rather than a constant. Everything else takes
+    /// <see cref="AttendanceLiveOptions.Default"/>, which is what an unconfigured host resolves to — so
+    /// the ordinary tests exercise exactly what ships.
+    /// </summary>
+    internal IEventService EventsOn(EamsDbContext db, AttendanceLiveOptions live) =>
+        new EventService(db, School, CurrentUser, live);
 
     internal IStudentGroupProjection ProjectionOn(EamsDbContext db) => new StudentGroupProjection(db);
 

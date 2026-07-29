@@ -53,6 +53,20 @@ public class AttendanceControllerMappingTests
         }
     }
 
+    /// <inheritdoc cref="Every_declared_tap_outcome_is_mapped"/>
+    [Fact]
+    public void Every_declared_live_outcome_is_mapped()
+    {
+        foreach (var outcome in Enum.GetValues<LiveOutcome>())
+        {
+            var status = AttendanceController.StatusCodeFor(outcome);
+            Assert.True(
+                status is >= 200 and < 500,
+                $"{outcome} maps to {status}. Every declared LiveOutcome needs a deliberate status " +
+                "code — a new one must be added to AttendanceController.StatusCodeFor.");
+        }
+    }
+
     /// <summary>
     /// The §8.2 contract, stated as the property that actually matters to the offline queue rather
     /// than as a list of specific codes. A rejected tap must be a 4xx: a 2xx makes the client delete
@@ -64,6 +78,8 @@ public class AttendanceControllerMappingTests
     [InlineData(TapOutcome.EventNotOpen)]
     [InlineData(TapOutcome.CardNotFound)]
     [InlineData(TapOutcome.DeviceNotRegistered)]
+    [InlineData(TapOutcome.DeviceTapIdRequired)]
+    [InlineData(TapOutcome.BatchTooLarge)]
     public void A_rejected_tap_is_a_4xx_so_the_offline_queue_stops_retrying(TapOutcome outcome)
     {
         var status = AttendanceController.StatusCodeFor(outcome);
@@ -99,5 +115,7 @@ public class AttendanceControllerMappingTests
             () => AttendanceController.StatusCodeFor((TapOutcome)999));
         Assert.Throws<ArgumentOutOfRangeException>(
             () => AttendanceController.StatusCodeFor((ManualOutcome)999));
+        Assert.Throws<ArgumentOutOfRangeException>(
+            () => AttendanceController.StatusCodeFor((LiveOutcome)999));
     }
 }

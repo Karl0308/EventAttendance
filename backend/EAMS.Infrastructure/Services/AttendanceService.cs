@@ -62,7 +62,36 @@ internal sealed class AttendanceService : IAttendanceService
     // validate the event window → validate the device → idempotency check → upsert → compute
     // Present/Late. Splitting it behind a repository would scatter a single transactional decision
     // across layers.
-    public async Task<TapResponse> TapAsync(TapRequest req, CancellationToken ct = default)
+    //
+    // The public entry point takes no window cache: a single tap resolves its §4.13 settings once and
+    // has nothing to reuse them across. TapBatchAsync supplies one — see the overload below.
+    public Task<TapResponse> TapAsync(TapRequest req, CancellationToken ct = default) =>
+        TapAsync(req, windows: null, ct);
+
+    /// <inheritdoc cref="TapAsync(TapRequest, CancellationToken)"/>
+    /// <param name="windows">
+    /// A per-call memo of resolved §4.13 tap windows, keyed by school, or null to resolve every time.
+    /// Phase 4d's carry-over from 4c: <see cref="ResolveTapWindowAsync"/> is one settings query per tap
+    /// and a 200-row batch would run it 200 times, identically. Supplied by
+    /// <see cref="TapBatchAsync"/> and by nothing else.
+    ///
+    /// <para>
+    /// <b>Keyed by school rather than by event, and it must stay that way.</b> The window is a §4.13
+    /// per-school setting, so two events in one school share an entry and two schools never do. Keying
+    /// on the event would be correct and would miss most of the saving; keying on nothing — resolving
+    /// once for the batch and reusing it regardless — would apply one school's window to another
+    /// school's event, which is unreachable through an authenticated device today and is exactly the
+    /// kind of "unreachable" this service has already been wrong about once.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>It is a parameter and not a field.</b> Its correct lifetime is one batch: a field on this
+    /// scoped service would outlive the call and start answering with a window an administrator had
+    /// since changed, and nothing about that would look wrong at the call site.
+    /// </para>
+    /// </param>
+    private async Task<TapResponse> TapAsync(
+        TapRequest req, Dictionary<Guid, TapTimeWindow>? windows, CancellationToken ct)
     {
         // Read once, at entry, and used for three things that must agree: the fallback timestamp when
         // the client sends none, the D-36 future-tolerance comparison, and the `serverTime` every
@@ -90,6 +119,35 @@ internal sealed class AttendanceService : IAttendanceService
                 TapOutcome.DeviceMismatch,
                 "The deviceId in the request body is not the device this key authenticates. Send the " +
                 "authenticated device's id, or omit the field.",
+                serverTime);
+        }
+
+        // The other half of the same payload guard, and it closes a 500 (Phase 4d review, CRITICAL).
+        //
+        // DeviceTapId is client-supplied and lands in nvarchar(100). EF sizes an over-length string as
+        // nvarchar(max) rather than clipping it, so it reached SQL Server and returned error 8152/2628 —
+        // a truncation, not a unique violation, so SaveNewRecordAsync's `when` filter correctly declines
+        // it and it propagated unhandled. Identical in mechanism to the Notes truncation this service
+        // already closed on the override path; see DeviceTapIds for why the batch endpoint made it
+        // urgent rather than tidy.
+        //
+        // Only the *length* is enforced here. Blank still means "absent" on this endpoint, exactly as
+        // before — the single tap has always permitted a caller to omit an idempotency key, and turning
+        // an empty string into a rejection would break every client built against that. The batch
+        // endpoint applies the whole of DeviceTapIds.IsUsable, because D-33 makes the field required
+        // there.
+        //
+        // The token is the published DeviceTapIdRequired rather than a new one: its documented client
+        // instruction is "Stop; bug on your side", which is exactly right for a key we cannot store, and
+        // the frozen table needs no revision to say so.
+        if (!string.IsNullOrWhiteSpace(req.DeviceTapId) && !DeviceTapIds.IsUsable(req.DeviceTapId))
+        {
+            return Reject(
+                TapOutcome.DeviceTapIdRequired,
+                $"deviceTapId is {req.DeviceTapId.Length} characters; the maximum is " +
+                $"{DeviceTapIds.MaxLength}. Nothing was recorded. Shorten the key your client " +
+                "generates — it is stored as the idempotency key and cannot be truncated without " +
+                "silently breaking replay.",
                 serverTime);
         }
 
@@ -122,7 +180,7 @@ internal sealed class AttendanceService : IAttendanceService
                 serverTime);
         }
 
-        var window = await ResolveTapWindowAsync(ev.SchoolId, ct);
+        var window = await ResolveTapWindowAsync(ev.SchoolId, windows, ct);
         if (!window.Contains(when, ev.StartAt, ev.EndAt))
         {
             var (from, to) = window.BoundsFor(ev.StartAt, ev.EndAt);
@@ -268,6 +326,246 @@ internal sealed class AttendanceService : IAttendanceService
         return AlreadyRecorded(existing, serverTime);
     }
 
+    // ---------------------------------------------------------------------- §8.2 batch sync (D-31)
+
+    /// <summary>
+    /// <inheritdoc cref="IAttendanceService.TapBatchAsync" path="/summary/para[1]"/>
+    ///
+    /// <para>
+    /// <b>Every row goes through <see cref="TapAsync"/>. There is no batch tap logic.</b> The only two
+    /// things this method decides are the two the single endpoint has no opinion about — the order rows
+    /// are applied in, and that a batch row must carry an idempotency key. Everything else (event
+    /// window, device ownership, duplicate detection, check-in versus check-out, Present versus Late) is
+    /// the same code producing the same <see cref="TapResponse"/>, which is what makes "the same tap
+    /// through /tap and through /tap/batch produces an identical outcome and an identical row" a
+    /// property of the structure rather than of two implementations agreeing.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>Per row, not per batch: there is no explicit transaction around this loop.</b> Each
+    /// <c>SaveChanges</c> is already its own transaction, so the unit of atomicity is one tap.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>The three arguments that read most persuasively for this are all wrong, and they are written
+    /// down because the next person will reach for them too.</b> Each was tested by wrapping this loop
+    /// in <c>BeginTransactionAsync</c> and running the suite; all nineteen batch tests passed.
+    /// <list type="number">
+    ///   <item>"A bad row would roll back the good rows." It would not. A rejected row is a
+    ///   <em>result</em>, not an exception — <c>CardNotFound</c> never reaches the database — so nothing
+    ///   aborts anything. Only a thrown exception rolls a batch back, and that is the <c>5xx</c> path.</item>
+    ///   <item>"<see cref="SaveNewRecordAsync"/>'s unique-violation recovery cannot run inside a
+    ///   transaction, because the failed statement dooms it." It can. With <c>XACT_ABORT</c> off — the
+    ///   default — SQL Server treats a 2601 as a <em>statement</em> abort: <c>XACT_STATE()</c> stays 1,
+    ///   the re-read succeeds and the transaction commits. Verified directly against SQL Server 2022
+    ///   rather than assumed.</item>
+    ///   <item>"Per-row commits are what let a duplicate <c>deviceTapId</c> inside one batch resolve,
+    ///   because the second row finds the first already committed." Also not the mechanism. Both rows
+    ///   run on one connection inside one transaction, so the second row's pre-check reads the first
+    ///   row's uncommitted insert anyway — read-your-own-writes, not commit visibility.</item>
+    /// </list>
+    /// </para>
+    ///
+    /// <para>
+    /// <b>The reason that survives is lock duration.</b> Under one transaction, every row's exclusive
+    /// row lock and its entries in two filtered unique indexes are held until the last of up to two
+    /// hundred rows is written — so an ordinary single tap arriving from another device on the same
+    /// event blocks behind an entire queue flush. Per-row commits hold each lock for one write. The
+    /// secondary reason is that a mid-batch exception under one transaction discards taps that were
+    /// recorded correctly, which the client then has to re-send; per row they survive and come back
+    /// <c>DuplicateIgnored</c>. Neither is a correctness argument, and neither is claimed as one.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>What actually makes the retry safe is idempotency, not atomicity</b> — which is also why the
+    /// absence of a batch transaction costs nothing. Every row is keyed by <c>deviceTapId</c> and
+    /// guarded by <c>UX_Attendance_Device_DeviceTapId</c>, so resending the whole batch converges on the
+    /// same rows however much of it landed the first time.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>Honest caveat on the published "a 5xx means nothing was committed".</b> With per-row commits
+    /// that is not literally true: an exception escaping at row 50 leaves rows 1–49 committed and
+    /// returns a 500. The client's prescribed behaviour — retry the whole batch — is still correct and
+    /// still safe, for the reason in the paragraph above, and no tap is lost or duplicated. But the
+    /// guarantee the document states is stronger than the one this shape provides, and the two can only
+    /// be reconciled by softening the wording or by giving a row a server-error token (there is none in
+    /// the frozen table). Raised with the document's owner rather than papered over here.
+    /// </para>
+    /// </summary>
+    public async Task<TapBatchResponse> TapBatchAsync(
+        TapBatchRequest req, CancellationToken ct = default)
+    {
+        // One clock read for the envelope, matching TapAsync's reasoning: a batch that quoted several
+        // serverTimes would give a client computing an offset several answers.
+        var serverTime = DateTime.UtcNow;
+        var taps = req.Taps ?? [];
+
+        if (taps.Count > TapBatchLimits.MaxRows)
+        {
+            // Nothing is processed and nothing is written. Deliberately checked before the loop rather
+            // than by truncating to the first 200: silently dropping the tail would return a 200 whose
+            // results say every submitted row landed, and the client would delete the ones that did not.
+            return new TapBatchResponse(
+                Reject(
+                    TapOutcome.BatchTooLarge,
+                    $"This batch carries {taps.Count} rows; the limit is {TapBatchLimits.MaxRows}. " +
+                    "Nothing was recorded. Split the queue into chunks of at most that many rows and " +
+                    "resend.",
+                    serverTime),
+                [],
+                serverTime);
+        }
+
+        LogClockSkew(req.ClientClockAt, serverTime, taps.Count);
+
+        // Resolved lazily and shared across the whole loop. Empty when the batch is empty, one entry
+        // in every realistic batch — an authenticated device's taps all resolve to its own school.
+        var windows = new Dictionary<Guid, TapTimeWindow>();
+
+        // Indexed by request position, filled in processing order. That is what makes results[i].index
+        // == i without the loop having to run in array order.
+        var rows = new TapBatchRow[taps.Count];
+
+        // ---------------------------------------------------------------- the malformed-row floor
+        //
+        // Every row is shape-checked BEFORE anything is sorted or written, and the ordering of the two
+        // passes is the fix rather than an optimization (Phase 4d review). InProcessingOrder reads
+        // row.Tap.TappedAt, so a null element in `taps` — which is valid JSON, and which ASP.NET's
+        // implicit-required-from-NRT does NOT catch, because that applies to bound parameters and
+        // properties and never to collection elements — used to NullReferenceException inside the sort,
+        // before a single row had been considered. A batch-level 500, which §8.2 retries forever.
+        //
+        // Both refusals are per row and both use the published DeviceTapIdRequired: a row that is null
+        // has no idempotency key in the most complete sense available, and the token's documented client
+        // instruction ("Stop; bug on your side") is the correct one for a row this API will refuse
+        // identically on every retry. No new token, no change to the frozen table.
+        var wellFormed = new List<(TapRequest Tap, int Index)>(taps.Count);
+
+        for (var index = 0; index < taps.Count; index++)
+        {
+            if (taps[index] is not { } tap)
+            {
+                rows[index] = new TapBatchRow(
+                    index,
+                    DeviceTapId: null,
+                    Reject(
+                        TapOutcome.DeviceTapIdRequired,
+                        "This row is null. Every element of `taps` must be a tap object carrying at " +
+                        "least an eventId, a cardUid and a deviceTapId.",
+                        serverTime));
+                continue;
+            }
+
+            // D-33 plus the length bound, as one predicate. Checked here rather than inside TapAsync
+            // because only this endpoint makes the field required; TapAsync enforces the length half on
+            // its own for the callers that reach it directly.
+            if (!DeviceTapIds.IsUsable(tap.DeviceTapId))
+            {
+                rows[index] = new TapBatchRow(
+                    index, tap.DeviceTapId, Reject(TapOutcome.DeviceTapIdRequired, UnusableTapId(tap), serverTime));
+                continue;
+            }
+
+            wellFormed.Add((tap, index));
+        }
+
+        foreach (var (tap, index) in InProcessingOrder(wellFormed, serverTime))
+        {
+            rows[index] = new TapBatchRow(index, tap.DeviceTapId, await TapAsync(tap, windows, ct));
+        }
+
+        return new TapBatchResponse(Refusal: null, rows, serverTime);
+
+        static string UnusableTapId(TapRequest tap) => tap.DeviceTapId is { Length: > DeviceTapIds.MaxLength }
+            ? $"deviceTapId is {tap.DeviceTapId.Length} characters; the maximum is " +
+              $"{DeviceTapIds.MaxLength}. It is stored as the idempotency key and cannot be truncated " +
+              "without silently breaking replay."
+            : "Every row of a batch must carry a deviceTapId. A queued tap without an idempotency key " +
+              "cannot be safely retried, and this endpoint's whole retry contract is that the batch " +
+              "may be resent.";
+    }
+
+    /// <summary>
+    /// The order rows are applied in: ascending <c>tappedAt</c>, ties broken by array index.
+    ///
+    /// <para>
+    /// <b>Not raw array order, and this is a correctness rule rather than tidiness.</b> An offline queue
+    /// can legitimately flush out of insertion order — a retry re-enqueued at the tail, a merge of two
+    /// device-local stores, a client that batches by event. If a <c>TimeInOut</c> check-out is applied
+    /// before its own check-in, the check-out finds no existing row, takes the <em>create</em> branch,
+    /// and writes a check-in stamped at the check-out's time. Nothing errors; the student's arrival time
+    /// is simply wrong, by however long they stayed, and it is wrong in the direction that turns a
+    /// Present into a Late. Sorting is what makes the endpoint's result independent of the order a queue
+    /// happens to hold.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>A null <c>tappedAt</c> sorts as <paramref name="serverTime"/>, which is precisely what it
+    /// means</b> — "now, on the server" — so it lands after every queued row that named an earlier time
+    /// and interleaves correctly with any that named a later one. Inventing a separate nulls-first or
+    /// nulls-last rule would be a second definition of the same value.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>What sorting cannot fix, stated because the published contract states it:</b> a check-out
+    /// whose check-in was in an <em>earlier batch that failed</em> still arrives alone and still lands as
+    /// a check-in. Ordering is per request; only flushing in order and stopping at the first retryable
+    /// error closes that, and that half belongs to the client.
+    /// </para>
+    /// </summary>
+    /// <param name="taps">
+    /// <b>Well-formed rows only.</b> This method dereferences each row, so the caller's shape pass has
+    /// to run first — see the malformed-row floor in <see cref="TapBatchAsync"/>, which is where a null
+    /// element used to reach this sort and NullReferenceException before any row was processed.
+    /// </param>
+    private static IEnumerable<(TapRequest Tap, int Index)> InProcessingOrder(
+        IReadOnlyList<(TapRequest Tap, int Index)> taps, DateTime serverTime) =>
+        taps
+            // Normalized first: a row that sent "+08:00" and one that sent "Z" are otherwise sorted
+            // eight hours apart from each other for a reason invisible in the payload. Same boundary
+            // rule TapAsync applies to the value it stores.
+            .OrderBy(row => UtcTime.Normalize(row.Tap.TappedAt) ?? serverTime)
+            // LINQ's OrderBy is already stable, so this is a no-op today. It is written because the
+            // published contract names the tiebreak explicitly, and a reader should not have to know
+            // that stability is guaranteed to see that the rule is honoured.
+            .ThenBy(row => row.Index);
+
+    /// <summary>
+    /// Records how far the device's clock is from ours, from the one value that measures it cleanly.
+    ///
+    /// <para>
+    /// <b><c>clientClockAt</c> is the only skew signal that is not contaminated by queue latency.</b> A
+    /// row's <c>tappedAt</c> is old for two reasons that cannot be told apart — a drifted clock and a
+    /// tap that waited three days for a signal — so it can never distinguish a broken device from a
+    /// working one. The batch envelope's clock is read at send time, so its difference from ours is skew
+    /// and nothing else.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>It never refuses anything.</b> The rules that refuse are D-36's, they are per row, and they
+    /// apply to <c>tappedAt</c>. Rejecting a batch over its envelope clock would discard rows whose own
+    /// timestamps are perfectly acceptable, which is the opposite of what an offline queue needs.
+    /// Warning at the same tolerance D-36 uses for the future is not a coincidence: past that point a
+    /// device is producing <c>tappedAt</c> values that will start being refused, so this is the log line
+    /// that explains the refusals arriving next.
+    /// </para>
+    /// </summary>
+    private void LogClockSkew(DateTime? clientClockAt, DateTime serverTime, int rows)
+    {
+        if (UtcTime.Normalize(clientClockAt) is not { } clientClock) return;
+
+        var skew = clientClock - serverTime;
+        if (Math.Abs(skew.TotalMinutes) <= TapTimeWindow.FutureToleranceMinutes) return;
+
+        _logger.LogWarning(
+            "Device clock skew of {SkewSeconds:F0}s on a {Rows}-row batch: the client reported " +
+            "{ClientClock:O} while the server clock was {ServerTime:O}. Taps from this device will " +
+            "start being refused as {Token} once the skew exceeds what a single tap's own timestamp " +
+            "can absorb. The client is expected to correct itself from the serverTime in this response.",
+            skew.TotalSeconds, rows, clientClock, serverTime, nameof(TapOutcome.TappedAtOutOfRange));
+    }
+
     // ------------------------------------------------------------------ response shaping (D-37)
     //
     // Every TapResponse in this service is built by one of these four, and none of them takes the
@@ -306,8 +604,16 @@ internal sealed class AttendanceService : IAttendanceService
     /// a disjunction on the leading key column of <c>UX_SystemSettings_SchoolId_Key</c>
     /// (<c>SchoolId = @school OR SchoolId IS NULL</c>) and another over <c>Key</c>, so nothing seeks;
     /// §4.13 is a handful of rows per tenant, so it is cheap anyway. Worth saying because "one query"
-    /// on its own reads as "one seek", and this is the read Phase 4d will multiply by the batch size —
-    /// hoisting it per batch, or per event, is the obvious answer there and is not this phase's.
+    /// on its own reads as "one seek".
+    /// </para>
+    ///
+    /// <para>
+    /// <b>Phase 4d hoisted it out of the per-row path, which is what 4c said would be needed.</b> A
+    /// 200-row batch ran this 200 times, and — per the paragraph above — each run is a small scan
+    /// rather than a seek, so "one query per tap" understated it. <paramref name="cache"/> memoizes the
+    /// answer per school for the duration of one batch, which collapses those 200 to one in every
+    /// realistic batch. The read itself is unchanged: still unconditional, still per school, still
+    /// falling through scopes. Only how often it runs moved.
     /// </para>
     ///
     /// <para>
@@ -325,7 +631,23 @@ internal sealed class AttendanceService : IAttendanceService
     /// discovered from an attendance report six weeks later.
     /// </para>
     /// </summary>
-    private async Task<TapTimeWindow> ResolveTapWindowAsync(Guid schoolId, CancellationToken ct)
+    /// <param name="cache">
+    /// A per-batch memo, or null on the single-tap path where there is nothing to reuse it across.
+    /// Populated on miss, so a school's settings are read at most once per call to
+    /// <see cref="TapBatchAsync"/>.
+    /// </param>
+    private async Task<TapTimeWindow> ResolveTapWindowAsync(
+        Guid schoolId, Dictionary<Guid, TapTimeWindow>? cache, CancellationToken ct)
+    {
+        if (cache is not null && cache.TryGetValue(schoolId, out var cached)) return cached;
+
+        var resolved = await ReadTapWindowAsync(schoolId, ct);
+        cache?.Add(schoolId, resolved);
+        return resolved;
+    }
+
+    /// <inheritdoc cref="ResolveTapWindowAsync"/>
+    private async Task<TapTimeWindow> ReadTapWindowAsync(Guid schoolId, CancellationToken ct)
     {
         var rows = await _db.SystemSettings
             .Where(s => (s.SchoolId == schoolId || s.SchoolId == null)
@@ -622,15 +944,48 @@ internal sealed class AttendanceService : IAttendanceService
     /// </para>
     ///
     /// <para>
-    /// <b>What is claimed and what is not.</b> One round trip is a fact about this code. <em>Two index
-    /// seeks</em> is not — it has not been measured, and there is a specific reason to doubt it: the
-    /// §11 query filter compiles to <c>(@school IS NULL OR SchoolId = @school)</c>, a disjunction on
-    /// the <em>leading</em> column of both indexes, which is the classic shape that costs a seek and
-    /// buys a scan. <c>EamsDbContext</c> already records that the null branch is a non-sargable cost to
-    /// be removed when Phase 6 makes an unauthenticated request impossible; this is the query where
-    /// that will show first. <b>Capture a plan before 4d ships</b> — a batch flush runs this up to 200
-    /// times per request, so the difference between two seeks and two scans stops being academic
-    /// exactly then.
+    /// <b>Measured in Phase 4d, and the doubt was justified: it is two index SCANS, not two seeks.</b>
+    /// 4c recorded one round trip as a fact and two seeks as an unverified guess, naming the §11 query
+    /// filter's disjunction on the leading column as the reason to doubt it, and asked for a plan before
+    /// the batch endpoint shipped. Captured on SQL Server 2022 against 40,000 attendance rows across two
+    /// tenants and twenty devices, statistics fully updated, parameters passed through
+    /// <c>sp_executesql</c> exactly as EF sends them:
+    /// <list type="bullet">
+    ///   <item><b>As shipped: <c>Index Scan</c> on <c>UX_Attendance_Device_DeviceTapId</c> and
+    ///   <c>Index Scan</c> on <c>UX_Attendance_Device_CheckOutDeviceTapId</c></b> — scan count 2,
+    ///   <b>1390 logical reads</b>. Identical with a tenant pinned and with none, which is itself the
+    ///   tell: the plan cannot depend on a value the disjunction stops it from using.</item>
+    ///   <item>The same query with the tenant disjunction removed — what Phase 6 emits once an
+    ///   unauthenticated request is impossible — is <b>two <c>Index Seek</c>s and 7 logical reads</b>.
+    ///   <b>A factor of about 198.</b></item>
+    /// </list>
+    /// One correction to 4c's wording while the evidence is here: EF Core 9 does not emit
+    /// <c>@school IS NULL</c>. It emits
+    /// <c>(@__ef_filter__p_1 = CAST(1 AS bit) OR [SchoolId] = @school)</c> — a bit parameter rather than
+    /// a null test. The shape and the consequence are the same; the literal SQL is not what the comment
+    /// said.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>Does it matter at this row count? Yes — and the batch endpoint is what makes it matter.</b>
+    /// One tap paying 1390 logical reads instead of 7 is invisible: the pages are in the buffer pool and
+    /// it is well under a millisecond. A 200-row flush pays it two hundred times — roughly
+    /// <b>278,000 logical reads per batch</b> against about 1,400 with seeks, per flush, per device.
+    /// Worse, the cost scales with the <em>table</em> rather than with the batch: the scan covers every
+    /// row carrying a tap id, so it grows with the entire history of captured attendance and never with
+    /// anything the client controls.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>Not fixed here, and deliberately so.</b> The repair is the one <c>EamsDbContext</c> already
+    /// names — drop the query filter's null branch once Phase 6 makes an unauthenticated request
+    /// impossible — which changes every tenant-scoped query in the system and belongs to that phase with
+    /// its own review. Both local workarounds are worse than the problem: <c>IgnoreQueryFilters()</c>
+    /// would let this lookup return another tenant's row <em>as a successful duplicate</em>, carrying
+    /// that school's student name and number to the caller (see the paragraph above that forbids it);
+    /// and <c>OPTION (RECOMPILE)</c> buys the seek at the price of a compile on the single hottest query
+    /// in the API. Recorded with numbers so the Phase 6 decision is made against evidence rather than
+    /// against a suspicion.
     /// </para>
     ///
     /// <para>

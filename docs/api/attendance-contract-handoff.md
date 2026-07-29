@@ -51,9 +51,15 @@ Your key is scoped to `attendance.capture` **only**, and it authenticates exactl
 | Endpoint | Requires the key |
 |---|---|
 | `POST /attendance/tap` | **yes, now** |
+| `POST /attendance/tap/batch` | **yes, now** |
 | `GET /students/by-card/{cardUid}` | **yes, now** |
 | `POST /devices/{id}/heartbeat` | **yes, now** |
-| `POST /attendance/tap/batch` | yes, when it exists (Phase 4d) |
+| `GET /attendance/live/{eventId}` | **no** — see below |
+
+`GET /attendance/live/{eventId}` deliberately takes **no device key**. Your key is scoped to
+`attendance.capture`, which is a *write* permission; requiring it to *read* a dashboard would put a
+write-capable credential into every browser watching an event. It stays open with the rest of the
+admin surface until Phase 6. If your app polls it, send no `Authorization` header.
 
 Everything else on the API remains open for the moment. **This is a narrowing of the open surface,
 not a security boundary** — see the note at the end of this section.
@@ -99,10 +105,11 @@ endpoint exists.
 | `DeviceNotRegistered` | 404 | Unknown device, or device belongs to another school | Stop retrying |
 | `EventNotOpen` | 400 | Event is Draft, Closed or Cancelled | Stop retrying |
 | `DeviceMismatch` | 400 | Body `deviceId` disagrees with your authenticated key | Stop; bug on your side |
-| `DeviceTapIdRequired` ⏳ | 400 | Batch row had no `deviceTapId` | Stop; bug on your side |
+| `DeviceTapIdRequired` | 400 | Batch row's `deviceTapId` is unusable — absent, blank, over 100 characters, or the row itself was `null` | Stop; bug on your side |
 | `TappedAtOutOfRange` | 400 | `tappedAt` more than 5 min in the future — check your clock | Stop; resync clock |
 | `TappedAtOutsideEventWindow` | 400 | `tappedAt` outside the event's window | Stop retrying |
-| `BatchTooLarge` ⏳ | 400 | Batch-level only; chunk and resend | Chunk, retry |
+| `BatchTooLarge` | 400 | Batch-level only; chunk and resend. Limit is in `maxBatchRows` | Chunk, retry |
+| `InvalidCursor` | 400 | Live endpoint: `since` was not a cursor we issued. **Refused, not silently downgraded to a snapshot** | Re-poll with no `since` |
 
 Tap and manual-override **failures are** RFC 7807 problem bodies carrying the same `code`, matching the
 rest of the API — `application/problem+json`, with `title`, `detail`, `status`, `traceId`, `code` and
@@ -125,22 +132,35 @@ rest of the API — `application/problem+json`, with `title`, `detail`, `status`
   "rejected": 3,
   "serverTime": "2026-07-29T09:14:05Z",
   "results": [
-    { "index": 0, "deviceTapId": "…", "code": "Recorded",     "status": 200, "record": { /*…*/ } },
-    { "index": 3, "deviceTapId": "…", "code": "CardNotFound", "status": 404, "record": null,
-      "message": "…" }
+    { "index": 0, "deviceTapId": "a7f3…", "code": "Recorded",     "status": 200, "record": { /*…*/ } },
+    { "index": 1, "deviceTapId": "b8c4…", "code": "CardNotFound", "status": 404, "record": null,
+      "message": "…" },
+    { "index": 2, "deviceTapId": "c9d5…", "code": "DuplicateIgnored", "status": 200, "record": { /*…*/ } }
+    // …one entry per tap you sent, in the order you sent them
   ]
 }
 ```
+
+**`results` is dense, not sparse** — one entry per submitted tap, `accepted + rejected == results.length`.
+The example above shows three of a batch of three; the counters in the envelope are illustrative of a
+larger flush.
 
 Rules you can rely on:
 
 - **The batch HTTP status describes the batch; each row's `status` describes that tap.** We are not
   using 207 Multi-Status — proxies and clients handle it inconsistently.
-- **A `5xx` means nothing was committed.** Retry the whole batch. This is safe because every row is
-  idempotent, and the entire design rests on it.
+- **On a `5xx`, retry the whole batch — that is always safe.** ⚠ **Corrected 2026-07-29:** an earlier
+  revision of this document said a `5xx` means *nothing was committed*. That was wrong, and it
+  contradicted the per-row processing described two bullets down. Rows are committed individually, so
+  a server error partway through leaves the earlier rows written.
+  **Your action does not change** — retry the whole batch — but the reason matters: it is safe because
+  **every row is idempotent**, not because the batch is atomic. Already-written rows come back
+  `DuplicateIgnored` on the retry. Never assume a `5xx` means you can start over from a clean slate.
 - **Batch-level `4xx`** is transport/auth/size only: `400` malformed or `BatchTooLarge`, `401` missing
   or bad key, `403` revoked key.
-- **Rows correlate by both `index` and `deviceTapId`.** Use whichever you prefer.
+- **Rows correlate by both `index` and `deviceTapId`**, and `results` comes back in **request array
+  order** — `results[i].index == i`. Zip positionally if that is easier; the `index` field is there so
+  you do not have to trust that.
 - **`eventId` stays per row**, not hoisted — a device that switched events while offline can flush a
   mixed batch.
 - **`deviceTapId` is REQUIRED on this endpoint** (optional on single `/tap`). A queued tap without an
@@ -153,9 +173,12 @@ Rules you can rely on:
 > failed* still lands as a check-in. So: **flush strictly in order, and stop the queue at the first
 > retryable error** rather than skipping past it.
 
-**Batch size cap: 200 rows — provisional.** This number is an estimate and will be measured before
-publication. Read the real limit from the OpenAPI document; it will be echoed in any `BatchTooLarge`
-body.
+**Batch size cap: 200 rows — enforced.** No longer provisional. A larger batch is refused whole with
+`BatchTooLarge`, never truncated, and the limit comes back as `maxBatchRows` in the problem body so
+you can chunk from the response rather than hard-coding it.
+
+**`clientClockAt` is consumed, never a reason for refusal.** We compare it against our clock to
+measure your device's drift and log it. It cannot fail your batch.
 
 ---
 
@@ -320,10 +343,19 @@ disagree with ours.
 > ID, so a UID is guessable. Device auth, the event window, and audit are the mitigations — which is
 > why device keys are not optional.
 
-### `deviceTapId`: always send one, keep it stable
+### `deviceTapId`: always send one, keep it stable, keep it **under 100 characters**
 
 The idempotency key the whole offline design rests on. Generate it once, when the tap happens on the
 device, and **never regenerate it on retry**. Required on batch, strongly recommended on single taps.
+
+> **⚠ Maximum length: 100 characters.** This is now published because you have not yet settled your
+> generation scheme, and a composite like `{installId}:{eventId}:{counter}:{uuid}` passes 100 easily.
+> An over-length value is refused as `DeviceTapIdRequired` / 400 for that row — a client bug, not a
+> transient error, so **do not retry it**; fix the generator.
+>
+> A UUID (36 chars), or a UUID prefixed with a short install id, fits comfortably. If your scheme
+> cannot fit, tell us — widening the column is a migration, not a redesign, and it is far cheaper to
+> do before you ship than after.
 
 ### Everything is UTC — and your clock is load-bearing
 
@@ -377,11 +409,36 @@ your device key into a WebSocket query string where it lands in access logs.
 GET /attendance/live/{eventId}?since=<cursor>
 ```
 
-- **`since` absent** → snapshot: `{ eventId, cursor, counters, entries[], serverTime, pollAfterSeconds }`
-- **`since` present** → `{ eventId, cursor, counters, changes[], serverTime, pollAfterSeconds }`
+- **`since` absent** → snapshot: `{ eventId, cursor, counters, entries[], hasMore, serverTime, pollAfterSeconds }`
+- **`since` present** → `{ eventId, cursor, counters, changes[], hasMore, serverTime, pollAfterSeconds }`
 
-**Respect `pollAfterSeconds`** — it lets us back clients off under load without you shipping a
-release.
+> **`hasMore` is the one field you must not ignore.** A response carries at most **500** entries or
+> changes. When `hasMore` is `true` the page was truncated and its `cursor` points at the last row you
+> received — **poll again immediately rather than waiting `pollAfterSeconds`.** Otherwise a
+> 5,000-attendee event takes ten polls at five seconds each to fill a dashboard, and it looks like the
+> feed is broken rather than paging.
+
+**Rate limited: 240 polls per minute, per client address** — roughly one poll every 250 ms, far above
+the 5-second default. Exceeding it is the standard `RateLimited` / 429 with `Retry-After`. This limit
+is partitioned separately from device-key capture limits, so a browser tab polling a dashboard can
+never spend a kiosk's tap budget.
+
+**Live as of Phase 4d.** Details now settled:
+
+- **`pollAfterSeconds` defaults to 5**, server-configurable between 1 and 300. **Respect it** — it lets
+  us back clients off under load without you shipping a release.
+- **A cursor that is not well-formed is refused** — `400 InvalidCursor` — rather than silently
+  downgraded to a snapshot, which would look like "nothing changed" forever while your cursor stayed
+  broken. On `InvalidCursor`, re-poll with no `since` and take a fresh snapshot.
+  To be precise about what is checked: we validate the cursor's **shape**, not that we issued it. A
+  well-formed cursor from somewhere else decodes, and a cursor pointing beyond our current position is
+  treated as a fresh snapshot rather than an error. **Send back the cursor from a previous response
+  verbatim** and none of this concerns you.
+- **Cursors are URL-safe** — 11 characters, base64url, no padding. They contain no `+`, `/` or `=`, so
+  they are safe to concatenate into a query string by hand. (An earlier build issued 12-character
+  standard base64; those are still accepted, so a client mid-upgrade is not stranded.)
+- **`EventNotFound` is a 404** here as everywhere else.
+- The delta objects carry §6.4's declared hub payload as their first six fields, verbatim.
 
 If a hub is ever added, it will emit exactly the same delta object, so your reducer would not change.
 
@@ -395,8 +452,9 @@ If a hub is ever added, it will emit exactly the same delta object, so your redu
 | Rate limiting on capture endpoints | ✅ **shipped in 4b** |
 | `code` + `serverTime` on tap responses | ✅ **shipped in 4c** |
 | Check-out idempotency, clock skew, event window | ✅ **shipped in 4c** |
-| `POST /attendance/tap/batch` | Shape **frozen** above. Phase 4d |
-| `GET /attendance/live/{eventId}` | Shape above, provisional in detail. Phase 4d |
+| `POST /attendance/tap/batch` | ✅ **shipped in 4d** |
+| `GET /attendance/live/{eventId}` | ✅ **shipped in 4d** |
+| Published OpenAPI document | Phase 4e — supersedes this file |
 | Auth for everything else | Phase 6 (JWT + RBAC) |
 
 ---
@@ -440,13 +498,23 @@ the clock-skew rules are the parts most likely to move.
 
 1. **Offline queue semantics** — retry/backoff policy, how long a tap may sit queued, what you do with
    a permanently rejected row.
-2. **`deviceTapId` generation** — what it derives from, and its uniqueness guarantee.
-3. **Batch size** — does 200 rows suit your flush strategy?
+2. **`deviceTapId` generation** — what it derives from, and its uniqueness guarantee. **Now urgent:**
+   see the 100-character limit above. If your scheme does not fit, we would rather widen the column
+   before you ship than after.
+3. **Batch size** — does 200 rows suit your flush strategy? The cap is enforced now, not provisional.
 4. **Device enrolment** — is QR-scan-at-issue the UX you want? What should happen on reinstall?
 5. **Clock skew** — how do you correct or flag a drifted device clock?
 6. **Did anything you had already built depend on tap *failures* returning `TapResult` rather than a
    problem body?** That changed in 4c and you were the only consumer we could not check. If it broke
    something, tell us — `success: false` bodies are gone from the `4xx` responses.
+7. **A row-level server-error token — we need your view before 4e freezes the OpenAPI.** Every token in
+   §2 today describes a *decision* we made about a tap. There is none for "this row threw
+   unexpectedly", so an unforeseen server-side failure on a single row can only surface as a
+   **batch-level `5xx`** — which you are told to retry, forever, with nothing telling you which row is
+   poison. We would rather add something like `RowFailed` (batch still 200, row `status` 500) than
+   leave that gap. **Do you want it, and would your queue treat it as retryable or as poison?** Your
+   queue's semantics should decide that, not ours. Adding it before publication costs nothing; adding
+   it afterwards is additive but awkward.
 
 ---
 

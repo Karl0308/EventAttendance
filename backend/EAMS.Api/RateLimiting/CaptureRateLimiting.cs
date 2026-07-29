@@ -57,6 +57,49 @@ public static class CaptureRateLimiting
     public static readonly TimeSpan Window = TimeSpan.FromMinutes(1);
 
     /// <summary>
+    /// The policy on <c>GET /attendance/live/{eventId}</c> (Phase 4d review).
+    ///
+    /// <para>
+    /// <b>Separate from <see cref="PolicyName"/> because it limits a different thing for a different
+    /// reason.</b> The capture policy protects writes and partitions by device, which requires an
+    /// authenticated principal. The live endpoint is deliberately unauthenticated — it is a dashboard
+    /// read, and the only credential that exists is scoped to <c>attendance.capture</c> — so there is
+    /// no device to partition by and the remote address is the only key available.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>It needs one at all because the endpoint is the most expensive read in the API and is
+    /// designed to be called in a loop.</b> A single poll is not one indexed seek: it is the
+    /// <c>MIN_ACTIVE_ROWVERSION()</c> scalar, the event read, the delta read, and four aggregate
+    /// queries for the counters — two of which (<c>INTERSECT</c> and <c>EXCEPT</c> against the expected
+    /// set) walk <c>EventGroups</c> into current section membership. Open, unlimited, and loop-shaped is
+    /// a combination worth refusing even before anyone is trying.
+    /// </para>
+    /// </summary>
+    public const string LivePolicyName = "attendance-live";
+
+    /// <summary>
+    /// Requests per <see cref="Window"/> per client address for the live endpoint.
+    ///
+    /// <para>
+    /// <b>Deliberately permissive, and the number is derived rather than picked.</b> At the default
+    /// five-second poll a dashboard makes twelve requests a minute, so this is room for roughly twenty
+    /// dashboards behind one address — a plausible staff room, and far more than a campus NAT would
+    /// legitimately need for a *dashboard*. It is a ceiling on a runaway client, not a quota: the
+    /// failure it exists to prevent is one page stuck in a tight retry loop quietly costing the
+    /// database six queries per iteration.
+    /// </para>
+    ///
+    /// <para>
+    /// The IP partition is the reason it cannot be tighter. Every dashboard behind one campus NAT
+    /// shares this bucket, and a limiter that fires on legitimate traffic gets raised by whoever is on
+    /// call — which is the same reasoning <see cref="PermitsPerWindow"/> records, applied to a key that
+    /// is much coarser.
+    /// </para>
+    /// </summary>
+    public const int LivePermitsPerWindow = 240;
+
+    /// <summary>
     /// The partition key prefix for an unauthenticated caller. Prefixed rather than bare so an IP
     /// address can never collide with a device id in the partition table.
     /// </summary>
@@ -70,6 +113,7 @@ public static class CaptureRateLimiting
             options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
 
             options.AddPolicy(PolicyName, PartitionFor);
+            options.AddPolicy(LivePolicyName, LivePartitionFor);
 
             options.OnRejected = WriteRejectionAsync;
         });
@@ -114,15 +158,25 @@ public static class CaptureRateLimiting
         // ships as a 200 with an error payload.
         http.Response.StatusCode = StatusCodes.Status429TooManyRequests;
 
+        // Which policy rejected decides the prose. Both bodies carry the same `code`, so a client
+        // branching on RateLimited is unaffected either way — but telling a dashboard that "this device
+        // is limited to 600 capture requests" would send its reader looking for a kiosk.
+        var isLive = http.GetEndpoint()?.Metadata
+            .GetMetadata<EnableRateLimitingAttribute>()?.PolicyName == LivePolicyName;
+
         var factory = http.RequestServices.GetRequiredService<ProblemDetailsFactory>();
         var problem = factory.CreateProblemDetails(
             http,
             statusCode: StatusCodes.Status429TooManyRequests,
-            title: "Too many capture requests.",
-            detail:
-                $"This device is limited to {PermitsPerWindow} capture requests per " +
-                $"{Window.TotalMinutes:0} minute(s). Wait for the period named by Retry-After and " +
-                "resend; nothing was recorded.",
+            title: isLive ? "Too many live-attendance polls." : "Too many capture requests.",
+            detail: isLive
+                ? $"This client address is limited to {LivePermitsPerWindow} live-attendance polls " +
+                  $"per {Window.TotalMinutes:0} minute(s). Wait for the period named by Retry-After " +
+                  "and poll again; honour the pollAfterSeconds in each response rather than polling " +
+                  "as fast as the endpoint answers."
+                : $"This device is limited to {PermitsPerWindow} capture requests per " +
+                  $"{Window.TotalMinutes:0} minute(s). Wait for the period named by Retry-After and " +
+                  "resend; nothing was recorded.",
             instance: http.Request.GetEncodedPathAndQuery());
 
         problem.Extensions["code"] = RateLimitedCode;
@@ -132,6 +186,35 @@ public static class CaptureRateLimiting
 
         _ = ct;
     }
+
+    /// <summary>
+    /// <inheritdoc cref="LivePolicyName" path="/summary/para[1]"/>
+    ///
+    /// <para>
+    /// Always the remote address, never the device claim, and the partition key is prefixed
+    /// <c>live:</c> so a dashboard's polling can never spend a kiosk's capture budget — or the reverse.
+    /// Two policies sharing one partition table is exactly how a limiter starts refusing taps because
+    /// somebody left a browser tab open.
+    /// </para>
+    /// </summary>
+    private static RateLimitPartition<string> LivePartitionFor(HttpContext context)
+    {
+        var key = LivePartitionPrefix + AnonymousPartitionPrefix +
+                  (context.Connection.RemoteIpAddress?.ToString() ?? "unknown");
+
+        return RateLimitPartition.GetFixedWindowLimiter(key, _ => new FixedWindowRateLimiterOptions
+        {
+            PermitLimit = LivePermitsPerWindow,
+            Window = Window,
+            // Reject rather than queue, matching the capture policy: a queued poll is a poll whose
+            // answer is stale by the time it is served, and the client is going to ask again anyway.
+            QueueLimit = 0,
+            AutoReplenishment = true,
+        });
+    }
+
+    /// <inheritdoc cref="LivePartitionFor"/>
+    private const string LivePartitionPrefix = "live:";
 
     private static RateLimitPartition<string> PartitionFor(HttpContext context)
     {

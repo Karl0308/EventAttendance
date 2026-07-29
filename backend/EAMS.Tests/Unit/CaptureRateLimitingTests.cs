@@ -22,17 +22,35 @@ namespace EAMS.Tests.Unit;
 /// </para>
 ///
 /// <para>
-/// The pairing is the assertion, not the presence: <b>every gated endpoint is rate limited, and
-/// nothing else is.</b> Limiting an ungated endpoint would partition by remote IP, which for a campus
-/// behind one NAT is a single shared bucket for the whole institution.
+/// <b>Every gated endpoint is rate limited, and the only endpoint limited without being gated is the
+/// live poll.</b> That exception is named rather than left to a looser assertion: Phase 4d added
+/// <c>GET /attendance/live/{eventId}</c>, which is deliberately unauthenticated (a dashboard read, and
+/// the only credential that exists is scoped to <c>attendance.capture</c>) and is therefore the one
+/// place where an IP partition is not a choice — there is no device claim to partition by. It gets its
+/// own policy so a browser tab left polling can never spend a kiosk's capture budget.
+/// </para>
+///
+/// <para>
+/// The general rule the exception is measured against still holds: limiting an <em>ordinary</em>
+/// ungated endpoint would partition a whole campus behind one NAT into a single bucket, which is why
+/// this is an allow-list of two names rather than "anything may be limited".
 /// </para>
 /// </summary>
 public class CaptureRateLimitingTests
 {
     private static readonly Assembly ApiAssembly = typeof(AuthorizationStatus).Assembly;
 
+    /// <summary>
+    /// The endpoints that are rate limited <em>without</em> a device key gating them. Exactly one, and
+    /// adding a second is a deliberate one-line edit here — the same allow-list shape
+    /// <c>AuthorizationSeamTests</c> uses, for the same reason: "all gated endpoints are limited" is a
+    /// property that stops being true the first time anyone limits an open one, and the natural repair
+    /// is to delete the test.
+    /// </summary>
+    private static readonly string[] LimitedButNotGated = ["AttendanceController.Live"];
+
     [Fact]
-    public void The_rate_limited_actions_are_exactly_the_gated_ones()
+    public void The_rate_limited_actions_are_the_gated_ones_plus_the_live_poll()
     {
         var actions = ApiAssembly.GetTypes()
             .SelectMany(t => t.GetMethods(BindingFlags.Public | BindingFlags.Instance | BindingFlags.DeclaredOnly))
@@ -45,21 +63,52 @@ public class CaptureRateLimitingTests
             m.GetCustomAttributes(inherit: true).OfType<EnableRateLimitingAttribute>().Any()));
 
         Assert.NotEmpty(gated);
-        Assert.Equal(gated, limited);
+        Assert.Equal(
+            gated.Concat(LimitedButNotGated).OrderBy(n => n, StringComparer.Ordinal).ToList(),
+            limited);
     }
 
+    /// <summary>
+    /// A gated endpoint takes the device-partitioned policy; the live poll takes the IP-partitioned
+    /// one. Crossing them is the mistake worth catching — putting the live endpoint on
+    /// <c>device-capture</c> would drop every unauthenticated poll into the anonymous IP bucket
+    /// <em>shared with the capture endpoints</em>, so a dashboard could exhaust the budget a kiosk
+    /// needs before it has presented its key.
+    /// </summary>
     [Fact]
-    public void Every_rate_limited_action_uses_the_device_partitioned_policy()
+    public void Each_rate_limited_action_uses_the_policy_matching_how_it_is_partitioned()
     {
-        var policies = ApiAssembly.GetTypes()
+        var limited = ApiAssembly.GetTypes()
             .SelectMany(t => t.GetMethods(BindingFlags.Public | BindingFlags.Instance | BindingFlags.DeclaredOnly))
-            .SelectMany(m => m.GetCustomAttributes(inherit: true).OfType<EnableRateLimitingAttribute>())
-            .Select(a => a.PolicyName)
+            .Select(m => new
+            {
+                Name = $"{m.DeclaringType?.Name}.{m.Name}",
+                Policies = m.GetCustomAttributes(inherit: true)
+                    .OfType<EnableRateLimitingAttribute>().Select(a => a.PolicyName).ToList(),
+            })
+            .Where(x => x.Policies.Count > 0)
             .ToList();
 
-        Assert.NotEmpty(policies);
-        Assert.All(policies, policy => Assert.Equal(CaptureRateLimiting.PolicyName, policy));
+        Assert.NotEmpty(limited);
+
+        foreach (var action in limited)
+        {
+            var expected = LimitedButNotGated.Contains(action.Name)
+                ? CaptureRateLimiting.LivePolicyName
+                : CaptureRateLimiting.PolicyName;
+
+            Assert.All(action.Policies, policy => Assert.Equal(expected, policy));
+        }
     }
+
+    /// <summary>
+    /// The two policies must not share a partition key space, or a dashboard's polling and a kiosk's
+    /// taps compete for one bucket. Asserted on the names because the partition functions are private
+    /// and the names are what make the buckets distinct.
+    /// </summary>
+    [Fact]
+    public void The_two_policies_are_distinct() =>
+        Assert.NotEqual(CaptureRateLimiting.PolicyName, CaptureRateLimiting.LivePolicyName);
 
     private static List<string> Named(IEnumerable<MethodInfo> methods) =>
         methods.Select(m => $"{m.DeclaringType?.Name}.{m.Name}")

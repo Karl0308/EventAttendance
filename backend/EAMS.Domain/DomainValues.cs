@@ -61,6 +61,60 @@ public static class AttendanceNotes
 }
 
 /// <summary>
+/// Technical Plan §4.9 — <c>AttendanceRecords.DeviceTapId</c> and <c>CheckOutDeviceTapId</c>.
+///
+/// <para>
+/// <b>The third instance of exactly the same defect <see cref="AttendanceNotes"/> records</b>, found at
+/// the Phase 4d review gate. A client-supplied string was written to a bounded <c>nvarchar</c> column
+/// with nothing checking its length, so an over-length value reached SQL Server and came back as error
+/// 8152/2628 (<c>String or binary data would be truncated</c>). EF sizes an over-length parameter as
+/// <c>nvarchar(max)</c> rather than truncating it, so nothing upstream clips it either — and a
+/// truncation is not a unique violation, so <c>AttendanceService.SaveNewRecordAsync</c>'s filter
+/// correctly declines to swallow it and it propagates as an unhandled 500.
+/// </para>
+///
+/// <para>
+/// <b>Why this one was worse than the <c>Notes</c> case, and worth a CRITICAL rather than a tidy-up.</b>
+/// <c>Notes</c> arrives from an organizer typing into a form, one request at a time. A
+/// <c>deviceTapId</c> arrives from an offline queue that the frozen contract makes <em>required</em>
+/// on the batch endpoint, whose generation scheme is still an open question with the mobile developer,
+/// and §8.2 tells that client to retry a 5xx. One poison row therefore 500s the whole batch, forever,
+/// with nothing in the response naming which row is bad — the exact permanently-wedged queue that
+/// <see cref="EAMS.Application.Abstractions.TapOutcome.DeviceNotRegistered"/> and ADR-001 D-35 were
+/// each created to close, arriving through a third route.
+/// </para>
+///
+/// <para>
+/// <b>Both tap-id columns share this limit, and they must.</b> They hold the same kind of value from
+/// the same client and are read by one lookup, so a length one column accepted and the other refused
+/// would reject a check-out whose check-in had been accepted — see <c>EamsDbContext</c>, which sizes
+/// them identically for the same reason.
+/// </para>
+/// </summary>
+public static class DeviceTapIds
+{
+    /// <summary>
+    /// Matches <c>AttendanceRecords.DeviceTapId nvarchar(100)</c> — and
+    /// <c>CheckOutDeviceTapId nvarchar(100)</c> — in the §4 baseline and the Phase 4c migration.
+    /// </summary>
+    public const int MaxLength = 100;
+
+    /// <summary>
+    /// Whether a tap id is one this system can store and key on.
+    ///
+    /// <para>
+    /// <b>Blank is invalid here and that is not the same statement as "required".</b> Whether a caller
+    /// may <em>omit</em> the field is an endpoint's decision — the batch endpoint requires one (D-33),
+    /// the single tap does not — but a value that is present and unusable is unusable on both. This
+    /// predicate answers the second question only, which is why <c>null</c> is <c>false</c>: the
+    /// callers that permit omission check for it themselves before asking.
+    /// </para>
+    /// </summary>
+    public static bool IsUsable(string? value) =>
+        !string.IsNullOrWhiteSpace(value) && value.Length <= MaxLength;
+}
+
+/// <summary>
 /// Technical Plan §4.7 — <c>StudentGroups.Name</c>. A length rather than a value set, here for the
 /// same reason <see cref="AttendanceNotes"/> is: the ADR-001 D-1 projection <em>composes</em> this
 /// name (label plus term) instead of copying a user's input, so it can produce an over-length value

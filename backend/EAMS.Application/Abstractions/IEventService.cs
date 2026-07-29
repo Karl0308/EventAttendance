@@ -77,6 +77,35 @@ public record EventWriteResponse(EventWriteOutcome Outcome, string Message, Even
 public record EventAudienceResponse(
     EventWriteOutcome Outcome, string Message, EventAudienceResultDto? Result);
 
+/// <summary>
+/// What <c>GET /attendance/live/{eventId}</c> decided (Phase 4d, D-29). Its own enum rather than a
+/// member of <see cref="TapOutcome"/> on purpose: that enum is frozen published contract, and a
+/// dashboard read has no business appearing in the mobile capture client's branch table.
+/// </summary>
+public enum LiveOutcome
+{
+    /// <summary>A snapshot or a delta was produced.</summary>
+    Ok,
+
+    /// <summary>No such event, or it is soft-deleted. 404.</summary>
+    EventNotFound,
+
+    /// <summary>
+    /// <c>?since=</c> was present but is not a cursor this API issued. 400.
+    ///
+    /// <para>
+    /// <b>Refused rather than quietly treated as "no cursor".</b> Falling back to a full snapshot is
+    /// the friendlier-looking behaviour and is the wrong one: the client asked for a delta, so it would
+    /// merge a complete row set into state that already holds those rows. See
+    /// <c>EAMS.Domain.AttendanceCursor.TryDecode</c>.
+    /// </para>
+    /// </summary>
+    InvalidCursor,
+}
+
+/// <summary><paramref name="Live"/> is null unless <paramref name="Outcome"/> is <see cref="LiveOutcome.Ok"/>.</summary>
+public record LiveAttendanceResponse(LiveOutcome Outcome, string Message, AttendanceLiveDto? Live);
+
 /// <summary>Technical Plan §6.3 and the §6.7/§12 event summary and roster.</summary>
 public interface IEventService
 {
@@ -171,4 +200,25 @@ public interface IEventService
     /// groups. Null when there is no such event.
     /// </summary>
     Task<EventRosterDto?> GetRosterAsync(Guid id, CancellationToken ct = default);
+
+    /// <summary>
+    /// <c>GET /attendance/live/{eventId}?since=</c> — the D-29 polling endpoint that stands in for the
+    /// §5/§6.4 SignalR hub.
+    ///
+    /// <para>
+    /// <b>It lives on the event service rather than the attendance service even though its route is
+    /// attendance's</b>, and the reason is the <c>counters</c> block. Those are
+    /// <see cref="GetSummaryAsync"/>'s numbers, and the denominator behind them is ADR-003 D-12/D-13
+    /// arithmetic that the ADR explicitly records as failing <em>silently</em> when it is duplicated —
+    /// a second copy would drift and every number involved would stay plausible. Producing them from
+    /// the one method that already owns them costs a controller its second constructor argument and
+    /// buys the guarantee that the dashboard header and the summary page cannot disagree.
+    /// </para>
+    /// </summary>
+    /// <param name="since">
+    /// Null or absent for a snapshot; otherwise a cursor from a previous response. Whitespace is
+    /// treated as absent — a query string that lost its value is not a corrupted cursor.
+    /// </param>
+    Task<LiveAttendanceResponse> GetLiveAttendanceAsync(
+        Guid id, string? since, CancellationToken ct = default);
 }

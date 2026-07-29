@@ -35,8 +35,34 @@ public class AttendanceController : ControllerBase
     /// </summary>
     internal const string ServerTimeProperty = "serverTime";
 
+    /// <summary>
+    /// The <c>BatchTooLarge</c> problem body's extension carrying <see cref="TapBatchLimits.MaxRows"/>.
+    ///
+    /// <para>
+    /// The published contract tells the mobile client to read the real limit from the response rather
+    /// than hard-coding 200, which is the whole reason the number is echoed: raising or lowering the cap
+    /// then costs no client release. A client that hard-codes it is not broken by this, it just does not
+    /// benefit.
+    /// </para>
+    /// </summary>
+    internal const string MaxBatchRowsProperty = "maxBatchRows";
+
     private readonly IAttendanceService _attendance;
-    public AttendanceController(IAttendanceService attendance) => _attendance = attendance;
+
+    /// <summary>
+    /// The live endpoint reads through <see cref="IEventService"/>, not <see cref="IAttendanceService"/>,
+    /// and the route being <c>/attendance/live/{eventId}</c> is not evidence against that — see
+    /// <c>IEventService.GetLiveAttendanceAsync</c>. Its <c>counters</c> block is the summary's own
+    /// object, and ADR-003 D-12/D-13 record that the denominator behind it fails <em>silently</em> when
+    /// it is duplicated. One extra constructor argument is the cheapest possible way to not duplicate it.
+    /// </summary>
+    private readonly IEventService _events;
+
+    public AttendanceController(IAttendanceService attendance, IEventService events)
+    {
+        _attendance = attendance;
+        _events = events;
+    }
 
     [HttpGet]
     [HasPermissionNotEnforced("attendance.read")]
@@ -70,6 +96,159 @@ public class AttendanceController : ControllerBase
         var response = await _attendance.TapAsync(req, ct);
         return Respond(StatusCodeFor(response.Outcome), response.Result, TitleFor(response.Outcome));
     }
+
+    /// <summary>
+    /// <c>POST /attendance/tap/batch</c> — §8.2's offline queue flush (Phase 4d, D-31).
+    ///
+    /// <para>
+    /// <b>A well-formed batch is always 200, never 207.</b> The transport status describes the batch;
+    /// each row's own <c>status</c> describes that tap. 207 Multi-Status is handled inconsistently by
+    /// proxies and client libraries, and — the part that bites — a client seeing any non-2xx is liable
+    /// to retry the entire batch, which is safe but pure waste when almost all of it landed.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>The fourth and last endpoint a device key gates</b> (D-28). <c>[HasPermissionNotEnforced]</c>
+    /// stays alongside <c>[Authorize]</c> for the reason the tap endpoint records: the inert attribute is
+    /// the list Phase 6's rename walks, and the enforced-first endpoints are the ones a reader is least
+    /// likely to check. The <c>Policy</c> is named rather than left to the default — a bare
+    /// <c>[Authorize]</c> falls back to <c>RequireAuthenticatedUser()</c>, which a revoked key and a
+    /// deactivated device both satisfy by design, so it would admit exactly the credentials the 403
+    /// exists to refuse. <c>AuthorizationSeamTests</c> fails the build on either mistake.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>Two size guards, and neither replaces the other.</b> <c>[RequestSizeLimit]</c> refuses an
+    /// oversized body before it is buffered; <see cref="TapBatchLimits.MaxRows"/> is checked in the service
+    /// after deserialization, when the row count is knowable. A body of 200 enormous rows passes the
+    /// first and fails nothing; a body of one row and four megabytes of whitespace passes the second.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>It shares <c>/tap</c>'s rate-limit policy, so one flush of 200 taps spends one permit where
+    /// 200 single taps would spend 200. That is intended, and it is recorded because nothing else would
+    /// say so.</b> The limiter's stated purpose is friction and detection against a runaway client, not
+    /// a contractual quota on taps — and a device that batches is being <em>well behaved</em>, so
+    /// charging it per row would penalise the shape §8.2 asks for and make the published
+    /// {PermitsPerWindow}-per-minute figure mean two different things depending on which endpoint was
+    /// used. What it does mean, stated plainly: the effective per-device write ceiling on this endpoint
+    /// is <c>PermitsPerWindow × MaxRows</c> — 120,000 taps a minute — so the limiter is not what bounds
+    /// batch write volume. The row cap and the body cap are. If a per-row budget is ever wanted, it
+    /// needs a token-bucket policy that charges by row count, which the fixed-window limiter cannot
+    /// express.
+    /// </para>
+    /// </summary>
+    [HttpPost("tap/batch")]
+    [Authorize(AuthenticationSchemes = DeviceKey.AuthenticationScheme, Policy = EamsPermissions.AttendanceCapture)]
+    [EnableRateLimiting(CaptureRateLimiting.PolicyName)]
+    [HasPermissionNotEnforced(EamsPermissions.AttendanceCapture)]
+    [RequestSizeLimit(TapBatchLimits.MaxRequestBytes)]
+    [ProducesResponseType(StatusCodes.Status401Unauthorized)]
+    [ProducesResponseType(StatusCodes.Status403Forbidden)]
+    [ProducesResponseType(StatusCodes.Status429TooManyRequests)]
+    [ProducesResponseType(typeof(TapBatchResult), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status400BadRequest)]
+    public async Task<ActionResult<TapBatchResult>> TapBatch(
+        [FromBody] TapBatchRequest req, CancellationToken ct)
+    {
+        var response = await _attendance.TapBatchAsync(req, ct);
+
+        if (response.Refusal is { } refusal)
+        {
+            var status = StatusCodeFor(refusal.Outcome);
+            var problem = ProblemDetailsFactory.CreateProblemDetails(
+                HttpContext, statusCode: status, title: TitleFor(refusal.Outcome),
+                detail: refusal.Result.Message);
+
+            problem.Extensions[ErrorCodeProperty] = refusal.Result.Code;
+            problem.Extensions[ServerTimeProperty] = refusal.Result.ServerTime;
+            problem.Extensions[MaxBatchRowsProperty] = TapBatchLimits.MaxRows;
+
+            return StatusCode(status, problem);
+        }
+
+        // The same outcome→status map the single endpoint uses, applied per row. That is what makes a
+        // row's `status` mean exactly what the status line of an individual POST /attendance/tap would
+        // have meant — there is one projection of outcome→status in the system, and this is a second
+        // caller of it rather than a second copy.
+        var results = response.Rows
+            .Select(row => new TapBatchRowResult(
+                row.Index, row.DeviceTapId,
+                row.Response.Result.Code,
+                StatusCodeFor(row.Response.Outcome),
+                row.Response.Result.Record,
+                row.Response.Result.Message))
+            .ToList();
+
+        return Ok(new TapBatchResult(
+            Accepted: results.Count(r => r.Status < StatusCodes.Status400BadRequest),
+            Rejected: results.Count(r => r.Status >= StatusCodes.Status400BadRequest),
+            response.ServerTime,
+            results));
+    }
+
+    /// <summary>
+    /// <c>GET /attendance/live/{eventId}</c> — the D-29 cursor-delta poll that stands in for §5/§6.4's
+    /// SignalR hub. Omit <c>since</c> for a snapshot; send back the previous response's <c>cursor</c>
+    /// for the changes since it.
+    ///
+    /// <para>
+    /// <b>The permission is <c>attendance.read</c> and there is deliberately no <c>[Authorize]</c>.</b>
+    /// This is a dashboard read, not a capture, and the only authentication scheme that exists today is
+    /// the device key — which §11 scopes to <c>attendance.capture</c> and nothing else. Gating this
+    /// endpoint with it would force the admin SPA to hold a capture-scoped credential in a browser in
+    /// order to <em>watch</em> attendance, which inverts the split §6.4 draws between capturing and
+    /// reading and would hand a page that can only display data a key that can write it. It stays open
+    /// under ADR-001 D-6 with the rest of the admin surface, declares the permission Phase 6 will
+    /// enforce, and is listed alongside <c>GET /attendance</c> — the endpoint it is a live view of —
+    /// rather than alongside the tap.
+    /// </para>
+    ///
+    /// <para>
+    /// <b><c>Cache-Control: no-store</c>.</b> A cached delta is worse than a slow one: an intermediary
+    /// replaying a 200 for a cursor the client has already advanced past would make the dashboard
+    /// silently stop updating, and the client has no way to tell that from an event where nothing is
+    /// happening. <c>no-store</c> rather than <c>no-cache</c> because there is nothing here worth
+    /// revalidating — every response is keyed to a cursor that will never be asked for again.
+    /// </para>
+    /// </summary>
+    [HttpGet("live/{eventId:guid}")]
+    [EnableRateLimiting(CaptureRateLimiting.LivePolicyName)]
+    [HasPermissionNotEnforced("attendance.read")]
+    [ProducesResponseType(typeof(AttendanceLiveDto), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status404NotFound)]
+    [ProducesResponseType(StatusCodes.Status429TooManyRequests)]
+    public async Task<ActionResult<AttendanceLiveDto>> Live(
+        Guid eventId, [FromQuery] string? since, CancellationToken ct)
+    {
+        // Set before the outcome is known, so it covers the 400 and the 404 as well as the 200. A
+        // cacheable InvalidCursor is the nastier of the two: an intermediary replaying it would pin a
+        // dashboard at "your cursor is invalid" long after the client had been handed a good one.
+        Response.Headers.CacheControl = NoStore;
+
+        var response = await _events.GetLiveAttendanceAsync(eventId, since, ct);
+
+        if (response.Outcome != LiveOutcome.Ok)
+        {
+            var status = StatusCodeFor(response.Outcome);
+            var problem = ProblemDetailsFactory.CreateProblemDetails(
+                HttpContext, statusCode: status, title: TitleFor(response.Outcome),
+                detail: response.Message);
+
+            problem.Extensions[ErrorCodeProperty] = response.Outcome.ToString();
+
+            return StatusCode(status, problem);
+        }
+
+        return Ok(response.Live);
+    }
+
+    /// <summary>
+    /// The one place the live endpoint's cache policy is written. Named rather than inlined so the
+    /// header and the reasoning above it stay in the same file as each other.
+    /// </summary>
+    private const string NoStore = "no-store";
 
     // POST /attendance/manual — organizer override (Technical Plan §6.4).
     //
@@ -146,7 +325,17 @@ public class AttendanceController : ControllerBase
         TapOutcome.DeviceMismatch => "That deviceId is not the authenticated device.",
         TapOutcome.TappedAtOutOfRange => "That tappedAt is in the future.",
         TapOutcome.TappedAtOutsideEventWindow => "That tappedAt is outside the event's window.",
+        TapOutcome.DeviceTapIdRequired => "That batch row carries no deviceTapId.",
+        TapOutcome.BatchTooLarge => "That batch is too large.",
         _ => "The tap could not be recorded.",
+    };
+
+    /// <inheritdoc cref="TitleFor(TapOutcome)"/>
+    private static string TitleFor(LiveOutcome outcome) => outcome switch
+    {
+        LiveOutcome.EventNotFound => "Event not found.",
+        LiveOutcome.InvalidCursor => "That cursor was not issued by this API.",
+        _ => "Live attendance could not be read.",
     };
 
     /// <inheritdoc cref="TitleFor(TapOutcome)"/>
@@ -202,14 +391,43 @@ public class AttendanceController : ControllerBase
         // retried, and 400 is the code its published table already binds to "stop retrying". Neither is
         // a conflict with the state of the resource — the same event would refuse the same tappedAt
         // forever — so 409 would be a lie about whether resending later could help.
+        // The two Phase 4d additions are 400 for the same §8.2 reason, arrived at from opposite ends.
+        // DeviceTapIdRequired is a row this API will refuse identically forever, so the client must
+        // stop rather than retry — a bug on its side, and named so it is findable. BatchTooLarge is the
+        // one refusal in the whole table whose guidance is "chunk and retry": resending the same bytes
+        // fails again, but resending them in two halves succeeds, which is still a 4xx and not a 5xx
+        // because the request as sent is the thing that was wrong.
         TapOutcome.EventNotOpen
             or TapOutcome.DeviceMismatch
             or TapOutcome.TappedAtOutOfRange
-            or TapOutcome.TappedAtOutsideEventWindow => StatusCodes.Status400BadRequest,
+            or TapOutcome.TappedAtOutsideEventWindow
+            or TapOutcome.DeviceTapIdRequired
+            or TapOutcome.BatchTooLarge => StatusCodes.Status400BadRequest,
 
         _ => throw new ArgumentOutOfRangeException(
             nameof(outcome), outcome,
             $"No HTTP status is mapped for this {nameof(TapOutcome)}. Every outcome must be mapped " +
+            "explicitly — see AttendanceControllerMappingTests."),
+    };
+
+    /// <summary>
+    /// The same contract for <c>GET /attendance/live/{eventId}</c>. See
+    /// <see cref="StatusCodeFor(TapOutcome)"/> for why the fall-through arm throws rather than
+    /// defaulting to 200 — the failure it prevents (a rejection returned as a success) is worse on a
+    /// read than on a write only in that it is quieter.
+    /// </summary>
+    internal static int StatusCodeFor(LiveOutcome outcome) => outcome switch
+    {
+        LiveOutcome.Ok => StatusCodes.Status200OK,
+        LiveOutcome.EventNotFound => StatusCodes.Status404NotFound,
+
+        // The caller sent something that is not a cursor. 400 rather than falling back to a snapshot:
+        // see LiveOutcome.InvalidCursor for why the friendlier behaviour is the wrong one.
+        LiveOutcome.InvalidCursor => StatusCodes.Status400BadRequest,
+
+        _ => throw new ArgumentOutOfRangeException(
+            nameof(outcome), outcome,
+            $"No HTTP status is mapped for this {nameof(LiveOutcome)}. Every outcome must be mapped " +
             "explicitly — see AttendanceControllerMappingTests."),
     };
 

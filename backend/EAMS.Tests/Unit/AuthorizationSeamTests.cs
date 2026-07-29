@@ -91,9 +91,19 @@ public class AuthorizationSeamTests
     }
 
     /// <summary>
-    /// <b>Exactly three actions in EAMS.Api carry a real authorization attribute, and this test names
+    /// <b>Exactly four actions in EAMS.Api carry a real authorization attribute, and this test names
     /// them.</b> It used to assert <em>zero</em>; Phase 4b (Phase 4a design, D-28) gated the capture
-    /// surface with a device key, so the assertion moved from "none" to "these, and nothing else".
+    /// surface with a device key, so the assertion moved from "none" to "these, and nothing else", and
+    /// Phase 4d added the fourth and last of D-28's list when the batch endpoint arrived.
+    ///
+    /// <para>
+    /// <b>The live endpoint added in the same phase is deliberately <em>not</em> here.</b>
+    /// <c>GET /attendance/live/{eventId}</c> is a dashboard read, and the only scheme that exists is the
+    /// device key, which §11 scopes to <c>attendance.capture</c> — so gating it would have handed the
+    /// admin SPA a capture-scoped credential in order to watch attendance. It declares
+    /// <c>attendance.read</c> through the inert attribute and stays open under ADR-001 D-6 with the rest
+    /// of the admin surface. This list is exactly the endpoints a <em>device</em> authenticates.
+    /// </para>
     ///
     /// <para>
     /// The change of shape is the important part. "None are gated" is a property that stops being true
@@ -122,6 +132,7 @@ public class AuthorizationSeamTests
         string[] expected =
         [
             "AttendanceController.Tap",
+            "AttendanceController.TapBatch",
             "DevicesController.Heartbeat",
             "StudentsController.ByCard",
         ];
@@ -196,8 +207,8 @@ public class AuthorizationSeamTests
             // purpose, so those become 403 rather than 401 — and ASP.NET Core's default policy is only
             // RequireAuthenticatedUser(). So a bare [Authorize] on a gated endpoint would admit a
             // revoked key and a deactivated device, which is precisely the pair the 403 exists to
-            // refuse. Today's three endpoints all name a policy; the risk is the *next* gated
-            // endpoint, and Phase 4d adds one.
+            // refuse. All four endpoints name a policy; the risk was always the *next* gated one, and
+            // Phase 4d's POST /attendance/tap/batch is the one this assertion was written ahead of.
             Assert.All(action.Authorize, attribute => Assert.True(
                 attribute.Policy is not null,
                 $"{name} carries an [Authorize] with no Policy. The default policy is only " +

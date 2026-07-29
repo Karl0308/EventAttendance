@@ -1,6 +1,7 @@
 using EAMS.Application.Abstractions;
 using EAMS.Domain;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 
 namespace EAMS.Infrastructure.Data;
 
@@ -762,6 +763,35 @@ internal class EamsDbContext : DbContext
         // reject a check-out the check-in accepted.
         e.Property(x => x.CheckOutDeviceTapId).HasMaxLength(100);
         e.Property(x => x.Notes).HasMaxLength(500);
+
+        // Phase 4d D-30 — the live cursor. Read AttendanceRecord.RowVersion for why it is a long and
+        // why it must not become a concurrency token; this is the mapping that keeps both true.
+        //
+        // ValueGeneratedOnAddOrUpdate() + IsConcurrencyToken(false) is deliberately spelled out instead
+        // of .IsRowVersion(). They differ in exactly one bit, and it is the bit that would turn the
+        // TimeInOut check-out UPDATE into an optimistic-concurrency check and start throwing
+        // DbUpdateConcurrencyException on a path that works today. .IsRowVersion() is one keystroke
+        // shorter and is the wrong call; a reviewer "simplifying" this back to it changes write
+        // semantics, which is why the two clauses are written out where the change would be visible.
+        //
+        // NumberToBytesConverter<long> is big-endian, so the CLR ordering and SQL Server's binary(8)
+        // ordering agree — the property that makes `WHERE RowVersion > @since` mean what the cursor
+        // says it means. HasColumnType("rowversion") is what makes the database assign the value; the
+        // converter only decides how it is read back.
+        e.Property(x => x.RowVersion)
+            .HasConversion(new NumberToBytesConverter<long>())
+            .HasColumnType("rowversion")
+            .ValueGeneratedOnAddOrUpdate()
+            .IsConcurrencyToken(false);
+
+        // The live endpoint's delta read: one event's rows above a cursor, in cursor order. Without it
+        // the query is a scan of every attendance row the event has ever taken, once per poll, per
+        // open dashboard — and the whole reason D-29 chose polling over a hub is that the poll is
+        // supposed to be cheap. EventId leads because it is the equality; RowVersion follows because it
+        // is the range and the sort (the composite-index column-order rule this file records under
+        // UX_Attendance_Device_DeviceTapId, applied where it was free to apply).
+        e.HasIndex(x => new { x.EventId, x.RowVersion })
+            .HasDatabaseName("IX_Attendance_EventId_RowVersion");
 
         e.HasOne(x => x.Event).WithMany(v => v.AttendanceRecords).HasForeignKey(x => x.EventId).IsRequired();
         // Phase 4a design D-35: the denormalized tenant. Required and FK-backed, exactly as

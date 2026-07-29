@@ -49,11 +49,20 @@ internal sealed class EventService : IEventService
     /// </summary>
     private readonly ICurrentUser _currentUser;
 
-    public EventService(EamsDbContext db, ISchoolContext school, ICurrentUser currentUser)
+    /// <summary>
+    /// The one tunable of the D-29 live endpoint. Read on every response so a configuration change
+    /// takes effect on the next restart rather than on the next client release — see
+    /// <see cref="AttendanceLiveOptions"/> for why the interval belongs to the server at all.
+    /// </summary>
+    private readonly AttendanceLiveOptions _live;
+
+    public EventService(
+        EamsDbContext db, ISchoolContext school, ICurrentUser currentUser, AttendanceLiveOptions live)
     {
         _db = db;
         _school = school;
         _currentUser = currentUser;
+        _live = live;
     }
 
     private static EventDto ToDto(Event e) => new(
@@ -106,6 +115,23 @@ internal sealed class EventService : IEventService
             .FirstOrDefaultAsync(x => x.Id == id && !x.IsDeleted, ct);
         if (e is null) return null;
 
+        return await SummaryForAsync(e, ct);
+    }
+
+    /// <summary>
+    /// <inheritdoc cref="GetSummaryAsync" path="/summary/para[1]"/>
+    ///
+    /// <para>
+    /// Split out so a caller that has <em>already</em> read the event does not read it again.
+    /// <see cref="GetLiveAttendanceAsync"/> is that caller, and it is polled in a loop by every open
+    /// dashboard — one redundant round trip on the hottest read in the API is worth removing, and the
+    /// alternative (letting the live path build its own counters) is the duplication ADR-003 D-12/D-13
+    /// record as failing silently.
+    /// </para>
+    /// </summary>
+    private async Task<EventSummaryDto> SummaryForAsync(Event e, CancellationToken ct)
+    {
+        var id = e.Id;
         var expectedIds = ExpectedStudentIds(id, e.Status);
 
         var counts = await CountByStatusAsync(id, ct);
@@ -356,6 +382,194 @@ internal sealed class EventService : IEventService
             Unexpected: entries.Count(e => !e.IsExpected),
             entries);
     }
+
+    // ------------------------------------------------------------------- live attendance (D-29/D-30)
+
+    /// <summary>
+    /// <inheritdoc cref="IEventService.GetLiveAttendanceAsync" path="/summary/para[1]"/>
+    ///
+    /// <para>
+    /// <b>The two modes are one query with one extra predicate.</b> A snapshot is every row of the event
+    /// up to the ceiling; a delta is the same thing with a floor added. Writing them as one method is
+    /// what guarantees a client that reconnects and re-snapshots sees exactly the rows its delta stream
+    /// would have delivered — two implementations of "which rows count" is precisely how a reconnect
+    /// starts disagreeing with a poll.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>The ceiling is <c>MIN_ACTIVE_ROWVERSION() - 1</c>, and without it the cursor loses rows
+    /// silently.</b> A <c>rowversion</c> is assigned when a row is <em>written</em>, not when its
+    /// transaction <em>commits</em>, so this sequence is ordinary rather than exotic — two devices
+    /// flushing queues at once produces it: transaction A writes a row and takes version 100; B writes
+    /// a row, takes 101 and commits; a poll running now sees 101 (A's row is not yet visible) and moves
+    /// its cursor to 101; A commits. A's row is version 100, forever below the cursor, and no later
+    /// poll will ever return it. The dashboard is simply missing a student who tapped, which is
+    /// indistinguishable from a student who did not — no error, nothing to notice.
+    /// <c>MIN_ACTIVE_ROWVERSION()</c> is the lowest version any uncommitted transaction holds (or the
+    /// next value to be issued, if there are none), so refusing to advance past one below it means the
+    /// cursor never crosses a write that has not landed. It costs one scalar round trip per poll.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>The cursor advances even when nothing changed.</b> It is the ceiling, not the maximum
+    /// <c>RowVersion</c> of the rows returned — echoing the caller's own cursor back on an empty delta
+    /// would leave a quiet event re-scanning the same widening range on every poll forever.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>Soft-deleted events are excluded, and the cursor is validated before the event is read.</b>
+    /// A malformed cursor is the caller's bug whichever event it names, and reporting it as a 404
+    /// because the event also did not exist would send a client hunting for the wrong problem.
+    /// </para>
+    /// </summary>
+    public async Task<LiveAttendanceResponse> GetLiveAttendanceAsync(
+        Guid id, string? since, CancellationToken ct = default)
+    {
+        var serverTime = DateTime.UtcNow;
+
+        // Whitespace is treated as absent: "?since=" with nothing after it is a query string that lost
+        // its value, not a corrupted cursor, and a snapshot is the right answer to a client that has
+        // nothing to resume from.
+        long? floor = null;
+        if (!string.IsNullOrWhiteSpace(since))
+        {
+            if (!AttendanceCursor.TryDecode(since, out var decoded))
+            {
+                return new LiveAttendanceResponse(
+                    LiveOutcome.InvalidCursor,
+                    $"'{since}' is not a cursor this API issued. Send the cursor from a previous " +
+                    "response verbatim, or omit it entirely to receive a full snapshot.",
+                    null);
+            }
+
+            floor = decoded;
+        }
+
+        var ev = await _db.Events.AsNoTracking()
+            .FirstOrDefaultAsync(x => x.Id == id && !x.IsDeleted, ct);
+        if (ev is null)
+            return new LiveAttendanceResponse(LiveOutcome.EventNotFound, "Event not found.", null);
+
+        var ceiling = await SafeCursorCeilingAsync(ct);
+
+        // A cursor above the ceiling cannot have come from this database in its current state, and the
+        // honest answer is a snapshot (Phase 4d review).
+        //
+        // TryDecode validates shape only — any eight base64url bytes decode — so "a cursor we did not
+        // issue is refused" was a stronger claim than the code could make. This is the cheap half of
+        // making it true, and it covers the case that actually happens: a database restored from backup,
+        // or one rebuilt by a migration Down/Up, where @@DBTS is lower than the cursor a dashboard is
+        // still holding. Used as a floor, that cursor selects nothing, forever, and the dashboard
+        // silently stops updating. Clamping to a snapshot is self-healing and costs one comparison.
+        //
+        // Cursor *signing* is the complete answer and is deliberately not built: it buys detection of a
+        // forged cursor, and a forged cursor can only ever cause the forger to see a wrong window of an
+        // event they were already allowed to read.
+        if (floor > ceiling) floor = null;
+
+        var q = _db.AttendanceRecords.AsNoTracking()
+            .Where(a => a.EventId == id && a.RowVersion <= ceiling);
+        if (floor is { } lowerBound) q = q.Where(a => a.RowVersion > lowerBound);
+
+        // Projected rather than materialized as entities: the delta needs six columns and four of the
+        // student's, and Include would pull every column of both tables per row on the hottest read the
+        // dashboard makes.
+        //
+        // Bounded by MaxPageRows, and the bound applies to a snapshot as much as to a delta (Phase 4d
+        // review). A five-thousand-attendee convocation used to return five thousand delta objects to
+        // every open dashboard on its first poll. Paging costs nothing conceptually here — see the note
+        // below the query for why a truncated page is still a correct cursor stream — whereas an
+        // unbounded read is unbounded on the one endpoint designed to be called in a loop.
+        var rows = await q
+            .OrderBy(a => a.RowVersion)
+            .Take(AttendanceLiveOptions.MaxPageRows)
+            .Select(a => new
+            {
+                a.Id,
+                a.RowVersion,
+                a.StudentId,
+                a.Status,
+                a.CheckInAt,
+                a.CheckOutAt,
+                a.CaptureMethod,
+                a.Student!.StudentNumber,
+                a.Student.FirstName,
+                a.Student.MiddleName,
+                a.Student.LastName,
+            })
+            .ToListAsync(ct);
+
+        // A full page means there may be more, so the cursor stops at the last row delivered rather than
+        // at the ceiling. That is what makes a truncated page correct rather than lossy: everything at
+        // or below that row has been sent, and the client's next poll asks for what is above it. A
+        // rowversion is unique per database, so no two rows share the boundary value and nothing can be
+        // skipped by a tie.
+        var hasMore = rows.Count == AttendanceLiveOptions.MaxPageRows;
+        var cursor = hasMore ? rows[^1].RowVersion : ceiling;
+
+        // The same object GET /events/{id}/summary returns, from the same method — see the interface
+        // docs for why this is not a leaner purpose-built type. Built from the event already read above
+        // rather than through GetSummaryAsync, which would read it a second time.
+        //
+        // KNOWN AND ACCEPTED FOR 4d — the counters do not honour the ceiling. They are four aggregate
+        // queries with no RowVersion predicate, run after the rows query, so `counters.present` can
+        // count a row the delta deliberately withheld (one below MIN_ACTIVE_ROWVERSION) or one written
+        // between the two reads. The dashboard then shows a headline count one higher than the list of
+        // names under it.
+        //
+        // Normally that is a single poll cycle of skew and heals itself. The case that does not heal on
+        // its own is worth naming, because it is not obvious: MIN_ACTIVE_ROWVERSION() is DATABASE-wide,
+        // so one unrelated long-running transaction — a roster import, an event freeze — pins the
+        // ceiling while the counters go on advancing, and the discrepancy persists for as long as that
+        // transaction runs. Bounding this means giving the counters the same ceiling, which means
+        // rewriting the shared summary aggregates around a cursor they otherwise have no use for; that
+        // is a 4e change with its own review, not a 4d one.
+        var counters = await SummaryForAsync(ev, ct);
+
+        var deltas = rows.Select(r => new AttendanceDeltaDto(
+            ev.Id, r.StudentId, r.Status, r.CheckInAt,
+            counters.Present, counters.Expected,
+            r.Id, r.StudentNumber,
+            string.Join(' ', new[] { r.FirstName, r.MiddleName, r.LastName }
+                .Where(p => !string.IsNullOrWhiteSpace(p))),
+            r.CheckOutAt, r.CaptureMethod))
+            .ToList();
+
+        var live = new AttendanceLiveDto(
+            ev.Id,
+            AttendanceCursor.Encode(cursor),
+            counters,
+            // Exactly one of the two is populated; the other is omitted from the JSON. A snapshot
+            // replaces the client's state and a delta merges into it, so a body that carried both keys
+            // would make the client guess which it had received.
+            Entries: floor is null ? deltas : null,
+            Changes: floor is null ? null : deltas,
+            serverTime,
+            _live.PollAfterSeconds,
+            hasMore);
+
+        return new LiveAttendanceResponse(LiveOutcome.Ok, "Live attendance.", live);
+    }
+
+    /// <summary>
+    /// The highest <c>rowversion</c> that is guaranteed to have no uncommitted writer at or below it.
+    ///
+    /// <para>
+    /// Raw SQL because there is no LINQ for it: <c>MIN_ACTIVE_ROWVERSION()</c> is a SQL Server intrinsic
+    /// with no EF surface. It takes no parameters and no user input, so there is nothing here to
+    /// parameterize and nothing to inject into.
+    /// </para>
+    ///
+    /// <para>
+    /// With no transactions in flight it returns the next value to be issued, so subtracting one gives
+    /// <c>@@DBTS</c> — the newest version actually assigned. On an empty database that is <c>0</c>,
+    /// which is <see cref="AttendanceCursor.Beginning"/> and correctly matches nothing.
+    /// </para>
+    /// </summary>
+    private Task<long> SafeCursorCeilingAsync(CancellationToken ct) =>
+        _db.Database
+            .SqlQuery<long>($"SELECT CONVERT(bigint, MIN_ACTIVE_ROWVERSION()) - 1 AS Value")
+            .FirstAsync(ct);
 
     // ------------------------------------------------------------------------------- create/edit
 

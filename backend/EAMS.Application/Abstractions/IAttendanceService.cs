@@ -87,6 +87,43 @@ public enum TapOutcome
     /// </para>
     /// </summary>
     TappedAtOutsideEventWindow,
+
+    /// <summary>
+    /// A row of <c>POST /attendance/tap/batch</c> carried no <c>deviceTapId</c> (Phase 4d, D-33).
+    /// Per-row, never batch-level: one unkeyed row does not spoil the other 199.
+    ///
+    /// <para>
+    /// <b>Required on batch, optional on the single tap, and the asymmetry is the decision.</b> A tap
+    /// arriving one at a time is being made <em>now</em> — if the response is lost the client can
+    /// resend and, at worst, <c>AlreadyRecorded</c> absorbs it, because the
+    /// <c>(EventId, StudentId, OccurrenceId)</c> index still holds. A tap arriving in a batch has by
+    /// definition been sitting in a queue, and the queue's entire retry contract is
+    /// "resend the batch, every row is idempotent". A row with no idempotency key cannot honour that:
+    /// its only guard is the event/student index, which silently converts a retry into
+    /// <c>AlreadyRecorded</c> and so loses the second genuine tap of a <c>TimeInOut</c> pair. Refusing
+    /// it names the problem on the client's side where it can be fixed; accepting it would produce a
+    /// row that looks recorded and is not replayable.
+    /// </para>
+    ///
+    /// <para>
+    /// Published as a 400 in the frozen token table, which is what makes it a "stop, bug on your side"
+    /// rather than something the queue retries.
+    /// </para>
+    /// </summary>
+    DeviceTapIdRequired,
+
+    /// <summary>
+    /// <c>POST /attendance/tap/batch</c> was sent more than <see cref="EAMS.Domain.TapBatchLimits.MaxRows"/>
+    /// rows (Phase 4d, D-31). <b>The only outcome in this enum that is batch-level rather than
+    /// per-row</b> — nothing was processed, so there are no row results to carry it.
+    ///
+    /// <para>
+    /// The refusal echoes the limit in its problem body, so a client discovers the number it has to
+    /// chunk to rather than being told a number it already sent was wrong. That is the one case in the
+    /// frozen table whose guidance is "chunk, retry" instead of "stop retrying".
+    /// </para>
+    /// </summary>
+    BatchTooLarge,
 }
 
 public enum ManualOutcome
@@ -139,6 +176,32 @@ public record ManualResponse(ManualOutcome Outcome, TapResult Result)
         new(outcome, new TapResult(success, message, record, outcome.ToString(), serverTime));
 }
 
+/// <summary>
+/// One row of a batch, paired with where it came from in the request (Phase 4d, D-31).
+///
+/// <para>
+/// It carries a whole <see cref="TapResponse"/> rather than a token, so the row a batch produces and
+/// the row the single endpoint produces are literally the same object — the controller applies the
+/// same outcome→status map to both, and there is no second projection to drift.
+/// </para>
+/// </summary>
+public record TapBatchRow(int Index, string? DeviceTapId, TapResponse Response);
+
+/// <summary>
+/// What one call to <c>POST /attendance/tap/batch</c> did.
+/// </summary>
+/// <param name="Refusal">
+/// Non-null only when the batch was refused as a whole — today that is
+/// <see cref="TapOutcome.BatchTooLarge"/> and nothing else. <see cref="Rows"/> is then empty and
+/// <b>nothing was written</b>. Null on every well-formed batch, including an empty one.
+/// </param>
+/// <param name="Rows">
+/// One entry per submitted tap, in the request's array order. The <em>processing</em> order was
+/// ascending <c>tappedAt</c>; that is not observable here and does not need to be.
+/// </param>
+public record TapBatchResponse(
+    TapResponse? Refusal, IReadOnlyList<TapBatchRow> Rows, DateTime ServerTime);
+
 /// <summary>Technical Plan §6.4 — RFID capture and organizer override.</summary>
 public interface IAttendanceService
 {
@@ -151,6 +214,22 @@ public interface IAttendanceService
     /// behind a repository — the steps are one transaction's worth of decision-making.
     /// </summary>
     Task<TapResponse> TapAsync(TapRequest request, CancellationToken ct = default);
+
+    /// <summary>
+    /// §8.2's offline queue flush: many taps, one request, each one decided by
+    /// <see cref="TapAsync"/> itself.
+    ///
+    /// <para>
+    /// <b>The implementation may not contain a second copy of the tap rules, and that is a hard
+    /// constraint rather than a preference.</b> This codebase has been bitten twice by a duplicated
+    /// write path — <c>ManualAsync</c> shipped as an undefended copy of the read-then-write, and
+    /// <c>FindByEventStudentAsync</c>/<c>SaveNewRecordAsync</c> exist so it could not happen a third
+    /// time. A batch endpoint that re-derived "is this a check-out?" or "is this a duplicate?" would be
+    /// the third, on the busiest path in the system, and the divergence would show up as two clients
+    /// getting different answers for the same tap.
+    /// </para>
+    /// </summary>
+    Task<TapBatchResponse> TapBatchAsync(TapBatchRequest request, CancellationToken ct = default);
 
     Task<ManualResponse> ManualAsync(
         Guid eventId, Guid studentId, string status, string? notes, CancellationToken ct = default);

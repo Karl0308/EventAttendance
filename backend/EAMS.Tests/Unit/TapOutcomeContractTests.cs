@@ -61,31 +61,27 @@ public class TapOutcomeContractTests
     private static string[] PublishedTokens => [.. PublishedOutcomes.Select(o => o.Token)];
 
     /// <summary>
-    /// The two published tokens that <b>4c does not produce</b>, because both belong to
-    /// <c>POST /attendance/tap/batch</c>, which Phase 4d builds:
-    /// <c>DeviceTapIdRequired</c> (the batch endpoint makes <c>deviceTapId</c> mandatory; the single
-    /// endpoint does not) and <c>BatchTooLarge</c> (a batch-level refusal with no single-tap meaning).
+    /// Published tokens that the code does <b>not</b> produce yet, exempt from
+    /// <see cref="Every_published_token_the_api_produces_is_a_declared_outcome"/> and from nothing else.
     ///
     /// <para>
-    /// <b>How the absence is tolerated:</b> they are exempt from
-    /// <see cref="Every_published_token_that_4c_produces_is_a_declared_outcome"/> and from nothing else.
-    /// The direction that matters — <see cref="Every_declared_outcome_is_a_published_token"/> — is
-    /// unconditional, so when 4d declares them they are already required to be spelled exactly as they
-    /// are here, and adding them fails nothing. Nothing asserts they are <em>absent</em>: a test that
-    /// broke when the feature arrived would just be deleted, which is not a guard.
+    /// <b>Empty as of Phase 4d, and that is the whole point of the mechanism.</b> It held
+    /// <c>DeviceTapIdRequired</c> and <c>BatchTooLarge</c> for exactly one phase, because both belonged
+    /// to <c>POST /attendance/tap/batch</c> and the document published them before the endpoint existed.
+    /// 4d built the endpoint and declared both outcomes, so the loan is repaid and the list is empty —
+    /// which makes the published table and the enum now agree in both directions with no exceptions.
     /// </para>
     ///
     /// <para>
-    /// <b>Delete an entry from this list when 4d ships its endpoint</b>, and the exemption narrows on
-    /// its own — <see cref="The_exemption_list_names_only_the_batch_endpoints_tokens"/> is what stops it
-    /// quietly growing into a way to publish a token nobody implements.
+    /// <b>The list is kept rather than deleted, and it is pinned empty.</b> Deleting it would remove the
+    /// only record of how a token gets published ahead of its implementation, and the next phase that
+    /// needs to do it would either invent the mechanism again or — far more likely — quietly weaken
+    /// <see cref="Every_published_token_the_api_produces_is_a_declared_outcome"/> instead.
+    /// <see cref="The_exemption_list_is_empty"/> makes adding an entry a deliberate, reviewed edit
+    /// rather than a way to publish a token nobody implements.
     /// </para>
     /// </summary>
-    private static readonly string[] NotYetOnTheWire =
-    [
-        "DeviceTapIdRequired",
-        "BatchTooLarge",
-    ];
+    private static readonly string[] NotYetOnTheWire = [];
 
     /// <summary>
     /// The direction that catches a rename. A member renamed, or a new one added without publishing it,
@@ -111,7 +107,7 @@ public class TapOutcomeContractTests
     /// enum no longer declares is an outcome a client is still branching on and will never receive.
     /// </summary>
     [Fact]
-    public void Every_published_token_that_4c_produces_is_a_declared_outcome()
+    public void Every_published_token_the_api_produces_is_a_declared_outcome()
     {
         var declared = Enum.GetNames<TapOutcome>();
 
@@ -158,15 +154,43 @@ public class TapOutcomeContractTests
         }
     }
 
+    /// <summary>
+    /// The exemption was a loan, and Phase 4d repaid it. Every token in
+    /// <c>docs/api/attendance-contract-handoff.md</c> §2 is now something this API can actually return.
+    ///
+    /// <para>
+    /// Failing here means somebody added an entry to <see cref="NotYetOnTheWire"/>. That is sometimes
+    /// the right thing to do — it is how a token gets published ahead of its endpoint, which is exactly
+    /// what happened with the two batch tokens in 4c — but it must be a deliberate edit with the ⏳
+    /// marker added to the document in the same change, not a way to make a red build green.
+    /// </para>
+    /// </summary>
     [Fact]
-    public void The_exemption_list_names_only_the_batch_endpoints_tokens()
+    public void The_exemption_list_is_empty()
     {
-        Assert.Equal(
-            new[] { "BatchTooLarge", "DeviceTapIdRequired" },
-            NotYetOnTheWire.OrderBy(t => t, StringComparer.Ordinal));
+        Assert.Empty(NotYetOnTheWire);
 
+        // Still asserted, because an exemption for a token the document does not publish would be
+        // exempting nothing from nothing while looking like coverage.
         Assert.All(NotYetOnTheWire, token => Assert.Contains(token, PublishedTokens));
     }
+
+    /// <summary>
+    /// The two tokens 4c published with a ⏳ and 4d had to implement, asserted by name.
+    ///
+    /// <para>
+    /// <see cref="Every_published_token_the_api_produces_is_a_declared_outcome"/> already covers them
+    /// now that the exemption list is empty — but it covers them <em>because</em> the list is empty, and
+    /// the repair for a future red build is to add an entry back. This one cannot be satisfied that way:
+    /// it names the two outcomes the batch endpoint is built on, so deleting either fails a test whose
+    /// message says what it was for rather than a generic list mismatch.
+    /// </para>
+    /// </summary>
+    [Theory]
+    [InlineData("DeviceTapIdRequired")]
+    [InlineData("BatchTooLarge")]
+    public void The_batch_endpoints_tokens_are_declared(string token) =>
+        Assert.Contains(token, Enum.GetNames<TapOutcome>());
 
     /// <summary>
     /// <c>TapResult.Code</c> is a projection of <see cref="TapResponse.Outcome"/>, and

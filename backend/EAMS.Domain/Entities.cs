@@ -274,4 +274,38 @@ public class AttendanceRecord : AuditableEntity
 
     public Guid? RecordedByUserId { get; set; }
     public User? RecordedByUser { get; set; }
+
+    /// <summary>
+    /// The SQL Server <c>rowversion</c> the live-attendance cursor is built from (Phase 4d, D-30). Not
+    /// in §4.9 — additive, recorded as drift. Database-generated on every insert and every update; the
+    /// application never assigns it and never reads it for anything but ordering.
+    ///
+    /// <para>
+    /// <b>Exposed as a <c>long</c> rather than a <c>byte[]</c>, and that is the point of it.</b> The
+    /// column is eight bytes either way — <c>EamsDbContext</c> maps it through
+    /// <c>NumberToBytesConverter&lt;long&gt;</c>, which is big-endian, so the CLR value's numeric order
+    /// and SQL Server's <c>binary(8)</c> order are the same order. C# has no comparison operators on
+    /// <c>byte[]</c>, so a <c>byte[]</c> property could not express <c>WHERE RowVersion &gt; @since</c>
+    /// in LINQ at all and the delta query would have had to be raw SQL. See
+    /// <see cref="AttendanceCursor"/> for the wire form.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>It is deliberately NOT a concurrency token, and that is the whole of D-30's caution.</b> EF's
+    /// <c>.IsRowVersion()</c> is shorthand for <c>ValueGeneratedOnAddOrUpdate().IsConcurrencyToken()</c>,
+    /// and the second half would change write semantics on a path that works today: the <c>TimeInOut</c>
+    /// check-out is an <em>update</em>, so EF would start appending <c>AND [RowVersion] = @original</c>
+    /// to it and throwing <c>DbUpdateConcurrencyException</c> whenever two taps of one card raced —
+    /// exactly the case <c>AttendanceService</c> already recovers from through the unique indexes, and a
+    /// new unhandled exception type on the busiest write in the system. This column is a cursor. It adds
+    /// a way to <em>read</em> the table in order and changes nothing about writing to it.
+    /// </para>
+    ///
+    /// <para>
+    /// A <c>rowversion</c> counter reaching 2^63 would make this <c>long</c> negative and invert the
+    /// ordering. That is nine quintillion row versions in one database; it is stated because the type is
+    /// signed and someone will notice, not because it is a risk.
+    /// </para>
+    /// </summary>
+    public long RowVersion { get; set; }
 }
