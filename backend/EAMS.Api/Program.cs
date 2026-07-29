@@ -5,6 +5,7 @@ using EAMS.Api.Authorization;
 using EAMS.Api.Cors;
 using EAMS.Api.Identity;
 using EAMS.Api.MultiTenancy;
+using EAMS.Api.OpenApi;
 using EAMS.Api.RateLimiting;
 using EAMS.Application.Abstractions;
 using EAMS.Infrastructure;
@@ -24,8 +25,11 @@ builder.Services.AddControllers();
 builder.Services.Replace(
     ServiceDescriptor.Singleton<ProblemDetailsFactory, TracedProblemDetailsFactory>());
 
-builder.Services.AddEndpointsApiExplorer();
-builder.Services.AddSwaggerGen();
+// Phase 4e: the generated OpenAPI document is the published contract, replacing the hand-written
+// docs/api/attendance-contract-handoff.md that could drift from the code with nothing failing.
+// Registered unconditionally — only the endpoints that *serve* it are Development-gated, forty lines
+// below. See EamsOpenApi.
+builder.Services.AddEamsOpenApi();
 
 // Plan §6's header declares "Errors: RFC 7807 ProblemDetails", which nothing implemented. Without
 // it an unhandled path returned a full stack trace in Development — on endpoints that are
@@ -176,7 +180,7 @@ if (app.Environment.IsDevelopment())
     app.UseSwagger();
     app.UseSwaggerUI(o =>
     {
-        o.SwaggerEndpoint("/swagger/v1/swagger.json", "EAMS API v1");
+        o.SwaggerEndpoint($"/swagger/{EamsOpenApi.DocumentName}/swagger.json", "EAMS API v1");
         o.RoutePrefix = string.Empty; // Swagger UI at the root.
     });
 }

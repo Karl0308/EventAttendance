@@ -95,7 +95,8 @@ public record AttendanceDeltaDto(
 /// one operational lever a polling design has and a hub does not.
 /// </param>
 /// <param name="HasMore">
-/// True when this response was truncated at <see cref="AttendanceLiveOptions.MaxPageRows"/> and more
+/// True when this response was truncated at
+/// <see cref="EAMS.Application.Abstractions.AttendanceLiveOptions.MaxPageRows"/> and more
 /// rows are already available below <see cref="Cursor"/>. <b>Poll again immediately rather than waiting
 /// <see cref="PollAfterSeconds"/>.</b>
 ///

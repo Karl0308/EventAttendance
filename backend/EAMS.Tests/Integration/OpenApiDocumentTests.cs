@@ -1,0 +1,389 @@
+using System.Net;
+using System.Text.Json;
+using EAMS.Api.OpenApi;
+using EAMS.Application.Abstractions;
+using EAMS.Tests.Integration.Infrastructure;
+using Microsoft.Extensions.DependencyInjection;
+using Swashbuckle.AspNetCore.Swagger;
+using Xunit;
+
+namespace EAMS.Tests.Integration;
+
+/// <summary>
+/// The generated OpenAPI document — the deliverable of Phase 4 (4e).
+///
+/// <para>
+/// <b>Asserted against the bytes the host actually serves, not against the object model.</b> The
+/// document is only worth anything to the mobile developer and the SPA as JSON on the wire, and the
+/// two failure modes that matter — a generator that throws, and a generator that quietly emits a
+/// document missing the thing you were relying on — are both invisible from inside
+/// <c>SwaggerGenOptions</c>. A contract that 500s on generation is worse than no contract at all,
+/// because everything upstream of it looks fine.
+/// </para>
+///
+/// <para>
+/// Development is the environment that serves it (ADR-001 D-6: an unauthenticated complete description
+/// of an API whose admin surface is open hands an attacker the map). The one Production assertion here
+/// is the other half of that split — the <em>document</em> must still be buildable for tooling even
+/// where the route is gone.
+/// </para>
+/// </summary>
+[Collection(DatabaseCollection.Name)]
+public class OpenApiDocumentTests : IntegrationTest
+{
+    public OpenApiDocumentTests(SqlServerFixture sql) : base(sql) { }
+
+    private const string DocumentRoute = "/swagger/v1/swagger.json";
+
+    private const string Tap = "/api/v1/attendance/tap";
+    private const string TapBatch = "/api/v1/attendance/tap/batch";
+    private const string Manual = "/api/v1/attendance/manual";
+    private const string Live = "/api/v1/attendance/live/{eventId}";
+    private const string ByCard = "/api/v1/students/by-card/{cardUid}";
+    private const string Heartbeat = "/api/v1/devices/{id}/heartbeat";
+    private const string Summary = "/api/v1/events/{id}/summary";
+
+    /// <summary>
+    /// The four endpoints D-28 gates behind a device key, and the whole of that list. Transcribed
+    /// rather than derived from the attributes, for the reason the outcome-token tests record: deriving
+    /// it would assert that the pipeline equals itself.
+    /// </summary>
+    private static readonly (string Path, string Method)[] GatedOperations =
+    [
+        (Tap, "post"),
+        (TapBatch, "post"),
+        (ByCard, "get"),
+        (Heartbeat, "post"),
+    ];
+
+    /// <summary>Fetches and parses the served document. Fails loudly if it is not 200 JSON.</summary>
+    private async Task<JsonDocument> DocumentAsync()
+    {
+        using var factory = new DevelopmentApiFactory(Sql.ConnectionString);
+        using var client = factory.CreateClient();
+
+        var response = await client.GetAsync(DocumentRoute);
+        var body = await response.Content.ReadAsStringAsync();
+
+        Assert.True(
+            response.StatusCode == HttpStatusCode.OK,
+            $"The OpenAPI document did not generate: {(int)response.StatusCode}. Body: {body}");
+
+        return JsonDocument.Parse(body);
+    }
+
+    private static JsonElement Operation(JsonDocument document, string path, string method)
+    {
+        var paths = document.RootElement.GetProperty("paths");
+
+        Assert.True(paths.TryGetProperty(path, out var item), $"'{path}' is not in the document.");
+        Assert.True(item.TryGetProperty(method, out var operation), $"'{method} {path}' is not in the document.");
+
+        return operation;
+    }
+
+    private static JsonElement Schema(JsonDocument document, string name)
+    {
+        var schemas = document.RootElement.GetProperty("components").GetProperty("schemas");
+
+        Assert.True(schemas.TryGetProperty(name, out var schema), $"Schema '{name}' is not in the document.");
+        return schema;
+    }
+
+    // ------------------------------------------------------------------------------- it generates
+
+    /// <summary>
+    /// <b>The document generates, and it is JSON.</b> The cheapest assertion here and the one worth
+    /// most: a schema filter that indexes a property that is not there, an operation filter that
+    /// dereferences a null, or a missing XML file all surface as a 500 on this route — and nothing
+    /// upstream of it fails, so a build could ship with the contract broken while every other test
+    /// stayed green.
+    /// </summary>
+    [Fact]
+    public async Task The_document_generates()
+    {
+        using var document = await DocumentAsync();
+
+        Assert.Equal("EAMS API", document.RootElement.GetProperty("info").GetProperty("title").GetString());
+        Assert.NotEmpty(document.RootElement.GetProperty("paths").EnumerateObject());
+    }
+
+    /// <summary>
+    /// <b>The UI is Development-only; the document is not.</b> <c>HostPipelineTests</c> pins the route
+    /// away in Production. This pins the other half: the generator stays registered there, so client
+    /// tooling can still build the contract from a production binary. Collapse the two — gate
+    /// <c>AddSwaggerGen</c> as well as <c>UseSwagger</c> — and this is the only test that notices.
+    /// </summary>
+    [Fact]
+    public void The_document_generates_in_production_even_though_it_is_not_served()
+    {
+        using var factory = new EamsApiFactory(Sql.ConnectionString);
+        using var client = factory.CreateClient(); // Builds the host.
+
+        using var scope = factory.Services.CreateScope();
+        var swagger = scope.ServiceProvider.GetRequiredService<ISwaggerProvider>();
+
+        var document = swagger.GetSwagger(EamsOpenApi.DocumentName);
+
+        Assert.NotNull(document);
+        Assert.NotEmpty(document.Paths);
+    }
+
+    // ----------------------------------------------------------------------------- what it covers
+
+    /// <summary>
+    /// Every endpoint the published contract names is in the document. Path by path rather than by
+    /// count, so adding a route cannot make a missing one pass.
+    /// </summary>
+    [Theory]
+    [InlineData(Tap, "post")]
+    [InlineData(TapBatch, "post")]
+    [InlineData(Manual, "post")]
+    [InlineData(Live, "get")]
+    [InlineData(ByCard, "get")]
+    [InlineData(Heartbeat, "post")]
+    [InlineData(Summary, "get")]
+    [InlineData("/api/v1/attendance", "get")]
+    [InlineData("/api/v1/events/{id}/roster", "get")]
+    public async Task The_document_describes_the_published_surface(string path, string method)
+    {
+        using var document = await DocumentAsync();
+        Operation(document, path, method);
+    }
+
+    /// <summary>
+    /// The reasoning above each action is <em>in</em> the document. This is what
+    /// <c>GenerateDocumentationFile</c> and <c>IncludeXmlComments</c> buy, and the failure mode without
+    /// them is silent: Swashbuckle emits a perfectly valid document with every description empty.
+    /// </summary>
+    [Fact]
+    public async Task The_document_carries_the_xml_documentation()
+    {
+        using var document = await DocumentAsync();
+
+        var tap = Operation(document, Tap, "post");
+
+        Assert.False(
+            string.IsNullOrWhiteSpace(tap.GetProperty("summary").GetString()),
+            "POST /attendance/tap has no summary. IncludeXmlComments is not reaching this assembly's " +
+            "XML file — see EamsOpenApi.XmlCommentPaths.");
+
+        var description = tap.GetProperty("description").GetString();
+        Assert.Contains("deviceTapId", description!, StringComparison.Ordinal);
+    }
+
+    // -------------------------------------------------------------------------- the security scheme
+
+    /// <summary>
+    /// <c>Authorization: DeviceKey …</c> is discoverable from the document rather than from a markdown
+    /// file somebody has to be sent.
+    /// </summary>
+    [Fact]
+    public async Task The_device_key_security_scheme_is_published()
+    {
+        using var document = await DocumentAsync();
+
+        var schemes = document.RootElement.GetProperty("components").GetProperty("securitySchemes");
+
+        Assert.True(
+            schemes.TryGetProperty(EamsOpenApi.DeviceKeySecuritySchemeId, out var scheme),
+            "The DeviceKey security scheme is not published, so nothing in the document says how a " +
+            "capture client authenticates.");
+
+        Assert.Equal("apiKey", scheme.GetProperty("type").GetString());
+        Assert.Equal("header", scheme.GetProperty("in").GetString());
+        Assert.Equal("Authorization", scheme.GetProperty("name").GetString());
+
+        // The exact prefix a client has to send, in the text a developer will read.
+        Assert.Contains("DeviceKey eams_dk_", scheme.GetProperty("description").GetString()!, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// <b>Exactly the four D-28 endpoints require the key, and no others.</b>
+    ///
+    /// <para>
+    /// Both directions matter and they fail differently. Marking too few leaves an integrator building
+    /// a client that sends no credential to an endpoint that will 401 it. Marking too many — which is
+    /// what a document-level <c>AddSecurityRequirement</c> would do — publishes a claim about
+    /// authentication that the pipeline does not make, on an API whose admin surface is deliberately
+    /// open until Phase 6. The second is the more dangerous, because it reads as the safer document.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public async Task Exactly_the_gated_operations_require_a_device_key()
+    {
+        using var document = await DocumentAsync();
+
+        var required = new List<string>();
+
+        foreach (var path in document.RootElement.GetProperty("paths").EnumerateObject())
+        {
+            foreach (var operation in path.Value.EnumerateObject())
+            {
+                if (!operation.Value.TryGetProperty("security", out var security)) continue;
+                if (security.GetArrayLength() == 0) continue;
+
+                required.Add($"{operation.Name} {path.Name}");
+            }
+        }
+
+        var expected = GatedOperations.Select(o => $"{o.Method} {o.Path}").Order().ToList();
+
+        Assert.Equal(expected, required.Order().ToList());
+    }
+
+    // ------------------------------------------------------------------------------ the error shape
+
+    /// <summary>
+    /// §6's declared error shape, with the extensions that were previously folklore. An integrator
+    /// reading only the document used to see the five RFC 7807 members and nothing else, so the branch
+    /// they would write is the one on <c>title</c> that the contract spends a paragraph warning against.
+    /// </summary>
+    [Theory]
+    [InlineData("traceId")]
+    [InlineData("code")]
+    [InlineData("serverTime")]
+    public async Task The_problem_details_schema_documents_its_extensions(string property)
+    {
+        using var document = await DocumentAsync();
+
+        var properties = Schema(document, "ProblemDetails").GetProperty("properties");
+
+        Assert.True(
+            properties.TryGetProperty(property, out var described),
+            $"ProblemDetails does not publish '{property}', which every error body on the attendance " +
+            "surface actually carries.");
+
+        Assert.False(string.IsNullOrWhiteSpace(described.GetProperty("description").GetString()));
+    }
+
+    /// <summary>
+    /// <b><c>POST /attendance/manual</c>'s 400 is a problem body, and the document now says so.</b>
+    ///
+    /// <para>
+    /// This action carried no <c>[ProducesResponseType]</c> at all until 4e, so the generated document
+    /// inferred <c>TapResult</c> for every status it produced — which 4c made untrue when tap and
+    /// manual failures became RFC 7807. A generated client would have deserialized a problem body into
+    /// <c>TapResult</c> and read <c>success: false</c> off a field that is not there.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public async Task The_manual_override_publishes_a_problem_body_for_its_failures()
+    {
+        using var document = await DocumentAsync();
+
+        var responses = Operation(document, Manual, "post").GetProperty("responses");
+
+        Assert.Equal("TapResult", SchemaRefOf(responses, "200"));
+        Assert.Equal("ProblemDetails", SchemaRefOf(responses, "400"));
+        Assert.Equal("ProblemDetails", SchemaRefOf(responses, "404"));
+    }
+
+    /// <summary>The component schema name a response body references, whatever media type carries it.</summary>
+    private static string SchemaRefOf(JsonElement responses, string status)
+    {
+        Assert.True(responses.TryGetProperty(status, out var response), $"No {status} response is declared.");
+        Assert.True(response.TryGetProperty("content", out var content), $"The {status} response declares no body.");
+
+        var reference = content.EnumerateObject()
+            .Select(media => media.Value.GetProperty("schema"))
+            .Select(schema => schema.TryGetProperty("$ref", out var r) ? r.GetString() : null)
+            .FirstOrDefault(r => r is not null);
+
+        Assert.NotNull(reference);
+        return reference!.Split('/')[^1];
+    }
+
+    // ---------------------------------------------------------------------------- the token tables
+
+    /// <summary>
+    /// <b>The frozen token tables are published as machine-readable schemas.</b> A markdown table in a
+    /// document nobody can compile is what Phase 4 has been living with; an <c>enum</c> in the contract
+    /// is something a generated client turns into a switchable type.
+    ///
+    /// <para>
+    /// The published list is compared against the enum, which is what makes the document and the code
+    /// unable to drift. The enum itself is pinned against the transcribed frozen table by
+    /// <c>TapOutcomeContractTests</c> and <c>ManualOutcomeContractTests</c> — that is the half this one
+    /// deliberately does not repeat.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public async Task The_outcome_token_tables_are_published()
+    {
+        using var document = await DocumentAsync();
+
+        AssertTokens(document, "TapOutcomeCode", Enum.GetNames<TapOutcome>());
+        AssertTokens(document, "ManualOutcomeCode", Enum.GetNames<ManualOutcome>());
+        AssertTokens(document, "LiveOutcomeCode", Enum.GetNames<LiveOutcome>());
+    }
+
+    private static void AssertTokens(JsonDocument document, string schemaName, string[] expected)
+    {
+        var schema = Schema(document, schemaName);
+
+        Assert.Equal("string", schema.GetProperty("type").GetString());
+
+        var published = schema.GetProperty("enum").EnumerateArray()
+            .Select(t => t.GetString())
+            .Order()
+            .ToList();
+
+        Assert.Equal(expected.Order().ToList(), published!);
+
+        // The (code, HTTP) pair is the frozen unit — a token published without its status leaves the
+        // client's first branch, on the status line, undocumented.
+        Assert.Contains("| HTTP |", schema.GetProperty("description").GetString()!, StringComparison.Ordinal);
+    }
+
+    // ------------------------------------------------------------------- deprecation and examples
+
+    /// <summary>
+    /// <b><c>TapResult.success</c> is deprecated and still there.</b> Both halves are the assertion.
+    ///
+    /// <para>
+    /// It has been redundant with <c>code</c> since 4c, and removing it was proposed for this phase and
+    /// refused: the one consumer we cannot recompile has an open question about whether 4c's
+    /// problem-body change already broke him, and a second breaking change to the same body before he
+    /// answers is not a thing to do unasked. So the field stays on the wire and the document says what
+    /// to read instead.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public async Task The_redundant_success_flag_is_deprecated_rather_than_removed()
+    {
+        using var document = await DocumentAsync();
+
+        var properties = Schema(document, "TapResult").GetProperty("properties");
+
+        Assert.True(
+            properties.TryGetProperty("success", out var success),
+            "TapResult.success was removed. That is a breaking change to a body an external client is " +
+            "already reading, and it was explicitly deferred — deprecate it, do not delete it.");
+
+        Assert.True(success.GetProperty("deprecated").GetBoolean());
+        Assert.Contains("`code`", success.GetProperty("description").GetString()!, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// Worked examples for the batch flush. The batch shape is the part of the contract an integrator
+    /// gets wrong — dense <c>results</c>, per-row <c>status</c> under a transport status that is always
+    /// 200 — and one piece of JSON says all of it faster than the four paragraphs it replaces.
+    /// </summary>
+    [Theory]
+    [InlineData("TapRequest")]
+    [InlineData("TapResult")]
+    [InlineData("TapBatchRequest")]
+    [InlineData("TapBatchResult")]
+    [InlineData("AttendanceLiveDto")]
+    public async Task The_capture_payloads_carry_worked_examples(string schemaName)
+    {
+        using var document = await DocumentAsync();
+
+        Assert.True(
+            Schema(document, schemaName).TryGetProperty("example", out var example),
+            $"{schemaName} publishes no example.");
+
+        Assert.Equal(JsonValueKind.Object, example.ValueKind);
+    }
+}

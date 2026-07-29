@@ -115,7 +115,9 @@ internal sealed class EventService : IEventService
             .FirstOrDefaultAsync(x => x.Id == id && !x.IsDeleted, ct);
         if (e is null) return null;
 
-        return await SummaryForAsync(e, ct);
+        // No cursor here, so no ceiling: this endpoint publishes the counts as of now. See
+        // SummaryForAsync for why the live path passes one and this deliberately does not.
+        return await SummaryForAsync(e, ceiling: null, ct);
     }
 
     /// <summary>
@@ -129,15 +131,52 @@ internal sealed class EventService : IEventService
     /// record as failing silently.
     /// </para>
     /// </summary>
-    private async Task<EventSummaryDto> SummaryForAsync(Event e, CancellationToken ct)
+    /// <param name="ceiling">
+    /// The highest <c>RowVersion</c> the attendance-derived counts may see, or <c>null</c> for "every
+    /// committed row" (Phase 4e).
+    ///
+    /// <para>
+    /// <b>A parameter rather than a second method, because the arithmetic underneath is the thing that
+    /// must not be copied.</b> ADR-003 D-12/D-13 record that this denominator fails <em>silently</em>
+    /// when it is duplicated: a second copy drifts and every number involved stays plausible. So the
+    /// live path and <c>GET /events/{id}/summary</c> keep sharing one implementation and differ only in
+    /// what they pass here.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>Why the live path needs it.</b> The delta withholds every row above
+    /// <c>MIN_ACTIVE_ROWVERSION() - 1</c>, because a <c>rowversion</c> is assigned when a row is
+    /// written and not when its transaction commits. Counted without the same bound, <c>present</c>
+    /// could include a row the delta deliberately held back, and the dashboard would show "5 present"
+    /// over a list of four names. Normally that is one poll cycle of skew and heals itself — but
+    /// <c>MIN_ACTIVE_ROWVERSION()</c> is <b>database-wide</b>, so one unrelated long transaction (a
+    /// roster import, an event freeze) pins the ceiling while the counters go on advancing, and the
+    /// discrepancy lasts as long as that transaction does.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>Why <c>GET /events/{id}/summary</c> must keep passing <c>null</c>.</b> It has no cursor and
+    /// hands out no cursor, so a ceiling there would silently lower a published number — an operator
+    /// refreshing a report would watch counts move for reasons that have nothing to do with attendance.
+    /// The two answers converge the moment any in-flight write commits.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>It bounds the attendance-derived quantities only, and not the denominator.</b>
+    /// <c>expected</c> is read from §4.8 <c>EventGroups</c> and section membership, which carry no
+    /// <c>rowversion</c> and are not what the cursor is a cursor over. There is nothing to bound: an
+    /// uncommitted audience change is invisible to this read anyway.
+    /// </para>
+    /// </param>
+    private async Task<EventSummaryDto> SummaryForAsync(Event e, long? ceiling, CancellationToken ct)
     {
         var id = e.Id;
         var expectedIds = ExpectedStudentIds(id, e.Status);
 
-        var counts = await CountByStatusAsync(id, ct);
+        var counts = await CountByStatusAsync(id, ceiling, ct);
         var expected = await expectedIds.CountAsync(ct);
-        var attended = await expectedIds.Intersect(AttendedStudentIds(id)).CountAsync(ct);
-        var unexpected = await RecordedStudentIds(id).Except(expectedIds).CountAsync(ct);
+        var attended = await expectedIds.Intersect(AttendedStudentIds(id, ceiling)).CountAsync(ct);
+        var unexpected = await RecordedStudentIds(id, ceiling).Except(expectedIds).CountAsync(ct);
 
         return new EventSummaryDto(
             e.Id, e.Name, expected,
@@ -171,10 +210,10 @@ internal sealed class EventService : IEventService
     /// the event has no attendance at all, which is why the result is nullable and falls back to zeros.
     /// </para>
     /// </summary>
-    private async Task<StatusCounts> CountByStatusAsync(Guid eventId, CancellationToken ct)
+    private async Task<StatusCounts> CountByStatusAsync(
+        Guid eventId, long? ceiling, CancellationToken ct)
     {
-        var counts = await _db.AttendanceRecords
-            .Where(a => a.EventId == eventId)
+        var counts = await AttendanceOn(eventId, ceiling)
             .GroupBy(_ => 1)
             .Select(g => new StatusCounts(
                 g.Count(a => a.Status == AttendanceStatus.Present),
@@ -197,15 +236,35 @@ internal sealed class EventService : IEventService
     /// disagree for a reason invisible in either.
     /// </para>
     /// </summary>
-    private IQueryable<Guid> AttendedStudentIds(Guid eventId) =>
-        _db.AttendanceRecords
-            .Where(a => a.EventId == eventId
-                     && (a.Status == AttendanceStatus.Present || a.Status == AttendanceStatus.Late))
+    private IQueryable<Guid> AttendedStudentIds(Guid eventId, long? ceiling) =>
+        AttendanceOn(eventId, ceiling)
+            .Where(a => a.Status == AttendanceStatus.Present || a.Status == AttendanceStatus.Late)
             .Select(a => a.StudentId);
 
     /// <summary>Every student with any attendance row on this event. <c>EXCEPT</c> the expected set gives the walk-ins.</summary>
-    private IQueryable<Guid> RecordedStudentIds(Guid eventId) =>
-        _db.AttendanceRecords.Where(a => a.EventId == eventId).Select(a => a.StudentId);
+    private IQueryable<Guid> RecordedStudentIds(Guid eventId, long? ceiling) =>
+        AttendanceOn(eventId, ceiling).Select(a => a.StudentId);
+
+    /// <summary>
+    /// One event's attendance rows, optionally bounded by the live cursor's ceiling (Phase 4e).
+    ///
+    /// <para>
+    /// <b>The single place the ceiling is applied.</b> Three aggregates feed the summary and the live
+    /// counters are all three of them; applying the predicate at each call site would be three chances
+    /// to forget one, and forgetting one is invisible — the number stays plausible, it is just counted
+    /// over a different set than the rows beside it. See <see cref="SummaryForAsync"/> for what the
+    /// ceiling is and why <c>GET /events/{id}/summary</c> passes <c>null</c>.
+    /// </para>
+    ///
+    /// <para>
+    /// The bounded form matches <c>IX_Attendance_EventId_RowVersion</c> — <c>EventId</c> equality then
+    /// a <c>RowVersion</c> range — which is the same index the delta query uses.
+    /// </para>
+    /// </summary>
+    private IQueryable<AttendanceRecord> AttendanceOn(Guid eventId, long? ceiling) =>
+        ceiling is { } max
+            ? _db.AttendanceRecords.Where(a => a.EventId == eventId && a.RowVersion <= max)
+            : _db.AttendanceRecords.Where(a => a.EventId == eventId);
 
     /// <summary>
     /// <c>(invited students who attended) / (invited students)</c>, to one decimal place.
@@ -511,20 +570,23 @@ internal sealed class EventService : IEventService
         // docs for why this is not a leaner purpose-built type. Built from the event already read above
         // rather than through GetSummaryAsync, which would read it a second time.
         //
-        // KNOWN AND ACCEPTED FOR 4d — the counters do not honour the ceiling. They are four aggregate
-        // queries with no RowVersion predicate, run after the rows query, so `counters.present` can
-        // count a row the delta deliberately withheld (one below MIN_ACTIVE_ROWVERSION) or one written
-        // between the two reads. The dashboard then shows a headline count one higher than the list of
-        // names under it.
+        // CLOSED IN 4e — bounded by the same ceiling as the rows. 4d shipped this unbounded and said so:
+        // four aggregates with no RowVersion predicate, run *after* the rows query, so `counters.present`
+        // could count a row the delta had deliberately withheld and the dashboard would show a headline
+        // count one higher than the list of names under it. A single poll cycle of skew heals itself; the
+        // case that does not is that MIN_ACTIVE_ROWVERSION() is DATABASE-wide, so one unrelated long
+        // transaction — a roster import, an event freeze — pins the ceiling while the counters advance,
+        // and the discrepancy lasts as long as that transaction does.
         //
-        // Normally that is a single poll cycle of skew and heals itself. The case that does not heal on
-        // its own is worth naming, because it is not obvious: MIN_ACTIVE_ROWVERSION() is DATABASE-wide,
-        // so one unrelated long-running transaction — a roster import, an event freeze — pins the
-        // ceiling while the counters go on advancing, and the discrepancy persists for as long as that
-        // transaction runs. Bounding this means giving the counters the same ceiling, which means
-        // rewriting the shared summary aggregates around a cursor they otherwise have no use for; that
-        // is a 4e change with its own review, not a 4d one.
-        var counters = await SummaryForAsync(ev, ct);
+        // The ceiling is passed as a parameter rather than by giving the live path its own aggregates:
+        // ADR-003 D-12/D-13 record that this denominator fails silently when it is duplicated, so
+        // sharing the one implementation is what stops a second copy drifting plausibly.
+        //
+        // Note what this does NOT make: an atomic read. The rows and the counters are still separate
+        // statements against a moving database, so a row committed between them raises the ceiling for
+        // neither — both are bounded by the same `ceiling` value, read once above. That is the property
+        // that matters: the counters can no longer describe a wider set than the rows do.
+        var counters = await SummaryForAsync(ev, ceiling, ct);
 
         var deltas = rows.Select(r => new AttendanceDeltaDto(
             ev.Id, r.StudentId, r.Status, r.CheckInAt,

@@ -3,6 +3,29 @@
   <!-- TargetFramework / Nullable / ImplicitUsings come from backend/Directory.Build.props. -->
 
   <!--
+    Phase 4e. The DTOs in this project ARE the published contract's payload shapes, and the reasoning
+    on them — why `code` is not called `outcome`, why `success` is redundant, why `entries` and
+    `changes` are never both present — is exactly what an integrating client needs and what the
+    hand-written handoff document used to carry. Emitting the XML lets EAMS.Api feed it to
+    Swashbuckle's IncludeXmlComments, so the generated OpenAPI document says it instead.
+
+    CS1591 ("missing XML comment") and CS1573 ("some parameters documented, others not") are
+    suppressed rather than answered: the build gate is zero warnings, and satisfying them would demand
+    a doc comment on every record parameter in the assembly — which is how a codebase ends up with
+    `/// <summary>Gets the id.</summary>` noise that makes the comments that *do* say something harder
+    to find. Documenting only the parameter that carries a decision is this codebase's house style and
+    CS1573 exists to argue with exactly that.
+
+    CS1574 (a cref that does not resolve) is deliberately NOT suppressed. A broken cref is a real
+    defect in the published document — it silently drops the link and, with it, whatever the sentence
+    was pointing at.
+  -->
+  <PropertyGroup>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <NoWarn>$(NoWarn);CS1591;CS1573</NoWarn>
+  </PropertyGroup>
+
+  <!--
     Layering rule (Technical Plan §3): Application depends on Domain only.
     No EF Core, no ASP.NET Core packages here.
   -->

@@ -36,8 +36,19 @@ public class StudentsController : ControllerBase
 
     // ---------------------------------------------------------------------------------- reads
 
+    /// <summary><c>GET /students</c> — the roster, every filter optional.</summary>
+    /// <param name="search">Matches student number or name.</param>
+    /// <param name="course">
+    /// <b>ADR-001 D-2 derived display cache.</b> A student can sit in several sections at once — twelve
+    /// of fifty-two in the real roster do — so this filter cannot represent the truth. It exists for the
+    /// admin grid; do not build reporting on it.
+    /// </param>
+    /// <param name="status"><c>Active</c>, <c>Inactive</c> or <c>Graduated</c>.</param>
+    /// <param name="ct">Cancellation token.</param>
+    /// <response code="200">The matching students, possibly empty.</response>
     [HttpGet]
     [HasPermissionNotEnforced("students.read")]
+    [ProducesResponseType(typeof(IEnumerable<StudentDto>), StatusCodes.Status200OK)]
     public async Task<ActionResult<IEnumerable<StudentDto>>> List(
         [FromQuery] string? search, [FromQuery] string? course, [FromQuery] string? status,
         CancellationToken ct)
@@ -53,7 +64,26 @@ public class StudentsController : ControllerBase
         return s is null ? NotFound() : Ok(s);
     }
 
-    // GET /students/by-card/{cardUid} — UID→student resolution for the mobile scan screen.
+    /// <summary>
+    /// <c>GET /students/by-card/{cardUid}</c> — UID→student resolution for the mobile scan screen.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>A card UID <em>is</em> the student number (REGNO).</b> There is no tap-to-bind screen to
+    /// build — students arrive card-ready from the roster import.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>Normalisation is uppercase with every non-alphanumeric stripped.</b> <c>04:A7:B8:C9</c>,
+    /// <c>04-a7-b8-c9</c> and <c>04a7b8c9</c> are one card, stored as <c>04A7B8C9</c>. The server
+    /// normalises what you send, so any reader format is accepted — but normalise before any
+    /// <em>local</em> cache or comparison, or your dedupe will disagree with ours.
+    /// </para>
+    /// </remarks>
+    /// <param name="cardUid">The raw or normalised UID.</param>
+    /// <param name="ct">Cancellation token.</param>
+    /// <response code="200">The student, with every card they hold.</response>
+    /// <response code="404">No <em>active</em> card matches that UID.</response>
     // The service normalizes the UID; callers may pass any reader format.
     //
     // `attendance.capture`, not `students.read` — §6.2 assigns this one endpoint the capture
@@ -71,8 +101,11 @@ public class StudentsController : ControllerBase
     [Authorize(AuthenticationSchemes = DeviceKey.AuthenticationScheme, Policy = EamsPermissions.AttendanceCapture)]
     [EnableRateLimiting(CaptureRateLimiting.PolicyName)]
     [HasPermissionNotEnforced(EamsPermissions.AttendanceCapture)]
+    [ProducesResponseType(typeof(StudentDto), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status401Unauthorized)]
     [ProducesResponseType(StatusCodes.Status403Forbidden)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    [ProducesResponseType(StatusCodes.Status429TooManyRequests)]
     public async Task<ActionResult<StudentDto>> ByCard(string cardUid, CancellationToken ct)
     {
         var s = await _students.GetByCardUidAsync(cardUid, ct);

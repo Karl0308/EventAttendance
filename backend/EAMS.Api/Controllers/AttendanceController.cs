@@ -64,14 +64,75 @@ public class AttendanceController : ControllerBase
         _events = events;
     }
 
+    /// <summary>
+    /// <c>GET /attendance</c> — recorded attendance rows, every filter optional.
+    /// </summary>
+    /// <remarks>
+    /// Unfiltered and unpaged, so it is a back-office read rather than something to poll. The live
+    /// dashboard's read is <c>GET /attendance/live/{eventId}</c>, which is bounded and cursored.
+    /// </remarks>
+    /// <param name="eventId">Restrict to one event.</param>
+    /// <param name="studentId">Restrict to one student.</param>
+    /// <param name="status">One of <c>Present</c>, <c>Late</c>, <c>Absent</c>, <c>Excused</c>.</param>
+    /// <param name="ct">Cancellation token.</param>
+    /// <response code="200">The matching rows, possibly empty. Never a 404 for an empty filter.</response>
     [HttpGet]
     [HasPermissionNotEnforced("attendance.read")]
+    [ProducesResponseType(typeof(IEnumerable<AttendanceDto>), StatusCodes.Status200OK)]
     public async Task<ActionResult<IEnumerable<AttendanceDto>>> List(
         [FromQuery] Guid? eventId, [FromQuery] Guid? studentId, [FromQuery] string? status,
         CancellationToken ct)
         => Ok(await _attendance.ListAsync(eventId, studentId, status, ct));
 
-    // POST /attendance/tap — the core capture path (Technical Plan §6.4).
+    /// <summary>
+    /// <c>POST /attendance/tap</c> — the core capture path (Technical Plan §6.4).
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// One tap, decided by the same function every row of <c>POST /attendance/tap/batch</c> goes
+    /// through. Resolve the card UID → check the event and its window → absorb a replay by
+    /// <c>deviceTapId</c> → write or update the row → decide Present versus Late from
+    /// <c>tappedAt</c> and the event's <c>graceMinutes</c>.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>Branch on <c>code</c>, never on <c>message</c>.</b> The token set and the status each one
+    /// arrives with are frozen contract — see the <c>TapOutcomeCode</c> schema. A success is a
+    /// <c>TapResult</c>; a rejection is an RFC 7807 body carrying the same <c>code</c> and
+    /// <c>serverTime</c>, so one accessor reads both.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>Always send a <c>deviceTapId</c>, and never regenerate it on retry.</b> It is optional here
+    /// and required on the batch endpoint, but it is what makes a lost response recoverable: a replay
+    /// comes back <c>DuplicateIgnored</c> instead of writing a second row.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>Send an explicit <c>tappedAt</c> too.</b> With <c>null</c> the instant being validated is
+    /// re-derived from our clock on <em>every</em> attempt, so a tap that landed at 10:00 and is
+    /// retried at 12:30 — after the event's window closed — comes back
+    /// <c>400 TappedAtOutsideEventWindow</c> rather than the <c>DuplicateIgnored</c> you would expect.
+    /// The stored row is correct either way; only reconciliation by code is wrong for it.
+    /// </para>
+    /// </remarks>
+    /// <param name="req">The tap. See <c>TapRequest</c> for the per-field rules.</param>
+    /// <param name="ct">Cancellation token.</param>
+    /// <response code="200">
+    /// <c>Recorded</c>, <c>DuplicateIgnored</c>, <c>CheckedOut</c> or <c>AlreadyRecorded</c>. All four
+    /// mean the client can drop the tap from its queue.
+    /// </response>
+    /// <response code="400">
+    /// <c>EventNotOpen</c>, <c>DeviceMismatch</c>, <c>TappedAtOutOfRange</c> or
+    /// <c>TappedAtOutsideEventWindow</c>. Stop retrying — the same request will be refused forever.
+    /// </response>
+    /// <response code="401">No device key, or one that is malformed or unknown.</response>
+    /// <response code="403">The key was revoked, or the device was retired.</response>
+    /// <response code="404">
+    /// <c>EventNotFound</c>, <c>CardNotFound</c> or <c>DeviceNotRegistered</c>. The last also covers a
+    /// device belonging to another school — deliberately indistinguishable.
+    /// </response>
+    /// <response code="429">Capture rate limit. Honour <c>Retry-After</c>.</response>
     // The workflow lives in IAttendanceService; this maps its outcome to an HTTP status.
     //
     // One of the four endpoints a device key gates (Phase 4a design, D-28). [HasPermissionNotEnforced]
@@ -99,7 +160,8 @@ public class AttendanceController : ControllerBase
 
     /// <summary>
     /// <c>POST /attendance/tap/batch</c> — §8.2's offline queue flush (Phase 4d, D-31).
-    ///
+    /// </summary>
+    /// <remarks>
     /// <para>
     /// <b>A well-formed batch is always 200, never 207.</b> The transport status describes the batch;
     /// each row's own <c>status</c> describes that tap. 207 Multi-Status is handled inconsistently by
@@ -137,7 +199,30 @@ public class AttendanceController : ControllerBase
     /// needs a token-bucket policy that charges by row count, which the fixed-window limiter cannot
     /// express.
     /// </para>
-    /// </summary>
+    /// </remarks>
+    /// <param name="req">The flush. See <c>TapBatchRequest</c>.</param>
+    /// <param name="ct">Cancellation token.</param>
+    /// <response code="200">
+    /// <b>Every well-formed batch, including an empty one.</b> <c>results</c> is dense — one entry per
+    /// submitted tap, in the order you sent them, so <c>results[i].index == i</c> and
+    /// <c>accepted + rejected == results.length</c>. Each row's own <c>status</c> is the status that tap
+    /// would have received as a single <c>POST /attendance/tap</c>.
+    ///
+    /// <para>
+    /// On a <c>5xx</c>, retry the whole batch — that is always safe. Safe <b>because every row is
+    /// idempotent</b>, not because the batch is atomic: rows commit individually, so a server error
+    /// partway through leaves the earlier rows written and the retry absorbs them as
+    /// <c>DuplicateIgnored</c>.
+    /// </para>
+    /// </response>
+    /// <response code="400">
+    /// Transport or size only: a malformed body, or <c>BatchTooLarge</c>. The refusal echoes the limit
+    /// as <c>maxBatchRows</c> in the problem body, so chunk from the response rather than hard-coding
+    /// the number. Nothing about the content of an individual row can produce a batch-level 4xx.
+    /// </response>
+    /// <response code="401">No device key, or one that is malformed or unknown.</response>
+    /// <response code="403">The key was revoked, or the device was retired.</response>
+    /// <response code="429">Capture rate limit. One flush spends one permit, whatever its row count.</response>
     [HttpPost("tap/batch")]
     [Authorize(AuthenticationSchemes = DeviceKey.AuthenticationScheme, Policy = EamsPermissions.AttendanceCapture)]
     [EnableRateLimiting(CaptureRateLimiting.PolicyName)]
@@ -191,7 +276,8 @@ public class AttendanceController : ControllerBase
     /// <c>GET /attendance/live/{eventId}</c> — the D-29 cursor-delta poll that stands in for §5/§6.4's
     /// SignalR hub. Omit <c>since</c> for a snapshot; send back the previous response's <c>cursor</c>
     /// for the changes since it.
-    ///
+    /// </summary>
+    /// <remarks>
     /// <para>
     /// <b>The permission is <c>attendance.read</c> and there is deliberately no <c>[Authorize]</c>.</b>
     /// This is a dashboard read, not a capture, and the only authentication scheme that exists today is
@@ -211,7 +297,39 @@ public class AttendanceController : ControllerBase
     /// happening. <c>no-store</c> rather than <c>no-cache</c> because there is nothing here worth
     /// revalidating — every response is keyed to a cursor that will never be asked for again.
     /// </para>
-    /// </summary>
+    /// </remarks>
+    /// <param name="eventId">The event to watch.</param>
+    /// <param name="since">
+    /// Omit for a snapshot; otherwise the <c>cursor</c> from your previous response, <b>verbatim</b>.
+    /// Opaque — store it, send it back, never parse it. A blank value is treated as absent.
+    /// </param>
+    /// <param name="ct">Cancellation token.</param>
+    /// <response code="200">
+    /// Exactly one of <c>entries</c> (you sent no cursor — <b>replace</b> your state) or <c>changes</c>
+    /// (you sent one — <b>merge</b>). The other key is omitted entirely rather than sent as null.
+    ///
+    /// <para>
+    /// <b>Do not ignore <c>hasMore</c>.</b> A response carries at most 500 rows; when it is true the
+    /// page was truncated and you should poll again <em>immediately</em> rather than waiting
+    /// <c>pollAfterSeconds</c>. Otherwise a 5,000-attendee event takes ten polls to fill a dashboard and
+    /// looks broken rather than paging.
+    /// </para>
+    ///
+    /// <para>
+    /// <c>counters</c> is <c>GET /events/{id}/summary</c>'s own object — the same numbers from the same
+    /// query, bounded by the same cursor ceiling as the rows beside them.
+    /// </para>
+    /// </response>
+    /// <response code="400">
+    /// <c>InvalidCursor</c>. Re-poll with no <c>since</c>. Refused rather than silently downgraded to a
+    /// snapshot, which would look like "nothing changed" forever while your cursor stayed broken.
+    /// </response>
+    /// <response code="404"><c>EventNotFound</c>.</response>
+    /// <response code="429">
+    /// 240 polls per minute per client address — about one every 250 ms, far above the 5-second
+    /// default. Partitioned separately from device-key capture limits, so a dashboard tab can never
+    /// spend a kiosk's tap budget.
+    /// </response>
     [HttpGet("live/{eventId:guid}")]
     [EnableRateLimiting(CaptureRateLimiting.LivePolicyName)]
     [HasPermissionNotEnforced("attendance.read")]
@@ -261,8 +379,52 @@ public class AttendanceController : ControllerBase
     // `attendance.write`, distinct from the tap's `attendance.capture` (§6.4): a kiosk's device key is
     // scoped to capture only, and an override is the organizer action the plan calls audited — the
     // two must not collapse into one permission or a reader could rewrite a status.
+    /// <summary>
+    /// <c>POST /attendance/manual</c> — the organizer override (Technical Plan §6.4).
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Not a device path.</b> It carries <c>attendance.write</c> rather than the tap's
+    /// <c>attendance.capture</c>: a kiosk's device key is scoped to capture only, and an override is
+    /// the audited organizer action §6.4 describes. Collapsing the two permissions would let a reader
+    /// rewrite a status.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>It keeps working on a <c>Closed</c> event, deliberately (ADR-003 D-17).</b> Closing is
+    /// terminal, and this is the only route back from a mistake — adding the tap path's status guard
+    /// here reads as a safety improvement in review and turns that terminal status into a dead end.
+    /// </para>
+    ///
+    /// <para>
+    /// Its <c>code</c> values are their own frozen table — see the <c>ManualOutcomeCode</c> schema —
+    /// and they travel through the identical <c>code</c> field a tap uses, on success bodies and RFC
+    /// 7807 problem bodies alike.
+    /// </para>
+    /// </remarks>
+    /// <param name="eventId">The event to record against.</param>
+    /// <param name="studentId">The student.</param>
+    /// <param name="status">
+    /// One of §4.9's values — <c>Present</c>, <c>Late</c>, <c>Absent</c>, <c>Excused</c>. Anything else
+    /// is <c>400 InvalidStatus</c> rather than a stored value no summary can count.
+    /// </param>
+    /// <param name="notes">
+    /// Free text, at most <see cref="AttendanceNotes.MaxLength"/> characters. Over-length is
+    /// <c>400 InvalidNotes</c> — it used to reach SQL Server and come back as a truncation 500.
+    /// </param>
+    /// <param name="ct">Cancellation token.</param>
+    /// <response code="200">Recorded. <c>code</c> is <c>Saved</c>.</response>
+    /// <response code="400">
+    /// <c>InvalidStatus</c> or <c>InvalidNotes</c>, as an RFC 7807 body carrying <c>code</c> and
+    /// <c>serverTime</c>. <b>Not</b> a <c>TapResult</c> with <c>success: false</c> — that shape left
+    /// the 4xx responses in Phase 4c.
+    /// </response>
+    /// <response code="404"><c>EventNotFound</c> or <c>StudentNotFound</c>, same body shape.</response>
     [HttpPost("manual")]
     [HasPermissionNotEnforced("attendance.write")]
+    [ProducesResponseType(typeof(TapResult), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status404NotFound)]
     public async Task<ActionResult<TapResult>> Manual(
         [FromQuery] Guid eventId, [FromQuery] Guid studentId,
         [FromQuery] string status = "Present",
@@ -281,7 +443,8 @@ public class AttendanceController : ControllerBase
     /// <c>success: false</c>, which contradicted §6's "Errors: RFC 7807" and the published handoff
     /// document's own claim that every error body carries a <c>traceId</c> a client can quote back —
     /// so the one endpoint an external developer was told to build against was the one endpoint whose
-    /// errors had nothing to quote. It now goes through <see cref="ProblemDetailsFactory"/> like every
+    /// errors had nothing to quote. It now goes through
+    /// <see cref="ControllerBase.ProblemDetailsFactory"/> like every
     /// other failure in this API, which is where the <c>traceId</c> is stamped exactly once
     /// (<c>TracedProblemDetailsFactory</c>).
     /// </para>

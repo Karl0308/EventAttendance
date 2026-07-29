@@ -111,6 +111,31 @@ public class AttendanceLiveTests : IntegrationTest
     }
 
     /// <summary>
+    /// <c>GET /events/{id}/summary</c>'s read, under the same SNAPSHOT isolation as
+    /// <see cref="SnapshotLiveAsync"/> and for the same fixture reason. Used by exactly one test — the
+    /// one that has to compare the two endpoints' counters while a transaction is held open, which is
+    /// the only condition under which they are allowed to differ.
+    /// </summary>
+    private async Task<EventSummaryDto> SnapshotSummaryAsync(Guid eventId)
+    {
+        await using var db = NewDbContext();
+        await db.Database.OpenConnectionAsync();
+
+        try
+        {
+            await db.Database.ExecuteSqlRawAsync("SET TRANSACTION ISOLATION LEVEL SNAPSHOT;");
+
+            var summary = await EventsOn(db).GetSummaryAsync(eventId);
+            Assert.NotNull(summary);
+            return summary!;
+        }
+        finally
+        {
+            await db.Database.CloseConnectionAsync();
+        }
+    }
+
+    /// <summary>
     /// Permits explicit snapshot transactions on the test database.
     ///
     /// <para>
@@ -378,6 +403,104 @@ public class AttendanceLiveTests : IntegrationTest
         var afterCommit = await LiveAsync(polled.EventId, whileHeld.Cursor);
 
         Assert.Equal(lateButCommitted, Assert.Single(afterCommit.Changes!).AttendanceId);
+    }
+
+    /// <summary>
+    /// <b>The live counters honour the same ceiling as the rows — and <c>GET /events/{id}/summary</c>
+    /// deliberately does not</b> (Phase 4e, carried from 4d where it was documented rather than fixed).
+    ///
+    /// <para>
+    /// The counters are aggregates run <em>after</em> the rows query. Unbounded, they can count a row
+    /// the delta deliberately withheld, and the dashboard shows a headline "1 present" over a list of
+    /// no names. On its own that is one poll cycle of skew and heals — but
+    /// <c>MIN_ACTIVE_ROWVERSION()</c> is <b>database-wide</b>, so one unrelated long transaction (a
+    /// roster import, an event freeze — modelled here by a held insert on a different school's event)
+    /// pins the ceiling while the counters go on advancing, and the discrepancy lasts as long as that
+    /// transaction does.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>The second half of the assertion is the one that is easy to lose.</b>
+    /// <c>GET /events/{id}/summary</c> has no cursor and hands out none, so bounding it would silently
+    /// lower a published number for reasons that have nothing to do with attendance. It must keep
+    /// counting every committed row — which is exactly what makes it the control here: same database,
+    /// same instant, same isolation, and it sees the row the live poll withholds.
+    /// </para>
+    ///
+    /// <para>
+    /// SNAPSHOT isolation for the reason <see cref="The_cursor_never_advances_past_an_uncommitted_write"/>
+    /// records at length: it removes lock behaviour from the experiment without weakening it. The
+    /// aggregates would otherwise take a shared lock on the held row and wait out the command timeout.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public async Task The_live_counters_honour_the_ceiling_and_the_summary_endpoint_still_does_not()
+    {
+        var polled = await ArrangeAsync();
+        var elsewhere = await ArrangeAsync();
+
+        await AllowSnapshotIsolationAsync();
+
+        var baseline = await LiveAsync(polled.EventId);
+        Assert.Equal(0, baseline.Counters.Present);
+
+        // The unrelated long-running transaction. It pins MIN_ACTIVE_ROWVERSION() database-wide, which
+        // is the whole point — it touches neither the polled event nor its school.
+        await using var held = new SqlConnection(Sql.ConnectionString);
+        await held.OpenAsync();
+        await using var uncommitted = (SqlTransaction)await held.BeginTransactionAsync();
+
+        await using (var insert = new SqlCommand(
+            """
+            INSERT INTO [AttendanceRecords]
+                ([Id], [SchoolId], [EventId], [StudentId], [Status], [CaptureMethod], [CreatedAt], [UpdatedAt])
+            VALUES (@id, @school, @event, @student, 'Present', 'Rfid', SYSUTCDATETIME(), SYSUTCDATETIME());
+            """,
+            held, uncommitted))
+        {
+            insert.Parameters.AddWithValue("@id", Guid.NewGuid());
+            insert.Parameters.AddWithValue("@school", elsewhere.SchoolId);
+            insert.Parameters.AddWithValue("@event", elsewhere.EventId);
+            insert.Parameters.AddWithValue("@student", elsewhere.StudentId);
+            await insert.ExecuteNonQueryAsync();
+        }
+
+        // A committed row on the polled event, above the pinned ceiling. The rows query withholds it.
+        await RecordAsync(polled, polled.StudentId);
+
+        var whileHeld = await SnapshotLiveAsync(polled.EventId, baseline.Cursor);
+
+        Assert.Empty(whileHeld.Changes!);
+
+        Assert.True(
+            whileHeld.Counters.Present == 0,
+            $"The delta withheld every row and the counters still reported " +
+            $"{whileHeld.Counters.Present} present. The dashboard would show a headline count over a " +
+            "list of no names — and because MIN_ACTIVE_ROWVERSION() is database-wide, one unrelated " +
+            "long transaction keeps it that way rather than it healing on the next poll. The summary " +
+            "aggregates must take the same ceiling the rows query takes.");
+
+        Assert.True(
+            whileHeld.Counters.Unexpected == 0,
+            "Unexpected is counted from the same attendance rows and must take the same ceiling — a " +
+            "walk-in that the delta has not delivered is not yet a walk-in the dashboard can name.");
+
+        // The control: the summary endpoint has no cursor, so it must still see the committed row.
+        var summary = await SnapshotSummaryAsync(polled.EventId);
+
+        Assert.True(
+            summary.Present == 1,
+            $"GET /events/{{id}}/summary reported {summary.Present} present for a committed row. It " +
+            "has no cursor and no ceiling, and bounding it would silently lower a published number " +
+            "whenever any unrelated transaction happened to be open.");
+
+        // And once the unrelated transaction lands, the two agree again with no client action.
+        await uncommitted.CommitAsync();
+
+        var afterCommit = await LiveAsync(polled.EventId, whileHeld.Cursor);
+
+        Assert.Single(afterCommit.Changes!);
+        Assert.Equal(1, afterCommit.Counters.Present);
     }
 
     // ------------------------------------------------------------------- cursor clamp and paging

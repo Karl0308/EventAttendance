@@ -32,8 +32,19 @@ public class DevicesController : ControllerBase
 
     // ---------------------------------------------------------------------------------- reads
 
+    /// <summary>
+    /// <c>GET /devices</c> — every registered device in this school.
+    /// </summary>
+    /// <remarks>
+    /// <b>No key material, ever.</b> The plaintext exists only in the 201 that issued it; this returns
+    /// the public key id and the lifecycle timestamps an operator needs to decide whether a credential
+    /// is still in use.
+    /// </remarks>
+    /// <param name="ct">Cancellation token.</param>
+    /// <response code="200">The devices, possibly empty.</response>
     [HttpGet]
     [HasPermissionNotEnforced("devices.read")]
+    [ProducesResponseType(typeof(IEnumerable<DeviceDto>), StatusCodes.Status200OK)]
     public async Task<ActionResult<IEnumerable<DeviceDto>>> List(CancellationToken ct)
         => Ok(await _devices.ListAsync(ct));
 
@@ -143,7 +154,8 @@ public class DevicesController : ControllerBase
     /// <para>
     /// The first version of this action skipped the check, on the reasoning that one kiosk stamping a
     /// sibling's <c>LastSeenAt</c> within its own school is a wrong liveness reading rather than a
-    /// data-integrity problem. That undercounts what this writes: <see cref="HeartbeatAsync"/> also
+    /// data-integrity problem. That undercounts what this writes:
+    /// <see cref="IDeviceService.HeartbeatAsync"/> also
     /// sets <c>ApiKeyLastUsedAt</c>, and <em>that</em> column is the signal an operator reads when
     /// deciding whether a credential is still in use and therefore whether it is safe to revoke. A
     /// retired-but-not-revoked kiosk that a neighbour keeps making look active is a key that never gets
@@ -164,6 +176,7 @@ public class DevicesController : ControllerBase
     [ProducesResponseType(StatusCodes.Status401Unauthorized)]
     [ProducesResponseType(StatusCodes.Status403Forbidden)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
+    [ProducesResponseType(StatusCodes.Status429TooManyRequests)]
     public async Task<ActionResult<DeviceDto>> Heartbeat(
         Guid id, [FromServices] IDeviceContext device, CancellationToken ct)
     {

@@ -16,8 +16,16 @@ public class EventsController : ControllerBase
 
     // ---------------------------------------------------------------------------------- reads
 
+    /// <summary><c>GET /events</c> — the event list, optionally filtered by status.</summary>
+    /// <param name="status">
+    /// <c>Draft</c>, <c>Open</c>, <c>Closed</c> or <c>Cancelled</c>. A capture client wants
+    /// <c>?status=Open</c> — a tap against any other status is <c>400 EventNotOpen</c>.
+    /// </param>
+    /// <param name="ct">Cancellation token.</param>
+    /// <response code="200">The matching events, possibly empty.</response>
     [HttpGet]
     [HasPermissionNotEnforced("events.read")]
+    [ProducesResponseType(typeof(IEnumerable<EventDto>), StatusCodes.Status200OK)]
     public async Task<ActionResult<IEnumerable<EventDto>>> List(
         [FromQuery] string? status, CancellationToken ct)
         => Ok(await _events.ListAsync(status, ct));
@@ -32,7 +40,36 @@ public class EventsController : ControllerBase
         return e is null ? NotFound() : Ok(e);
     }
 
-    // GET /events/{id}/summary — report aggregation from the Technical Plan §6.7 / §12.
+    /// <summary>
+    /// <c>GET /events/{id}/summary</c> — the §6.7/§12 Event Attendance Summary.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b><c>expected</c> is the invited population, not the number who tapped</b> (ADR-003 D-19):
+    /// students in the event's attached groups plus its individually attached students, de-duplicated.
+    /// Zero means no audience is attached, and nothing falls back to a row count in that case — a
+    /// denominator that silently changes definition depending on whether a table is empty is worse than
+    /// one that is honestly absent.
+    /// </para>
+    ///
+    /// <para>
+    /// <b><c>attendanceRate</c> cannot exceed 100</b>, structurally rather than by clamping: numerator
+    /// and denominator are both computed over the expected set. Walk-ins are therefore not in it — they
+    /// are counted as <c>unexpected</c>, and <c>GET /events/{id}/roster</c> names them.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>This read is unbounded, and that is the difference from the identical object inside
+    /// <c>GET /attendance/live/{eventId}</c>.</b> There is no cursor here and therefore no ceiling: it
+    /// counts every committed row at the moment it runs. The live endpoint bounds the same counters by
+    /// its own cursor ceiling so the headline number cannot exceed the list of names under it; the two
+    /// converge as soon as any in-flight write commits.
+    /// </para>
+    /// </remarks>
+    /// <param name="id">The event.</param>
+    /// <param name="ct">Cancellation token.</param>
+    /// <response code="200">The summary.</response>
+    /// <response code="404">No such event, or it is soft-deleted.</response>
     //
     // JUDGEMENT CALL, flagged rather than buried: §6.7 assigns `reports.read` to the equivalent
     // report (`GET /reports/event/{eventId}/summary`), but this endpoint lives on the events resource

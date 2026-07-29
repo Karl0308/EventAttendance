@@ -2,6 +2,20 @@
 
   <!-- TargetFramework / Nullable / ImplicitUsings come from backend/Directory.Build.props. -->
 
+  <!--
+    Phase 4e. The OpenAPI document is the deliverable of Phase 4 — it replaces a hand-written markdown
+    handoff that could drift from the code without anything failing. The XML file is what carries the
+    controllers' reasoning into it; see EamsOpenApi.XmlCommentPaths, which throws rather than silently
+    generating a documentation-free document if this property is ever turned off.
+
+    CS1591 / CS1573 suppressed for the reason EAMS.Application.csproj records at length; CS1574
+    (unresolvable cref) deliberately left on, for the reason recorded there too.
+  -->
+  <PropertyGroup>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <NoWarn>$(NoWarn);CS1591;CS1573</NoWarn>
+  </PropertyGroup>
+
   <ItemGroup>
     <PackageReference Include="Swashbuckle.AspNetCore" Version="7.2.0" />
   </ItemGroup>
