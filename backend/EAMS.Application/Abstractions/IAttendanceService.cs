@@ -146,7 +146,7 @@ public enum ManualOutcome
     /// <c>nvarchar</c> column unchecked, so an over-length value reached SQL Server and returned as
     /// error 2628 (truncation) — a 500 on input the caller got wrong, which is a 400.
     /// </summary>
-    InvalidNotes,
+    InvalidNoteText,
 }
 
 /// <summary>

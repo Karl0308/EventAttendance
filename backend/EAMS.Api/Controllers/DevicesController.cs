@@ -62,13 +62,12 @@ public class DevicesController : ControllerBase
 
     /// <summary>
     /// §6.6 <c>POST /devices</c> — register, and issue the first key.
-    ///
-    /// <para>
+    /// </summary>
+    /// <remarks>
     /// <b>The 201 body is the only time this key is ever readable.</b> The server stores
     /// <c>SHA-256(secret)</c> and nothing else, so there is no "show it again" endpoint to write and
     /// none to forget to protect. An operator who loses it rotates.
-    /// </para>
-    /// </summary>
+    /// </remarks>
     [HttpPost]
     [HasPermissionNotEnforced("devices.write")]
     [ProducesResponseType(typeof(DeviceKeyIssuedDto), StatusCodes.Status201Created)]
@@ -117,7 +116,8 @@ public class DevicesController : ControllerBase
 
     /// <summary>
     /// <c>POST /devices/{id}/revoke-key</c> — burn the credential without issuing a replacement.
-    ///
+    /// </summary>
+    /// <remarks>
     /// <para>
     /// <b>Not defined by §6.6, and added deliberately.</b> §6.6 offers only regeneration, which
     /// conflates "this key is compromised" with "give me a working one" — but the published mobile
@@ -131,7 +131,7 @@ public class DevicesController : ControllerBase
     /// postcondition — this device cannot authenticate — holds either way, so a retry after a timeout
     /// is safe on the one operation an operator runs when something has gone wrong.
     /// </para>
-    /// </summary>
+    /// </remarks>
     [HttpPost("{id:guid}/revoke-key")]
     [HasPermissionNotEnforced("devices.write")]
     [ProducesResponseType(typeof(DeviceDto), StatusCodes.Status200OK)]
@@ -145,7 +145,8 @@ public class DevicesController : ControllerBase
     /// <summary>
     /// §6.6 <c>POST /devices/{id}/heartbeat</c> — liveness, and one of the four endpoints a device key
     /// authenticates.
-    ///
+    /// </summary>
+    /// <remarks>
     /// <para>
     /// <b>The route id must be the authenticated device's own</b> — the same D-26 rule the tap path
     /// applies, and it took a second look to see that it belongs here too.
@@ -167,7 +168,7 @@ public class DevicesController : ControllerBase
     /// names nothing it can see — the same non-disclosure rule D-27 applies when it reuses
     /// <c>DeviceNotRegistered</c> rather than inventing a cross-tenant 403.
     /// </para>
-    /// </summary>
+    /// </remarks>
     [HttpPost("{id:guid}/heartbeat")]
     [Authorize(AuthenticationSchemes = DeviceKey.AuthenticationScheme, Policy = EamsPermissions.AttendanceCapture)]
     [EnableRateLimiting(CaptureRateLimiting.PolicyName)]

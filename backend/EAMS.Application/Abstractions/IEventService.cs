@@ -23,7 +23,7 @@ public enum EventWriteOutcome
     ///
     /// <para>
     /// One member rather than one per field on purpose. <see cref="ManualOutcome.InvalidStatus"/> and
-    /// <see cref="ManualOutcome.InvalidNotes"/> are split because each records a distinct shipped defect
+    /// <see cref="ManualOutcome.InvalidNoteText"/> are split because each records a distinct shipped defect
     /// worth naming; these are a validation layer written all at once, they all map to 400, and eight
     /// enum members that a controller treats identically would be eight things to keep in sync for no
     /// reader's benefit.

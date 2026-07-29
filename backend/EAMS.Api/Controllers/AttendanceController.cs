@@ -507,7 +507,7 @@ public class AttendanceController : ControllerBase
         ManualOutcome.EventNotFound => "Event not found.",
         ManualOutcome.StudentNotFound => "Student not found.",
         ManualOutcome.InvalidStatus => "That attendance status is not one of the documented values.",
-        ManualOutcome.InvalidNotes => "Those notes are too long.",
+        ManualOutcome.InvalidNoteText => "Those notes are too long.",
         _ => "The manual entry could not be saved.",
     };
 
@@ -608,7 +608,7 @@ public class AttendanceController : ControllerBase
         // Syntactically valid requests that failed a §4.9 column rule — 400, not 500, and not a
         // cheerful 200 with the bad value persisted.
         ManualOutcome.InvalidStatus
-            or ManualOutcome.InvalidNotes => StatusCodes.Status400BadRequest,
+            or ManualOutcome.InvalidNoteText => StatusCodes.Status400BadRequest,
 
         _ => throw new ArgumentOutOfRangeException(
             nameof(outcome), outcome,

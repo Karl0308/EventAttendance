@@ -728,7 +728,7 @@ internal sealed class AttendanceService : IAttendanceService
         if (!AttendanceNotes.IsValid(notes))
         {
             return RejectManual(
-                ManualOutcome.InvalidNotes,
+                ManualOutcome.InvalidNoteText,
                 $"Notes must be {AttendanceNotes.MaxLength} characters or fewer (got {notes!.Length}).",
                 serverTime);
         }
