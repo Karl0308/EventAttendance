@@ -244,6 +244,32 @@ public class AttendanceRecord : AuditableEntity
     public Device? Device { get; set; }
 
     public string? DeviceTapId { get; set; } // client-generated, idempotency key
+
+    /// <summary>
+    /// The <c>deviceTapId</c> of the tap that recorded <see cref="CheckOutAt"/>, in a
+    /// <c>TimeInOut</c> event. Not in §4.9 — additive, recorded as drift (Phase 4c, D-34).
+    ///
+    /// <para>
+    /// <b>Why a second column rather than reusing <see cref="DeviceTapId"/>.</b> The problem is
+    /// structural, not a missing assignment: one row, one tap-id column, and <em>two</em> taps that each
+    /// own a key. The check-out used to discard its own id, so a client that retried a timed-out
+    /// check-out got <c>AlreadyRecorded</c> instead of <c>CheckedOut</c> and no unique index covered the
+    /// second tap at all — idempotency survived by accident, because <c>CheckOutAt</c> happened to be
+    /// non-null by then. Overwriting the check-in's id with the check-out's would have been worse: it
+    /// would break the check-in's own idempotency to fix the check-out's, so a replayed check-in would
+    /// then write a second row.
+    /// </para>
+    ///
+    /// <para>
+    /// With its own column and its own filtered unique index
+    /// (<c>UX_Attendance_Device_CheckOutDeviceTapId</c>), each half of a <c>TimeInOut</c> pair is
+    /// independently retryable and the guarantee is <em>index-backed</em> rather than incidental —
+    /// which is what the skipped defect test actually complained about. Replaying a check-out now
+    /// returns <c>DuplicateIgnored</c>.
+    /// </para>
+    /// </summary>
+    public string? CheckOutDeviceTapId { get; set; }
+
     public string? Notes { get; set; }
 
     public Guid? RecordedByUserId { get; set; }

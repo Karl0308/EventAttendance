@@ -50,7 +50,10 @@ public class DeviceAuthenticationTests : IntegrationTest
             var student = TestData.NewStudent(school.Id);
             db.Students.Add(student);
             db.RfidCards.Add(TestData.NewCard(school.Id, student.Id, Uid));
-            var ev = TestData.NewEvent(school.Id);
+            // Live rather than anchored on the frozen TestData.Now — the taps here are posted without a
+            // `tappedAt`, so D-36 validates the server's clock against this event's window. See
+            // TestData.NewLiveEvent.
+            var ev = TestData.NewLiveEvent(school.Id);
             db.Events.Add(ev);
             await db.SaveChangesAsync();
 
@@ -355,6 +358,16 @@ public class DeviceAuthenticationTests : IntegrationTest
     /// <summary>
     /// The same rule at the service layer, where the decision is made. The published token is
     /// <c>DeviceMismatch</c> and it is frozen contract — the mobile developer branches on it.
+    ///
+    /// <para>
+    /// <b><c>tappedAt: null</c>, not <c>TestData.Now</c>.</b> This file's fixture is a
+    /// <see cref="TestData.NewLiveEvent"/> — the taps around it are posted over HTTP with no
+    /// timestamp — so a frozen <c>TestData.Now</c> here would be a day or more outside the event's
+    /// D-36 window. It would still pass today, because the D-26 guard is evaluated before the event is
+    /// even read, but only for a reason this test is not about and does not assert. A test that
+    /// survives on the position of an unrelated guard is one refactor from failing for a reason nobody
+    /// will connect to the refactor.
+    /// </para>
     /// </summary>
     [Fact]
     public async Task The_service_reports_a_device_mismatch_as_its_own_outcome()
@@ -365,7 +378,7 @@ public class DeviceAuthenticationTests : IntegrationTest
 
         await using var db = NewDbContext();
         var response = await AttendanceOn(db).TapAsync(
-            new TapRequest(world.EventId, Uid, Guid.NewGuid(), "queued-0001", TestData.Now));
+            new TapRequest(world.EventId, Uid, Guid.NewGuid(), "queued-0001", null));
 
         Assert.Equal(TapOutcome.DeviceMismatch, response.Outcome);
         Assert.False(response.Result.Success);
@@ -504,7 +517,7 @@ public class DeviceAuthenticationTests : IntegrationTest
             var student = TestData.NewStudent(usa.Id);
             db.Students.Add(student);
             db.RfidCards.Add(TestData.NewCard(usa.Id, student.Id, Uid));
-            var ev = TestData.NewEvent(usa.Id);
+            var ev = TestData.NewLiveEvent(usa.Id); // server-stamped tap below — see TestData.NewLiveEvent
             db.Events.Add(ev);
             await db.SaveChangesAsync();
 

@@ -49,6 +49,44 @@ public enum TapOutcome
     /// </para>
     /// </summary>
     DeviceMismatch,
+
+    /// <summary>
+    /// <c>tappedAt</c> is more than <see cref="EAMS.Domain.TapTimeWindow.FutureToleranceMinutes"/>
+    /// minutes ahead of the server's clock (Phase 4c, D-36).
+    ///
+    /// <para>
+    /// A device cannot observe a card that has not been presented yet, so this is always a drifted
+    /// clock — and it is the drift direction that benefits the student, since a check-in dated forward
+    /// past the grace boundary is exactly what a Late arrival would want. The response carries
+    /// <c>serverTime</c>, so the client has what it needs to correct itself and resend.
+    /// </para>
+    ///
+    /// <para>
+    /// There is deliberately no matching outcome for the distant <em>past</em>: an old queued tap is
+    /// the point of §8.2's offline sync. What bounds the past is
+    /// <see cref="TappedAtOutsideEventWindow"/>, which bounds it by the event rather than by age.
+    /// </para>
+    /// </summary>
+    TappedAtOutOfRange,
+
+    /// <summary>
+    /// <c>tappedAt</c> falls outside the event's window — <c>[StartAt − 60min, EndAt + 60min]</c> by
+    /// default, per school via §4.13 (Phase 4c, D-36).
+    ///
+    /// <para>
+    /// <b>Rejected rather than clamped, and that was the decision.</b> Clamping a skewed timestamp into
+    /// the window would invent an observation nobody made, on the one field that decides Present vs
+    /// Late — the same fabrication <c>AttendanceService.RecordsAnArrival</c> refuses when it declines to
+    /// stamp a <c>CheckInAt</c> on an <c>Absent</c> row.
+    /// </para>
+    ///
+    /// <para>
+    /// It is checked on <em>submission-time-stamped</em> taps too (<c>tappedAt: null</c> means "now, on
+    /// the server"). Exempting them would make omitting the field a way to bypass the window, which is
+    /// the one bypass an attacker holding a guessed card UID would reach for first.
+    /// </para>
+    /// </summary>
+    TappedAtOutsideEventWindow,
 }
 
 public enum ManualOutcome
@@ -74,9 +112,32 @@ public enum ManualOutcome
     InvalidNotes,
 }
 
-public record TapResponse(TapOutcome Outcome, TapResult Result);
+/// <summary>
+/// The tap workflow's decision, plus the body a client sees.
+///
+/// <para>
+/// <b>Build one through <see cref="For"/>, never through the constructor.</b> <c>TapResult.Code</c> is
+/// a projection of <see cref="Outcome"/> and the two must never disagree — a response saying
+/// <c>CheckedOut</c> in one field and <c>AlreadyRecorded</c> in the other is worse than the prose-only
+/// body D-37 replaced, because a client would trust it. The factory is the only place the projection
+/// happens; <c>TapOutcomeContractTests</c> asserts it holds for every declared member, and
+/// <c>TapFlowTests</c> re-asserts it on every response the real service returns.
+/// </para>
+/// </summary>
+public record TapResponse(TapOutcome Outcome, TapResult Result)
+{
+    public static TapResponse For(
+        TapOutcome outcome, bool success, string message, AttendanceDto? record, DateTime serverTime) =>
+        new(outcome, new TapResult(success, message, record, outcome.ToString(), serverTime));
+}
 
-public record ManualResponse(ManualOutcome Outcome, TapResult Result);
+/// <summary><inheritdoc cref="TapResponse" path="/summary"/></summary>
+public record ManualResponse(ManualOutcome Outcome, TapResult Result)
+{
+    public static ManualResponse For(
+        ManualOutcome outcome, bool success, string message, AttendanceDto? record, DateTime serverTime) =>
+        new(outcome, new TapResult(success, message, record, outcome.ToString(), serverTime));
+}
 
 /// <summary>Technical Plan §6.4 — RFID capture and organizer override.</summary>
 public interface IAttendanceService

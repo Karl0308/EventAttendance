@@ -35,7 +35,11 @@ public class ApiContractTests : IntegrationTest
         var student = TestData.NewStudent(school.Id);
         db.Students.Add(student);
         db.RfidCards.Add(TestData.NewCard(school.Id, student.Id, StoredUid));
-        var ev = TestData.NewEvent(school.Id, eventStatus);
+        // A live event, not one anchored on the frozen TestData.Now: every tap in this file is posted
+        // over HTTP without a `tappedAt`, so the server stamps it with the real clock, and Phase 4c's
+        // D-36 window check compares that against this event's own StartAt/EndAt. See
+        // TestData.NewLiveEvent.
+        var ev = TestData.NewLiveEvent(school.Id, eventStatus);
         db.Events.Add(ev);
         await db.SaveChangesAsync();
         return new World(school.Id, ev.Id, student.Id);
@@ -125,6 +129,171 @@ public class ApiContractTests : IntegrationTest
         var response = await TapAsync(client, new { eventId = world.EventId, cardUid = StoredUid });
 
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+    }
+
+    // ---------------------------------------------------------------- the machine-readable body (D-37)
+
+    /// <summary>
+    /// The client's top ask, on the wire. All four tap successes are a 200, so before this the only
+    /// thing distinguishing "I wrote a row" from "your retry was absorbed" was a prose <c>message</c>
+    /// the same document tells the client not to parse — which made reconciling a flushed queue
+    /// against what actually landed impossible.
+    /// </summary>
+    [Fact]
+    public async Task A_recorded_tap_body_carries_its_outcome_code_and_the_server_clock()
+    {
+        var world = await ArrangeAsync();
+        var apiKey = await IssueDeviceKeyAsync(world.SchoolId);
+        using var factory = new EamsApiFactory(Sql.ConnectionString);
+        using var client = factory.CreateClient().WithDeviceKey(apiKey);
+
+        var response = await TapAsync(client, new { eventId = world.EventId, cardUid = StoredUid });
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        using var body = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+
+        Assert.Equal("Recorded", body.RootElement.GetProperty("code").GetString());
+        Assert.EndsWith("Z", body.RootElement.GetProperty("serverTime").GetString());
+    }
+
+    /// <summary>
+    /// The distinction the prose could not carry: a replay is a different <c>code</c> from a first
+    /// write, at the same status code and with the same <c>success: true</c>.
+    /// </summary>
+    [Fact]
+    public async Task A_replayed_tap_is_distinguishable_from_the_original_by_its_code_alone()
+    {
+        var world = await ArrangeAsync();
+        var apiKey = await IssueDeviceKeyAsync(world.SchoolId);
+        using var factory = new EamsApiFactory(Sql.ConnectionString);
+        using var client = factory.CreateClient().WithDeviceKey(apiKey);
+        var payload = new { eventId = world.EventId, cardUid = StoredUid, deviceTapId = "replay-0002" };
+
+        var first = await TapAsync(client, payload);
+        var replay = await TapAsync(client, payload);
+
+        using var firstBody = JsonDocument.Parse(await first.Content.ReadAsStringAsync());
+        using var replayBody = JsonDocument.Parse(await replay.Content.ReadAsStringAsync());
+
+        Assert.Equal(first.StatusCode, replay.StatusCode);
+        Assert.Equal("Recorded", firstBody.RootElement.GetProperty("code").GetString());
+        Assert.Equal("DuplicateIgnored", replayBody.RootElement.GetProperty("code").GetString());
+    }
+
+    /// <summary>
+    /// A rejected tap is now an RFC 7807 body like every other failure in this API, where it used to be
+    /// a <c>TapResult</c> with <c>success: false</c>.
+    ///
+    /// <para>
+    /// That was two contradictions at once: §6 says "Errors: RFC 7807", and the published handoff
+    /// document tells the mobile developer that every error body carries a <c>traceId</c> he can quote
+    /// back to us — so the one endpoint he was told to build against was the one endpoint whose errors
+    /// had nothing to quote. The <c>traceId</c> assertion is the point of this test; the <c>code</c>
+    /// assertion is what makes the body readable by the same accessor as a success.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public async Task A_rejected_tap_is_a_problem_body_carrying_a_code_and_a_trace_id()
+    {
+        var world = await ArrangeAsync(eventStatus: "Closed");
+        var apiKey = await IssueDeviceKeyAsync(world.SchoolId);
+        using var factory = new EamsApiFactory(Sql.ConnectionString);
+        using var client = factory.CreateClient().WithDeviceKey(apiKey);
+
+        var response = await TapAsync(client, new { eventId = world.EventId, cardUid = StoredUid });
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        Assert.Equal("application/problem+json", response.Content.Headers.ContentType?.MediaType);
+
+        using var body = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        Assert.Equal("EventNotOpen", body.RootElement.GetProperty("code").GetString());
+        Assert.False(string.IsNullOrWhiteSpace(body.RootElement.GetProperty("traceId").GetString()));
+        Assert.Equal(400, body.RootElement.GetProperty("status").GetInt32());
+        Assert.False(string.IsNullOrWhiteSpace(body.RootElement.GetProperty("title").GetString()));
+    }
+
+    /// <summary>
+    /// The D-36 refusal a drifted device receives, and the reason the problem body carries
+    /// <c>serverTime</c> as well: this response tells a client its clock is wrong, so it has to say in
+    /// the same body what the right one is. Without that the client's only recovery is to guess.
+    /// </summary>
+    [Fact]
+    public async Task A_tap_from_the_future_is_a_400_that_tells_the_device_the_server_clock()
+    {
+        var world = await ArrangeAsync();
+        var apiKey = await IssueDeviceKeyAsync(world.SchoolId);
+        using var factory = new EamsApiFactory(Sql.ConnectionString);
+        using var client = factory.CreateClient().WithDeviceKey(apiKey);
+
+        var response = await TapAsync(client, new
+        {
+            eventId = world.EventId,
+            cardUid = StoredUid,
+            tappedAt = DateTime.UtcNow.AddHours(9),
+        });
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        // Asserted here as well as in the test above, because `code` and `serverTime` are present on
+        // both body shapes: without this the test would pass just as happily on the old TapResult
+        // failure body, and this is the rejection that most needs to be a problem body.
+        Assert.Equal("application/problem+json", response.Content.Headers.ContentType?.MediaType);
+
+        using var body = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        Assert.Equal("TappedAtOutOfRange", body.RootElement.GetProperty("code").GetString());
+
+        var serverTime = DateTime.Parse(
+            body.RootElement.GetProperty("serverTime").GetString()!,
+            null, System.Globalization.DateTimeStyles.RoundtripKind);
+        Assert.InRange(serverTime, DateTime.UtcNow.AddMinutes(-5), DateTime.UtcNow.AddMinutes(5));
+    }
+
+    /// <summary>
+    /// The other D-36 refusal, and the one an out-of-date event id produces. Asserted separately from
+    /// the future case because the client's published instruction for the two differs — resync the
+    /// clock, versus stop retrying.
+    /// </summary>
+    [Fact]
+    public async Task A_tap_outside_the_event_window_is_a_400_naming_the_window()
+    {
+        var world = await ArrangeAsync();
+        var apiKey = await IssueDeviceKeyAsync(world.SchoolId);
+        using var factory = new EamsApiFactory(Sql.ConnectionString);
+        using var client = factory.CreateClient().WithDeviceKey(apiKey);
+
+        var response = await TapAsync(client, new
+        {
+            eventId = world.EventId,
+            cardUid = StoredUid,
+            tappedAt = DateTime.UtcNow.AddYears(-2),
+        });
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+
+        using var body = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        Assert.Equal("TappedAtOutsideEventWindow", body.RootElement.GetProperty("code").GetString());
+    }
+
+    /// <summary>
+    /// The override surface gets the same treatment. Its outcomes are not in the device contract — no
+    /// device calls this endpoint — but a second error convention on one controller is exactly how a
+    /// client ends up parsing prose after all.
+    /// </summary>
+    [Fact]
+    public async Task A_rejected_manual_override_is_a_problem_body_carrying_a_code()
+    {
+        var world = await ArrangeAsync();
+        using var factory = new EamsApiFactory(Sql.ConnectionString);
+        using var client = factory.CreateClient();
+
+        var response = await client.PostAsync(
+            $"/api/v1/attendance/manual?eventId={world.EventId}&studentId={world.StudentId}" +
+            "&status=Banana", content: null);
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+
+        using var body = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        Assert.Equal("InvalidStatus", body.RootElement.GetProperty("code").GetString());
+        Assert.False(string.IsNullOrWhiteSpace(body.RootElement.GetProperty("traceId").GetString()));
     }
 
     // ---------------------------------------------------------------- lookup endpoints

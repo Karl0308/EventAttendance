@@ -76,6 +76,49 @@ internal static class TestData
         Status = status,
     };
 
+    /// <summary>
+    /// An event whose window contains the <em>real</em> clock rather than <see cref="Now"/>.
+    ///
+    /// <para>
+    /// <b>Use this whenever the tap under test is stamped by the server</b> — an HTTP payload that omits
+    /// <c>tappedAt</c>, which is what the mobile client sends and therefore what most of the contract
+    /// tests post. Phase 4c's D-36 rejects a tap whose <c>tappedAt</c> falls outside
+    /// <c>[StartAt − 60min, EndAt + 60min]</c>, and <see cref="Now"/> is a <em>fixed</em> instant: the
+    /// day after it passes, an event anchored on it has a window that today's clock is nowhere near, so
+    /// every server-stamped tap against it is correctly refused. That is the rule working, not a
+    /// fixture problem — but it makes <see cref="NewEvent"/> the wrong builder for those tests.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>Use <see cref="NewEvent"/> when the test supplies an explicit <c>tappedAt</c> derived from
+    /// <see cref="Now"/>,</b> which is every grace-boundary test — those need a frozen clock, because
+    /// arithmetic against a moving one turns a boundary assertion into a coin flip. The two builders
+    /// exist because the two needs are genuinely opposite and no single anchor satisfies both:
+    /// <see cref="Now"/> cannot be moved forward to meet the real clock without making
+    /// <c>Now.AddHours(2)</c> a tap in the future, which D-36 also refuses.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>Started five minutes ago by default, so a server-stamped tap is <c>Present</c></b> — inside
+    /// the event proper rather than in the window's slack, and inside the default 15-minute grace. The
+    /// earlier version of this builder started the event <em>thirty</em> minutes ago while claiming the
+    /// grace still distinguished Present from Late, which was simply false: every server-stamped tap on
+    /// it was <c>Late</c>, always. Nothing asserted status against it, so nothing was broken — but the
+    /// first test written as "tap, assert Present" would have failed in a way that reads as a
+    /// grace-period bug rather than as a fixture choice, which is the expensive kind of wrong comment.
+    /// </para>
+    ///
+    /// <para>
+    /// Pass a larger <paramref name="startedMinutesAgo"/> than <paramref name="graceMinutes"/> when
+    /// <c>Late</c> is what the test wants.
+    /// </para>
+    /// </summary>
+    public static Event NewLiveEvent(
+        Guid schoolId, string status = "Open", string attendanceMode = "Single",
+        int graceMinutes = 15, int startedMinutesAgo = 5) =>
+        NewEvent(schoolId, status, attendanceMode, graceMinutes,
+            startAt: DateTime.UtcNow.AddMinutes(-startedMinutesAgo));
+
     public static Device NewDevice(Guid schoolId, string name) => new()
     {
         SchoolId = schoolId,

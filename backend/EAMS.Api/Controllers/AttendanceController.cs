@@ -14,6 +14,27 @@ namespace EAMS.Api.Controllers;
 [Route("api/v1/attendance")]
 public class AttendanceController : ControllerBase
 {
+    /// <summary>
+    /// The machine-readable half of §6's RFC 7807 body — the same property name
+    /// <c>StudentsController</c>, <c>DevicesController</c>, <c>DeviceKeyHandler</c> and the capture
+    /// rate limiter already stamp, so a client has one accessor for every error this API produces.
+    ///
+    /// <para>
+    /// Phase 4c D-37 makes it one accessor for every <em>success</em> too: <c>TapResult.Code</c>
+    /// serializes to the same <c>code</c>. That is the reason the success field is not called
+    /// <c>outcome</c>.
+    /// </para>
+    /// </summary>
+    internal const string ErrorCodeProperty = "code";
+
+    /// <summary>
+    /// The server's clock, on the error bodies as well as the success ones. The published contract
+    /// promises <c>serverTime</c> on every response, and the response that needs it most is
+    /// <c>TappedAtOutOfRange</c> — a device is being told its clock is wrong, so it has to be told what
+    /// the right one is in the same body.
+    /// </summary>
+    internal const string ServerTimeProperty = "serverTime";
+
     private readonly IAttendanceService _attendance;
     public AttendanceController(IAttendanceService attendance) => _attendance = attendance;
 
@@ -41,10 +62,13 @@ public class AttendanceController : ControllerBase
     [ProducesResponseType(StatusCodes.Status401Unauthorized)]
     [ProducesResponseType(StatusCodes.Status403Forbidden)]
     [ProducesResponseType(StatusCodes.Status429TooManyRequests)]
+    [ProducesResponseType(typeof(TapResult), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status404NotFound)]
     public async Task<ActionResult<TapResult>> Tap([FromBody] TapRequest req, CancellationToken ct)
     {
         var response = await _attendance.TapAsync(req, ct);
-        return StatusCode(StatusCodeFor(response.Outcome), response.Result);
+        return Respond(StatusCodeFor(response.Outcome), response.Result, TitleFor(response.Outcome));
     }
 
     // POST /attendance/manual — organizer override (Technical Plan §6.4).
@@ -67,8 +91,73 @@ public class AttendanceController : ControllerBase
         CancellationToken ct = default)
     {
         var response = await _attendance.ManualAsync(eventId, studentId, status, notes, ct);
-        return StatusCode(StatusCodeFor(response.Outcome), response.Result);
+        return Respond(StatusCodeFor(response.Outcome), response.Result, TitleFor(response.Outcome));
     }
+
+    /// <summary>
+    /// §6's two body shapes, chosen by the status code rather than by the outcome (Phase 4c, D-37).
+    ///
+    /// <para>
+    /// <b>Why the failure body changed at all.</b> A rejected tap used to return <c>TapResult</c> with
+    /// <c>success: false</c>, which contradicted §6's "Errors: RFC 7807" and the published handoff
+    /// document's own claim that every error body carries a <c>traceId</c> a client can quote back —
+    /// so the one endpoint an external developer was told to build against was the one endpoint whose
+    /// errors had nothing to quote. It now goes through <see cref="ProblemDetailsFactory"/> like every
+    /// other failure in this API, which is where the <c>traceId</c> is stamped exactly once
+    /// (<c>TracedProblemDetailsFactory</c>).
+    /// </para>
+    ///
+    /// <para>
+    /// <b>The status code decides, not <c>result.Success</c>.</b> They agree today, and keeping the
+    /// choice on the code means they cannot stop agreeing: an outcome mapped to a 4xx is a failure to
+    /// the offline queue (§8.2 branches on the status), so it must be a problem body whatever a bool
+    /// in the payload says.
+    /// </para>
+    ///
+    /// <para>
+    /// <c>code</c> is copied from <see cref="TapResult.Code"/> rather than re-derived from the outcome,
+    /// so the success body and the failure body cannot disagree about a token — there is one
+    /// projection of outcome→token in the system and it lives in <c>TapResponse.For</c>.
+    /// </para>
+    /// </summary>
+    private ActionResult<TapResult> Respond(int status, TapResult result, string title)
+    {
+        if (status < StatusCodes.Status400BadRequest) return StatusCode(status, result);
+
+        var problem = ProblemDetailsFactory.CreateProblemDetails(
+            HttpContext, statusCode: status, title: title, detail: result.Message);
+
+        problem.Extensions[ErrorCodeProperty] = result.Code;
+        problem.Extensions[ServerTimeProperty] = result.ServerTime;
+
+        return StatusCode(status, problem);
+    }
+
+    /// <summary>
+    /// The human half of the problem body. Prose, and deliberately so — a client branches on
+    /// <c>code</c>; this is what an operator reads in a log or a support ticket.
+    /// </summary>
+    private static string TitleFor(TapOutcome outcome) => outcome switch
+    {
+        TapOutcome.EventNotFound => "Event not found.",
+        TapOutcome.EventNotOpen => "That event is not open for capture.",
+        TapOutcome.CardNotFound => "No active card matches that UID.",
+        TapOutcome.DeviceNotRegistered => "That device is not registered.",
+        TapOutcome.DeviceMismatch => "That deviceId is not the authenticated device.",
+        TapOutcome.TappedAtOutOfRange => "That tappedAt is in the future.",
+        TapOutcome.TappedAtOutsideEventWindow => "That tappedAt is outside the event's window.",
+        _ => "The tap could not be recorded.",
+    };
+
+    /// <inheritdoc cref="TitleFor(TapOutcome)"/>
+    private static string TitleFor(ManualOutcome outcome) => outcome switch
+    {
+        ManualOutcome.EventNotFound => "Event not found.",
+        ManualOutcome.StudentNotFound => "Student not found.",
+        ManualOutcome.InvalidStatus => "That attendance status is not one of the documented values.",
+        ManualOutcome.InvalidNotes => "Those notes are too long.",
+        _ => "The manual entry could not be saved.",
+    };
 
     /// <summary>
     /// The §6 status-code contract for <c>POST /attendance/tap</c>, as one total function over
@@ -105,10 +194,18 @@ public class AttendanceController : ControllerBase
             or TapOutcome.CardNotFound
             or TapOutcome.DeviceNotRegistered => StatusCodes.Status404NotFound,
 
-        // Both are the caller's payload, wrong under any circumstances. DeviceMismatch is a bug on the
-        // client's side (D-26) and is reported rather than absorbed, so it is discoverable.
+        // All four are the caller's payload, wrong under any circumstances. DeviceMismatch is a bug on
+        // the client's side (D-26) and is reported rather than absorbed, so it is discoverable.
+        //
+        // The two D-36 timestamp refusals are 400 rather than 409 or 422 for the reason §8.2 cares
+        // about: a queued tap that names a time we will never accept must be dropped by the client, not
+        // retried, and 400 is the code its published table already binds to "stop retrying". Neither is
+        // a conflict with the state of the resource — the same event would refuse the same tappedAt
+        // forever — so 409 would be a lie about whether resending later could help.
         TapOutcome.EventNotOpen
-            or TapOutcome.DeviceMismatch => StatusCodes.Status400BadRequest,
+            or TapOutcome.DeviceMismatch
+            or TapOutcome.TappedAtOutOfRange
+            or TapOutcome.TappedAtOutsideEventWindow => StatusCodes.Status400BadRequest,
 
         _ => throw new ArgumentOutOfRangeException(
             nameof(outcome), outcome,

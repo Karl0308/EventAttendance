@@ -51,8 +51,45 @@ public record AttendanceDto(
 public record TapRequest(
     Guid EventId, string CardUid, Guid? DeviceId, string? DeviceTapId, DateTime? TappedAt);
 
+/// <summary>
+/// The body of <c>POST /attendance/tap</c> and <c>POST /attendance/manual</c> on every path that
+/// produced a record. Failures carry the same two machine-readable fields in an RFC 7807 body instead
+/// — see <c>AttendanceController</c>.
+/// </summary>
+/// <param name="Message">
+/// <b>Prose. Never parse it.</b> It is written for a person reading a log or a kiosk screen and is
+/// reworded whenever the wording is wrong; <paramref name="Code"/> is what a client branches on.
+/// </param>
+/// <param name="Code">
+/// The stable outcome token — <c>nameof</c> the <see cref="EAMS.Application.Abstractions.TapOutcome"/>
+/// or <see cref="EAMS.Application.Abstractions.ManualOutcome"/> member this response carries (Phase 4c,
+/// D-37).
+///
+/// <para>
+/// <b>Why the field is <c>code</c> and not <c>outcome</c>.</b> A failure is an RFC 7807 problem body,
+/// which already carries <c>code</c> everywhere else in this API (<c>StudentsController</c>,
+/// <c>DevicesController</c>, the device-key handler, the rate limiter). Naming the success field the
+/// same thing means one accessor — <c>body.code</c> — works across success and failure alike, which is
+/// the whole of what the mobile client asked for: today all four tap successes are an
+/// indistinguishable 200 whose only differentiator is the prose above, so reconciling a flushed queue
+/// against what actually landed is impossible.
+/// </para>
+///
+/// <para>
+/// <b>These token names are published contract.</b> Renaming <c>DuplicateIgnored</c> is a breaking
+/// change for a consumer we cannot recompile, so <c>TapOutcomeContractTests</c> enumerates the enum
+/// against a frozen list and fails the build rather than letting a rename ship quietly.
+/// </para>
+/// </param>
+/// <param name="ServerTime">
+/// The server's UTC clock at the moment this response was produced. The published contract promises it
+/// on every response and the client computes a clock offset from it before enqueueing — which is the
+/// half of D-36 that lets a drifted device correct itself instead of having its taps refused. It is on
+/// rejections too, and most of all on <c>TappedAtOutOfRange</c>: that is precisely the response whose
+/// reader needs to know what time we think it is.
+/// </param>
 public record TapResult(
-    bool Success, string Message, AttendanceDto? Record);
+    bool Success, string Message, AttendanceDto? Record, string Code, DateTime ServerTime);
 
 /// <summary>
 /// Technical Plan §6.7/§12 — the Event Attendance Summary.

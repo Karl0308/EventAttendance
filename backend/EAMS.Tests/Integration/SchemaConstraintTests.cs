@@ -200,6 +200,59 @@ public class SchemaConstraintTests : IntegrationTest
         Assert.Equal(3, await read.AttendanceRecords.CountAsync());
     }
 
+    // ------------------------------- UX_Attendance_Device_CheckOutDeviceTapId
+
+    /// <summary>
+    /// The Phase 4c D-34 twin of the index above, and it has to be filtered for a sharper reason than
+    /// its sibling: <c>CheckOutDeviceTapId</c> is <c>NULL</c> on <em>every</em> row written before that
+    /// migration and on every <c>Single</c>-mode row after it. Unfiltered, SQL Server's NULL equality
+    /// inside a unique index would cap the whole table at one check-out-less row per
+    /// <c>(school, device)</c>.
+    ///
+    /// <para>
+    /// Read from <c>sys.indexes</c> rather than from the EF model, per the standing rule this file
+    /// exists to enforce — the provider's silent <c>IS NOT NULL</c> is invisible in a model assertion
+    /// and once shipped a completely unconstrained attendance table.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public async Task The_check_out_tap_index_is_unique_and_filtered_to_rows_that_carry_one()
+    {
+        var index = await ReadIndexAsync("UX_Attendance_Device_CheckOutDeviceTapId");
+
+        Assert.True(index.IsUnique);
+        Assert.True(index.HasFilter);
+        Assert.Contains("CheckOutDeviceTapId", index.FilterDefinition!);
+        Assert.Contains("IS NOT NULL", index.FilterDefinition!);
+    }
+
+    /// <summary>
+    /// The behaviour that filter buys, asserted against the database rather than inferred from it —
+    /// three rows sharing a NULL check-out tap id, which is the ordinary state of this table.
+    /// </summary>
+    [Fact]
+    public async Task Many_attendance_rows_may_have_no_check_out_tap_id_at_all()
+    {
+        var (schoolId, studentId, eventId) = await ArrangeAsync();
+
+        await using var db = NewDbContext();
+        var second = TestData.NewStudent(schoolId, "2023-0006", lastName: "Flores");
+        var third = TestData.NewStudent(schoolId, "2023-0007", lastName: "Aquino");
+        db.Students.AddRange(second, third);
+        foreach (var id in new[] { studentId, second.Id, third.Id })
+            db.AttendanceRecords.Add(new AttendanceRecord
+            {
+                SchoolId = schoolId,
+                EventId = eventId, StudentId = id, CheckOutDeviceTapId = null,
+                CheckInAt = TestData.Now, Status = "Present",
+            });
+
+        await db.SaveChangesAsync();
+
+        await using var read = NewDbContext();
+        Assert.Equal(3, await read.AttendanceRecords.CountAsync());
+    }
+
     // ------------------------------- UX_RfidCards_SchoolId_CardUid_Active
 
     [Fact]

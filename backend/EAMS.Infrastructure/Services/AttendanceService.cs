@@ -3,6 +3,7 @@ using EAMS.Application.Dtos;
 using EAMS.Domain;
 using EAMS.Infrastructure.Data;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Logging;
 
 namespace EAMS.Infrastructure.Services;
 
@@ -24,11 +25,21 @@ internal sealed class AttendanceService : IAttendanceService
     /// </summary>
     private readonly IDeviceContext _device;
 
-    public AttendanceService(EamsDbContext db, ICurrentUser currentUser, IDeviceContext device)
+    /// <summary>
+    /// Only ever used to report a §4.13 tap-window setting this service could not read as a number —
+    /// see <see cref="ResolveTapWindowAsync"/>. A malformed setting falls back to the published
+    /// default, which is the right behaviour and a silent one, so it says so out loud.
+    /// </summary>
+    private readonly ILogger<AttendanceService> _logger;
+
+    public AttendanceService(
+        EamsDbContext db, ICurrentUser currentUser, IDeviceContext device,
+        ILogger<AttendanceService> logger)
     {
         _db = db;
         _currentUser = currentUser;
         _device = device;
+        _logger = logger;
     }
 
     private static AttendanceDto ToDto(AttendanceRecord a) => new(
@@ -53,11 +64,18 @@ internal sealed class AttendanceService : IAttendanceService
     // across layers.
     public async Task<TapResponse> TapAsync(TapRequest req, CancellationToken ct = default)
     {
+        // Read once, at entry, and used for three things that must agree: the fallback timestamp when
+        // the client sends none, the D-36 future-tolerance comparison, and the `serverTime` every
+        // response carries. Reading DateTime.UtcNow separately at each would let a rejection quote a
+        // clock a few milliseconds away from the one it rejected against — small, and exactly the kind
+        // of inconsistency a client computing a clock offset would be entitled to complain about.
+        var serverTime = DateTime.UtcNow;
+
         // TappedAt arrives from JSON, so its Kind depends on how the client wrote the string: "Z"
         // gives Utc, "+08:00" gives Local, a bare date-time gives Unspecified. Comparing a Local
         // value against ev.StartAt (Utc) below would misjudge Present vs Late by the server's
         // offset — eight hours, in Manila. Normalize once, here, at the boundary.
-        var when = UtcTime.Normalize(req.TappedAt) ?? DateTime.UtcNow;
+        var when = UtcTime.Normalize(req.TappedAt) ?? serverTime;
 
         // D-26. The principal wins on the write; the body is only allowed to agree with it.
         //
@@ -68,11 +86,11 @@ internal sealed class AttendanceService : IAttendanceService
         // derived field echoed back on a PUT. Refuse, name the token, let the client fix its bug.
         if (req.DeviceId is { } claimed && _device.DeviceId is { } authenticated && claimed != authenticated)
         {
-            return new TapResponse(TapOutcome.DeviceMismatch, new TapResult(
-                false,
+            return Reject(
+                TapOutcome.DeviceMismatch,
                 "The deviceId in the request body is not the device this key authenticates. Send the " +
                 "authenticated device's id, or omit the field.",
-                null));
+                serverTime);
         }
 
         // The principal first, deliberately. The two operands are equal or one is null by the time this
@@ -84,10 +102,35 @@ internal sealed class AttendanceService : IAttendanceService
 
         var ev = await _db.Events.FirstOrDefaultAsync(e => e.Id == req.EventId && !e.IsDeleted, ct);
         if (ev is null)
-            return new TapResponse(TapOutcome.EventNotFound, new TapResult(false, "Event not found.", null));
+            return Reject(TapOutcome.EventNotFound, "Event not found.", serverTime);
         if (ev.Status != EventStatus.Open)
-            return new TapResponse(TapOutcome.EventNotOpen,
-                new TapResult(false, $"Event is {ev.Status}, not Open.", null));
+            return Reject(TapOutcome.EventNotOpen, $"Event is {ev.Status}, not Open.", serverTime);
+
+        // D-36, both halves, and they run here for a reason: after the event is resolved (the window
+        // check needs its StartAt/EndAt) and before the card is resolved, which keeps the ordering
+        // TapFlowTests already pins — event state is reported before card resolution, so a client with
+        // two problems is told about the one it can act on first.
+        //
+        // Neither of these rewrites `when`. See TapTimeWindow for why clamping was refused.
+        if (TapTimeWindow.IsImplausiblyFuture(when, serverTime))
+        {
+            return Reject(
+                TapOutcome.TappedAtOutOfRange,
+                $"tappedAt {when:O} is more than {TapTimeWindow.FutureToleranceMinutes} minutes ahead " +
+                $"of the server clock ({serverTime:O}). Correct the device clock using the serverTime " +
+                "in this response and resend.",
+                serverTime);
+        }
+
+        var window = await ResolveTapWindowAsync(ev.SchoolId, ct);
+        if (!window.Contains(when, ev.StartAt, ev.EndAt))
+        {
+            var (from, to) = window.BoundsFor(ev.StartAt, ev.EndAt);
+            return Reject(
+                TapOutcome.TappedAtOutsideEventWindow,
+                $"tappedAt {when:O} is outside this event's window ({from:O} to {to:O}).",
+                serverTime);
+        }
 
         var uid = CardUid.Normalize(req.CardUid);
 
@@ -114,8 +157,7 @@ internal sealed class AttendanceService : IAttendanceService
         var card = await _db.RfidCards.Include(c => c.Student)
             .FirstOrDefaultAsync(c => c.CardUid == uid && c.IsActive && !c.Student!.IsDeleted, ct);
         if (card?.Student is null)
-            return new TapResponse(TapOutcome.CardNotFound,
-                new TapResult(false, $"No active card matches UID {uid}.", null));
+            return Reject(TapOutcome.CardNotFound, $"No active card matches UID {uid}.", serverTime);
 
         var student = card.Student;
 
@@ -146,8 +188,10 @@ internal sealed class AttendanceService : IAttendanceService
 
             if (deviceSchoolId != ev.SchoolId)
             {
-                return new TapResponse(TapOutcome.DeviceNotRegistered,
-                    new TapResult(false, $"Device {tappingDeviceId} is not registered.", null));
+                return Reject(
+                    TapOutcome.DeviceNotRegistered,
+                    $"Device {tappingDeviceId} is not registered.",
+                    serverTime);
             }
         }
 
@@ -158,9 +202,7 @@ internal sealed class AttendanceService : IAttendanceService
         if (!string.IsNullOrWhiteSpace(req.DeviceTapId))
         {
             var dup = await FindByDeviceTapAsync(deviceId, req.DeviceTapId, ct);
-            if (dup is not null)
-                return new TapResponse(TapOutcome.DuplicateIgnored,
-                    new TapResult(true, "Duplicate tap ignored (idempotent).", ToDto(dup)));
+            if (dup is not null) return Duplicate(dup, serverTime);
         }
 
         var existing = await FindByEventStudentAsync(ev.Id, student.Id, ct);
@@ -186,12 +228,10 @@ internal sealed class AttendanceService : IAttendanceService
             var saved = await SaveNewRecordAsync(rec, deviceId, req.DeviceTapId, ct);
             return saved.Outcome switch
             {
-                SaveOutcome.Inserted => new TapResponse(TapOutcome.Recorded,
-                    new TapResult(true, $"Checked in ({status}).", ToDto(rec))),
-                SaveOutcome.DuplicateTapWon => new TapResponse(TapOutcome.DuplicateIgnored,
-                    new TapResult(true, "Duplicate tap ignored (idempotent).", ToDto(saved.Record))),
-                _ => new TapResponse(TapOutcome.AlreadyRecorded,
-                    new TapResult(true, "Already recorded.", ToDto(saved.Record))),
+                SaveOutcome.Inserted =>
+                    Accept(TapOutcome.Recorded, $"Checked in ({status}).", rec, serverTime),
+                SaveOutcome.DuplicateTapWon => Duplicate(saved.Record, serverTime),
+                _ => AlreadyRecorded(saved.Record, serverTime),
             };
         }
 
@@ -199,13 +239,139 @@ internal sealed class AttendanceService : IAttendanceService
         if (ev.AttendanceMode == AttendanceMode.TimeInOut && existing.CheckOutAt is null)
         {
             existing.CheckOutAt = when;
+
+            // D-34. The check-out's own idempotency key, kept rather than discarded — which is the
+            // whole of the defect this closes. It goes in its own column because the check-in's id is
+            // still load-bearing in DeviceTapId: overwriting that to record this one would fix the
+            // check-out's idempotency by breaking the check-in's, so a replayed check-in would then
+            // write a second row.
+            existing.CheckOutDeviceTapId = req.DeviceTapId;
             existing.UpdatedAt = DateTime.UtcNow;
-            await _db.SaveChangesAsync(ct);
-            return new TapResponse(TapOutcome.CheckedOut, new TapResult(true, "Checked out.", ToDto(existing)));
+
+            try
+            {
+                await _db.SaveChangesAsync(ct);
+                return Accept(TapOutcome.CheckedOut, "Checked out.", existing, serverTime);
+            }
+            catch (DbUpdateException ex) when (SqlServerErrors.IsUniqueViolation(ex))
+            {
+                // UX_Attendance_Device_CheckOutDeviceTapId rejected the update: this device already
+                // used this tap id to check somebody out. The pre-check above catches the ordinary
+                // replay, so reaching here means the winner landed between that read and this write —
+                // the same race SaveNewRecordAsync recovers from, arriving on an UPDATE instead of an
+                // INSERT, and it exists only because this column is now constrained at all.
+                var winner = await ResolveLostCheckOutRaceAsync(ex, existing, deviceId, req.DeviceTapId, ct);
+                return Duplicate(winner, serverTime);
+            }
         }
 
-        return new TapResponse(TapOutcome.AlreadyRecorded,
-            new TapResult(true, "Already recorded.", ToDto(existing)));
+        return AlreadyRecorded(existing, serverTime);
+    }
+
+    // ------------------------------------------------------------------ response shaping (D-37)
+    //
+    // Every TapResponse in this service is built by one of these four, and none of them takes the
+    // token as an argument: TapResponse.For derives `code` from the outcome, so the two fields cannot
+    // be made to disagree by a caller passing the wrong string. The two duplicate/already-recorded
+    // helpers exist because those bodies are produced from three call sites each and drifted wording
+    // between them would be a wire change nobody reviewed.
+
+    private static TapResponse Reject(TapOutcome outcome, string message, DateTime serverTime) =>
+        TapResponse.For(outcome, success: false, message, record: null, serverTime);
+
+    private static TapResponse Accept(
+        TapOutcome outcome, string message, AttendanceRecord record, DateTime serverTime) =>
+        TapResponse.For(outcome, success: true, message, ToDto(record), serverTime);
+
+    private static TapResponse Duplicate(AttendanceRecord record, DateTime serverTime) =>
+        Accept(TapOutcome.DuplicateIgnored, "Duplicate tap ignored (idempotent).", record, serverTime);
+
+    private static TapResponse AlreadyRecorded(AttendanceRecord record, DateTime serverTime) =>
+        Accept(TapOutcome.AlreadyRecorded, "Already recorded.", record, serverTime);
+
+    /// <summary>
+    /// The §4.13 tap-time window for one school (D-36): its own rows if it has them, the global
+    /// (<c>NULL SchoolId</c>) rows otherwise, the published defaults otherwise.
+    ///
+    /// <para>
+    /// <b>One query per tap, unconditionally, and the cheap-looking alternative is wrong.</b> Checking
+    /// the defaults first and only loading the settings when that check fails would cost nothing on the
+    /// happy path — and would silently ignore a school that <em>narrows</em> its window, which is the
+    /// direction an administrator tightening a rule would move it. A settings read that only runs when
+    /// it would be permissive is not a settings read.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>It is a small scan, not a seek, and that is stated rather than glossed.</b> The predicate is
+    /// a disjunction on the leading key column of <c>UX_SystemSettings_SchoolId_Key</c>
+    /// (<c>SchoolId = @school OR SchoolId IS NULL</c>) and another over <c>Key</c>, so nothing seeks;
+    /// §4.13 is a handful of rows per tenant, so it is cheap anyway. Worth saying because "one query"
+    /// on its own reads as "one seek", and this is the read Phase 4d will multiply by the batch size —
+    /// hoisting it per batch, or per event, is the obvious answer there and is not this phase's.
+    /// </para>
+    ///
+    /// <para>
+    /// The rows are filtered explicitly on <c>SchoolId</c> rather than relying on the §11 query filter:
+    /// this method is reached by the import path and by tests with no tenant pinned, where that filter
+    /// is a no-op and every school's settings are visible. Same principle the device-ownership check
+    /// above records — a tenant-scoped decision on a write path validates the tenant itself.
+    /// </para>
+    ///
+    /// <para>
+    /// A value that is not a non-negative integer falls back to the default <em>and says so</em>. It is
+    /// not an exception: a typo in a settings row must not stop every tap on the campus, and the
+    /// fallback is the documented behaviour. But a silent fallback would make a mis-typed window
+    /// indistinguishable from a working one, which is precisely the class of failure that gets
+    /// discovered from an attendance report six weeks later.
+    /// </para>
+    /// </summary>
+    private async Task<TapTimeWindow> ResolveTapWindowAsync(Guid schoolId, CancellationToken ct)
+    {
+        var rows = await _db.SystemSettings
+            .Where(s => (s.SchoolId == schoolId || s.SchoolId == null)
+                     && (s.Key == TapTimeWindow.BeforeStartMinutesSettingKey
+                      || s.Key == TapTimeWindow.AfterEndMinutesSettingKey))
+            .Select(s => new { s.SchoolId, s.Key, s.Value })
+            .ToListAsync(ct);
+
+        return new TapTimeWindow(
+            Minutes(TapTimeWindow.BeforeStartMinutesSettingKey, TapTimeWindow.DefaultBeforeStartMinutes),
+            Minutes(TapTimeWindow.AfterEndMinutesSettingKey, TapTimeWindow.DefaultAfterEndMinutes));
+
+        int Minutes(string key, int fallback)
+        {
+            // The school's own row beats the global one — §4.13's "a NULL SchoolId is the global
+            // scope", read as a default rather than as an override. At most two rows reach this loop:
+            // UX_SystemSettings_SchoolId_Key allows one per scope.
+            //
+            // <b>It walks the candidates rather than taking the first one</b>, and that is the whole
+            // of the difference between this and the version that shipped to review. Falling straight
+            // back to the published constant when the school's row is unreadable *skips the global
+            // row that is already in this list* — so a campus that set a global afterEndMinutes of 10
+            // to tighten capture, and then fat-fingered one school's override, would silently give
+            // that school 60. Six times wider than the rule an administrator deliberately narrowed,
+            // and in exactly the permissive direction the unconditional read above exists to prevent.
+            // Precedence has to survive a malformed row or it is not precedence.
+            foreach (var row in rows
+                .Where(r => r.Key == key)
+                .OrderByDescending(r => r.SchoolId.HasValue))
+            {
+                if (TapTimeWindow.TryParseMinutes(row.Value, out var minutes)) return minutes;
+
+                // Every unreadable candidate is reported, not just the last one: "the school row is
+                // wrong and we fell through to the global one" and "both are wrong and we fell through
+                // to the default" are different operational situations and the log has to tell them
+                // apart.
+                _logger.LogWarning(
+                    "SystemSettings['{Key}'] for school {SchoolId} is '{Value}', which is not a " +
+                    "non-negative whole number of minutes. Falling through to the next scope, and to " +
+                    "the published default of {Default} if there is none. Taps are being validated " +
+                    "against a window nobody configured until the row is corrected.",
+                    key, row.SchoolId, row.Value, fallback);
+            }
+
+            return fallback;
+        }
     }
 
     // Technical Plan §6.4 — organizer override.
@@ -220,15 +386,18 @@ internal sealed class AttendanceService : IAttendanceService
     public async Task<ManualResponse> ManualAsync(
         Guid eventId, Guid studentId, string status, string? notes, CancellationToken ct = default)
     {
+        // Same reasoning as the tap path: one read of the clock, quoted back on every response.
+        var serverTime = DateTime.UtcNow;
+
         // §4.9's value set, validated before anything is read or written. Here rather than in the
         // controller because the service is what writes the column: a guard on the HTTP boundary
         // alone would leave the next caller (the planned import path, §4.12) unprotected.
         if (!AttendanceStatus.TryNormalize(status, out var canonicalStatus))
         {
-            return new ManualResponse(ManualOutcome.InvalidStatus, new TapResult(
-                false,
+            return RejectManual(
+                ManualOutcome.InvalidStatus,
                 $"Status '{status}' is not one of {string.Join(", ", AttendanceStatus.All)}.",
-                null));
+                serverTime);
         }
 
         // The other half of the same guard. `Notes` is nvarchar(500); an over-length value used to
@@ -236,19 +405,19 @@ internal sealed class AttendanceService : IAttendanceService
         // is not a unique violation and SaveNewRecordAsync rightly declines to swallow it.
         if (!AttendanceNotes.IsValid(notes))
         {
-            return new ManualResponse(ManualOutcome.InvalidNotes, new TapResult(
-                false,
+            return RejectManual(
+                ManualOutcome.InvalidNotes,
                 $"Notes must be {AttendanceNotes.MaxLength} characters or fewer (got {notes!.Length}).",
-                null));
+                serverTime);
         }
 
         var ev = await _db.Events.FirstOrDefaultAsync(e => e.Id == eventId && !e.IsDeleted, ct);
         if (ev is null)
-            return new ManualResponse(ManualOutcome.EventNotFound, new TapResult(false, "Event not found.", null));
+            return RejectManual(ManualOutcome.EventNotFound, "Event not found.", serverTime);
 
         var student = await _db.Students.FirstOrDefaultAsync(s => s.Id == studentId && !s.IsDeleted, ct);
         if (student is null)
-            return new ManualResponse(ManualOutcome.StudentNotFound, new TapResult(false, "Student not found.", null));
+            return RejectManual(ManualOutcome.StudentNotFound, "Student not found.", serverTime);
 
         var existing = await FindByEventStudentAsync(eventId, studentId, ct);
         if (existing is not null)
@@ -293,9 +462,21 @@ internal sealed class AttendanceService : IAttendanceService
         await _db.SaveChangesAsync(ct);
         return Saved(saved.Record);
 
-        static ManualResponse Saved(AttendanceRecord record) =>
-            new(ManualOutcome.Saved, new TapResult(true, "Manual entry saved.", ToDto(record)));
+        ManualResponse Saved(AttendanceRecord record) => ManualResponse.For(
+            ManualOutcome.Saved, success: true, "Manual entry saved.", ToDto(record), serverTime);
     }
+
+    /// <summary>
+    /// <inheritdoc cref="Reject" path="/summary"/>
+    /// <para>
+    /// The override surface's outcomes are not in the frozen device contract — no device ever calls
+    /// this endpoint — but they carry a <c>code</c> for the same reason: the SPA branches on it, and a
+    /// second error convention on one controller is how a client ends up parsing prose after all.
+    /// </para>
+    /// </summary>
+    private static ManualResponse RejectManual(
+        ManualOutcome outcome, string message, DateTime serverTime) =>
+        ManualResponse.For(outcome, success: false, message, record: null, serverTime);
 
     /// <summary>
     /// Whether this override is recording an arrival we actually observed.
@@ -426,10 +607,89 @@ internal sealed class AttendanceService : IAttendanceService
     /// the worse of the two by a wide margin.
     /// </para>
     /// </summary>
-    private Task<AttendanceRecord?> FindByDeviceTapAsync(
-        Guid? deviceId, string deviceTapId, CancellationToken ct) =>
-        _db.AttendanceRecords.Include(a => a.Student)
-            .FirstOrDefaultAsync(a => a.DeviceId == deviceId && a.DeviceTapId == deviceTapId, ct);
+    /// <remarks>
+    /// <b>Phase 4c D-34 — it now seeks two columns, and the shape of the query is the decision.</b> A
+    /// <c>TimeInOut</c> pair has two tap ids and two indexes to match them
+    /// (<c>UX_Attendance_Device_DeviceTapId</c> and <c>UX_Attendance_Device_CheckOutDeviceTapId</c>),
+    /// and a client replaying either half must get its own record back.
+    ///
+    /// <para>
+    /// <b>Not <c>WHERE DeviceTapId = @t OR CheckOutDeviceTapId = @t</c>.</b> A disjunction over two
+    /// different columns generally cannot seek both filtered indexes — the optimizer's realistic
+    /// options are a scan or an index union it has to derive — and this runs on every tap that carries
+    /// a tap id, which after Phase 4d's batch endpoint means every row of every queue flush. The
+    /// <c>UNION</c> below states the index union explicitly, as two branches in one round trip.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>What is claimed and what is not.</b> One round trip is a fact about this code. <em>Two index
+    /// seeks</em> is not — it has not been measured, and there is a specific reason to doubt it: the
+    /// §11 query filter compiles to <c>(@school IS NULL OR SchoolId = @school)</c>, a disjunction on
+    /// the <em>leading</em> column of both indexes, which is the classic shape that costs a seek and
+    /// buys a scan. <c>EamsDbContext</c> already records that the null branch is a non-sargable cost to
+    /// be removed when Phase 6 makes an unauthenticated request impossible; this is the query where
+    /// that will show first. <b>Capture a plan before 4d ships</b> — a batch flush runs this up to 200
+    /// times per request, so the difference between two seeks and two scans stops being academic
+    /// exactly then.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>Ids first, then a load, and that ordering is deliberate rather than incidental.</b> EF cannot
+    /// apply <c>Include</c> across a set operation, so the union projects keys and the entity is
+    /// fetched only when one is found. The common case on the tap path is a <em>miss</em> — a new tap,
+    /// no prior row — and that case costs exactly one query; the second round trip is paid only on a
+    /// genuine replay, which is the rare one. Projecting an anonymous type rather than a bare
+    /// <c>Guid</c> is what makes "no row" distinguishable from <c>Guid.Empty</c>, and it is where the
+    /// arm tiebreak lives — see <see cref="CheckInArm"/>.
+    /// </para>
+    /// </remarks>
+    private async Task<AttendanceRecord?> FindByDeviceTapAsync(
+        Guid? deviceId, string deviceTapId, CancellationToken ct)
+    {
+        var checkIns = _db.AttendanceRecords
+            .Where(a => a.DeviceId == deviceId && a.DeviceTapId == deviceTapId)
+            .Select(a => new { a.Id, Arm = CheckInArm });
+
+        var checkOuts = _db.AttendanceRecords
+            .Where(a => a.DeviceId == deviceId && a.CheckOutDeviceTapId == deviceTapId)
+            .Select(a => new { a.Id, Arm = CheckOutArm });
+
+        var match = await checkIns.Union(checkOuts)
+            .OrderBy(m => m.Arm).ThenBy(m => m.Id)
+            .FirstOrDefaultAsync(ct);
+
+        if (match is null) return null;
+
+        return await _db.AttendanceRecords.Include(a => a.Student)
+            .FirstOrDefaultAsync(a => a.Id == match.Id, ct);
+    }
+
+    /// <summary>
+    /// Which arm of <see cref="FindByDeviceTapAsync"/>'s union a row matched on, and the tiebreak when
+    /// it matched on both.
+    ///
+    /// <para>
+    /// <b>The two arms can genuinely both hit, and the ordering is what stops that being a bug.</b> The
+    /// two filtered unique indexes are independent: nothing prevents one tap id existing as row A's
+    /// <c>DeviceTapId</c> and row B's <c>CheckOutDeviceTapId</c>. The pre-check normally makes that
+    /// unreachable — a tap id already in use comes back <c>DuplicateIgnored</c> before it can be
+    /// written again — but a lost race skips the pre-check by definition, which is the one situation
+    /// this method exists to survive.
+    /// </para>
+    ///
+    /// <para>
+    /// Without an <c>ORDER BY</c> the union returns whichever row the plan happens to emit first, so a
+    /// replay would hand back a nondeterministically chosen one of <em>two different students'</em>
+    /// records, reported as a successful duplicate. That is the exact failure class the two-device
+    /// bug in this method's remarks was about, and it is the one this codebase treats as serious.
+    /// The check-in arm wins because it is the tap that created the row; <c>Id</c> breaks any residual
+    /// tie so the answer is reproducible rather than merely usually-right.
+    /// </para>
+    /// </summary>
+    private const int CheckInArm = 0;
+
+    /// <inheritdoc cref="CheckInArm"/>
+    private const int CheckOutArm = 1;
 
     /// <summary>
     /// The other uniqueness guard, <c>UX_Attendance_Event_Student_Occurrence</c>. <c>OccurrenceId</c>
@@ -545,5 +805,56 @@ internal sealed class AttendanceService : IAttendanceService
             $"A unique-key violation was raised inserting attendance for event {eventId} / student " +
             $"{studentId}, but no conflicting record could be read back. The constraint that fired " +
             "is not one this method knows how to resolve.", violation);
+    }
+
+    /// <summary>
+    /// The same recovery for the one <em>update</em> that can now lose a race:
+    /// <c>UX_Attendance_Device_CheckOutDeviceTapId</c> rejecting a check-out because this device
+    /// already used that tap id somewhere else (Phase 4c, D-34).
+    ///
+    /// <para>
+    /// <b>The reload is load-bearing, not tidiness.</b> The entity is left <c>Modified</c> with a
+    /// <c>CheckOutAt</c> that was never committed, and it is a row this context is still tracking —
+    /// so any later save would retry the rejected update, and, worse, the record handed back to the
+    /// caller would report a check-out time the database does not have. Reloading restores the honest
+    /// answer: our change did not happen. <see cref="ResolveLostInsertRaceAsync"/> detaches instead
+    /// because its entity was never in the table at all.
+    /// </para>
+    ///
+    /// <para>
+    /// If the winner cannot be read back this fails loudly with the original violation attached, for
+    /// the reason the insert-side resolver records: a unique violation with no conflicting row is a
+    /// wrong assumption about which constraint fired, and reporting it as a duplicate that does not
+    /// exist would hide a real bug.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>Here that throw is unreachable, and by a stronger argument than the insert side's.</b> Only
+    /// one index can reject this update — <c>UX_Attendance_Device_CheckOutDeviceTapId</c>, keyed
+    /// <c>(SchoolId, DeviceId, CheckOutDeviceTapId)</c> — so a violation <em>requires</em> the
+    /// conflicting row to carry the same <c>SchoolId</c> as the row we failed to update. That is
+    /// exactly the predicate the §11 query filter applies, so the winner is always visible to the
+    /// re-read and it cannot come back empty. Contrast <see cref="ResolveLostInsertRaceAsync"/>, where
+    /// two indexes can fire and one of them was, until D-35, genuinely capable of rejecting an insert
+    /// whose winner the filter then hid. The throw stays because "unreachable" is an argument about
+    /// today's schema and the cost of being wrong about it is a duplicate that does not exist.
+    /// </para>
+    /// </summary>
+    private async Task<AttendanceRecord> ResolveLostCheckOutRaceAsync(
+        DbUpdateException violation, AttendanceRecord failed,
+        Guid? deviceId, string? deviceTapId, CancellationToken ct)
+    {
+        await _db.Entry(failed).ReloadAsync(ct);
+
+        if (!string.IsNullOrWhiteSpace(deviceTapId))
+        {
+            var winner = await FindByDeviceTapAsync(deviceId, deviceTapId, ct);
+            if (winner is not null) return winner;
+        }
+
+        throw new InvalidOperationException(
+            $"A unique-key violation was raised recording a check-out on attendance {failed.Id} with " +
+            $"deviceTapId '{deviceTapId}', but no conflicting record could be read back. The " +
+            "constraint that fired is not one this method knows how to resolve.", violation);
     }
 }

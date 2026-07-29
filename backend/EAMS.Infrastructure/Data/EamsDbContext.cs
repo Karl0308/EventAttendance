@@ -757,6 +757,10 @@ internal class EamsDbContext : DbContext
         e.Property(x => x.CaptureMethod).HasMaxLength(20).IsRequired()
             .HasDefaultValue("Rfid").ValueGeneratedNever();
         e.Property(x => x.DeviceTapId).HasMaxLength(100);
+        // Phase 4c D-34. Same width as DeviceTapId: it holds the same kind of value from the same
+        // client, and two columns in one key-space that disagreed about how long a key may be would
+        // reject a check-out the check-in accepted.
+        e.Property(x => x.CheckOutDeviceTapId).HasMaxLength(100);
         e.Property(x => x.Notes).HasMaxLength(500);
 
         e.HasOne(x => x.Event).WithMany(v => v.AttendanceRecords).HasForeignKey(x => x.EventId).IsRequired();
@@ -805,6 +809,28 @@ internal class EamsDbContext : DbContext
         e.HasIndex(x => new { x.SchoolId, x.DeviceId, x.DeviceTapId }).IsUnique()
             .HasFilter("[DeviceTapId] IS NOT NULL")
             .HasDatabaseName("UX_Attendance_Device_DeviceTapId");
+
+        // The other half of the same guarantee, for the second tap of a TimeInOut pair (Phase 4c,
+        // D-34). Scoped (SchoolId, DeviceId, CheckOutDeviceTapId) — deliberately the same shape as the
+        // index above rather than a better one, because the two are read by one lookup and a key that
+        // was scoped differently would make "is this tap id already used?" mean two things depending on
+        // which half of the pair it landed in.
+        //
+        // HasFilter is stated explicitly for the reason this file records throughout: the provider
+        // appends its own "[CheckOutDeviceTapId] IS NOT NULL" and an index that happens to work for a
+        // reason nobody chose is one refactor from not working. Here the stated filter is the same
+        // predicate the provider would have inferred — and it has to be, because every row written
+        // before this migration and every Single-mode row after it has a NULL here, and SQL Server
+        // compares NULLs as equal inside a unique index. Unfiltered, the second such row would be
+        // rejected and the whole table would cap at one check-out-less attendance record.
+        //
+        // Why this is not a mirror of the note on the index above about column order: DeviceId still
+        // does not lead, and it still does not need to — IX_AttendanceRecords_DeviceId serves the
+        // foreign key, and the lookup supplies SchoolId (from the query filter), DeviceId and the tap id
+        // as three equalities either way.
+        e.HasIndex(x => new { x.SchoolId, x.DeviceId, x.CheckOutDeviceTapId }).IsUnique()
+            .HasFilter("[CheckOutDeviceTapId] IS NOT NULL")
+            .HasDatabaseName("UX_Attendance_Device_CheckOutDeviceTapId");
 
         e.HasIndex(x => new { x.EventId, x.Status }).HasDatabaseName("IX_Attendance_EventId_Status");
     });

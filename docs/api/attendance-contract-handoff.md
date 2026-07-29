@@ -1,11 +1,18 @@
 # Attendance API — Mobile Developer Handoff
 
-**Status: partial contract freeze, 2026-07-29. Device authentication is now LIVE.** Revised after
-Phase 4b shipped.
+**Status: partial contract freeze, 2026-07-29. Device authentication and the `code` field are now
+LIVE.** Revised after Phase 4c shipped.
 
-> **⚠ If you read the previous revision of this document, re-read §1.** It said you could send no
-> header until 4b landed. **4b has landed.** The three capture endpoints now *require* a device key,
-> and a client built to the old text gets `401` on every tap.
+> **⚠ If you read the previous revision of this document, re-read §1 and §2.**
+>
+> - §1: you no longer have the option of sending no header. **4b has landed** — the three capture
+>   endpoints *require* a device key, and a client built to the older text gets `401` on every tap.
+> - §2: **4c has landed.** Every tap response now carries `code` and `serverTime`, and a rejected tap
+>   is an `application/problem+json` body rather than a `TapResult` with `success: false`. If you
+>   were reading `success` off a `4xx` body, that field is gone from those responses — read `code`.
+> - Also new in 4c, and it will refuse taps a previous build accepted: a `tappedAt` more than five
+>   minutes ahead of our clock, or outside the event's window, is now a `400`. See the last of the
+>   three rules further down.
 
 This document exists so the mobile capture app can start now instead of waiting for Phase 4 to be
 built. It describes what the backend *actually does today*, verified against the source — plus the
@@ -22,8 +29,9 @@ our side; taps are testable over plain HTTP because a card UID is just a student
 
 ## FROZEN — build against these now
 
-These three are settled and will not change shape. **§1 (device auth) is implemented and enforced
-as of Phase 4b.** §2 and §3 are still being built — build against them anyway.
+These three are settled and will not change shape. **§1 (device auth) is implemented and enforced as
+of Phase 4b; §2 (`code`, `serverTime`, problem bodies) is implemented as of Phase 4c**, apart from the
+two batch-only tokens noted in its table. §3 is still being built — build against it anyway.
 
 ### 1. Device authentication header
 
@@ -71,9 +79,14 @@ otherwise confirm a valid key id to someone who does not hold the secret.
 
 ### 2. Outcome tokens — the machine-readable `code` field
 
-Every tap response and every batch row will carry a stable `code`. **Branch on this, never on
+Every tap response and every batch row carries a stable `code`. **Branch on this, never on
 `message`.** The token list is frozen contract; a rename on our side would be a breaking change and is
-pinned by a test that fails the build.
+pinned by a test that fails the build (`TapOutcomeContractTests`, added with the field in 4c).
+
+**Live as of Phase 4c** for `POST /attendance/tap` and `POST /attendance/manual`, on success bodies and
+problem bodies alike. The two rows marked ⏳ below belong to `POST /attendance/tap/batch` and arrive
+with it in 4d; the pin test knows they are not on the wire yet and will require them the moment the
+endpoint exists.
 
 | `code` | HTTP | Meaning | Your queue |
 |---|---|---|---|
@@ -86,13 +99,14 @@ pinned by a test that fails the build.
 | `DeviceNotRegistered` | 404 | Unknown device, or device belongs to another school | Stop retrying |
 | `EventNotOpen` | 400 | Event is Draft, Closed or Cancelled | Stop retrying |
 | `DeviceMismatch` | 400 | Body `deviceId` disagrees with your authenticated key | Stop; bug on your side |
-| `DeviceTapIdRequired` | 400 | Batch row had no `deviceTapId` | Stop; bug on your side |
+| `DeviceTapIdRequired` ⏳ | 400 | Batch row had no `deviceTapId` | Stop; bug on your side |
 | `TappedAtOutOfRange` | 400 | `tappedAt` more than 5 min in the future — check your clock | Stop; resync clock |
 | `TappedAtOutsideEventWindow` | 400 | `tappedAt` outside the event's window | Stop retrying |
-| `BatchTooLarge` | 400 | Batch-level only; chunk and resend | Chunk, retry |
+| `BatchTooLarge` ⏳ | 400 | Batch-level only; chunk and resend | Chunk, retry |
 
-Tap **failures** will also become RFC 7807 problem bodies carrying the same `code`, matching the rest
-of the API. One accessor — `body.code` — works across success and failure alike.
+Tap and manual-override **failures are** RFC 7807 problem bodies carrying the same `code`, matching the
+rest of the API — `application/problem+json`, with `title`, `detail`, `status`, `traceId`, `code` and
+`serverTime`. One accessor — `body.code` — works across success and failure alike.
 
 ### 3. Batch sync shape
 
@@ -175,9 +189,18 @@ body.
 ```
 
 ```jsonc
-// TapResult — `code` is being added, see FROZEN §2
-{ "success": true, "message": "…prose, do not parse…", "record": { /* AttendanceDto | null */ } }
+// TapResult — success bodies only; a failure is a problem body (FROZEN §2)
+{
+  "success":    true,
+  "message":    "…prose, do not parse…",
+  "record":     { /* AttendanceDto | null */ },
+  "code":       "Recorded",               // branch on this
+  "serverTime": "2026-07-29T05:31:22.117Z" // your clock offset comes from here
+}
 ```
+
+`success` is retained for the clients already reading it and is now redundant with `code`: it is
+`false` on exactly the outcomes that arrive as a `4xx`.
 
 ### Others
 
@@ -317,7 +340,26 @@ eight hours in Manila. This has already been a real defect on our side once.
   never age-limited — an old queued tap is the entire point of the endpoint.
 - A `tappedAt` outside the event window — default **60 minutes either side** of `StartAt`/`EndAt`,
   configurable per school — is rejected (`TappedAtOutsideEventWindow`). *Submission* lateness is
-  unconstrained; only the claimed tap time is checked.
+  unconstrained; only the claimed tap time is checked. Both bounds are inclusive.
+- **Omitting `tappedAt` is not a way around either check.** `null` means "now, on the server", and
+  that instant is validated against the event window exactly like a value you sent. A tap on an event
+  that finished yesterday is a `400` whether or not you name a time.
+
+> **Always send `tappedAt` — not only `deviceTapId`.** This is the one recommendation in this document
+> that exists because of a retry consequence rather than a rule.
+>
+> With `tappedAt: null`, the instant being validated is **re-derived from our clock on every attempt**.
+> So a tap that landed at 10:00 whose response you lost, retried at 12:30 after the event's window has
+> closed, comes back `400 TappedAtOutsideEventWindow` — not the `DuplicateIgnored` you would expect for
+> a tap that is already recorded. The stored attendance is correct and both codes tell your queue to
+> drop the row, so nothing is lost; but reconciliation *by code* is wrong for that row.
+>
+> Sending an explicit `tappedAt` pins the value across every retry and the problem disappears.
+
+**Live as of 4c.** Both refusals are real now, and they will refuse taps an earlier build accepted.
+Neither ever alters the timestamp you sent: an accepted `tappedAt` is stored exactly as given, and an
+unbelievable one is refused rather than clamped into range — clamping would invent an observation on
+the field that decides Present vs Late.
 
 ---
 
@@ -351,8 +393,8 @@ If a hub is ever added, it will emit exactly the same delta object, so your redu
 |---|---|
 | Device registration + API keys | ✅ **shipped in 4b** |
 | Rate limiting on capture endpoints | ✅ **shipped in 4b** |
-| `code` on tap responses | Frozen above. Phase 4c |
-| Check-out idempotency, clock skew, event window | Frozen above. Phase 4c |
+| `code` + `serverTime` on tap responses | ✅ **shipped in 4c** |
+| Check-out idempotency, clock skew, event window | ✅ **shipped in 4c** |
 | `POST /attendance/tap/batch` | Shape **frozen** above. Phase 4d |
 | `GET /attendance/live/{eventId}` | Shape above, provisional in detail. Phase 4d |
 | Auth for everything else | Phase 6 (JWT + RBAC) |
@@ -361,14 +403,25 @@ If a hub is ever added, it will emit exactly the same delta object, so your redu
 
 ## Open defects — both being fixed, both affect you
 
-### 1. A `TimeInOut` check-out discards its own `deviceTapId` — **fix decided, landing in 4c**
+### 1. A `TimeInOut` check-out discards its own `deviceTapId` — ✅ **CLOSED in 4c**
 
 Today a check-out returns `AlreadyRecorded` instead of `CheckedOut`, and its `deviceTapId` is not
 retained. The fix gives a check-out its **own** idempotency key with its own unique index behind it,
 so each half of a `TimeInOut` pair is independently retryable.
 
-**What this means for you:** once 4c lands, replaying a check-out returns `DuplicateIgnored`, and
-`CheckedOut` means the check-out was newly recorded. Until then, do not trust check-out idempotency.
+**What this means for you:** replaying a check-out returns `DuplicateIgnored`, and `CheckedOut` means
+the check-out was newly recorded. Both halves of a `TimeInOut` pair are now independently retryable, so
+send a fresh `deviceTapId` with each tap and keep it stable across retries of *that* tap.
+
+One residual, and it is broader than a `TimeInOut` edge case, so it should not surprise you: **any tap
+that changes nothing** returns `AlreadyRecorded` without storing its `deviceTapId`, so replaying it
+returns `AlreadyRecorded` again rather than `DuplicateIgnored`.
+
+In `Single` mode — the default — that is the *ordinary* duplicate path, not a rare one: every second
+tap of the same student at the same event lands here. Both codes mean "drop it", so your queue behaves
+identically either way; it is only reconciliation *by tap id* that cannot see those taps. If your
+client reasons about "did tap X land?" purely from tap ids, treat `AlreadyRecorded` as an answer it
+will never get.
 
 ### 2. A device from another school can record a tap — ✅ **CLOSED in 4b**
 
@@ -391,8 +444,9 @@ the clock-skew rules are the parts most likely to move.
 3. **Batch size** — does 200 rows suit your flush strategy?
 4. **Device enrolment** — is QR-scan-at-issue the UX you want? What should happen on reinstall?
 5. **Clock skew** — how do you correct or flag a drifted device clock?
-6. **Does anything you have already built depend on tap *failures* returning `TapResult` rather than a
-   problem body?** We are changing that in 4c, and you are the only consumer we cannot check.
+6. **Did anything you had already built depend on tap *failures* returning `TapResult` rather than a
+   problem body?** That changed in 4c and you were the only consumer we could not check. If it broke
+   something, tell us — `success: false` bodies are gone from the `4xx` responses.
 
 ---
 

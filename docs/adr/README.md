@@ -24,13 +24,42 @@ Decision numbers run continuously across documents, so `D-9` is unambiguous with
 An index that only lists written ADRs cannot warn you about a decision nobody wrote down. This is
 that warning.
 
-| Pending | Made at | Currently lives only in |
-|---|---|---|
-| **D-22** — a soft-deleted student's card may be **deactivated**, but a new card may not be **issued** to them. Releasing what a deleted student holds is bookkeeping; issuing to them is a claim. This is the only one of five write methods that deliberately bypasses the `!IsDeleted` lookup | Phase 3b-1 review gate, 2026-07-29 | `StudentService.DeactivateCardAsync` remarks, and `StudentSoftDeleteStrandingTests` |
+Decision numbers run continuously, so a gap in this list is itself a signal. **D-22 through D-37 are
+all unwritten.** Twelve of them are cited by number in shipped production code, comments and tests.
 
-Deferred to the ADR-004 consolidation at JJ's direction, not forgotten. Both directions of the
-asymmetry are pinned by tests, so it cannot silently collapse — but a reader who wonders *why* one
-method differs has only a code comment to find.
+| Pending | Decision | Status | Lives only in |
+|---|---|---|---|
+| **D-22** | A soft-deleted student's card may be **deactivated**, but a new card may not be **issued** to them. Releasing what a deleted student holds is bookkeeping; issuing to them is a claim | shipped 3b-1 | `StudentService.DeactivateCardAsync`, `StudentSoftDeleteStrandingTests` |
+| **D-23** | Device authentication is a real ASP.NET Core auth scheme emitting the claim shape Phase 6's JWT will emit, not bespoke middleware. `ISchoolContext` becomes claims-reading, with one dev fallback Phase 6 deletes | shipped 4b | `DeviceKeyHandler`, `ClaimsSchoolContext` |
+| **D-24** | API keys are split tokens — public id indexed, 256-bit secret SHA-256 hashed. Fast hash is correct *because* the secret is server-generated. §4.10's `ApiKey` kept and permanently NULL, not dropped | shipped 4b | `DeviceKey`, `DeviceAuthenticator`, `RowLevelTenancy` migration |
+| **D-25** | Key lifecycle: plaintext shown exactly once; hard-cut rotation, no overlap window; `ApiKeyRevokedAt` (burn credential) distinct from `IsActive` (retire device); no key caching | shipped 4b | `DeviceService`, `DeviceLifecycleTests` |
+| **D-26** | Device identity comes from the authenticated principal via `IDeviceContext`, never from `TapRequest.DeviceId`. Body field retained as a cross-check; mismatch is `400 DeviceMismatch`, never a silent ignore | shipped 4b | `AttendanceService.TapAsync` |
+| **D-27** | An explicit `device.SchoolId == event.SchoolId` check reported as the existing `DeviceNotRegistered` → 404 — no cross-tenant existence disclosure, no wire change. **Closed the cross-school tap defect** | shipped 4b | `AttendanceService`, `KnownDefectTests` |
+| **D-28** | Enforcement narrowed to the capture endpoints only; `[HasPermissionNotEnforced]` stays alongside `[Authorize]`; no config off-switch; a Development-seeded device supplies the local key. **ADR-001 D-6's do-not-expose constraint stays in force** | shipped 4b | `Program.cs`, `AuthorizationSeamTests` |
+| **D-29** | Live attendance is a cursor-delta polling endpoint. The SignalR hub of §5/§6.4 is **deferred** behind a delta DTO that is a superset of §6.4's declared payload | designed, 4d | Phase 4a design report |
+| **D-30** | A `rowversion` cursor on `AttendanceRecords`, mapped **non-concurrency** so write semantics are unchanged | designed, 4d | Phase 4a design report |
+| **D-31** | `POST /attendance/tap/batch`: per-row results correlated by index **and** `deviceTapId`; always HTTP 200 for a well-formed batch, never 207; 5xx means nothing committed | designed, 4d | Phase 4a design report, frozen handoff doc |
+| **D-32** | Batch rows processed in ascending `tappedAt`, each in its own transaction, through the **same decision function** as `/tap` | designed, 4d | Phase 4a design report |
+| **D-33** | `deviceTapId` **required** on the batch path, optional on single tap | designed, 4d | Phase 4a design report, frozen handoff doc |
+| **D-34** | A check-out gets its **own** idempotency key and its own filtered unique index, so each half of a `TimeInOut` pair is independently retryable and the guarantee is index-backed | shipped 4c | `AttendanceService.FindByDeviceTapAsync`, `KnownDefectTests` |
+| **D-35** | `SchoolId` denormalized onto `AttendanceRecords` and the idempotency index re-scoped, closing the filter/constraint divergence before a queue drain could make its permanent-500 loop reachable | shipped 4b | `RowLevelTenancy` migration, `AttendanceTenancyTests` |
+| **D-36** | `tappedAt` is **never rewritten**. Future taps beyond 5 minutes rejected; `tappedAt` validated against a configurable event window; submission lateness unconstrained | shipped 4c | `TapTimeWindow`, `TapTimeWindowTests` |
+| **D-37** | `code` (the outcome member name) ships on every tap body, success and failure; failures become RFC 7807. **Outcome tokens are frozen published contract**, pinned by a test | shipped 4c | `TapOutcomeContractTests`, frozen handoff doc |
+
+Deferred to the ADR-004 consolidation at JJ's direction, not forgotten.
+
+> **Two of these have the silent-failure shape this file exists to catch.**
+>
+> **D-36's settings read is deliberately unconditional.** "Check the defaults first, load configuration
+> only if that fails" looks like a free win in review. It silently ignores any school that *narrows*
+> its window — the direction an administrator tightening a rule moves — and only a school widening it
+> would ever notice. `A_school_can_narrow_its_window` is the test that dies under that optimisation,
+> and it is the only one that does.
+>
+> **D-24's fast hash is correct only under its precondition.** SHA-256 rather than a slow KDF is right
+> *because* the secret is server-generated with 256 bits of entropy — `DeviceKey.Issue()` takes no
+> parameters precisely so no caller can weaken that. The moment anyone lets an operator choose a key,
+> the choice becomes wrong, and nothing about the hashing code would look different.
 
 ## What is decided where
 

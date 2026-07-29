@@ -66,7 +66,16 @@ public abstract class IntegrationTest : IAsyncLifetime
     internal EamsDbContext NewDbContext(ISchoolContext school) => Sql.NewDbContext(school);
 
     internal IAttendanceService AttendanceOn(EamsDbContext db) =>
-        new AttendanceService(db, CurrentUser, Device);
+        new AttendanceService(db, CurrentUser, Device, NullLogger<AttendanceService>.Instance);
+
+    /// <summary>
+    /// The same service with a logger a test can read back — the shape <see cref="StudentsOn"/> already
+    /// takes, and needed for the same reason: the D-36 tap window falls back to its published default
+    /// when a §4.13 settings row is unreadable, and a fallback nobody can observe is indistinguishable
+    /// from a setting that worked.
+    /// </summary>
+    internal IAttendanceService AttendanceOn(EamsDbContext db, CapturingLogger<AttendanceService> logger) =>
+        new AttendanceService(db, CurrentUser, Device, logger);
 
     /// <summary>
     /// The §6.6 device surface, wired to the same tenant as <see cref="NewDbContext()"/> — which

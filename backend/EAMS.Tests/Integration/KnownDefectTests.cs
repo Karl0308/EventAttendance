@@ -1,5 +1,6 @@
 ﻿using System.Net;
 using System.Net.Http.Json;
+using System.Text.Json;
 using EAMS.Application.Abstractions;
 using EAMS.Application.Dtos;
 using EAMS.Domain;
@@ -44,8 +45,12 @@ namespace EAMS.Tests.Integration;
 /// </para>
 ///
 /// <para>
-/// What remains skipped is one published-contract decision — the check-out tap id, DEFECT 5, which
-/// Phase 4c settles. Neither a validation nor a concurrency gap.
+/// <b>Nothing is skipped any more.</b> The last one — DEFECT 5, the check-out tap id — was closed by
+/// Phase 4c D-34 and, like DEFECT 1's <c>Status</c> half, was <em>rewritten</em> rather than ticked
+/// off: one of its two assertions described a fix that would have repaired the check-out's idempotency
+/// by breaking the check-in's. The rule this file has now demonstrated twice is worth stating plainly:
+/// <b>a skipped test whose premise has dissolved should be rewritten to the surviving rule</b>, and an
+/// assertion written before the design existed is evidence about the defect, not about the fix.
 /// </para>
 /// </summary>
 [Collection(DatabaseCollection.Name)]
@@ -288,6 +293,17 @@ public class KnownDefectTests : IntegrationTest
     /// The same rejection at the HTTP boundary, which is the only place it matters to the caller
     /// §8.2 publishes this contract to. Asserted as a specific 4xx rather than merely "not a 500":
     /// the defect was that an offline queue kept retrying, and only the status code tells it to stop.
+    ///
+    /// <para>
+    /// <b>Both the timestamp and the assertion were tightened in Phase 4c, and the loose version was
+    /// the problem.</b> The body carried no <c>tappedAt</c>, so the server stamped it with the real
+    /// clock while this file's fixture event is anchored on the frozen <c>TestData.Now</c> — outside
+    /// its D-36 window. It passed only because the D-26 mismatch guard runs before the event is read,
+    /// which this test neither asserts nor is about. And <c>NotFound or BadRequest</c> was too loose to
+    /// notice if that stopped being true: <c>TappedAtOutsideEventWindow</c> is also a 400, so the test
+    /// would have gone on passing while testing something else entirely. It now sends a timestamp
+    /// inside the window and names the outcome it means.
+    /// </para>
     /// </summary>
     [Fact]
     public async Task A_tap_from_an_unregistered_device_is_not_a_500()
@@ -309,11 +325,13 @@ public class KnownDefectTests : IntegrationTest
             cardUid = Uid,
             deviceId = Guid.NewGuid(),
             deviceTapId = "queued-0001",
+            tappedAt = TestData.Now,
         });
 
-        Assert.True(
-            response.StatusCode is HttpStatusCode.NotFound or HttpStatusCode.BadRequest,
-            $"Expected a 4xx that stops an offline queue; got {(int)response.StatusCode}.");
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+
+        using var body = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        Assert.Equal("DeviceMismatch", body.RootElement.GetProperty("code").GetString());
     }
 
     // ------------------------------------------------------------------ DEFECT 3
@@ -459,25 +477,56 @@ public class KnownDefectTests : IntegrationTest
     /// than the plan describes, and any future change to the check-out branch has no constraint
     /// backing it up. Worth settling before Phase 4 publishes this contract externally.
     /// </para>
+    ///
+    /// <para>
+    /// <b>CLOSED (Phase 4c, D-34), and rewritten rather than merely un-skipped</b> — the second of the
+    /// two closures in this file that changed the assertion, and for the same reason DEFECT 1's
+    /// <c>Status</c> half did: one of the original assertions turned out to be describing a fix that
+    /// was not taken.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>What was taken.</b> The problem is structural, not a missing assignment: one row, one
+    /// <c>DeviceTapId</c> column, and two taps that each own a key. So the row gained a
+    /// <em>second</em> column, <c>CheckOutDeviceTapId</c>, with its own filtered unique index — which
+    /// is what the paragraph above is actually complaining about when it says no unique index covers a
+    /// check-out tap and any future change has no constraint backing it up. Each half of the pair is
+    /// now independently retryable.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>What changed in the assertions, and why the original was wrong.</b> The final assertion —
+    /// replaying the check-out returns <c>DuplicateIgnored</c> — is untouched and is exactly what this
+    /// design produces. The <em>first</em> one (<c>record.DeviceTapId == "out-1"</c>) described the
+    /// cheap fix, overwriting the check-in's id with the check-out's, and that fix is worse than the
+    /// defect: it would repair the check-out's idempotency by destroying the check-in's, so a client
+    /// retrying the first tap of the pair would find no record of it.
+    /// <c>TapFlowTests.A_check_in_stays_replayable_after_its_check_out_has_landed</c> is the assertion
+    /// that would fail under it. Both columns are asserted below instead.
+    /// </para>
     /// </summary>
-    [Fact(Skip = "DEFECT (contract, no data loss today): a TimeInOut check-out discards its own " +
-                 "deviceTapId — the stored value stays the check-in's, and replaying the check-out " +
-                 "returns AlreadyRecorded instead of CheckedOut. §8.2 publishes deviceTapId as the " +
-                 "idempotency key, so this should be settled before Phase 4. Out of scope for the " +
-                 "Phase 0c QA task.")]
+    [Fact]
     public async Task A_check_out_tap_is_idempotent_on_its_own_deviceTapId()
     {
         var world = await ArrangeAsync(attendanceMode: "TimeInOut");
 
         await using (var db = NewDbContext())
             await AttendanceOn(db).TapAsync(new TapRequest(world.EventId, Uid, null, "in-1", TestData.Now));
+
         await using (var db = NewDbContext())
-            await AttendanceOn(db).TapAsync(new TapRequest(world.EventId, Uid, null, "out-1", TestData.Now.AddHours(1)));
+        {
+            var checkOut = await AttendanceOn(db).TapAsync(
+                new TapRequest(world.EventId, Uid, null, "out-1", TestData.Now.AddHours(1)));
+
+            // The outcome the original defect reported as AlreadyRecorded.
+            Assert.Equal(TapOutcome.CheckedOut, checkOut.Outcome);
+        }
 
         await using (var read = NewDbContext())
         {
             var record = await read.AttendanceRecords.AsNoTracking().SingleAsync();
-            Assert.Equal("out-1", record.DeviceTapId);
+            Assert.Equal("in-1", record.DeviceTapId);
+            Assert.Equal("out-1", record.CheckOutDeviceTapId);
         }
 
         await using var replay = NewDbContext();
@@ -485,6 +534,7 @@ public class KnownDefectTests : IntegrationTest
             new TapRequest(world.EventId, Uid, null, "out-1", TestData.Now.AddHours(1)));
 
         Assert.Equal(TapOutcome.DuplicateIgnored, response.Outcome);
+        Assert.Equal(TestData.Now.AddHours(1), response.Result.Record!.CheckOutAt);
     }
 
     // ------------------------------------------------------------------ GAP 6

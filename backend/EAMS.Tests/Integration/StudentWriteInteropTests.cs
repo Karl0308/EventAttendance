@@ -417,7 +417,12 @@ public class StudentWriteInteropTests : IntegrationTest
         await using (var db = NewDbContext())
         {
             var first = TestData.NewEvent(world.SchoolId);
-            var second = TestData.NewEvent(world.SchoolId, startAt: TestData.Now.AddDays(1));
+            // Two hours later rather than a day. Under Phase 4c's D-36 a tap must name a time inside
+            // its own event's window *and* not in the future, and TestData.Now is a fixed instant that
+            // the real clock has already passed — so `Now.AddDays(1)` is a future timestamp on some
+            // days and a past one on others, which would make this test fail on a schedule. Two hours
+            // still makes it visibly the later of the two events.
+            var second = TestData.NewEvent(world.SchoolId, startAt: TestData.Now.AddHours(2));
             db.Events.AddRange(first, second);
             await db.SaveChangesAsync();
             firstEventId = first.Id;
@@ -444,7 +449,7 @@ public class StudentWriteInteropTests : IntegrationTest
         await using (var db = NewDbContext())
         {
             var refused = await AttendanceOn(db).TapAsync(
-                new TapRequest(secondEventId, "04A7B8C9", null, "after-1", TestData.Now.AddDays(1)));
+                new TapRequest(secondEventId, "04A7B8C9", null, "after-1", TestData.Now.AddHours(2)));
 
             Assert.Equal(TapOutcome.CardNotFound, refused.Outcome);
         }

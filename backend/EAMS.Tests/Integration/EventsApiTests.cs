@@ -36,16 +36,29 @@ public class EventsApiTests : IntegrationTest
         return school.Id;
     }
 
+    /// <summary>
+    /// A fixed pair of dates on purpose — most tests here read the event back and compare the strings
+    /// they sent, so a moving clock would make the assertion assert nothing.
+    ///
+    /// <para>
+    /// <paramref name="live"/> is the exception, for the one flow that goes on to <em>tap</em>. Phase
+    /// 4c's D-36 refuses a <c>tappedAt</c> outside <c>[StartAt − 60min, EndAt + 60min]</c>, and the tap
+    /// in that flow is posted with no <c>tappedAt</c> at all — so the server stamps it with the real
+    /// clock, which August 2026 is nowhere near. Only that flow needs the event to actually be
+    /// happening.
+    /// </para>
+    /// </summary>
     private static object ValidEvent(
         string name = "University Convocation 2026",
         string? attendanceMode = "Single",
-        int graceMinutes = 15) => new
+        int graceMinutes = 15,
+        bool live = false) => new
         {
             name,
             description = "Annual convocation.",
             location = "USA Gymnasium",
-            startAt = "2026-08-01T01:00:00Z",
-            endAt = "2026-08-01T04:00:00Z",
+            startAt = live ? $"{DateTime.UtcNow.AddMinutes(-30):O}" : "2026-08-01T01:00:00Z",
+            endAt = live ? $"{DateTime.UtcNow.AddHours(2):O}" : "2026-08-01T04:00:00Z",
             attendanceMode,
             graceMinutes,
             requireRegistration = false,
@@ -287,7 +300,7 @@ public class EventsApiTests : IntegrationTest
         using var factory = new EamsApiFactory(Sql.ConnectionString);
         using var client = factory.CreateClient().WithDeviceKey(apiKey);
 
-        var created = await client.PostAsJsonAsync(Route, ValidEvent(graceMinutes: 0));
+        var created = await client.PostAsJsonAsync(Route, ValidEvent(graceMinutes: 0, live: true));
         var id = await CreatedIdAsync(created);
 
         var attach = await client.PostAsJsonAsync(

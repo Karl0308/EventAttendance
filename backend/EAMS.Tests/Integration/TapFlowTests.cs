@@ -75,10 +75,31 @@ public class TapFlowTests : IntegrationTest
         return device.Id;
     }
 
+    /// <summary>
+    /// Every tap in this file goes through here, and the two assertions below therefore run on roughly
+    /// thirty real responses covering every outcome the file exercises.
+    ///
+    /// <para>
+    /// <b>They are here rather than in a test of their own on purpose (Phase 4c, D-37).</b>
+    /// <c>TapResult.Code</c> is a projection of <c>TapResponse.Outcome</c>, and a unit test over
+    /// <c>TapResponse.For</c> proves only that the <em>factory</em> projects correctly — it says nothing
+    /// about whether the service used the factory. Asserting the invariant on every response the real
+    /// service produces is what closes that gap: a call site that hand-built a <c>TapResult</c> with the
+    /// wrong token, or with none, fails whichever test provoked it.
+    /// </para>
+    /// </summary>
     private async Task<TapResponse> TapAsync(TapRequest request)
     {
+        var before = DateTime.UtcNow;
+
         await using var db = NewDbContext();
-        return await AttendanceOn(db).TapAsync(request);
+        var response = await AttendanceOn(db).TapAsync(request);
+
+        Assert.Equal(response.Outcome.ToString(), response.Result.Code);
+        Assert.InRange(response.Result.ServerTime, before.AddSeconds(-5), DateTime.UtcNow.AddSeconds(5));
+        Assert.Equal(DateTimeKind.Utc, response.Result.ServerTime.Kind);
+
+        return response;
     }
 
     private async Task<List<AttendanceRecord>> AllRecordsAsync()
@@ -491,6 +512,261 @@ public class TapFlowTests : IntegrationTest
         Assert.True(third.Result.Success);
         Assert.Equal(TestData.Now.AddHours(2), third.Result.Record!.CheckOutAt!.Value);
         Assert.Single(await AllRecordsAsync());
+    }
+
+    // ---------------------------------------------------------------- check-out idempotency (D-34)
+    //
+    // The half of §8.2's "deviceTapId is the keystone of idempotency" that was missing until Phase 4c:
+    // a TimeInOut pair is two taps, each owning a key, and the row now has a column and a filtered
+    // unique index for each of them. KnownDefectTests.A_check_out_tap_is_idempotent_on_its_own_deviceTapId
+    // is the defect this closes; what follows is the surrounding behaviour it does not assert.
+
+    [Fact]
+    public async Task A_check_out_stores_its_own_tap_id_without_disturbing_the_check_ins()
+    {
+        var world = await ArrangeAsync(attendanceMode: "TimeInOut", startAt: TestData.Now);
+
+        await TapAsync(new TapRequest(world.EventId, StoredUid, null, "in-0001", TestData.Now));
+        await TapAsync(new TapRequest(world.EventId, StoredUid, null, "out-0001", TestData.Now.AddHours(2)));
+
+        var record = Assert.Single(await AllRecordsAsync());
+        Assert.Equal("in-0001", record.DeviceTapId);
+        Assert.Equal("out-0001", record.CheckOutDeviceTapId);
+    }
+
+    /// <summary>
+    /// The negative control for the cheap version of this fix. Overwriting <c>DeviceTapId</c> with the
+    /// check-out's id would make the test above pass on the column that matters least and would break
+    /// this one: the check-in's key would no longer resolve, so a client retrying the <em>first</em>
+    /// tap — the one that actually creates the row — would be told there was no such tap and would
+    /// write a second one, or be refused by the event/student index. Two columns is what keeps both
+    /// halves replayable.
+    /// </summary>
+    [Fact]
+    public async Task A_check_in_stays_replayable_after_its_check_out_has_landed()
+    {
+        var world = await ArrangeAsync(attendanceMode: "TimeInOut", startAt: TestData.Now);
+
+        var checkIn = await TapAsync(new TapRequest(world.EventId, StoredUid, null, "in-0001", TestData.Now));
+        await TapAsync(new TapRequest(world.EventId, StoredUid, null, "out-0001", TestData.Now.AddHours(2)));
+
+        var replay = await TapAsync(new TapRequest(world.EventId, StoredUid, null, "in-0001", TestData.Now));
+
+        Assert.Equal(TapOutcome.DuplicateIgnored, replay.Outcome);
+        Assert.Equal(checkIn.Result.Record!.Id, replay.Result.Record!.Id);
+        Assert.Equal(TestData.Now.AddHours(2), replay.Result.Record!.CheckOutAt);
+        Assert.Single(await AllRecordsAsync());
+    }
+
+    /// <summary>
+    /// A check-out replay must not move <c>CheckOutAt</c>. The client is retrying a request it already
+    /// made; answering it by re-stamping the exit time with whatever the retry claims would let a
+    /// flaky connection quietly extend a student's attendance.
+    /// </summary>
+    [Fact]
+    public async Task A_replayed_check_out_does_not_move_the_recorded_check_out_time()
+    {
+        var world = await ArrangeAsync(attendanceMode: "TimeInOut", startAt: TestData.Now);
+
+        await TapAsync(new TapRequest(world.EventId, StoredUid, null, "in-0001", TestData.Now));
+        await TapAsync(new TapRequest(world.EventId, StoredUid, null, "out-0001", TestData.Now.AddHours(2)));
+
+        var replay = await TapAsync(new TapRequest(
+            world.EventId, StoredUid, null, "out-0001", TestData.Now.AddHours(2).AddMinutes(30)));
+
+        Assert.Equal(TapOutcome.DuplicateIgnored, replay.Outcome);
+        Assert.Equal(TestData.Now.AddHours(2), replay.Result.Record!.CheckOutAt);
+        Assert.Equal(TestData.Now.AddHours(2), Assert.Single(await AllRecordsAsync()).CheckOutAt);
+    }
+
+    /// <summary>
+    /// The check-out key is scoped by device exactly as the check-in key is, so two devices flushing
+    /// queues that happen to have generated the same string are two separate check-outs. Same failure
+    /// shape as the two-device check-in bug, reached through the new column.
+    /// </summary>
+    [Fact]
+    public async Task Two_devices_sending_the_same_check_out_tap_id_check_out_two_students()
+    {
+        var world = await ArrangeAsync(attendanceMode: "TimeInOut", startAt: TestData.Now);
+        const string otherUid = "04F7081A";
+        var otherStudentId = await AddStudentWithCardAsync(world.SchoolId, "2023-0006", otherUid);
+
+        var deviceA = await AddDeviceAsync(world.SchoolId, "TEST-DEVICE-A");
+        var deviceB = await AddDeviceAsync(world.SchoolId, "TEST-DEVICE-B");
+        const string sharedTapId = "out-collision-0001";
+
+        await TapAsync(new TapRequest(world.EventId, StoredUid, deviceA, "in-a", TestData.Now));
+        await TapAsync(new TapRequest(world.EventId, otherUid, deviceB, "in-b", TestData.Now));
+
+        var fromA = await TapAsync(new TapRequest(
+            world.EventId, StoredUid, deviceA, sharedTapId, TestData.Now.AddHours(2)));
+        var fromB = await TapAsync(new TapRequest(
+            world.EventId, otherUid, deviceB, sharedTapId, TestData.Now.AddHours(2)));
+
+        Assert.Equal(TapOutcome.CheckedOut, fromA.Outcome);
+        Assert.Equal(TapOutcome.CheckedOut, fromB.Outcome);
+        Assert.Equal(world.StudentId, fromA.Result.Record!.StudentId);
+        Assert.Equal(otherStudentId, fromB.Result.Record!.StudentId);
+        Assert.All(await AllRecordsAsync(), r => Assert.NotNull(r.CheckOutAt));
+    }
+
+    /// <summary>
+    /// The flip side, and the one the unique index is actually there for: <em>one</em> device reusing a
+    /// check-out tap id is a replay, whichever student it claims — so the second student is not checked
+    /// out and the first student's record is what comes back. Mirrors
+    /// <see cref="One_device_reusing_a_tap_id_for_another_card_is_treated_as_a_replay"/>.
+    /// </summary>
+    [Fact]
+    public async Task One_device_reusing_a_check_out_tap_id_for_another_student_is_a_replay()
+    {
+        var world = await ArrangeAsync(attendanceMode: "TimeInOut", startAt: TestData.Now);
+        const string otherUid = "04F7081A";
+        var otherStudentId = await AddStudentWithCardAsync(world.SchoolId, "2023-0006", otherUid);
+        var deviceId = await AddDeviceAsync(world.SchoolId, "TEST-DEVICE-A");
+        const string tapId = "out-reused-0001";
+
+        await TapAsync(new TapRequest(world.EventId, StoredUid, deviceId, "in-a", TestData.Now));
+        await TapAsync(new TapRequest(world.EventId, otherUid, deviceId, "in-b", TestData.Now));
+
+        var first = await TapAsync(new TapRequest(
+            world.EventId, StoredUid, deviceId, tapId, TestData.Now.AddHours(2)));
+        var second = await TapAsync(new TapRequest(
+            world.EventId, otherUid, deviceId, tapId, TestData.Now.AddHours(2)));
+
+        Assert.Equal(TapOutcome.CheckedOut, first.Outcome);
+        Assert.Equal(TapOutcome.DuplicateIgnored, second.Outcome);
+        Assert.Equal(first.Result.Record!.Id, second.Result.Record!.Id);
+
+        await using var read = NewDbContext();
+        var other = await read.AttendanceRecords.AsNoTracking()
+            .SingleAsync(r => r.StudentId == otherStudentId);
+        Assert.Null(other.CheckOutAt);
+    }
+
+    /// <summary>
+    /// A check-out with no tap id at all still records, and many such rows coexist. This is the
+    /// <c>NULL</c> half of the new filtered index: SQL Server compares NULLs as equal inside a unique
+    /// index, so an unfiltered <c>UNIQUE(SchoolId, DeviceId, CheckOutDeviceTapId)</c> would allow
+    /// exactly one check-out-less row per device in the entire table — which is every row written
+    /// before Phase 4c and every <c>Single</c>-mode row after it.
+    /// </summary>
+    [Fact]
+    public async Task Check_outs_without_a_tap_id_are_recorded_and_do_not_collide()
+    {
+        var world = await ArrangeAsync(attendanceMode: "TimeInOut", startAt: TestData.Now);
+        const string otherUid = "04F7081A";
+        await AddStudentWithCardAsync(world.SchoolId, "2023-0006", otherUid);
+
+        foreach (var uid in new[] { StoredUid, otherUid })
+        {
+            await TapAsync(new TapRequest(world.EventId, uid, null, null, TestData.Now));
+            var checkOut = await TapAsync(new TapRequest(
+                world.EventId, uid, null, null, TestData.Now.AddHours(2)));
+            Assert.Equal(TapOutcome.CheckedOut, checkOut.Outcome);
+        }
+
+        var records = await AllRecordsAsync();
+        Assert.Equal(2, records.Count);
+        Assert.All(records, r => Assert.NotNull(r.CheckOutAt));
+        Assert.All(records, r => Assert.Null(r.CheckOutDeviceTapId));
+    }
+
+    /// <summary>
+    /// <b>One tap id matching a check-in on one row and a check-out on another resolves to the
+    /// check-in, deterministically.</b>
+    ///
+    /// <para>
+    /// The two filtered unique indexes are independent, so nothing at the schema level prevents this:
+    /// <c>UX_Attendance_Device_DeviceTapId</c> knows nothing about <c>CheckOutDeviceTapId</c> and vice
+    /// versa. The pre-check normally makes it unreachable — a tap id already in use comes back
+    /// <c>DuplicateIgnored</c> before it can be written a second time — but a lost race skips the
+    /// pre-check by definition, and that is the case <c>FindByDeviceTapAsync</c> exists to survive.
+    /// </para>
+    ///
+    /// <para>
+    /// The rows are therefore written directly rather than produced through the service: reaching this
+    /// state through <c>TapAsync</c> would mean orchestrating the very race whose <em>outcome</em> is
+    /// the thing under test. What matters is that the union's answer is not "whichever row the query
+    /// plan emitted first" — that would hand a replay a nondeterministically chosen one of two
+    /// <em>different students'</em> records, reported as a successful duplicate, which is precisely the
+    /// failure class the two-device bug in this file was about.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public async Task A_tap_id_matching_both_arms_resolves_to_the_check_in_every_time()
+    {
+        var world = await ArrangeAsync(attendanceMode: "TimeInOut", startAt: TestData.Now);
+        const string otherUid = "04F7081A";
+        var otherStudentId = await AddStudentWithCardAsync(world.SchoolId, "2023-0006", otherUid);
+        const string collidingTapId = "both-arms-0001";
+
+        await using (var db = NewDbContext())
+        {
+            // The check-out arm first, so a plan that simply concatenated the branches in query order
+            // would be inclined to answer with this one.
+            db.AttendanceRecords.Add(new AttendanceRecord
+            {
+                SchoolId = world.SchoolId,
+                EventId = world.EventId, StudentId = otherStudentId,
+                CheckInAt = TestData.Now, CheckOutAt = TestData.Now.AddHours(1),
+                Status = AttendanceStatus.Present, CaptureMethod = CaptureMethod.Rfid,
+                DeviceTapId = "other-in", CheckOutDeviceTapId = collidingTapId,
+            });
+            db.AttendanceRecords.Add(new AttendanceRecord
+            {
+                SchoolId = world.SchoolId,
+                EventId = world.EventId, StudentId = world.StudentId,
+                CheckInAt = TestData.Now, Status = AttendanceStatus.Present,
+                CaptureMethod = CaptureMethod.Rfid, DeviceTapId = collidingTapId,
+            });
+            await db.SaveChangesAsync();
+        }
+
+        // Repeated because the property under test is reproducibility, and one execution of an
+        // unordered query proves nothing about the next.
+        for (var attempt = 0; attempt < 5; attempt++)
+        {
+            var replay = await TapAsync(new TapRequest(
+                world.EventId, StoredUid, null, collidingTapId, TestData.Now));
+
+            Assert.Equal(TapOutcome.DuplicateIgnored, replay.Outcome);
+            Assert.Equal(world.StudentId, replay.Result.Record!.StudentId);
+        }
+    }
+
+    /// <summary>
+    /// Two check-out taps racing on one student. Only one can win the <c>CheckOutAt is null</c> branch;
+    /// the rest fall through to <c>AlreadyRecorded</c> or are absorbed as duplicates, and none of them
+    /// may be a 500 or a second row. The <see cref="TaskCompletionSource"/> gate is load-bearing for the
+    /// reason the check-in version of this test records.
+    /// </summary>
+    [Theory]
+    [InlineData(true)]   // one retried check-out: the new index is what rejects the losers
+    [InlineData(false)]  // distinct check-out taps: the CheckOutAt branch is what does
+    public async Task Concurrent_check_outs_all_succeed_and_write_exactly_one_check_out(bool sameTapId)
+    {
+        var world = await ArrangeAsync(attendanceMode: "TimeInOut", startAt: TestData.Now);
+        await TapAsync(new TapRequest(world.EventId, StoredUid, null, "in-0001", TestData.Now));
+
+        var sharedTapId = Guid.NewGuid().ToString();
+        var gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        var attempts = Enumerable.Range(0, 8).Select(i => Task.Run(async () =>
+        {
+            await gate.Task;
+            await using var db = NewDbContext();
+            return await AttendanceOn(db).TapAsync(new TapRequest(
+                world.EventId, StoredUid, null,
+                sameTapId ? sharedTapId : $"out-{i}", TestData.Now.AddHours(2)));
+        })).ToArray();
+
+        gate.SetResult();
+        var responses = await Task.WhenAll(attempts);
+
+        Assert.All(responses, r => Assert.True(
+            r.Result.Success, $"A concurrent check-out failed with: {r.Outcome} / {r.Result.Message}"));
+        var record = Assert.Single(await AllRecordsAsync());
+        Assert.Equal(TestData.Now.AddHours(2), record.CheckOutAt);
     }
 
     [Fact]

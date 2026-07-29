@@ -578,7 +578,13 @@ public class ManualOverrideTests : IntegrationTest
 
         await using (var seed = NewDbContext())
         {
-            var tap = await AttendanceOn(seed).TapAsync(new TapRequest(world.EventId, Uid, null, "tap-1", null));
+            // An explicit tappedAt, where this used to send null and let the server stamp it. The
+            // fixture event is anchored on the frozen TestData.Now, so a server-stamped time is a day
+            // or more outside its D-36 window and is now correctly refused. What this test is about —
+            // that an override to Absent keeps whatever check-in time was observed — is unchanged
+            // either way; the assertion below reads the stored value rather than a literal.
+            var tap = await AttendanceOn(seed).TapAsync(
+                new TapRequest(world.EventId, Uid, null, "tap-1", TestData.Now));
             Assert.True(tap.Result.Success);
         }
 
