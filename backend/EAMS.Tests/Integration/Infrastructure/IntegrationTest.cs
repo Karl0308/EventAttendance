@@ -1,4 +1,5 @@
 using EAMS.Application.Abstractions;
+using EAMS.Application.Dtos;
 using EAMS.Infrastructure.Data;
 using EAMS.Infrastructure.Services;
 using EAMS.Infrastructure.Sis;
@@ -44,6 +45,13 @@ public abstract class IntegrationTest : IAsyncLifetime
     /// </summary>
     protected TestCurrentUser CurrentUser { get; } = new();
 
+    /// <summary>
+    /// The device a capture is attributed to. Null by default, matching the production context on
+    /// every request that is not a device's — an organizer override, an import, a direct service call.
+    /// The D-26 mismatch tests set it.
+    /// </summary>
+    protected TestDeviceContext Device { get; } = new();
+
     public virtual Task InitializeAsync() => Sql.ResetAsync();
 
     public virtual Task DisposeAsync() => Task.CompletedTask;
@@ -57,7 +65,42 @@ public abstract class IntegrationTest : IAsyncLifetime
 
     internal EamsDbContext NewDbContext(ISchoolContext school) => Sql.NewDbContext(school);
 
-    internal IAttendanceService AttendanceOn(EamsDbContext db) => new AttendanceService(db, CurrentUser);
+    internal IAttendanceService AttendanceOn(EamsDbContext db) =>
+        new AttendanceService(db, CurrentUser, Device);
+
+    /// <summary>
+    /// The §6.6 device surface, wired to the same tenant as <see cref="NewDbContext()"/> — which
+    /// matters for the same reason it does on students and events: registering a device has to decide
+    /// which school it belongs to, and the tenant comes from the context rather than the request.
+    /// </summary>
+    internal IDeviceService DevicesOn(EamsDbContext db) => new DeviceService(db, School);
+
+    /// <summary>
+    /// The device-key verifier, on the same context the test asserts against. Real, not a stand-in:
+    /// the whole of what it does is a hash comparison against a row, and a fake would leave the one
+    /// thing worth testing — that the stored value is a hash and not the secret — untested.
+    /// </summary>
+    internal IDeviceAuthenticator DeviceAuthOn(EamsDbContext db) =>
+        new DeviceAuthenticator(db, NullLogger<DeviceAuthenticator>.Instance);
+
+    /// <summary>
+    /// Registers a device and returns the plaintext key, for the HTTP tests that now have to present
+    /// one. It goes through <see cref="IDeviceService"/> rather than writing the row directly, so a
+    /// fixture cannot mint a key by a rule the production path does not use — which is exactly the
+    /// class of bug that would make an authentication suite pass against itself.
+    /// </summary>
+    internal async Task<string> IssueDeviceKeyAsync(
+        Guid schoolId, string name = "Test Kiosk", CancellationToken ct = default)
+    {
+        var pinned = new TestSchoolContext { CurrentSchoolId = schoolId };
+        await using var db = NewDbContext(pinned);
+
+        var response = await new DeviceService(db, pinned).RegisterAsync(
+            new DeviceWriteRequest(name, "Kiosk", null, IsActive: true), ct);
+
+        Assert.Equal(DeviceWriteOutcome.Saved, response.Outcome);
+        return response.IssuedKey!.ApiKey;
+    }
 
     /// <summary>
     /// The §6.2 students service, wired to the same tenant as <see cref="NewDbContext()"/>.

@@ -91,26 +91,127 @@ public class AuthorizationSeamTests
     }
 
     /// <summary>
-    /// No controller or action in EAMS.Api carries a real ASP.NET Core authorization attribute
-    /// either. Without this, "IsEnforced is false" could coexist with endpoints that are in fact
-    /// gated — the flag and reality would disagree, which is the exact condition
-    /// <see cref="AuthorizationStatus"/> was written to make impossible.
+    /// <b>Exactly three actions in EAMS.Api carry a real authorization attribute, and this test names
+    /// them.</b> It used to assert <em>zero</em>; Phase 4b (Phase 4a design, D-28) gated the capture
+    /// surface with a device key, so the assertion moved from "none" to "these, and nothing else".
+    ///
+    /// <para>
+    /// The change of shape is the important part. "None are gated" is a property that stops being true
+    /// the first time anyone gates anything, and then the natural repair is to delete the test —
+    /// which removes the only thing standing between "we gated one more endpoint deliberately" and
+    /// "an <c>[Authorize]</c> arrived by copy-paste while the API still reports itself open". An
+    /// allow-list keeps failing usefully: adding a fourth gated endpoint is a one-line, deliberate
+    /// edit here, and adding one by accident is a red build.
+    /// </para>
+    ///
+    /// <para>
+    /// <c>AuthorizationStatus.IsEnforced</c> stays <c>false</c> throughout, and that is not a
+    /// contradiction: §11 is permission-based RBAC over human users, and none of it exists. Four
+    /// endpoints authenticate one principal type. The flag means "§11 has landed", not "nothing is
+    /// gated" — which is why the startup warning now names the gated endpoints rather than claiming
+    /// every endpoint is open.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>Still meant to be deleted by Phase 6</b>, along with the rest of this file.
+    /// </para>
     /// </summary>
     [Fact]
-    public void No_endpoint_in_the_api_is_gated_by_a_real_authorization_attribute()
+    public void Only_the_device_capture_endpoints_are_gated_by_a_real_authorization_attribute()
     {
+        string[] expected =
+        [
+            "AttendanceController.Tap",
+            "DevicesController.Heartbeat",
+            "StudentsController.ByCard",
+        ];
+
         var gated = ApiAssembly.GetTypes()
             .SelectMany(t => t.GetMembers(BindingFlags.Public | BindingFlags.Instance | BindingFlags.Static | BindingFlags.DeclaredOnly)
                 .Cast<MemberInfo>()
                 .Append(t))
             .Where(m => m.GetCustomAttributes().Any(a => a is IAuthorizeData or IAuthorizationFilter or IAsyncAuthorizationFilter))
             .Select(m => $"{m.DeclaringType?.Name}.{m.Name}")
+            .OrderBy(name => name, StringComparer.Ordinal)
             .ToList();
 
-        Assert.True(
-            gated.Count == 0,
-            "Real authorization attributes appeared on: " + string.Join(", ", gated) +
-            ". AuthorizationStatus.IsEnforced is still false, so the API now reports itself open " +
-            "while parts of it are gated. Make the two agree.");
+        Assert.Equal(expected, gated);
+    }
+
+    /// <summary>
+    /// Every gated action also declares the permission it demands through the inert attribute, and the
+    /// two agree about which permission that is.
+    ///
+    /// <para>
+    /// <b>Why keep the inert attribute on an endpoint that is genuinely enforced.</b> It is the audit
+    /// trail ADR-001 D-6 created: Phase 6 renames <c>[HasPermissionNotEnforced]</c> to
+    /// <c>[HasPermission]</c> and the compiler then points at every decorated endpoint so each is
+    /// looked at on the day enforcement becomes real. Dropping it from the three endpoints that were
+    /// enforced first would put a hole in exactly that list — and it would be the least visible kind of
+    /// hole, because those three are the ones a reader is least likely to check.
+    /// </para>
+    ///
+    /// <para>
+    /// The equality assertion is what stops the two drifting: an <c>[Authorize(Policy = "x")]</c> over
+    /// a <c>[HasPermissionNotEnforced("y")]</c> would enforce one permission while documenting another,
+    /// and Phase 6's rename would then silently swap which one applies.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public void Every_gated_action_declares_the_same_permission_through_the_inert_attribute()
+    {
+        var gated = ApiAssembly.GetTypes()
+            .SelectMany(t => t.GetMethods(BindingFlags.Public | BindingFlags.Instance | BindingFlags.DeclaredOnly))
+            .Select(m => new
+            {
+                Method = m,
+                Authorize = m.GetCustomAttributes(inherit: true).OfType<AuthorizeAttribute>().ToList(),
+            })
+            .Where(x => x.Authorize.Count > 0)
+            .ToList();
+
+        Assert.NotEmpty(gated);
+
+        foreach (var action in gated)
+        {
+            var name = $"{action.Method.DeclaringType?.Name}.{action.Method.Name}";
+
+            var declared = action.Method
+                .GetCustomAttributes(typeof(HasPermissionNotEnforcedAttribute), inherit: true)
+                .Cast<HasPermissionNotEnforcedAttribute>()
+                .Select(a => a.Permission)
+                .ToList();
+
+            Assert.True(
+                declared.Count > 0,
+                $"{name} carries [Authorize] but no [HasPermissionNotEnforced]. The inert attribute is " +
+                "the list Phase 6's rename walks; an enforced endpoint missing from it is the one " +
+                "least likely to be noticed.");
+
+            // A policy-less [Authorize] is the hole this loop used to have: OfType<string>() silently
+            // dropped nulls, so an attribute with no Policy iterated zero times and passed.
+            //
+            // That is not a theoretical gap on this API, and the reason is DeviceKeyHandler's own
+            // design. It returns AuthenticateResult.Success for Revoked and DeviceInactive — on
+            // purpose, so those become 403 rather than 401 — and ASP.NET Core's default policy is only
+            // RequireAuthenticatedUser(). So a bare [Authorize] on a gated endpoint would admit a
+            // revoked key and a deactivated device, which is precisely the pair the 403 exists to
+            // refuse. Today's three endpoints all name a policy; the risk is the *next* gated
+            // endpoint, and Phase 4d adds one.
+            Assert.All(action.Authorize, attribute => Assert.True(
+                attribute.Policy is not null,
+                $"{name} carries an [Authorize] with no Policy. The default policy is only " +
+                "RequireAuthenticatedUser(), and a revoked or deactivated device key authenticates " +
+                "successfully by design — so a policy-less gate admits exactly the credentials the " +
+                $"403 exists to refuse. Name a policy ('{EamsPermissions.AttendanceCapture}')."));
+
+            foreach (var policy in action.Authorize.Select(a => a.Policy).OfType<string>())
+            {
+                Assert.True(
+                    declared.Contains(policy),
+                    $"{name} enforces policy '{policy}' but declares [{string.Join(", ", declared)}]. " +
+                    "The enforced permission and the documented one must be the same string.");
+            }
+        }
     }
 }

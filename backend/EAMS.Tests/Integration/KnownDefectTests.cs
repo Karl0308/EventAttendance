@@ -1,4 +1,4 @@
-using System.Net;
+﻿using System.Net;
 using System.Net.Http.Json;
 using EAMS.Application.Abstractions;
 using EAMS.Application.Dtos;
@@ -27,10 +27,10 @@ namespace EAMS.Tests.Integration;
 /// </para>
 ///
 /// <para>
-/// <b>Six have since been closed</b> and now run — the mechanism worked as designed, so five were
+/// <b>Seven have since been closed</b> and now run — the mechanism worked as designed, so six were
 /// un-skipped in place rather than rewritten: DEFECT 1's soft-delete half, both halves of DEFECT 2,
-/// DEFECT 4, and GAP 6's invited-roster denominator, which Phase 3a built. Each one's comment records
-/// what changed.
+/// DEFECT 3, DEFECT 4, and GAP 6's invited-roster denominator, which Phase 3a built. Each one's
+/// comment records what changed.
 /// </para>
 ///
 /// <para>
@@ -44,8 +44,8 @@ namespace EAMS.Tests.Integration;
 /// </para>
 ///
 /// <para>
-/// What remains skipped is a schema or feature phase (write-side tenancy) and a published-contract
-/// decision (the check-out tap id) — neither a validation nor a concurrency gap.
+/// What remains skipped is one published-contract decision — the check-out tap id, DEFECT 5, which
+/// Phase 4c settles. Neither a validation nor a concurrency gap.
 /// </para>
 /// </summary>
 [Collection(DatabaseCollection.Name)]
@@ -294,9 +294,15 @@ public class KnownDefectTests : IntegrationTest
     {
         var world = await ArrangeAsync();
 
-        using var factory = new EamsApiFactory(Sql.ConnectionString);
-        using var client = factory.CreateClient();
+        var apiKey = await IssueDeviceKeyAsync(world.SchoolId);
 
+        using var factory = new EamsApiFactory(Sql.ConnectionString);
+        using var client = factory.CreateClient().WithDeviceKey(apiKey);
+
+        // A body deviceId that is neither the authenticated device nor a registered one. It is a
+        // DeviceMismatch before it is an unknown device (D-26 checks the principal first), and the
+        // point of this test is unchanged either way: a stale id from a re-provisioned handset gets a
+        // 4xx that stops §8.2's retry loop rather than a 5xx that feeds it.
         var response = await client.PostAsJsonAsync("/api/v1/attendance/tap", new
         {
             eventId = world.EventId,
@@ -305,7 +311,9 @@ public class KnownDefectTests : IntegrationTest
             deviceTapId = "queued-0001",
         });
 
-        Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
+        Assert.True(
+            response.StatusCode is HttpStatusCode.NotFound or HttpStatusCode.BadRequest,
+            $"Expected a 4xx that stops an offline queue; got {(int)response.StatusCode}.");
     }
 
     // ------------------------------------------------------------------ DEFECT 3
@@ -327,20 +335,35 @@ public class KnownDefectTests : IntegrationTest
     /// </para>
     ///
     /// <para>
-    /// <b>Still open, but narrower.</b> DEFECT 2's fix means the device must now at least
-    /// <em>exist</em>, and that existence check runs through the <c>SchoolId</c> query filter — so a
-    /// host with a tenant pinned already rejects another school's device as unregistered. What
-    /// remains uncovered is the case this test arranges, an <em>unpinned</em> context, and the
-    /// general principle: a tenant-owned foreign key arriving on a write is still validated only by
-    /// whatever filter happens to be in force, not by an explicit ownership check. That is the piece
-    /// §11 has to close, and it is a tenancy phase rather than a validation fix.
+    /// <b>CLOSED</b> (Phase 4b, D-27), and it took two changes rather than one because the thing that
+    /// dissolves the problem is not the thing that closes this test.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>What dissolves it:</b> device authentication. Once a key identifies the device, the
+    /// <c>school_id</c> claim it carries <em>is</em> the tenant, so another school's event is not
+    /// visible at all and a foreign tap is <c>EventNotFound</c> long before any device check runs.
+    /// That is the ordinary path and it needs no ownership check.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>What closes this test:</b> an explicit <c>device.SchoolId == ev.SchoolId</c> guard in
+    /// <c>TapAsync</c>, before the write. This test arranges exactly the case the pipeline does not
+    /// cover — an <em>unpinned</em> context, calling the service directly, which is also how the §10
+    /// import path and any future worker will call it. The general principle DEFECT 2 left open still
+    /// applies there: a tenant-owned foreign key arriving on a write must be validated explicitly, not
+    /// by whatever query filter happens to be in force.
+    /// </para>
+    ///
+    /// <para>
+    /// The refusal reuses <c>DeviceNotRegistered</c> → 404 rather than introducing a 403. A distinct
+    /// status would confirm to the caller that the device exists in some other school, which is a
+    /// cross-tenant existence disclosure bought for no client benefit — and the published mobile
+    /// contract already defines that token as "unknown device, or device belongs to another school".
+    /// No new outcome, no wire change, and the assertion below is the one that was already written.
     /// </para>
     /// </summary>
-    [Fact(Skip = "DEFECT (latent, single-tenant today): a Device from another school can record a " +
-                 "tap on this school's event when no tenant is pinned. Narrowed by the DEFECT 2 " +
-                 "fix — the device must now exist, and that lookup is filtered — but write-side " +
-                 "ownership is still not checked explicitly. Must be closed before Technical Plan " +
-                 "§11 makes tenancy real; a tenancy phase, not a validation fix.")]
+    [Fact]
     public async Task A_device_from_another_school_cannot_record_a_tap()
     {
         var world = await ArrangeAsync();
@@ -519,6 +542,7 @@ public class KnownDefectTests : IntegrationTest
             db.EventGroups.Add(new EventGroup { EventId = world.EventId, StudentId = invitedButAbsent.Id });
             db.AttendanceRecords.Add(new AttendanceRecord
             {
+                SchoolId = world.SchoolId,
                 EventId = world.EventId, StudentId = world.StudentId,
                 CheckInAt = TestData.Now, Status = "Present",
             });

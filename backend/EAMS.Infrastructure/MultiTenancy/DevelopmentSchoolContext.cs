@@ -14,11 +14,20 @@ namespace EAMS.Infrastructure.MultiTenancy;
 /// </para>
 ///
 /// <para>
-/// Phase 6 deletes this and registers a claims-based implementation. Nothing else changes: the
-/// filters are expressed against the interface.
+/// <b>Phase 4b demoted this from "the tenant" to "the fallback".</b> The registered
+/// <see cref="ISchoolContext"/> is now <c>ClaimsSchoolContext</c>, which reads the <c>school_id</c>
+/// claim a device key produces and comes here only when a request carries no credentials — which is
+/// still every request outside the four device-gated endpoints (ADR-001 D-6). Hence
+/// <see cref="IPinnedSchoolContext"/>: the fallback needs its own name so the claims implementation
+/// can ask for it without asking for itself.
+/// </para>
+///
+/// <para>
+/// Phase 6 deletes this and the fallback branch that consults it. Nothing else changes: the filters
+/// are expressed against <see cref="ISchoolContext"/>.
 /// </para>
 /// </summary>
-internal sealed class DevelopmentSchoolContext : ISchoolContext
+internal sealed class DevelopmentSchoolContext : IPinnedSchoolContext
 {
     // Written once during host initialization, before the server accepts a request, then only read.
     // Interlocked gives the write a release barrier so query threads cannot observe a torn or stale

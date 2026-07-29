@@ -1,4 +1,4 @@
-using EAMS.Application.Abstractions;
+﻿using EAMS.Application.Abstractions;
 using EAMS.Application.Dtos;
 using EAMS.Domain;
 using EAMS.Tests.Integration.Infrastructure;
@@ -477,6 +477,7 @@ public class EventWriteTests : IntegrationTest
             db.Students.Add(student);
             db.AttendanceRecords.Add(new AttendanceRecord
             {
+                SchoolId = schoolId,
                 EventId = eventId, StudentId = student.Id,
                 CheckInAt = TestData.Now, Status = AttendanceStatus.Present,
             });

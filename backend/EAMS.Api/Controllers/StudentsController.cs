@@ -1,8 +1,12 @@
 using EAMS.Api.Authorization;
+using EAMS.Api.RateLimiting;
 using EAMS.Application.Abstractions;
 using EAMS.Application.Dtos;
+using EAMS.Domain;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.Infrastructure;
+using Microsoft.AspNetCore.RateLimiting;
 
 namespace EAMS.Api.Controllers;
 
@@ -57,8 +61,18 @@ public class StudentsController : ControllerBase
     // without being trusted to browse the roster. A device API key is scoped to `attendance.capture`
     // alone (§11), so reading it as a student permission would lock the kiosks out of the one lookup
     // they exist to perform.
+    //
+    // One of the four endpoints a device key gates (Phase 4a design, D-28) — and the only *read* among
+    // them, which is why it is worth stating why it is gated at all while the rest of the roster is
+    // open. This endpoint resolves a card UID to a named student, a card UID is a student number, and
+    // student numbers are sequential and printed on the ID. Left open it is an enumeration oracle over
+    // the whole roster; behind a device key it is what a scan screen needs and nothing else.
     [HttpGet("by-card/{cardUid}")]
-    [HasPermissionNotEnforced("attendance.capture")]
+    [Authorize(AuthenticationSchemes = DeviceKey.AuthenticationScheme, Policy = EamsPermissions.AttendanceCapture)]
+    [EnableRateLimiting(CaptureRateLimiting.PolicyName)]
+    [HasPermissionNotEnforced(EamsPermissions.AttendanceCapture)]
+    [ProducesResponseType(StatusCodes.Status401Unauthorized)]
+    [ProducesResponseType(StatusCodes.Status403Forbidden)]
     public async Task<ActionResult<StudentDto>> ByCard(string cardUid, CancellationToken ct)
     {
         var s = await _students.GetByCardUidAsync(cardUid, ct);

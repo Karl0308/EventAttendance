@@ -1,9 +1,12 @@
-using System.ComponentModel.DataAnnotations;
+﻿using System.ComponentModel.DataAnnotations;
 using EAMS.Api.Authorization;
+using EAMS.Api.RateLimiting;
 using EAMS.Application.Abstractions;
 using EAMS.Application.Dtos;
 using EAMS.Domain;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.RateLimiting;
 
 namespace EAMS.Api.Controllers;
 
@@ -23,8 +26,21 @@ public class AttendanceController : ControllerBase
 
     // POST /attendance/tap — the core capture path (Technical Plan §6.4).
     // The workflow lives in IAttendanceService; this maps its outcome to an HTTP status.
+    //
+    // One of the four endpoints a device key gates (Phase 4a design, D-28). [HasPermissionNotEnforced]
+    // stays alongside [Authorize] deliberately: the inert attribute is the audit trail Phase 6's rename
+    // walks, and removing it here because "this one is real now" would put a hole in exactly the list
+    // ADR-001 D-6 created the attribute to keep complete. AuthorizationSeamTests asserts the two never
+    // disagree about which permission this endpoint demands, and that a gated endpoint always names a
+    // policy — a bare [Authorize] would fall back to RequireAuthenticatedUser(), which a revoked key
+    // satisfies by design.
     [HttpPost("tap")]
-    [HasPermissionNotEnforced("attendance.capture")]
+    [Authorize(AuthenticationSchemes = DeviceKey.AuthenticationScheme, Policy = EamsPermissions.AttendanceCapture)]
+    [EnableRateLimiting(CaptureRateLimiting.PolicyName)]
+    [HasPermissionNotEnforced(EamsPermissions.AttendanceCapture)]
+    [ProducesResponseType(StatusCodes.Status401Unauthorized)]
+    [ProducesResponseType(StatusCodes.Status403Forbidden)]
+    [ProducesResponseType(StatusCodes.Status429TooManyRequests)]
     public async Task<ActionResult<TapResult>> Tap([FromBody] TapRequest req, CancellationToken ct)
     {
         var response = await _attendance.TapAsync(req, ct);
@@ -89,7 +105,10 @@ public class AttendanceController : ControllerBase
             or TapOutcome.CardNotFound
             or TapOutcome.DeviceNotRegistered => StatusCodes.Status404NotFound,
 
-        TapOutcome.EventNotOpen => StatusCodes.Status400BadRequest,
+        // Both are the caller's payload, wrong under any circumstances. DeviceMismatch is a bug on the
+        // client's side (D-26) and is reported rather than absorbed, so it is discoverable.
+        TapOutcome.EventNotOpen
+            or TapOutcome.DeviceMismatch => StatusCodes.Status400BadRequest,
 
         _ => throw new ArgumentOutOfRangeException(
             nameof(outcome), outcome,

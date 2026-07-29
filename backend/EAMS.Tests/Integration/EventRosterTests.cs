@@ -1,4 +1,4 @@
-using EAMS.Application.Abstractions;
+﻿using EAMS.Application.Abstractions;
 using EAMS.Application.Dtos;
 using EAMS.Domain;
 using EAMS.Tests.Integration.Infrastructure;
@@ -782,6 +782,7 @@ public class EventRosterTests : IntegrationTest
             await EventsOn(db).AttachAudienceAsync(world.EventId, Groups(world.GroupA));
             db.AttendanceRecords.Add(new AttendanceRecord
             {
+                SchoolId = world.SchoolId,
                 EventId = world.EventId, StudentId = world.OnlyInA,
                 CheckInAt = TestData.Now, Status = AttendanceStatus.Present,
             });
@@ -818,6 +819,7 @@ public class EventRosterTests : IntegrationTest
             await EventsOn(db).AttachAudienceAsync(world.EventId, Groups(world.GroupA));
             db.AttendanceRecords.Add(new AttendanceRecord
             {
+                SchoolId = world.SchoolId,
                 EventId = world.EventId, StudentId = world.OnlyInB,
                 CheckInAt = TestData.Now, Status = AttendanceStatus.Present,
             });
@@ -870,17 +872,20 @@ public class EventRosterTests : IntegrationTest
             db.AttendanceRecords.AddRange(
                 new AttendanceRecord
                 {
+                    SchoolId = world.SchoolId,
                     EventId = world.EventId, StudentId = world.OnlyInA,
                     CheckInAt = TestData.Now, Status = AttendanceStatus.Present,
                 },
                 new AttendanceRecord
                 {
+                    SchoolId = world.SchoolId,
                     EventId = world.EventId, StudentId = world.InBoth,
                     CheckInAt = TestData.Now, Status = AttendanceStatus.Present,
                 },
                 // And one who was never invited taps anyway — the alumnus at the turnstile.
                 new AttendanceRecord
                 {
+                    SchoolId = world.SchoolId,
                     EventId = world.EventId, StudentId = world.OnlyInB,
                     CheckInAt = TestData.Now, Status = AttendanceStatus.Present,
                 });
@@ -923,11 +928,13 @@ public class EventRosterTests : IntegrationTest
             db.AttendanceRecords.AddRange(
                 new AttendanceRecord
                 {
+                    SchoolId = world.SchoolId,
                     EventId = world.EventId, StudentId = world.OnlyInA,
                     CheckInAt = TestData.Now, Status = AttendanceStatus.Present,
                 },
                 new AttendanceRecord
                 {
+                    SchoolId = world.SchoolId,
                     EventId = world.EventId, StudentId = world.OnlyInB,
                     CheckInAt = TestData.Now, Status = AttendanceStatus.Late,
                 });
@@ -961,6 +968,7 @@ public class EventRosterTests : IntegrationTest
             await EventsOn(db).AttachAudienceAsync(world.EventId, Groups(world.GroupA));
             db.AttendanceRecords.Add(new AttendanceRecord
             {
+                SchoolId = world.SchoolId,
                 EventId = world.EventId, StudentId = world.OnlyInA,
                 CheckInAt = TestData.Now.AddMinutes(30), Status = AttendanceStatus.Late,
             });
@@ -988,6 +996,7 @@ public class EventRosterTests : IntegrationTest
         {
             db.AttendanceRecords.Add(new AttendanceRecord
             {
+                SchoolId = world.SchoolId,
                 EventId = world.EventId, StudentId = world.OnlyInA,
                 CheckInAt = TestData.Now, Status = AttendanceStatus.Present,
             });
@@ -1023,16 +1032,19 @@ public class EventRosterTests : IntegrationTest
             db.AttendanceRecords.AddRange(
                 new AttendanceRecord
                 {
+                    SchoolId = world.SchoolId,
                     EventId = world.EventId, StudentId = world.OnlyInA,
                     CheckInAt = TestData.Now, Status = AttendanceStatus.Present,
                 },
                 new AttendanceRecord
                 {
+                    SchoolId = world.SchoolId,
                     EventId = world.EventId, StudentId = world.OnlyInB,
                     CheckInAt = TestData.Now.AddMinutes(30), Status = AttendanceStatus.Late,
                 },
                 new AttendanceRecord
                 {
+                    SchoolId = world.SchoolId,
                     EventId = world.EventId, StudentId = world.InBoth,
                     Status = AttendanceStatus.Excused, CaptureMethod = CaptureMethod.Manual,
                 });

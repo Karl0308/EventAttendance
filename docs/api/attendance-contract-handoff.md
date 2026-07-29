@@ -1,6 +1,11 @@
 # Attendance API — Mobile Developer Handoff
 
-**Status: partial contract freeze, 2026-07-29.** Revised during Phase 4a (design).
+**Status: partial contract freeze, 2026-07-29. Device authentication is now LIVE.** Revised after
+Phase 4b shipped.
+
+> **⚠ If you read the previous revision of this document, re-read §1.** It said you could send no
+> header until 4b landed. **4b has landed.** The three capture endpoints now *require* a device key,
+> and a client built to the old text gets `401` on every tap.
 
 This document exists so the mobile capture app can start now instead of waiting for Phase 4 to be
 built. It describes what the backend *actually does today*, verified against the source — plus the
@@ -17,7 +22,8 @@ our side; taps are testable over plain HTTP because a card UID is just a student
 
 ## FROZEN — build against these now
 
-These three are settled. They are not yet implemented; they will not change shape when they are.
+These three are settled and will not change shape. **§1 (device auth) is implemented and enforced
+as of Phase 4b.** §2 and §3 are still being built — build against them anyway.
 
 ### 1. Device authentication header
 
@@ -32,12 +38,36 @@ is issued once by the admin back office and never retrievable afterwards. Store 
 The planned enrolment UX is a QR code rendered on the admin device screen at issue time, which your
 app scans. Tell us if you would rather have something else; nothing is built yet.
 
-Your key is scoped to `attendance.capture` **only**. It will authenticate exactly four endpoints:
-`POST /attendance/tap`, `POST /attendance/tap/batch`, `GET /students/by-card/{cardUid}`, and
-`POST /devices/{id}/heartbeat`. Everything else remains open for now.
+Your key is scoped to `attendance.capture` **only**, and it authenticates exactly these endpoints:
 
-Until this lands, all endpoints are open and you may send no header at all. **Send the header as soon
-as you have somewhere to put it** — the server will ignore it until 4b, then start requiring it.
+| Endpoint | Requires the key |
+|---|---|
+| `POST /attendance/tap` | **yes, now** |
+| `GET /students/by-card/{cardUid}` | **yes, now** |
+| `POST /devices/{id}/heartbeat` | **yes, now** |
+| `POST /attendance/tap/batch` | yes, when it exists (Phase 4d) |
+
+Everything else on the API remains open for the moment. **This is a narrowing of the open surface,
+not a security boundary** — see the note at the end of this section.
+
+### Authentication failures
+
+| `code` | HTTP | Meaning |
+|---|---|---|
+| `DeviceKeyMissing` | 401 | No `Authorization: DeviceKey …` header |
+| `DeviceKeyMalformed` | 401 | Header present but not a well-formed token |
+| `DeviceKeyInvalid` | 401 | Unknown key id, or the secret does not match |
+| `DeviceKeyRevoked` | 403 | The key was burned. Get a new one issued |
+| `DeviceInactive` | 403 | The device record was retired |
+| `RateLimited` | 429 | Too many capture requests. Honour `Retry-After` |
+
+`DeviceKeyInvalid` deliberately does **not** distinguish "no such key" from "wrong secret" — it would
+otherwise confirm a valid key id to someone who does not hold the secret.
+
+> **What this does and does not protect.** Device auth makes the *capture channel* attributable,
+> which is what the audit story needs. It does **not** make the system safe to expose: the admin
+> surface is still open until Phase 6, so this API must stay on a local or trusted network. Nothing
+> about your client changes because of that — it is stated so you are not surprised later.
 
 ### 2. Outcome tokens — the machine-readable `code` field
 
@@ -137,7 +167,8 @@ body.
 {
   "eventId":     "3f2504e0-4f89-11d3-9a0c-0305e82c3301",  // required
   "cardUid":     "USA39912",   // required; normalised server-side
-  "deviceId":    null,          // guid | null — cross-checked against your key once auth lands
+  "deviceId":    null,          // guid | null — omit it. Cross-checked against your key; a
+                                //   mismatch is 400 DeviceMismatch, never a silent ignore
   "deviceTapId": "a7f3…",      // YOUR idempotency key. Always send one.
   "tappedAt":    "2026-07-29T01:15:00Z"  // null means "now, on the server"
 }
@@ -316,15 +347,15 @@ If a hub is ever added, it will emit exactly the same delta object, so your redu
 
 ## Not built yet
 
-| Missing | Status |
+| Item | Status |
 |---|---|
-| `POST /attendance/tap/batch` | Shape **frozen** above. Implementation: Phase 4d |
+| Device registration + API keys | ✅ **shipped in 4b** |
+| Rate limiting on capture endpoints | ✅ **shipped in 4b** |
+| `code` on tap responses | Frozen above. Phase 4c |
+| Check-out idempotency, clock skew, event window | Frozen above. Phase 4c |
+| `POST /attendance/tap/batch` | Shape **frozen** above. Phase 4d |
 | `GET /attendance/live/{eventId}` | Shape above, provisional in detail. Phase 4d |
-| Device registration + API keys | Header **frozen** above. Implementation: Phase 4b |
-| Rate limiting on capture endpoints | Phase 4b |
 | Auth for everything else | Phase 6 (JWT + RBAC) |
-
-**Until 4b lands, every endpoint is open.** Build the auth seam now regardless.
 
 ---
 
@@ -339,11 +370,12 @@ so each half of a `TimeInOut` pair is independently retryable.
 **What this means for you:** once 4c lands, replaying a check-out returns `DuplicateIgnored`, and
 `CheckedOut` means the check-out was newly recorded. Until then, do not trust check-out idempotency.
 
-### 2. A device from another school can record a tap — **closes with 4b**
+### 2. A device from another school can record a tap — ✅ **CLOSED in 4b**
 
-Latent while the system is single-tenant. Device authentication is itself the fix: once your key
-identifies the device, its school scopes the event lookup, and a foreign event is simply
-`EventNotFound`. No change on your side.
+Device authentication was itself the fix: your key identifies the device, its school scopes the event
+lookup, and a foreign event is `EventNotFound`. An explicit device-vs-event school check backs it up,
+reported as `DeviceNotRegistered` / 404 so the API never confirms that a device exists in another
+school. No change on your side.
 
 ---
 

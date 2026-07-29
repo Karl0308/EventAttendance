@@ -1,4 +1,4 @@
-using EAMS.Domain;
+﻿using EAMS.Domain;
 using Microsoft.EntityFrameworkCore;
 
 namespace EAMS.Infrastructure.Data;
@@ -6,9 +6,63 @@ namespace EAMS.Infrastructure.Data;
 /// <summary>
 /// Dev-only convenience data. The guard is the school row: on a persistent database the second and
 /// every later start finds it and returns without writing, so seeding stays a no-op once applied.
+///
+/// <para>
+/// <b>This is also the whole of Phase 4b's answer to "how do I develop against a gated endpoint?"</b>
+/// (D-28). The alternative — a configuration switch that turns device authentication off — was
+/// rejected: an off-switch is a thing that can be set in the wrong environment, and it would make the
+/// gated and ungated builds behave differently in a way no test covers. A seeded device with a
+/// well-known key exercises the *real* handler, the real claims and the real policy, and it rides the
+/// existing environment gate, so the well-known credential cannot exist outside a development host at
+/// all. The three <c>DeviceAuthenticationTests.The_seeded_development_key_*</c> tests pin all of it —
+/// works in Development, absent in Staging, absent in Production.
+/// </para>
 /// </summary>
 internal static class SeedData
 {
+    /// <summary>
+    /// The development kiosk's key, in plaintext, deliberately.
+    ///
+    /// <para>
+    /// <b>A hard-coded credential in source is normally a finding, and this one is not, for exactly one
+    /// reason: it can only ever exist on a Development host.</b> <c>Program.cs</c> calls
+    /// <c>InitializeEamsDatabaseAsync(seed: app.Environment.IsDevelopment())</c>, so the device row this
+    /// key belongs to is never written anywhere else — which makes the string worthless anywhere it
+    /// could do harm. <b>If that gate is ever loosened, this constant becomes a real credential leak and
+    /// must go in the same change.</b>
+    /// </para>
+    ///
+    /// <para>
+    /// <b>The gate was <c>!IsProduction()</c> when this constant was first written, and that was
+    /// wrong.</b> It admits <c>Staging</c> — a real, network-reachable host — so the sentence above
+    /// would have been false of exactly the environment where it mattered most. Recorded rather than
+    /// quietly corrected, because "not Production" reads as a synonym for "development only" and is
+    /// not one.
+    /// </para>
+    ///
+    /// <para>
+    /// It is shaped like a real key (<c>eams_dk_&lt;12&gt;_&lt;64&gt;</c>) rather than being a magic
+    /// short string, so the parser, the hash comparison and the handler all take the same path they
+    /// take in production — a shortcut here would be a shortcut around the thing under development.
+    /// The repeating <c>0de0</c> pattern makes it obvious in a log which key was used.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>Both halves are lower-case hexadecimal, and that is a constraint rather than a style.</b>
+    /// The first draft of this constant read <c>0dev00000001</c>, which is not hex —
+    /// <see cref="DeviceKey"/> rejected it as malformed, the seed wrote a device with an empty key id,
+    /// and the kiosk simply did not authenticate. It failed silently, in exactly the way a development
+    /// convenience is least likely to be noticed failing, which is why <see cref="InitializeAsync"/>
+    /// now refuses to seed a malformed one.
+    /// </para>
+    /// </summary>
+    public const string DevelopmentKioskApiKey =
+        "eams_dk_0de0de0de0de_" +
+        "0de00de00de00de00de00de00de00de00de00de00de00de00de00de00de00de0";
+
+    /// <summary>The seeded kiosk's name, so tests and tooling can find it without a magic string.</summary>
+    public const string DevelopmentKioskName = "Development Kiosk";
+
     public static async Task InitializeAsync(EamsDbContext db, CancellationToken ct = default)
     {
         if (await db.Schools.AnyAsync(ct)) return;
@@ -86,10 +140,41 @@ internal static class SeedData
         };
         db.Events.AddRange(openEvent, pastEvent);
 
+        // The §4.10 device the local mobile/kiosk client authenticates as. See DevelopmentKioskApiKey
+        // for why a plaintext key in source is acceptable here and nowhere else.
+        //
+        // Only the *hash* of the secret half is stored, exactly as a registered device's is — the seed
+        // takes the same path DeviceService.ApplyNewKey does rather than a privileged shortcut, so a
+        // change to the format breaks this row loudly instead of leaving a device that authenticates
+        // by a rule production does not use. ApiKey (§4.10's original single-column key) is left null,
+        // like every other row.
+        if (!DeviceKey.TryParse(DevelopmentKioskApiKey, out var kioskKeyId, out var kioskSecret))
+        {
+            // Loud rather than silent, because the silent version already happened once: a key id with
+            // a non-hex character parsed to nothing, the device was seeded with an empty key id, and
+            // the only symptom was a 401 nobody could explain. A development convenience that does not
+            // work must say so at the moment it is created, not at the moment it is used.
+            throw new InvalidOperationException(
+                $"{nameof(DevelopmentKioskApiKey)} is not a well-formed device key. Both halves must " +
+                "be lower-case hexadecimal — see DeviceKey.TryParse.");
+        }
+
+        db.Devices.Add(new Device
+        {
+            SchoolId = school.Id,
+            Name = DevelopmentKioskName,
+            DeviceType = DeviceTypes.Kiosk,
+            ReaderModel = "Development stand-in",
+            ApiKeyId = kioskKeyId,
+            ApiKeyHash = DeviceKey.HashSecret(kioskSecret),
+            ApiKeyIssuedAt = now,
+        });
+
         // A few taps already recorded on the open event.
         db.AttendanceRecords.AddRange(
             new AttendanceRecord
             {
+                SchoolId = school.Id,
                 EventId = openEvent.Id, StudentId = students[0].Id,
                 RfidCardId = students[0].Cards.First().Id,
                 CheckInAt = now.AddMinutes(-25), Status = AttendanceStatus.Present,
@@ -98,6 +183,7 @@ internal static class SeedData
             },
             new AttendanceRecord
             {
+                SchoolId = school.Id,
                 EventId = openEvent.Id, StudentId = students[1].Id,
                 RfidCardId = students[1].Cards.First().Id,
                 CheckInAt = now.AddMinutes(-5), Status = AttendanceStatus.Late,

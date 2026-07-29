@@ -1,4 +1,4 @@
-using System.Net;
+﻿using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
 using EAMS.Tests.Integration.Infrastructure;
@@ -41,6 +41,11 @@ public class ApiContractTests : IntegrationTest
         return new World(school.Id, ev.Id, student.Id);
     }
 
+    /// <summary>
+    /// <c>POST /attendance/tap</c> is one of the four endpoints a device key gates (Phase 4a design,
+    /// D-28), so every call here now presents one. That fixture cost is the correct cost: these tests
+    /// exist to assert what the mobile client sees, and the mobile client presents a key.
+    /// </summary>
     private static Task<HttpResponseMessage> TapAsync(HttpClient client, object payload) =>
         client.PostAsJsonAsync("/api/v1/attendance/tap", payload);
 
@@ -50,8 +55,9 @@ public class ApiContractTests : IntegrationTest
     public async Task A_recorded_tap_is_200()
     {
         var world = await ArrangeAsync();
+        var apiKey = await IssueDeviceKeyAsync(world.SchoolId);
         using var factory = new EamsApiFactory(Sql.ConnectionString);
-        using var client = factory.CreateClient();
+        using var client = factory.CreateClient().WithDeviceKey(apiKey);
 
         var response = await TapAsync(client, new { eventId = world.EventId, cardUid = StoredUid });
 
@@ -69,8 +75,9 @@ public class ApiContractTests : IntegrationTest
     public async Task A_replayed_tap_is_also_200()
     {
         var world = await ArrangeAsync();
+        var apiKey = await IssueDeviceKeyAsync(world.SchoolId);
         using var factory = new EamsApiFactory(Sql.ConnectionString);
-        using var client = factory.CreateClient();
+        using var client = factory.CreateClient().WithDeviceKey(apiKey);
         var payload = new { eventId = world.EventId, cardUid = StoredUid, deviceTapId = "replay-0001" };
 
         await TapAsync(client, payload);
@@ -84,9 +91,10 @@ public class ApiContractTests : IntegrationTest
     [Fact]
     public async Task A_tap_on_an_unknown_event_is_404()
     {
-        await ArrangeAsync();
+        var world = await ArrangeAsync();
+        var apiKey = await IssueDeviceKeyAsync(world.SchoolId);
         using var factory = new EamsApiFactory(Sql.ConnectionString);
-        using var client = factory.CreateClient();
+        using var client = factory.CreateClient().WithDeviceKey(apiKey);
 
         var response = await TapAsync(client, new { eventId = Guid.NewGuid(), cardUid = StoredUid });
 
@@ -97,8 +105,9 @@ public class ApiContractTests : IntegrationTest
     public async Task A_tap_with_an_unknown_card_is_404()
     {
         var world = await ArrangeAsync();
+        var apiKey = await IssueDeviceKeyAsync(world.SchoolId);
         using var factory = new EamsApiFactory(Sql.ConnectionString);
-        using var client = factory.CreateClient();
+        using var client = factory.CreateClient().WithDeviceKey(apiKey);
 
         var response = await TapAsync(client, new { eventId = world.EventId, cardUid = "DEADBEEF" });
 
@@ -109,8 +118,9 @@ public class ApiContractTests : IntegrationTest
     public async Task A_tap_on_an_event_that_is_not_open_is_400()
     {
         var world = await ArrangeAsync(eventStatus: "Closed");
+        var apiKey = await IssueDeviceKeyAsync(world.SchoolId);
         using var factory = new EamsApiFactory(Sql.ConnectionString);
-        using var client = factory.CreateClient();
+        using var client = factory.CreateClient().WithDeviceKey(apiKey);
 
         var response = await TapAsync(client, new { eventId = world.EventId, cardUid = StoredUid });
 
@@ -123,8 +133,9 @@ public class ApiContractTests : IntegrationTest
     public async Task An_unknown_card_lookup_is_404_and_a_known_one_normalizes_the_uid()
     {
         var world = await ArrangeAsync();
+        var apiKey = await IssueDeviceKeyAsync(world.SchoolId);
         using var factory = new EamsApiFactory(Sql.ConnectionString);
-        using var client = factory.CreateClient();
+        using var client = factory.CreateClient().WithDeviceKey(apiKey);
 
         Assert.Equal(HttpStatusCode.NotFound, (await client.GetAsync("/api/v1/students/by-card/DEADBEEF")).StatusCode);
 

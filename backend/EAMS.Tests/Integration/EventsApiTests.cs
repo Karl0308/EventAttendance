@@ -1,4 +1,4 @@
-using System.Net;
+﻿using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
 using EAMS.Domain;
@@ -280,8 +280,12 @@ public class EventsApiTests : IntegrationTest
                 .Select(g => g.Id).SingleAsync();
         }
 
+        // The one tap in this flow goes through a gated endpoint (D-28). Everything else here — create,
+        // attach, status, roster, summary — is still open.
+        var apiKey = await IssueDeviceKeyAsync(schoolId);
+
         using var factory = new EamsApiFactory(Sql.ConnectionString);
-        using var client = factory.CreateClient();
+        using var client = factory.CreateClient().WithDeviceKey(apiKey);
 
         var created = await client.PostAsJsonAsync(Route, ValidEvent(graceMinutes: 0));
         var id = await CreatedIdAsync(created);

@@ -1,4 +1,4 @@
-using EAMS.Application.Abstractions;
+﻿using EAMS.Application.Abstractions;
 using EAMS.Application.Dtos;
 using EAMS.Domain;
 using EAMS.Infrastructure.Data;
@@ -16,10 +16,19 @@ internal sealed class AttendanceService : IAttendanceService
     /// </summary>
     private readonly ICurrentUser _currentUser;
 
-    public AttendanceService(EamsDbContext db, ICurrentUser currentUser)
+    /// <summary>
+    /// Which device is making this request, from the authenticated principal (Phase 4a design, D-26).
+    /// Null on every path that is not a device: the organizer override, an import, a test that does
+    /// not care. See <see cref="IDeviceContext"/> for why the body's <c>deviceId</c> is a cross-check
+    /// and not the source of truth.
+    /// </summary>
+    private readonly IDeviceContext _device;
+
+    public AttendanceService(EamsDbContext db, ICurrentUser currentUser, IDeviceContext device)
     {
         _db = db;
         _currentUser = currentUser;
+        _device = device;
     }
 
     private static AttendanceDto ToDto(AttendanceRecord a) => new(
@@ -49,6 +58,29 @@ internal sealed class AttendanceService : IAttendanceService
         // value against ev.StartAt (Utc) below would misjudge Present vs Late by the server's
         // offset — eight hours, in Manila. Normalize once, here, at the boundary.
         var when = UtcTime.Normalize(req.TappedAt) ?? DateTime.UtcNow;
+
+        // D-26. The principal wins on the write; the body is only allowed to agree with it.
+        //
+        // Overwriting a mismatched body value silently would be *safe* — the row would still record
+        // the device that actually tapped — and it would still be wrong: the client would go on
+        // believing it recorded a tap against a device the row does not name, and the idempotency key
+        // it retries on is scoped by device. The same reasoning the students write surface applies to a
+        // derived field echoed back on a PUT. Refuse, name the token, let the client fix its bug.
+        if (req.DeviceId is { } claimed && _device.DeviceId is { } authenticated && claimed != authenticated)
+        {
+            return new TapResponse(TapOutcome.DeviceMismatch, new TapResult(
+                false,
+                "The deviceId in the request body is not the device this key authenticates. Send the " +
+                "authenticated device's id, or omit the field.",
+                null));
+        }
+
+        // The principal first, deliberately. The two operands are equal or one is null by the time this
+        // runs — the guard above is what guarantees it — so the order is behaviourally identical today
+        // and reads backwards written the other way round. Relax or move that guard and
+        // `req.DeviceId ?? _device.DeviceId` would silently let the body win, which is the one thing
+        // D-26 says it must never do. Stating the invariant in the expression means it cannot invert.
+        var deviceId = _device.DeviceId ?? req.DeviceId;
 
         var ev = await _db.Events.FirstOrDefaultAsync(e => e.Id == req.EventId && !e.IsDeleted, ct);
         if (ev is null)
@@ -91,13 +123,32 @@ internal sealed class AttendanceService : IAttendanceService
         // an FK violation that IsUniqueViolation correctly declines to swallow — an unhandled 500.
         // §8.2 treats 5xx as retryable, so a re-provisioned handset holding a stale id retried every
         // queued tap forever and the queue never drained. Validated here, before the write, and
-        // reported as a rejection the client can act on. The lookup runs through the SchoolId query
-        // filter, so a device belonging to another tenant is "not registered" to this one.
-        if (req.DeviceId is { } deviceId
-            && !await _db.Devices.AnyAsync(d => d.Id == deviceId, ct))
+        // reported as a rejection the client can act on.
+        //
+        // D-27 — DEFECT 3, closed here. The check is on the device's *own* SchoolId against the
+        // event's, not on whatever the query filter happens to be doing. Device authentication already
+        // makes the ordinary case impossible (an authenticated device's school pins the tenant, so a
+        // foreign event is simply EventNotFound), but that is a property of the request pipeline, and
+        // this method is called directly by the import path and by tests with no tenant pinned at all.
+        // Defence in depth: a tenant-owned foreign key arriving on a write is validated explicitly
+        // rather than by whichever filter is in force.
+        //
+        // It reuses DeviceNotRegistered → 404 rather than introducing a 403. A distinct status would
+        // confirm to the caller that the device exists in some other school, which is a cross-tenant
+        // existence disclosure; and the published mobile contract already defines this token as
+        // "unknown device, or device belongs to another school". No new outcome, no wire change.
+        if (deviceId is { } tappingDeviceId)
         {
-            return new TapResponse(TapOutcome.DeviceNotRegistered,
-                new TapResult(false, $"Device {deviceId} is not registered.", null));
+            var deviceSchoolId = await _db.Devices
+                .Where(d => d.Id == tappingDeviceId)
+                .Select(d => (Guid?)d.SchoolId)
+                .FirstOrDefaultAsync(ct);
+
+            if (deviceSchoolId != ev.SchoolId)
+            {
+                return new TapResponse(TapOutcome.DeviceNotRegistered,
+                    new TapResult(false, $"Device {tappingDeviceId} is not registered.", null));
+            }
         }
 
         // Idempotency (§4.9, §8.2): the same tap replayed by the same device returns the record it
@@ -106,7 +157,7 @@ internal sealed class AttendanceService : IAttendanceService
         // matter and why the plan's §1 wording is not the one followed here.
         if (!string.IsNullOrWhiteSpace(req.DeviceTapId))
         {
-            var dup = await FindByDeviceTapAsync(req.DeviceId, req.DeviceTapId, ct);
+            var dup = await FindByDeviceTapAsync(deviceId, req.DeviceTapId, ct);
             if (dup is not null)
                 return new TapResponse(TapOutcome.DuplicateIgnored,
                     new TapResult(true, "Duplicate tap ignored (idempotent).", ToDto(dup)));
@@ -122,14 +173,17 @@ internal sealed class AttendanceService : IAttendanceService
 
             var rec = new AttendanceRecord
             {
+                // D-35. Denormalized from the event that was just read, which is the only source it
+                // ever has — see AttendanceRecord.SchoolId.
+                SchoolId = ev.SchoolId,
                 EventId = ev.Id, StudentId = student.Id, RfidCardId = card.Id,
                 CheckInAt = when, Status = status, CaptureMethod = CaptureMethod.Rfid,
-                DeviceId = req.DeviceId, DeviceTapId = req.DeviceTapId,
+                DeviceId = deviceId, DeviceTapId = req.DeviceTapId,
                 Student = student,
             };
             _db.AttendanceRecords.Add(rec);
 
-            var saved = await SaveNewRecordAsync(rec, req.DeviceId, req.DeviceTapId, ct);
+            var saved = await SaveNewRecordAsync(rec, deviceId, req.DeviceTapId, ct);
             return saved.Outcome switch
             {
                 SaveOutcome.Inserted => new TapResponse(TapOutcome.Recorded,
@@ -211,6 +265,8 @@ internal sealed class AttendanceService : IAttendanceService
             // authentication exists, which is exactly why the seam is wired now rather than in
             // Phase 6. See ICurrentUser.
             RecordedByUserId = _currentUser.UserId,
+            // D-35, as on the tap path: the tenant comes from the event this row belongs to.
+            SchoolId = ev.SchoolId,
             EventId = eventId, StudentId = studentId,
             // §4.9 defines CheckInAt as "First tap (UTC)" and makes it nullable. Absent and Excused
             // are precisely the statuses that assert the student did NOT check in, so stamping a
@@ -342,38 +398,32 @@ internal sealed class AttendanceService : IAttendanceService
     /// </para>
     ///
     /// <para>
-    /// <b>Where query and constraint stop agreeing, and what that costs.</b> This paragraph used to
-    /// claim the lookup "cannot miss a record the index would go on to reject". That was true when
-    /// written and is no longer: the <c>SchoolId</c> global query filter installed in the same phase
-    /// applies to <c>AttendanceRecords</c> (through <c>Event.SchoolId</c>), so this lookup and the
-    /// re-read in <see cref="ResolveLostInsertRaceAsync"/> both see only the pinned tenant's rows —
-    /// while <c>UX_Attendance_Device_DeviceTapId</c> is <em>global</em>, because
-    /// <c>AttendanceRecords</c> carries no <c>SchoolId</c> of its own to scope it by. The real
-    /// condition is therefore narrower than the old claim: <b>query and constraint agree only while
-    /// at most one school's rows are visible</b> — which is every deployment today, and is why
-    /// nothing is currently broken.
+    /// <b>Query and constraint agree again, and the fix was schema rather than this method.</b> This
+    /// lookup runs through the <c>SchoolId</c> global query filter; for a while
+    /// <c>UX_Attendance_Device_DeviceTapId</c> was <em>global</em>, because <c>AttendanceRecords</c>
+    /// carried no <c>SchoolId</c> of its own to scope it by, so the two selected different row sets as
+    /// soon as a second school existed. A tap whose <c>(DeviceId, DeviceTapId)</c> collided with
+    /// another tenant's row missed this pre-check, raised 2601 on insert, failed the re-read through
+    /// the same filter, and reached <see cref="ResolveLostInsertRaceAsync"/>'s deliberate throw — a 500
+    /// that §8.2's offline queue retries straight back into the same collision, permanently, with no
+    /// way for the client to escape it. Benign while one school existed; a queue drain is what turns
+    /// it into a loop, which is why it was closed before the batch endpoint was built.
     /// </para>
     ///
     /// <para>
-    /// With a second school the divergence is reachable and its failure is ugly. A tap whose
-    /// <c>(DeviceId, DeviceTapId)</c> collides with a row belonging to another tenant misses this
-    /// pre-check, raises 2601 on insert, fails the re-read through the same filter, and reaches
-    /// <see cref="ResolveLostInsertRaceAsync"/>'s deliberate throw — a 500 that the offline queue
-    /// retries straight back into the same collision, so it is permanent for that tap.
-    /// <c>UX_Attendance_Event_Student_Occurrence</c> is <em>not</em> affected: every row under a
-    /// given <c>EventId</c> belongs to that event's school by construction, so its lookup and its
-    /// index select the same rows under any tenant.
+    /// Phase 4a design D-35 denormalized <c>SchoolId</c> onto the table, re-scoped the index to
+    /// <c>(SchoolId, DeviceId, DeviceTapId)</c>, and pointed the query filter at the same column — so
+    /// filter and constraint are now one predicate rather than two that happen to agree.
+    /// <c>UX_Attendance_Event_Student_Occurrence</c> was never affected: every row under a given
+    /// <c>EventId</c> belongs to that event's school by construction.
     /// </para>
     ///
     /// <para>
-    /// <b>The fix is schema, and it is scheduled — not this method.</b> Denormalize <c>SchoolId</c>
-    /// onto <c>AttendanceRecords</c> and make the index <c>(SchoolId, DeviceId, DeviceTapId)</c>, so
-    /// the constraint is scoped exactly as the filter is. Do <em>not</em> reach for
-    /// <c>IgnoreQueryFilters()</c> to make the two agree instead: it would let the pre-check and the
-    /// re-read find the other tenant's row, and this method's result is returned to the caller as a
-    /// successful duplicate — carrying another school's student name and student number in the
-    /// response body. That trades a 500 for a cross-tenant disclosure, which is the worse of the two
-    /// by a wide margin.
+    /// <b>Do not reach for <c>IgnoreQueryFilters()</c> here if the two ever diverge again.</b> It would
+    /// let this pre-check and the re-read find another tenant's row, and this method's result is
+    /// returned to the caller as a successful duplicate — carrying another school's student name and
+    /// student number in the response body. That trades a 500 for a cross-tenant disclosure, which is
+    /// the worse of the two by a wide margin.
     /// </para>
     /// </summary>
     private Task<AttendanceRecord?> FindByDeviceTapAsync(

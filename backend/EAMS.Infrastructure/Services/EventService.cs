@@ -495,7 +495,7 @@ internal sealed class EventService : IEventService
         }
 
         var materializeAbsentees = EventStatusTransition.FreezesRoster(current, target);
-        var frozen = await FreezeAsync(ev.Id, materializeAbsentees, ct);
+        var frozen = await FreezeAsync(ev.Id, ev.SchoolId, materializeAbsentees, ct);
 
         if (!materializeAbsentees)
         {
@@ -544,7 +544,7 @@ internal sealed class EventService : IEventService
     /// not, which is the divergence <c>SqlServerErrors</c> was extracted to prevent.
     /// </param>
     private async Task<FrozenAudience> FreezeAsync(
-        Guid eventId, bool materializeAbsentees, CancellationToken ct)
+        Guid eventId, Guid schoolId, bool materializeAbsentees, CancellationToken ct)
     {
         for (var attempt = 0; ; attempt++)
         {
@@ -556,7 +556,7 @@ internal sealed class EventService : IEventService
             var pending = new List<object>();
             var expected = await SnapshotAudienceAsync(eventId, pending, ct);
             var absentees = materializeAbsentees
-                ? await StageAbsenteesAsync(eventId, expected, pending, ct)
+                ? await StageAbsenteesAsync(eventId, schoolId, expected, pending, ct)
                 : 0;
 
             try
@@ -667,7 +667,8 @@ internal sealed class EventService : IEventService
     /// </para>
     /// </summary>
     private async Task<int> StageAbsenteesAsync(
-        Guid eventId, IReadOnlyList<Guid> expected, List<object> pending, CancellationToken ct)
+        Guid eventId, Guid schoolId, IReadOnlyList<Guid> expected, List<object> pending,
+        CancellationToken ct)
     {
         if (expected.Count == 0) return 0;
 
@@ -684,6 +685,10 @@ internal sealed class EventService : IEventService
         {
             var record = new AttendanceRecord
             {
+                // D-35. The event's school, passed in rather than re-read: this loop runs inside the
+                // one SaveChangesAsync the freeze commits through (D-21), and the event is already in
+                // hand at the call site.
+                SchoolId = schoolId,
                 EventId = eventId,
                 StudentId = studentId,
                 OccurrenceId = null,

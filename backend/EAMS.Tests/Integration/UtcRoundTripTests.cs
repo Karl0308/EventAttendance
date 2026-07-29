@@ -1,4 +1,4 @@
-using System.Net.Http.Json;
+﻿using System.Net.Http.Json;
 using System.Text.Json;
 using EAMS.Domain;
 using EAMS.Tests.Integration.Infrastructure;
@@ -90,6 +90,7 @@ public class UtcRoundTripTests : IntegrationTest
         {
             write.AttendanceRecords.Add(new AttendanceRecord
             {
+                SchoolId = world.SchoolId,
                 EventId = world.EventId, StudentId = world.StudentId,
                 CheckInAt = TestData.Now, CheckOutAt = null, Status = "Present",
             });
@@ -141,8 +142,10 @@ public class UtcRoundTripTests : IntegrationTest
         var tappedAt = TestData.Now.AddMinutes(5);
         var world = await ArrangeAsync(startAt: TestData.Now);
 
+        var apiKey = await IssueDeviceKeyAsync(world.SchoolId);
+
         using var factory = new EamsApiFactory(Sql.ConnectionString);
-        using var client = factory.CreateClient();
+        using var client = factory.CreateClient().WithDeviceKey(apiKey);
 
         var tap = await client.PostAsJsonAsync("/api/v1/attendance/tap", new
         {
@@ -197,8 +200,10 @@ public class UtcRoundTripTests : IntegrationTest
     {
         var world = await ArrangeAsync(startAt: TestData.Now);
 
+        var apiKey = await IssueDeviceKeyAsync(world.SchoolId);
+
         using var factory = new EamsApiFactory(Sql.ConnectionString);
-        using var client = factory.CreateClient();
+        using var client = factory.CreateClient().WithDeviceKey(apiKey);
 
         // 17:05 +08:00 is 09:05 UTC — five minutes into the event, inside the 15-minute grace.
         var tap = await client.PostAsJsonAsync("/api/v1/attendance/tap", new
@@ -230,8 +235,10 @@ public class UtcRoundTripTests : IntegrationTest
     {
         var world = await ArrangeAsync(startAt: TestData.Now);
 
+        var apiKey = await IssueDeviceKeyAsync(world.SchoolId);
+
         using var factory = new EamsApiFactory(Sql.ConnectionString);
-        using var client = factory.CreateClient();
+        using var client = factory.CreateClient().WithDeviceKey(apiKey);
 
         var tap = await client.PostAsJsonAsync("/api/v1/attendance/tap", new
         {

@@ -283,8 +283,14 @@ internal class EamsDbContext : DbContext
         // Dependents: same predicate, reached through the owning parent. The null-forgiving `!` is
         // safe on each — every one of these navigations is configured IsRequired() above, so the
         // nullable CLR property is a modelling artifact, not a real possibility.
+        // AttendanceRecords owns its SchoolId as of Phase 4a design D-35 and is filtered on the column
+        // directly rather than through Event. Two reasons, and the first is the one that matters: the
+        // filter and UX_Attendance_Device_DeviceTapId now express the *same* predicate over the *same*
+        // column, which is the entire point of denormalizing it — see the index for what their
+        // disagreeing used to cost. The second is that it removes a seek on Events per row from the
+        // busiest table in the system.
         b.Entity<AttendanceRecord>().HasQueryFilter(
-            x => _school.CurrentSchoolId == null || x.Event!.SchoolId == _school.CurrentSchoolId);
+            x => _school.CurrentSchoolId == null || x.SchoolId == _school.CurrentSchoolId);
         b.Entity<EventSchedule>().HasQueryFilter(
             x => _school.CurrentSchoolId == null || x.Event!.SchoolId == _school.CurrentSchoolId);
         b.Entity<EventGroup>().HasQueryFilter(
@@ -754,6 +760,11 @@ internal class EamsDbContext : DbContext
         e.Property(x => x.Notes).HasMaxLength(500);
 
         e.HasOne(x => x.Event).WithMany(v => v.AttendanceRecords).HasForeignKey(x => x.EventId).IsRequired();
+        // Phase 4a design D-35: the denormalized tenant. Required and FK-backed, exactly as
+        // RfidCards.SchoolId is under ADR-001 D-3 — it exists so an index can be tenant-scoped, and a
+        // nullable one would put the rows it failed to classify outside the filter instead of inside a
+        // wrong tenant, which is the harder failure to notice.
+        e.HasOne(x => x.School).WithMany().HasForeignKey(x => x.SchoolId).IsRequired();
         e.HasOne(x => x.Occurrence).WithMany().HasForeignKey(x => x.OccurrenceId);
         e.HasOne(x => x.Student).WithMany().HasForeignKey(x => x.StudentId).IsRequired();
         e.HasOne(x => x.RfidCard).WithMany().HasForeignKey(x => x.RfidCardId);
@@ -771,7 +782,27 @@ internal class EamsDbContext : DbContext
             .HasDatabaseName("UX_Attendance_Event_Student_Occurrence");
 
         // Idempotent offline sync (§4.9). Filtered so the many rows without a tap id do not collide.
-        e.HasIndex(x => new { x.DeviceId, x.DeviceTapId }).IsUnique()
+        //
+        // SchoolId leads the key as of Phase 4a design D-35, and that is a correctness fix rather than
+        // a performance one. The index used to be global while the §11 query filter on this table was
+        // per-tenant, so AttendanceService.FindByDeviceTapAsync and this constraint selected different
+        // row sets the moment a second school existed: a colliding tap missed the pre-check, raised
+        // 2601, failed the filtered re-read, and became a permanent 500 that an offline queue retries
+        // forever. Filter and constraint are now the same predicate.
+        //
+        // Widening a unique key can never reject data that the narrower one accepted, so the swap is
+        // safe on a populated table — see the RowLevelTenancy migration for the full argument, and for
+        // why the reverse (Down) is not.
+        //
+        // Column order, noted for whoever next touches this index. (DeviceId, SchoolId, DeviceTapId)
+        // would have been strictly better and was not spotted in time: uniqueness is order-independent
+        // and the idempotency pre-check is three equalities either way, so it costs nothing — but it
+        // would have kept DeviceId leading, which is what the FK to Devices needs, and made
+        // IX_AttendanceRecords_DeviceId below unnecessary. Deliberately NOT re-cut: re-ordering an
+        // applied migration's index to save one index on a table with no write volume yet is churn on
+        // the one file it is least safe to churn. Worth doing when Phase 4d's batch endpoint makes the
+        // write cost real, and that is a decision with an owner rather than a TODO.
+        e.HasIndex(x => new { x.SchoolId, x.DeviceId, x.DeviceTapId }).IsUnique()
             .HasFilter("[DeviceTapId] IS NOT NULL")
             .HasDatabaseName("UX_Attendance_Device_DeviceTapId");
 
@@ -784,17 +815,38 @@ internal class EamsDbContext : DbContext
         e.ToTable("Devices");
         e.Property(x => x.Name).HasMaxLength(100).IsRequired();
         e.Property(x => x.DeviceType).HasMaxLength(30).IsRequired();
-        e.Property(x => x.ReaderModel).HasMaxLength(100);
+        e.Property(x => x.ReaderModel).HasMaxLength(DeviceText.ReaderModelMaxLength);
         e.Property(x => x.ApiKey).HasMaxLength(256);
         e.Property(x => x.IsActive).HasDefaultValue(true).ValueGeneratedNever();
+
+        // Phase 4b (D-24): the split key. ApiKeyId is the public half and is what a presented token is
+        // looked up by; ApiKeyHash is SHA-256 of the secret in lower-case hex, sized to the value
+        // exactly — the same reasoning §4.12's FileHash/RowHash columns are nvarchar(64) for. A hash
+        // that does not fit is not a SHA-256, and SQL Server says so instead of storing a truncated
+        // one that still looks plausible in a row dump.
+        e.Property(x => x.ApiKeyId).HasMaxLength(DeviceKey.KeyIdLength);
+        e.Property(x => x.ApiKeyHash).HasMaxLength(DeviceKey.HashLength);
 
         e.HasOne(x => x.School).WithMany().HasForeignKey(x => x.SchoolId).IsRequired();
 
         // §4.10 declares UNIQUE on a nullable column. SQL Server treats NULLs as equal in a unique
         // index, which would allow only one key-less device; filtered is the only workable reading.
+        //
+        // The column itself is permanently NULL from Phase 4b onward and is kept deliberately — see
+        // Device.ApiKey. The index is kept with it: dropping an index on a column nothing writes buys
+        // nothing and makes the schema disagree with §4.10 for a second reason.
         e.HasIndex(x => x.ApiKey).IsUnique()
             .HasFilter("[ApiKey] IS NOT NULL")
             .HasDatabaseName("UX_Devices_ApiKey");
+
+        // The authentication hot path: one seek per presented token. Unique because a key id resolving
+        // to two devices would make "which device is this?" ambiguous at exactly the moment the answer
+        // is being used to choose a tenant. Filtered for the same reason UX_Devices_ApiKey is — most
+        // rows will have a key, but a device may exist briefly without one and NULL = NULL inside a
+        // unique index would cap that at one.
+        e.HasIndex(x => x.ApiKeyId).IsUnique()
+            .HasFilter("[ApiKeyId] IS NOT NULL")
+            .HasDatabaseName("UX_Devices_ApiKeyId");
     });
 
     // §4.11 RBAC

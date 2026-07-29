@@ -23,8 +23,32 @@ public enum TapOutcome
     /// wiped or re-provisioned handset holds a stale id, and §8.2's offline queue retries on 5xx.
     /// An unhandled FK violation therefore made every queued tap retry forever and the queue never
     /// drained. A 4xx tells the client to stop and re-register instead.
+    ///
+    /// <para>
+    /// <b>It is also what a cross-tenant device gets</b>, since Phase 4b (D-27). A device whose
+    /// <c>SchoolId</c> does not match the event's is "not registered" <em>to this event</em>, and
+    /// saying so with the existing outcome rather than a new 403 is deliberate: a distinct status
+    /// would confirm to the caller that the device exists somewhere else, which is a cross-tenant
+    /// existence disclosure bought for no client benefit. The published contract already tells the
+    /// mobile developer this token means "unknown device, or device belongs to another school".
+    /// </para>
     /// </summary>
     DeviceNotRegistered,
+
+    /// <summary>
+    /// The body's <c>deviceId</c> disagrees with the authenticated device (Phase 4a design, D-26).
+    ///
+    /// <para>
+    /// <b>A rejection rather than a silent override, and that is the whole decision.</b> The principal
+    /// wins on the write either way — a body field cannot choose which device recorded a tap — so
+    /// ignoring the mismatch would be *safe* and would still be wrong: the client believes it recorded
+    /// a tap against device A, the row says device B, and its local queue and our table disagree about
+    /// a key it will later retry on. Same reasoning the students surface applies to a derived field
+    /// echoed back on a <c>PUT</c>: a value that is quietly discarded is worse than one that is
+    /// refused, because only the refusal is discoverable.
+    /// </para>
+    /// </summary>
+    DeviceMismatch,
 }
 
 public enum ManualOutcome

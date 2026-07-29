@@ -1,4 +1,4 @@
-using EAMS.Application.Abstractions;
+﻿using EAMS.Application.Abstractions;
 using EAMS.Application.Dtos;
 using EAMS.Domain;
 using EAMS.Tests.Integration.Infrastructure;
@@ -732,6 +732,7 @@ public class EventCloseFreezeTests : IntegrationTest
         {
             racing.AttendanceRecords.Add(new AttendanceRecord
             {
+                SchoolId = world.SchoolId,
                 EventId = world.EventId, StudentId = world.Absentee,
                 CheckInAt = TestData.Now, Status = AttendanceStatus.Present,
                 CaptureMethod = CaptureMethod.Rfid,

@@ -29,3 +29,26 @@ public interface ISchoolContext
     /// </summary>
     Guid? CurrentSchoolId { get; }
 }
+
+/// <summary>
+/// The <em>pinned</em> pre-auth tenant, kept separately resolvable now that <see cref="ISchoolContext"/>
+/// itself reads claims (Phase 4a design, D-23).
+///
+/// <para>
+/// Phase 4b replaced the registered <see cref="ISchoolContext"/> with a claims-reading implementation
+/// — the one Phase 6 will ship — but a request that carries no credentials still has to resolve to
+/// <em>something</em>, because every endpoint outside the four device-gated ones is still open under
+/// ADR-001 D-6. This interface is that fallback: the single school the host pinned at startup, with
+/// the log line that announced it.
+/// </para>
+///
+/// <para>
+/// <b>It is the one line Phase 6 deletes.</b> When §11 lands in full, an unauthenticated request never
+/// reaches a query, so the fallback has no caller and the claims implementation is complete on its
+/// own. Keeping it behind its own interface is what makes that deletion a two-file change rather than
+/// an archaeology exercise.
+/// </para>
+/// </summary>
+public interface IPinnedSchoolContext : ISchoolContext
+{
+}

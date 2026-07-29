@@ -1,10 +1,16 @@
-using System.Diagnostics;
+﻿using System.Diagnostics;
 using EAMS.Api;
+using EAMS.Api.Authentication;
 using EAMS.Api.Authorization;
 using EAMS.Api.Cors;
+using EAMS.Api.Identity;
+using EAMS.Api.MultiTenancy;
+using EAMS.Api.RateLimiting;
+using EAMS.Application.Abstractions;
 using EAMS.Infrastructure;
 using Microsoft.AspNetCore.Mvc.Infrastructure;
 using Microsoft.Extensions.DependencyInjection.Extensions;
+using DeviceKey = EAMS.Domain.DeviceKey;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -58,6 +64,46 @@ builder.Services.AddCors(options => options.AddPolicy(
 // Nothing else in this project can see an Infrastructure type — they are all internal.
 builder.Services.AddEamsInfrastructure(builder.Configuration);
 
+// ---------------------------------------------------------------------------- device authentication
+//
+// Phase 4b (Phase 4a design, D-23). ADR-001 D-6 deferred *authorization* — §11's permission-based RBAC
+// over human users — not *authentication*. This adds authentication for one principal type, a device,
+// emitting exactly the claim types Phase 6's JWT will emit, so Phase 6 adds `.AddJwtBearer("Bearer")`
+// beside this line rather than replacing what is here.
+//
+// D-6's operational constraint is unchanged and still binding: four endpoints are gated; everything
+// else in this API is open and unauthenticated, and this build must not be exposed beyond local or
+// development use until §11 lands in full. See AuthorizationStatus, which says so on every start.
+builder.Services
+    .AddAuthentication(DeviceKey.AuthenticationScheme)
+    .AddScheme<DeviceKeyOptions, DeviceKeyHandler>(DeviceKey.AuthenticationScheme, _ => { });
+
+// The policy name and the claim value are the same string on purpose: a policy that exists and demands
+// nothing is then not expressible. §11 scopes a device key to `attendance.capture` and nothing else, so
+// this is the whole of what a device may do — and a Phase 6 JWT user carrying the same permission
+// satisfies the same policy, which is what makes the authorization layer principal-agnostic.
+builder.Services.AddAuthorization(options => options.AddPolicy(
+    EamsPermissions.AttendanceCapture,
+    policy => policy
+        .AddAuthenticationSchemes(DeviceKey.AuthenticationScheme)
+        .RequireClaim(EamsClaimTypes.Permission, EamsPermissions.AttendanceCapture)));
+
+// §14: "rate limiting on /auth and /attendance/tap". Partitioned by device_id — see CaptureRateLimiting
+// for why that forces the limiter to sit *after* authentication, and what the per-instance limitation
+// means behind several SaaS instances.
+builder.Services.AddCaptureRateLimiter();
+
+// Both seams become claims-reading here, replacing the Infrastructure defaults registered above.
+// Scoped, because the answer is now a property of the request rather than of the process.
+//
+// ClaimsSchoolContext is Phase 6's implementation with exactly one branch to delete — the fallback to
+// the pinned development school for a request that carries no credentials, which is still most of them.
+// This is the largest "build toward the seam" win in the phase: every §11 global query filter now runs
+// against a tenant that can move, which is the condition under which its failure modes appear at all.
+builder.Services.AddHttpContextAccessor();
+builder.Services.Replace(ServiceDescriptor.Scoped<ISchoolContext, ClaimsSchoolContext>());
+builder.Services.Replace(ServiceDescriptor.Scoped<IDeviceContext, ClaimsDeviceContext>());
+
 var app = builder.Build();
 
 // Converts anything that escapes a controller into a ProblemDetails body. Registered first among
@@ -105,10 +151,21 @@ else
 // Said out loud on every start: nothing here is protected (ADR-001 D-6, Technical Plan §11).
 AuthorizationStatus.LogEnforcementState(app.Logger);
 
-// Migrate on start, and seed dev convenience data only outside Production. All idempotent:
-// migrations skip what is already applied, seeding returns early once a school row exists. This
-// also pins the development tenant for §11's SchoolId query filter and logs which school won.
-await app.Services.InitializeEamsDatabaseAsync(seed: !app.Environment.IsProduction());
+// Migrate on start, and seed dev convenience data in Development only. All idempotent: migrations
+// skip what is already applied, seeding returns early once a school row exists. This also pins the
+// development tenant for §11's SchoolId query filter and logs which school won.
+//
+// The gate is IsDevelopment(), not !IsProduction(), and that changed in Phase 4b. The seed now
+// includes a device row carrying a *working* well-known API key (SeedData.DevelopmentKioskApiKey),
+// and the only thing that makes a hard-coded credential in source acceptable is that it cannot exist
+// where it could be reached. "Not Production" admits Staging — a real, network-reachable host — so it
+// was the wrong predicate for that claim. Note the asymmetry it would otherwise leave twenty lines
+// below: Swagger, a strictly lesser exposure, is already gated on IsDevelopment().
+//
+// The whole seed moves rather than the device row alone. Splitting the predicate would trade one
+// asymmetry for a subtler one, and eight fictional students in a Staging database a client might look
+// at is its own small hazard.
+await app.Services.InitializeEamsDatabaseAsync(seed: app.Environment.IsDevelopment());
 
 // Development only. Swagger UI is an unauthenticated, complete description of an API whose
 // endpoints are all open (ADR-001 D-6) — publishing it from a production host hands an attacker
@@ -124,7 +181,28 @@ if (app.Environment.IsDevelopment())
     });
 }
 
-// Auth is stubbed for the mock build — endpoints are open. See AuthorizationStatus.
+// ------------------------------------------------------------------------------ the gated pipeline
+//
+// Routing is called explicitly rather than left to the framework's implicit insertion, because the
+// three middlewares below have to sit between it and the endpoints, in this order, and an implicit
+// UseRouting would put them all on the wrong side of it.
+app.UseRouting();
+
+// Runs on every request. The DeviceKey handler returns NoResult when the request carries no
+// Authorization header of its scheme, so the open endpoints are entirely unaffected.
+app.UseAuthentication();
+
+// After authentication, not before, and that is deliberate — the partition key is `device_id`, which
+// only exists once the key has been verified. CaptureRateLimiting records the trade-off: the usual
+// "limit before you validate" advice assumes an IP partition, and an IP partition would put every
+// kiosk behind one campus NAT in a single bucket.
+app.UseRateLimiter();
+
+// Only the endpoints carrying [Authorize] are gated (Phase 4a design, D-28) — three of D-28's four
+// today, because POST /attendance/tap/batch does not exist until 4d. Everything else in this API is
+// still open under ADR-001 D-6.
+app.UseAuthorization();
+
 app.MapControllers();
 
 app.Run();

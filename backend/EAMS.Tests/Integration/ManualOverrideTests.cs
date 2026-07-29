@@ -1,4 +1,4 @@
-using EAMS.Application.Abstractions;
+﻿using EAMS.Application.Abstractions;
 using EAMS.Application.Dtos;
 using EAMS.Domain;
 using EAMS.Tests.Integration.Infrastructure;
@@ -87,6 +87,7 @@ public class ManualOverrideTests : IntegrationTest
             using var tap = NewDbContext();
             tap.AttendanceRecords.Add(new AttendanceRecord
             {
+                SchoolId = world.SchoolId,
                 EventId = world.EventId,
                 StudentId = world.StudentId,
                 CheckInAt = TestData.Now,
@@ -128,6 +129,7 @@ public class ManualOverrideTests : IntegrationTest
             using var manual = NewDbContext();
             manual.AttendanceRecords.Add(new AttendanceRecord
             {
+                SchoolId = world.SchoolId,
                 EventId = world.EventId,
                 StudentId = world.StudentId,
                 CheckInAt = TestData.Now,
@@ -338,6 +340,7 @@ public class ManualOverrideTests : IntegrationTest
             db.EventSchedules.Add(occurrence);
             db.AttendanceRecords.Add(new AttendanceRecord
             {
+                SchoolId = world.SchoolId,
                 EventId = world.EventId,
                 StudentId = world.StudentId,
                 OccurrenceId = occurrence.Id,

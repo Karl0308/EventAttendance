@@ -33,10 +33,31 @@ public static class AuthorizationStatus
         if (IsEnforced) return;
 
         logger.LogWarning(
-            "AUTHORIZATION IS NOT ENFORCED. Every endpoint in this API is open and unauthenticated. " +
+            "AUTHORIZATION IS NOT ENFORCED. Every endpoint in this API is open and unauthenticated " +
+            "EXCEPT the {GatedCount} capture endpoints a device key gates ({Gated}). " +
             "[HasPermissionNotEnforced] records intended permissions only and guards nothing, and " +
             "this assembly carries [assembly: AuthorizationNotEnforced]. Deferred by ADR-001 D-6 " +
             "until the data layer stabilizes; Technical Plan §11 (JWT + permission-based RBAC) is " +
-            "the fix. Do not expose this build outside local/development use.");
+            "the fix. Do not expose this build outside local/development use.",
+            GatedEndpoints.Length,
+            string.Join(", ", GatedEndpoints));
     }
+
+    /// <summary>
+    /// The endpoints Phase 4b narrowed the open surface to (Phase 4a design, D-28), named so the
+    /// startup warning states what is <em>and is not</em> covered rather than making a claim a reader
+    /// has to go and verify.
+    ///
+    /// <para>
+    /// <c>POST /attendance/tap/batch</c> is deliberately absent: it is published as frozen contract to
+    /// the mobile developer but is Phase 4d work and does not exist yet. Listing an endpoint that
+    /// returns 404 would make this line the wrong kind of documentation.
+    /// </para>
+    /// </summary>
+    public static readonly string[] GatedEndpoints =
+    [
+        "POST /api/v1/attendance/tap",
+        "GET /api/v1/students/by-card/{cardUid}",
+        "POST /api/v1/devices/{id}/heartbeat",
+    ];
 }

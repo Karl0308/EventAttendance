@@ -1,4 +1,4 @@
-using EAMS.Domain;
+﻿using EAMS.Domain;
 using EAMS.Tests.Integration.Infrastructure;
 using Microsoft.EntityFrameworkCore;
 using Xunit;
@@ -48,6 +48,7 @@ public class MultiTenantFilterTests : IntegrationTest
             db.RfidCards.Add(TestData.NewCard(school.Id, student.Id, $"{code}{i:0000}"));
             db.AttendanceRecords.Add(new AttendanceRecord
             {
+                SchoolId = school.Id,
                 EventId = ev.Id, StudentId = student.Id, CheckInAt = TestData.Now, Status = "Present",
             });
             // §4.8: the student is *invited* as well as recorded. Added in Phase 3a, when

@@ -193,6 +193,32 @@ public class Event : AuditableEntity
 // §4.9 AttendanceRecords
 public class AttendanceRecord : AuditableEntity
 {
+    /// <summary>
+    /// The owning tenant, denormalized from <see cref="Event"/> (Phase 4a design, D-35). Not in §4.9 —
+    /// additive, recorded as drift, and the same shape as <c>RfidCards.SchoolId</c> under ADR-001 D-3:
+    /// a column that exists so an <em>index</em> can be tenant-scoped, not because the row needed a
+    /// second way to reach a school.
+    ///
+    /// <para>
+    /// <b>Why it had to exist.</b> <c>UX_Attendance_Device_DeviceTapId</c> was global while the §11
+    /// query filter on this table was per-tenant, so the idempotency pre-check and the constraint
+    /// selected different row sets the moment a second school existed. A tap whose
+    /// <c>(DeviceId, DeviceTapId)</c> collided with another tenant's row missed the pre-check, raised
+    /// 2601 on insert, failed the filtered re-read, and became a 500 — which §8.2's offline queue
+    /// retries straight back into the same collision. Permanent, per-tap, and unescapable from the
+    /// client. Benign today; a queue drain (the batch endpoint) is what turns it into a loop.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>It must equal <c>Event.SchoolId</c>, always.</b> Every writer sets it from the event it just
+    /// read; nothing derives it any other way. The query filter reads this column directly rather than
+    /// joining through <c>Event</c>, which is the point — filter and constraint are now the same
+    /// predicate rather than two predicates that happen to agree.
+    /// </para>
+    /// </summary>
+    public Guid SchoolId { get; set; }
+    public School? School { get; set; }
+
     public Guid EventId { get; set; }
     public Event? Event { get; set; }
 

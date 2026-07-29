@@ -1,4 +1,4 @@
-using System.Net;
+﻿using System.Net;
 using System.Net.Http.Json;
 using EAMS.Application.Abstractions;
 using EAMS.Application.Dtos;
@@ -370,8 +370,12 @@ public class StudentSoftDeleteStrandingTests : IntegrationTest
     {
         var world = await ArrangeAsync();
 
+        // by-card is gated by a device key as of Phase 4b (D-28) — which is exactly the caller this
+        // test's own summary named. The student detail read beside it is still open.
+        var apiKey = await IssueDeviceKeyAsync(world.SchoolId);
+
         using var factory = new EamsApiFactory(Sql.ConnectionString);
-        using var client = factory.CreateClient();
+        using var client = factory.CreateClient().WithDeviceKey(apiKey);
 
         Assert.Equal(HttpStatusCode.NotFound,
             (await client.GetAsync($"{Route}/{world.DeletedStudentId}")).StatusCode);

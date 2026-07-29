@@ -1,4 +1,4 @@
-using EAMS.Domain;
+﻿using EAMS.Domain;
 using EAMS.Tests.Integration.Infrastructure;
 using Microsoft.Data.SqlClient;
 using Microsoft.EntityFrameworkCore;
@@ -109,11 +109,12 @@ public class SchemaConstraintTests : IntegrationTest
     [Fact]
     public async Task A_duplicate_attendance_row_with_a_null_occurrence_is_rejected()
     {
-        var (_, studentId, eventId) = await ArrangeAsync();
+        var (schoolId, studentId, eventId) = await ArrangeAsync();
 
         await using var db = NewDbContext();
         db.AttendanceRecords.Add(new AttendanceRecord
         {
+            SchoolId = schoolId,
             EventId = eventId, StudentId = studentId, OccurrenceId = null,
             CheckInAt = TestData.Now, Status = "Present",
         });
@@ -122,6 +123,7 @@ public class SchemaConstraintTests : IntegrationTest
         await using var second = NewDbContext();
         second.AttendanceRecords.Add(new AttendanceRecord
         {
+            SchoolId = schoolId,
             EventId = eventId, StudentId = studentId, OccurrenceId = null,
             CheckInAt = TestData.Now.AddMinutes(1), Status = "Late",
         });
@@ -141,10 +143,12 @@ public class SchemaConstraintTests : IntegrationTest
         db.Students.Add(other);
         db.AttendanceRecords.Add(new AttendanceRecord
         {
+            SchoolId = schoolId,
             EventId = eventId, StudentId = studentId, CheckInAt = TestData.Now, Status = "Present",
         });
         db.AttendanceRecords.Add(new AttendanceRecord
         {
+            SchoolId = schoolId,
             EventId = eventId, StudentId = other.Id, CheckInAt = TestData.Now, Status = "Present",
         });
 
@@ -185,6 +189,7 @@ public class SchemaConstraintTests : IntegrationTest
         foreach (var id in new[] { studentId, second.Id, third.Id })
             db.AttendanceRecords.Add(new AttendanceRecord
             {
+                SchoolId = schoolId,
                 EventId = eventId, StudentId = id, DeviceTapId = null,
                 CheckInAt = TestData.Now, Status = "Present",
             });
@@ -412,12 +417,13 @@ public class SchemaConstraintTests : IntegrationTest
     [Fact]
     public async Task Deleting_an_event_that_has_attendance_is_refused_rather_than_cascaded()
     {
-        var (_, studentId, eventId) = await ArrangeAsync();
+        var (schoolId, studentId, eventId) = await ArrangeAsync();
 
         await using (var db = NewDbContext())
         {
             db.AttendanceRecords.Add(new AttendanceRecord
             {
+                SchoolId = schoolId,
                 EventId = eventId, StudentId = studentId, CheckInAt = TestData.Now, Status = "Present",
             });
             await db.SaveChangesAsync();

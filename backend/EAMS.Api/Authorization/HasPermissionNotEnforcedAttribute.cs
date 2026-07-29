@@ -1,4 +1,4 @@
-using EAMS.Api.Authorization;
+﻿using EAMS.Api.Authorization;
 
 // Assembly-level marker. Machine-readable proof that nothing in EAMS.Api enforces authorization —
 // a test, a startup check, or a deployment gate can assert its absence before allowing a
@@ -36,8 +36,19 @@ namespace EAMS.Api.Authorization;
 /// </para>
 ///
 /// <para>
-/// Nothing is decorated with it yet, and the API is open. Per ADR-001 D-6 this system must not be
-/// exposed beyond local/development use until §11 lands in full.
+/// <b>Phase 4b gated three endpoints with a real <c>[Authorize]</c>, and this attribute stays on them
+/// as well.</b> That looks redundant and is not: the attribute is the audit trail D-6 created — the
+/// list Phase 6's rename walks so that every endpoint is looked at on the day enforcement becomes
+/// real — and dropping it from the endpoints that happen to be enforced first would put a hole in
+/// exactly that list. Where both are present they must name the same permission, which
+/// <c>AuthorizationSeamTests.Every_gated_action_declares_the_same_permission_through_the_inert_attribute</c>
+/// asserts.
+/// </para>
+///
+/// <para>
+/// Everything else in this API is open. Per ADR-001 D-6 this system must not be exposed beyond
+/// local/development use until §11 lands in full — narrowing the open surface to four capture
+/// endpoints does not change that.
 /// </para>
 /// </summary>
 [AttributeUsage(

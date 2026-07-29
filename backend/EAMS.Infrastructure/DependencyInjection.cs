@@ -40,6 +40,14 @@ public static class DependencyInjection
         // Phase 6 replacing the ISchoolContext registration makes the pinning step visibly dead
         // code (GetService<DevelopmentSchoolContext>() returns null) rather than quietly wrong.
         services.AddSingleton<DevelopmentSchoolContext>();
+        services.AddSingleton<IPinnedSchoolContext>(sp => sp.GetRequiredService<DevelopmentSchoolContext>());
+
+        // The default ISchoolContext for any host that is not the API — a migration, a console tool,
+        // a test that builds the container directly. EAMS.Api *replaces* this registration with the
+        // claims-reading ClaimsSchoolContext (Phase 4a design, D-23), which falls back to
+        // IPinnedSchoolContext above whenever a request carries no credentials. Registering the pin
+        // here rather than only in the web host is what keeps `new ServiceCollection()
+        // .AddEamsInfrastructure(...)` resolvable, which is the gap CompositionRootTests exists for.
         services.AddSingleton<ISchoolContext>(sp => sp.GetRequiredService<DevelopmentSchoolContext>());
 
         // The identity seam, twinned with the tenant seam above (ADR-001 D-6 deferred auth; this is
@@ -48,6 +56,10 @@ public static class DependencyInjection
         // stateless and constant; Phase 6's claims-reading replacement becomes scoped, and that is a
         // one-line change here rather than anywhere on a write path.
         services.AddSingleton<ICurrentUser, UnauthenticatedCurrentUser>();
+
+        // The device seam, the third of the family (Phase 4a design, D-26). Same shape and the same
+        // replacement path: EAMS.Api registers a scoped, claims-reading implementation over this one.
+        services.AddSingleton<IDeviceContext, UnauthenticatedDeviceContext>();
 
         // The services in this assembly take an ILogger<T>, so the seam has to guarantee one exists
         // rather than assume its caller happened to add logging. A web host always has — which is
@@ -62,6 +74,11 @@ public static class DependencyInjection
         services.AddScoped<IAttendanceService, AttendanceService>();
         services.AddScoped<IStudentGroupProjection, StudentGroupProjection>();
         services.AddScoped<ISisImportService, SisImportService>();
+        services.AddScoped<IDeviceService, DeviceService>();
+
+        // Resolved per request by the DeviceKey authentication handler, from the request scope — so it
+        // gets the same EamsDbContext the rest of the request will use.
+        services.AddScoped<IDeviceAuthenticator, DeviceAuthenticator>();
 
         return services;
     }
