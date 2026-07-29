@@ -49,6 +49,14 @@ public static class DependencyInjection
         // one-line change here rather than anywhere on a write path.
         services.AddSingleton<ICurrentUser, UnauthenticatedCurrentUser>();
 
+        // The services in this assembly take an ILogger<T>, so the seam has to guarantee one exists
+        // rather than assume its caller happened to add logging. A web host always has — which is
+        // exactly why this is easy to get wrong: production would have worked and only a bare
+        // `new ServiceCollection().AddEamsInfrastructure(...)` would fail, which is a test, a
+        // background worker, or a console tool. AddLogging is built entirely from TryAdd, so where
+        // the host has already configured providers this changes nothing at all.
+        services.AddLogging();
+
         services.AddScoped<IStudentService, StudentService>();
         services.AddScoped<IEventService, EventService>();
         services.AddScoped<IAttendanceService, AttendanceService>();

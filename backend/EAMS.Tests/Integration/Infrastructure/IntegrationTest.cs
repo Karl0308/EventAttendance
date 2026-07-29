@@ -2,6 +2,7 @@ using EAMS.Application.Abstractions;
 using EAMS.Infrastructure.Data;
 using EAMS.Infrastructure.Services;
 using EAMS.Infrastructure.Sis;
+using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
 
 namespace EAMS.Tests.Integration.Infrastructure;
@@ -58,7 +59,25 @@ public abstract class IntegrationTest : IAsyncLifetime
 
     internal IAttendanceService AttendanceOn(EamsDbContext db) => new AttendanceService(db, CurrentUser);
 
-    internal IStudentService StudentsOn(EamsDbContext db) => new StudentService(db);
+    /// <summary>
+    /// The §6.2 students service, wired to the same tenant as <see cref="NewDbContext()"/>.
+    ///
+    /// <para>
+    /// The tenant seam matters here for the same reason it does on events: <c>POST /students</c> has to
+    /// decide which school a new student belongs to, and a card's denormalized <c>SchoolId</c>
+    /// (ADR-001 D-3) has to agree with its owner's. Passing the test's own <see cref="School"/> is what
+    /// lets a multi-tenant test prove a student cannot be filed against another school.
+    /// </para>
+    /// </summary>
+    internal IStudentService StudentsOn(EamsDbContext db) =>
+        new StudentService(db, School, NullLogger<StudentService>.Instance);
+
+    /// <summary>
+    /// The same service with a logger a test can read back. See <see cref="CapturingLogger{T}"/> for
+    /// why the recovered-from failures need one.
+    /// </summary>
+    internal IStudentService StudentsOn(EamsDbContext db, CapturingLogger<StudentService> logger) =>
+        new StudentService(db, School, logger);
 
     /// <summary>
     /// The §6.3 events service, wired to the same tenant and identity as <see cref="NewDbContext()"/>.

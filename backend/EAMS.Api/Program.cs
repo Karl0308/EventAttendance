@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using EAMS.Api;
 using EAMS.Api.Authorization;
+using EAMS.Api.Cors;
 using EAMS.Infrastructure;
 using Microsoft.AspNetCore.Mvc.Infrastructure;
 using Microsoft.Extensions.DependencyInjection.Extensions;
@@ -32,6 +33,27 @@ builder.Services.AddProblemDetails(options => options.CustomizeProblemDetails = 
         Activity.Current?.Id ?? context.HttpContext.TraceIdentifier;
 });
 
+// The admin SPA is served from a different origin in development (Vite on :5173), so every call it
+// makes to this API is cross-origin and the browser refuses it without this. Origins come from
+// configuration and default to the Vite dev server only in Development — see LocalDevelopmentCors for
+// why an unconfigured production host admits none.
+var corsOrigins = LocalDevelopmentCors.ResolveOrigins(builder.Configuration, builder.Environment);
+
+builder.Services.AddCors(options => options.AddPolicy(
+    LocalDevelopmentCors.PolicyName,
+    policy => policy
+        .WithOrigins(corsOrigins)
+        .AllowAnyHeader()
+        .AllowAnyMethod()
+        // Location is not one of the seven CORS-safelisted response headers, so without this the SPA
+        // can see the 201 and not the header telling it where the thing it just created lives —
+        // POST /students and POST /students/{id}/cards both set it deliberately, and a client would
+        // have to guess or re-query. Exposed by name rather than by wildcard: "*" is ignored outright
+        // by any request that carries credentials, so a header list that works today and silently
+        // stops working when Phase 6 adds auth is worse than one that names what it means.
+        .WithExposedHeaders("Location")));
+// No AllowCredentials, deliberately — see LocalDevelopmentCors.
+
 // The one seam into Infrastructure: SQL Server, EamsDbContext, and the service implementations.
 // Nothing else in this project can see an Infrastructure type — they are all internal.
 builder.Services.AddEamsInfrastructure(builder.Configuration);
@@ -48,6 +70,37 @@ var app = builder.Build();
 // (DevelopmentApiFactory boots a real Development host to prove this; a Production-only test would
 // have passed for the wrong reason.)
 app.UseExceptionHandler();
+
+// Inside the exception handler, which is Microsoft's documented order (exception handler first, CORS
+// after routing) and the one that stays correct if the middleware ever changes.
+//
+// It is worth knowing *why* this is not fragile, because the obvious worry is real:
+// ExceptionHandlerMiddleware clears the response before writing its ProblemDetails, so headers written
+// on the way down would be lost on a 500 — and a browser that cannot read an error body reports a CORS
+// failure instead of surfacing the traceId. CorsMiddleware does not write on the way down; it registers
+// a Response.OnStarting callback that runs after that clearing. Measured, not assumed: with UseCors
+// moved ahead of UseExceptionHandler, CorsTests still passes, so the order here is convention and
+// defence-in-depth rather than the thing holding the behaviour up. What CorsTests *does* pin is the
+// behaviour itself — a 500 stays readable cross-origin.
+app.UseCors(LocalDevelopmentCors.PolicyName);
+
+// Said out loud on every start, next to the authorization warning, because a policy that admits
+// nothing looks identical to one that is working until a browser says otherwise.
+if (corsOrigins.Length == 0)
+{
+    app.Logger.LogWarning(
+        "CORS policy '{Policy}' admits NO origin: '{Setting}' is not configured and the Vite " +
+        "dev-server default applies only in Development. Every cross-origin browser call will be " +
+        "refused.",
+        LocalDevelopmentCors.PolicyName, LocalDevelopmentCors.ConfigurationSection);
+}
+else
+{
+    app.Logger.LogInformation(
+        "CORS policy '{Policy}' admits {Origins}. Set '{Setting}' to change it.",
+        LocalDevelopmentCors.PolicyName, string.Join(", ", corsOrigins),
+        LocalDevelopmentCors.ConfigurationSection);
+}
 
 // Said out loud on every start: nothing here is protected (ADR-001 D-6, Technical Plan §11).
 AuthorizationStatus.LogEnforcementState(app.Logger);

@@ -1,7 +1,29 @@
 namespace EAMS.Application.Dtos;
 
+/// <summary>
+/// Technical Plan §4.3, as a client sees it.
+///
+/// <para>
+/// <b>The name parts and <c>Gender</c>/<c>PhotoUrl</c> arrived with the §6.2 write surface</b>, and
+/// they are not decoration — they are what makes <c>PUT /students/{id}</c> usable at all. The PUT is a
+/// full replacement of a student's own fields, so a field a client cannot <em>read</em> is a field it
+/// cannot send back, and the round trip would blank it. <c>FullName</c> is computed and cannot be
+/// split back into three columns, so an edit form had no way to populate itself. Additive on the wire;
+/// existing consumers ignore them. Same reasoning <see cref="EventDto"/> records for
+/// <c>Description</c>.
+/// </para>
+/// </summary>
+/// <param name="Course">
+/// <b>Read-only. ADR-001 D-2 derived cache.</b> Present because the students grid renders and filters
+/// on it. Sending it back on a write is refused with <c>FieldIsDerived</c> rather than ignored — a
+/// caller that echoes the object it read would otherwise believe it had saved a section.
+/// </param>
+/// <param name="YearLevel"><inheritdoc cref="Course"/></param>
+/// <param name="Section"><inheritdoc cref="Course"/></param>
 public record StudentDto(
-    Guid Id, string StudentNumber, string FullName, string? Email,
+    Guid Id, string StudentNumber, string FullName,
+    string FirstName, string? MiddleName, string LastName,
+    string? Email, string? Gender, string? PhotoUrl,
     string? Course, string? YearLevel, string? Section, string Status,
     IEnumerable<CardDto> Cards);
 

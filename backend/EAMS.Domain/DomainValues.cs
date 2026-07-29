@@ -1,3 +1,5 @@
+using System.Diagnostics.CodeAnalysis;
+
 namespace EAMS.Domain;
 
 // The closed value sets the Technical Plan §4 defines for the enum-ish `nvarchar` columns.
@@ -95,6 +97,131 @@ public static class CaptureMethod
 
     public static bool TryNormalize(string? value, out string canonical) =>
         DomainValueSet.TryNormalize(All, value, out canonical);
+}
+
+/// <summary>
+/// Technical Plan §4.3 — <c>Students.Status</c>.
+///
+/// <para>
+/// The set was written down in exactly two places before this existed: a trailing comment on
+/// <c>Student.Status</c> and the "Active/Inactive/Graduated" cell in §4.3's table. Neither is
+/// referenceable from a validator, which is how <c>status=Banana</c> reached
+/// <c>AttendanceRecords</c> and would have reached this column the moment a write endpoint existed.
+/// </para>
+/// </summary>
+public static class StudentStatus
+{
+    public const string Active = "Active";
+    public const string Inactive = "Inactive";
+    public const string Graduated = "Graduated";
+
+    /// <summary>§4.3's column default, and what a request that omits the field resolves to.</summary>
+    public const string Default = Active;
+
+    public static readonly IReadOnlyList<string> All = [Active, Inactive, Graduated];
+
+    public static bool TryNormalize(string? value, out string canonical) =>
+        DomainValueSet.TryNormalize(All, value, out canonical);
+}
+
+/// <summary>
+/// Technical Plan §4.3 — the bounded <c>nvarchar</c> columns on <c>Students</c> that a caller
+/// supplies.
+///
+/// <para>
+/// Lengths rather than value sets, here for the reason <see cref="AttendanceNotes"/> and
+/// <see cref="EventText"/> are: they are §4 column constraints a caller has to agree with, and an
+/// over-length value reaching SQL Server comes back as error 2628 (<c>String or binary data would be
+/// truncated</c>) — a 500 on input the caller got wrong.
+/// </para>
+///
+/// <para>
+/// <b>Deliberately absent: <c>Course</c>, <c>YearLevel</c> and <c>Section</c>.</b> They are the
+/// ADR-001 D-2 derived cache and no caller may supply them, so there is nothing for a caller to
+/// validate against and a length constant here would read as permission.
+/// </para>
+/// </summary>
+public static class StudentText
+{
+    /// <summary>Matches <c>Students.StudentNumber nvarchar(50)</c>.</summary>
+    public const int StudentNumberMaxLength = 50;
+
+    /// <summary>Matches <c>Students.FirstName / MiddleName / LastName nvarchar(100)</c>.</summary>
+    public const int NameMaxLength = 100;
+
+    /// <summary>Matches <c>Students.Email nvarchar(256)</c>.</summary>
+    public const int EmailMaxLength = 256;
+
+    /// <summary>Matches <c>Students.Gender nvarchar(20)</c>.</summary>
+    public const int GenderMaxLength = 20;
+
+    /// <summary>Matches <c>Students.PhotoUrl nvarchar(1000)</c>.</summary>
+    public const int PhotoUrlMaxLength = 1000;
+
+    /// <summary>
+    /// A NOT NULL column, judged on the <b>cleaned</b> value — what <see cref="RosterText.Clean"/>
+    /// returns, which is exactly what will be stored.
+    ///
+    /// <para>
+    /// <b>Taking the cleaned value rather than the raw one is the whole point, and it fixes a 500.</b>
+    /// These checks used to run on the request as it arrived, using
+    /// <c>string.IsNullOrWhiteSpace</c> + <c>Trim()</c>, while the writer stored
+    /// <c>RosterText.Clean(value)</c>. Those are two different definitions of "empty" and the gap
+    /// between them was reachable: a zero-width space (U+200B, and the four others
+    /// <see cref="RosterText"/> strips) is Unicode category <c>Cf</c>, <em>not</em> whitespace, so
+    /// <c>char.IsWhiteSpace</c> is false and <c>"​".Trim().Length</c> is 1. A first name of one
+    /// zero-width space therefore passed validation, cleaned to <c>null</c>, and hit a NOT NULL column
+    /// as SQL Server error 515 — an unhandled <c>DbUpdateException</c> and a 500 on input the caller
+    /// got wrong, which is the exact defect class these constants exist to remove.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>Length is measured on the cleaned value for a second reason.</b> <see cref="RosterText"/>
+    /// composes to NFC, and NFC can <em>expand</em> a string — U+0344 becomes U+0308 U+0301, one
+    /// character into two. A 100-character name measured before composition can be 200 after it, so a
+    /// pre-clean length check under-counts and the column raises 2628. Measured after, the number this
+    /// compares against is the number of characters that will be written.
+    /// </para>
+    /// </summary>
+    /// <remarks>
+    /// <see cref="NotNullWhenAttribute"/> is what turns this from a convention into a compiler-checked
+    /// guarantee: a caller that passes the check gets a non-nullable <c>string</c> back through flow
+    /// analysis, so the write path needs no null-forgiving operator and cannot acquire one by
+    /// accident. The previous version's safety lived in a comment, and the comment was wrong.
+    /// </remarks>
+    public static bool IsValidRequiredValue(
+        [NotNullWhen(true)] string? cleaned, int maxLength = NameMaxLength) =>
+        cleaned is not null && cleaned.Length <= maxLength;
+
+    /// <inheritdoc cref="IsValidRequiredValue"/>
+    public static bool IsValidOptionalValue(string? cleaned, int maxLength) =>
+        cleaned is null || cleaned.Length <= maxLength;
+}
+
+/// <summary>
+/// Technical Plan §4.4 — the bounded <c>nvarchar</c> columns on <c>RfidCards</c>.
+///
+/// <para>
+/// <c>CardUid</c> is measured <em>after</em> <see cref="CardUid.Normalize"/>, because that is the form
+/// that is stored: a reader that sends <c>04:A7:B8:C9</c> must be judged on the eight characters that
+/// land in the column, not on the eleven it typed.
+/// </para>
+/// </summary>
+public static class RfidCardText
+{
+    /// <summary>Matches <c>RfidCards.CardUid nvarchar(128)</c>.</summary>
+    public const int CardUidMaxLength = 128;
+
+    /// <summary>Matches <c>RfidCards.Label nvarchar(100)</c>.</summary>
+    public const int LabelMaxLength = 100;
+
+    /// <summary>
+    /// True when the normalized UID is storable. Blank is refused rather than accepted as an empty
+    /// string: a card row whose UID is <c>""</c> would occupy the one active slot for the empty UID in
+    /// its school and match no tap ever, which is a silent, permanent hole in the roster.
+    /// </summary>
+    public static bool IsValidNormalizedCardUid(string normalizedUid) =>
+        normalizedUid.Length is > 0 and <= CardUidMaxLength;
 }
 
 /// <summary>Technical Plan §4.5 — <c>Events.Status</c>.</summary>

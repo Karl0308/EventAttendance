@@ -364,7 +364,7 @@ internal sealed class EventService : IEventService
     {
         if (Validate(request) is { } invalid) return invalid;
 
-        var schoolId = await ResolveSchoolIdAsync(ct);
+        var schoolId = await _db.ResolveSchoolIdAsync(_school, ct);
         if (schoolId is null)
         {
             return new EventWriteResponse(EventWriteOutcome.NoSchoolResolved,
@@ -922,31 +922,9 @@ internal sealed class EventService : IEventService
     private Task<Event?> FindAsync(Guid id, CancellationToken ct) =>
         _db.Events.FirstOrDefaultAsync(e => e.Id == id && !e.IsDeleted, ct);
 
-    /// <summary>
-    /// Which school a new event belongs to.
-    ///
-    /// <para>
-    /// The pinned tenant when there is one. Otherwise the only school, if there is exactly one — the
-    /// same rule <c>DependencyInjection.PinDevelopmentSchoolAsync</c> already applies at startup, so
-    /// this agrees with what the log said rather than inventing a second answer. With zero or several
-    /// and nothing pinned there is no honest choice, and guessing would file an event under a school at
-    /// random; the caller gets <see cref="EventWriteOutcome.NoSchoolResolved"/> instead.
-    /// </para>
-    ///
-    /// <para>
-    /// Phase 6 makes the fallback dead code: the tenant arrives in the claims and an unauthenticated
-    /// request never reaches here.
-    /// </para>
-    /// </summary>
-    private async Task<Guid?> ResolveSchoolIdAsync(CancellationToken ct)
-    {
-        if (_school.CurrentSchoolId is { } pinned) return pinned;
-
-        var candidates = await _db.Schools.AsNoTracking()
-            .OrderBy(s => s.Code).Select(s => s.Id).Take(2).ToListAsync(ct);
-
-        return candidates.Count == 1 ? candidates[0] : null;
-    }
+    // Which school a new event belongs to: SchoolResolution.ResolveSchoolIdAsync. Shared with the
+    // §6.2 student write surface rather than copied, so both agree with the tenant the startup log
+    // announced. A null answer becomes EventWriteOutcome.NoSchoolResolved.
 
     /// <summary>
     /// §4.5's column rules, checked before anything is read or written. In the service rather than the
