@@ -1,20 +1,117 @@
 # Attendance API — Mobile Developer Handoff
 
-**Status: DRAFT — not the published contract.** Written 2026-07-29, during Phase 3b-1.
+**Status: partial contract freeze, 2026-07-29.** Revised during Phase 4a (design).
 
-This document exists so the mobile capture app can start now instead of waiting for Phase 4.
-It describes what the backend *actually does today*, verified against the source — not what the
-Technical Plan intends. Where the two differ, this file is right about today and the plan is right
-about the destination.
+This document exists so the mobile capture app can start now instead of waiting for Phase 4 to be
+built. It describes what the backend *actually does today*, verified against the source — plus the
+parts of the contract that are now **frozen** and can be built against before they exist.
 
-**What this is not:** the published contract. Phase 4 publishes that, as an OpenAPI document, and it
-will supersede this file. Two endpoints this app depends on do not exist yet, and two known defects
-in the tap path are still open — both are listed below. Do not treat anything here as frozen.
+**Read this first:** three things are frozen and will not change. Everything else in this document is
+provisional and may move. Build your queue against the frozen parts; stub the rest.
 
 **Scope split.** The React Native capture app and the RFID hardware adapters belong to the mobile
 developer. This repo owns and publishes the API they consume. There is no physical-tap milestone on
-our side; taps are testable over plain HTTP because a card UID is just a student number (see
-[Card UIDs](#card-uids-normalise-before-you-compare)).
+our side; taps are testable over plain HTTP because a card UID is just a student number.
+
+---
+
+## FROZEN — build against these now
+
+These three are settled. They are not yet implemented; they will not change shape when they are.
+
+### 1. Device authentication header
+
+```
+Authorization: DeviceKey eams_dk_<keyId>_<secret>
+```
+
+A standard `Authorization` header with a `DeviceKey` scheme — **not** a bespoke `X-Api-Key`. The key
+is issued once by the admin back office and never retrievable afterwards. Store it in
+`expo-secure-store` / Android Keystore — **never `AsyncStorage`**.
+
+The planned enrolment UX is a QR code rendered on the admin device screen at issue time, which your
+app scans. Tell us if you would rather have something else; nothing is built yet.
+
+Your key is scoped to `attendance.capture` **only**. It will authenticate exactly four endpoints:
+`POST /attendance/tap`, `POST /attendance/tap/batch`, `GET /students/by-card/{cardUid}`, and
+`POST /devices/{id}/heartbeat`. Everything else remains open for now.
+
+Until this lands, all endpoints are open and you may send no header at all. **Send the header as soon
+as you have somewhere to put it** — the server will ignore it until 4b, then start requiring it.
+
+### 2. Outcome tokens — the machine-readable `code` field
+
+Every tap response and every batch row will carry a stable `code`. **Branch on this, never on
+`message`.** The token list is frozen contract; a rename on our side would be a breaking change and is
+pinned by a test that fails the build.
+
+| `code` | HTTP | Meaning | Your queue |
+|---|---|---|---|
+| `Recorded` | 200 | New attendance row written | Drop |
+| `DuplicateIgnored` | 200 | Your retry was absorbed — same `deviceTapId` already landed | Drop |
+| `CheckedOut` | 200 | `TimeInOut` check-out recorded | Drop |
+| `AlreadyRecorded` | 200 | Student already had a record; nothing changed | Drop |
+| `EventNotFound` | 404 | — | Stop retrying |
+| `CardNotFound` | 404 | No active card matches that UID | Stop retrying |
+| `DeviceNotRegistered` | 404 | Unknown device, or device belongs to another school | Stop retrying |
+| `EventNotOpen` | 400 | Event is Draft, Closed or Cancelled | Stop retrying |
+| `DeviceMismatch` | 400 | Body `deviceId` disagrees with your authenticated key | Stop; bug on your side |
+| `DeviceTapIdRequired` | 400 | Batch row had no `deviceTapId` | Stop; bug on your side |
+| `TappedAtOutOfRange` | 400 | `tappedAt` more than 5 min in the future — check your clock | Stop; resync clock |
+| `TappedAtOutsideEventWindow` | 400 | `tappedAt` outside the event's window | Stop retrying |
+| `BatchTooLarge` | 400 | Batch-level only; chunk and resend | Chunk, retry |
+
+Tap **failures** will also become RFC 7807 problem bodies carrying the same `code`, matching the rest
+of the API. One accessor — `body.code` — works across success and failure alike.
+
+### 3. Batch sync shape
+
+```jsonc
+// POST /attendance/tap/batch
+{
+  "clientClockAt": "2026-07-29T09:14:03Z",   // your device clock at send time
+  "taps": [ /* the same TapRequest row shape as POST /attendance/tap */ ]
+}
+```
+
+```jsonc
+// 200 — always, for any well-formed batch
+{
+  "accepted": 47,
+  "rejected": 3,
+  "serverTime": "2026-07-29T09:14:05Z",
+  "results": [
+    { "index": 0, "deviceTapId": "…", "code": "Recorded",     "status": 200, "record": { /*…*/ } },
+    { "index": 3, "deviceTapId": "…", "code": "CardNotFound", "status": 404, "record": null,
+      "message": "…" }
+  ]
+}
+```
+
+Rules you can rely on:
+
+- **The batch HTTP status describes the batch; each row's `status` describes that tap.** We are not
+  using 207 Multi-Status — proxies and clients handle it inconsistently.
+- **A `5xx` means nothing was committed.** Retry the whole batch. This is safe because every row is
+  idempotent, and the entire design rests on it.
+- **Batch-level `4xx`** is transport/auth/size only: `400` malformed or `BatchTooLarge`, `401` missing
+  or bad key, `403` revoked key.
+- **Rows correlate by both `index` and `deviceTapId`.** Use whichever you prefer.
+- **`eventId` stays per row**, not hoisted — a device that switched events while offline can flush a
+  mixed batch.
+- **`deviceTapId` is REQUIRED on this endpoint** (optional on single `/tap`). A queued tap without an
+  idempotency key cannot be safely retried.
+- **We sort rows by `tappedAt` ascending server-side**, ties by array index. Send chronologically if
+  you can; an out-of-order queue is safe either way.
+- An empty `taps` array is a 200 with empty results, not an error.
+
+> **The one thing sorting cannot fix.** A check-out whose check-in was in an *earlier batch that
+> failed* still lands as a check-in. So: **flush strictly in order, and stop the queue at the first
+> retryable error** rather than skipping past it.
+
+**Batch size cap: 200 rows — provisional.** This number is an estimate and will be measured before
+publication. Read the real limit from the OpenAPI document; it will be echoed in any `BatchTooLarge`
+body.
 
 ---
 
@@ -23,10 +120,9 @@ our side; taps are testable over plain HTTP because a card UID is just a student
 | | |
 |---|---|
 | Base URL (local dev) | `http://localhost:5080/api/v1` |
-| Interactive docs | Swagger UI at `http://localhost:5080/` — **Development only**, deliberately not served in Production |
+| Interactive docs | Swagger UI at `http://localhost:5080/` — **Development only** |
 | Serialisation | JSON, camelCase field names |
-| Errors | RFC 7807 `application/problem+json`, every body carrying a `traceId` you can quote back to us |
-| Auth | **None. Every endpoint is currently open.** See [Auth](#auth-does-not-exist-yet) |
+| Errors | RFC 7807 `application/problem+json`, every body carrying a `traceId` you can quote back |
 
 `Guid` values are JSON strings (UUID). All `DateTime` values are **UTC**, ISO 8601.
 
@@ -34,89 +130,34 @@ our side; taps are testable over plain HTTP because a card UID is just a student
 
 ## Endpoints that exist today
 
-These are implemented, tested against real SQL Server, and safe to build against — subject to the
-caveats in [Open defects](#open-defects-that-affect-your-design).
-
-### Capture
-
-#### `POST /attendance/tap`
-
-The core capture path. Permission (once auth lands): `attendance.capture`.
+### `POST /attendance/tap`
 
 ```jsonc
-// request — TapRequest
+// TapRequest
 {
   "eventId":     "3f2504e0-4f89-11d3-9a0c-0305e82c3301",  // required
   "cardUid":     "USA39912",   // required; normalised server-side
-  "deviceId":    null,          // guid | null — see Device registration
-  "deviceTapId": "a7f3...",    // string | null — YOUR idempotency key. Always send one.
-  "tappedAt":    "2026-07-29T01:15:00Z"  // datetime | null; null means "now" on the server
+  "deviceId":    null,          // guid | null — cross-checked against your key once auth lands
+  "deviceTapId": "a7f3…",      // YOUR idempotency key. Always send one.
+  "tappedAt":    "2026-07-29T01:15:00Z"  // null means "now, on the server"
 }
 ```
 
 ```jsonc
-// response — TapResult
-{
-  "success": true,
-  "message": "Juan Dela Cruz checked in (Present).",  // human-readable, WILL be reworded
-  "record": { /* AttendanceDto, or null when nothing was recorded */ }
-}
+// TapResult — `code` is being added, see FROZEN §2
+{ "success": true, "message": "…prose, do not parse…", "record": { /* AttendanceDto | null */ } }
 ```
 
-#### `POST /attendance/manual`
+### Others
 
-Organiser override, **not** a device path. Permission: `attendance.write` — deliberately distinct
-from `attendance.capture`, so a device key cannot rewrite a status. Query parameters:
-`eventId`, `studentId`, `status` (default `Present`), `notes`.
-
-This endpoint keeps working on a **closed** event, on purpose — it is the only sanctioned route to
-correct a terminal event's record.
-
-#### `GET /students/by-card/{cardUid}`
-
-UID → student resolution for the scan screen. Returns `StudentDto` or 404.
-
-Scoped `attendance.capture` rather than `students.read` on purpose: a device key must be able to
-resolve one card without being trusted to browse the whole roster.
-
-#### `GET /attendance?eventId=&studentId=&status=`
-
-Returns `AttendanceDto[]`. All three filters optional.
-
-### Event context
-
-| Endpoint | Returns |
-|---|---|
-| `GET /events?status=Open` | `EventDto[]` |
-| `GET /events/{id}` | `EventDto` |
-| `GET /events/{id}/roster` | `EventRosterDto` — expected-vs-present, the absentee source |
-| `GET /events/{id}/summary` | `EventSummaryDto` — the headline counts |
-
----
-
-## Tap outcomes → HTTP status
-
-**Branch on the HTTP status, never on `message`.** The message text is written for humans and will
-be reworded without notice.
-
-| HTTP | Outcomes folded into it | What your queue should do |
+| Endpoint | Returns | Note |
 |---|---|---|
-| `200` | `Recorded`, `DuplicateIgnored`, `CheckedOut`, `AlreadyRecorded` | Delivered. Drop from the queue. |
-| `404` | `EventNotFound`, `CardNotFound`, `DeviceNotRegistered` | Stop retrying. Surface to the operator. |
-| `400` | `EventNotOpen` | Stop retrying. The event is Draft, Closed or Cancelled. |
-| `5xx` | — | Transient. Retry with backoff. |
-
-> ### ⚠ Known gap: the outcome is not on the wire
->
-> All four success outcomes return `200` with `success: true`. There is currently **no
-> machine-readable field** distinguishing `Recorded` (we wrote a new record) from `DuplicateIgnored`
-> (your retry was absorbed) from `AlreadyRecorded` from `CheckedOut`. The only signal is the prose
-> `message`, which you must not parse.
->
-> If your reconciliation needs that distinction — and an offline queue usually does — **tell us**.
-> We added a stable `code` field to the students surface in Phase 3b-1 for exactly this reason, and
-> the tap path should get the same treatment before Phase 4 publishes it externally. This is a
-> cheap change now and a breaking one later.
+| `GET /students/by-card/{cardUid}` | `StudentDto` \| 404 | UID→student for the scan screen |
+| `GET /attendance?eventId=&studentId=&status=` | `AttendanceDto[]` | all filters optional |
+| `POST /attendance/manual` | `TapResult` | organiser override, **not** a device path |
+| `GET /events?status=Open`, `GET /events/{id}` | `EventDto` | |
+| `GET /events/{id}/roster` | `EventRosterDto` | expected-vs-present |
+| `GET /events/{id}/summary` | `EventSummaryDto` | headline counts |
 
 ---
 
@@ -126,15 +167,13 @@ Field names are camelCase on the wire. `?` marks nullable.
 
 ### `AttendanceDto`
 ```
-id             guid
-eventId        guid
-studentId      guid
-studentName    string
-studentNumber  string
-checkInAt      datetime?
-checkOutAt     datetime?
-status         string   // Present | Late | Absent | Excused
-captureMethod  string   // Rfid | Manual | Import
+id, eventId, studentId   guid
+studentName              string
+studentNumber            string
+checkInAt                datetime?
+checkOutAt               datetime?
+status                   string   // Present | Late | Absent | Excused
+captureMethod            string   // Rfid | Manual | Import
 ```
 
 ### `StudentDto`
@@ -142,21 +181,22 @@ captureMethod  string   // Rfid | Manual | Import
 id             guid
 studentNumber  string
 fullName       string
+firstName      string
+middleName     string?
+lastName       string
 email          string?
-course         string?   // ⚠ derived display cache — see below
-yearLevel      string?   // ⚠ derived display cache
-section        string?   // ⚠ derived display cache
+gender         string?
+photoUrl       string?
 status         string    // Active | Inactive | Graduated
 cards          CardDto[]
+course         string?   // ⚠ derived display cache
+yearLevel      string?   // ⚠ derived display cache
+section        string?   // ⚠ derived display cache
 ```
-
-Landing additively in Phase 3b-1 (in review as this is written):
-`firstName`, `middleName?`, `lastName`, `gender?`, `photoUrl?`.
 
 > **`course` / `yearLevel` / `section` are a derived cache, not the truth.** A student can sit in
 > several sections at once — 12 of 52 in the real roster do — so these single-valued fields cannot
-> represent reality. Read them for display only. **Never filter or group by them**, and never send
-> them back on a write: the API refuses that with `400` and `code: "FieldIsDerived"`.
+> represent reality. Display only. **Never filter or group by them.**
 
 ### `CardDto`
 ```
@@ -172,8 +212,7 @@ id                  guid
 name                string
 description         string?
 location            string?
-startAt             datetime   // UTC
-endAt               datetime   // UTC
+startAt, endAt      datetime   // UTC
 attendanceMode      string     // Single | TimeInOut
 graceMinutes        int        // Present vs Late boundary, from startAt
 requireRegistration bool
@@ -185,10 +224,7 @@ status              string     // Draft | Open | Closed | Cancelled
 eventId         guid
 eventName       string
 expected        int      // the invited population — NOT the number who tapped
-present         int
-late            int
-absent          int
-excused         int
+present, late, absent, excused   int
 unexpected      int      // walk-ins: recorded but never invited
 attendanceRate  double   // % of the invited who turned up, 1dp. Cannot exceed 100.
 ```
@@ -207,9 +243,8 @@ EventRosterEntryDto
   fullName       string
   section        string?
   isExpected     bool     // false = walk-in
-  status         string?  // null = expected but no record yet (the live absentee signal)
-  checkInAt      datetime?
-  checkOutAt     datetime?
+  status         string?  // null = expected but no record yet
+  checkInAt, checkOutAt  datetime?
   captureMethod  string?
 ```
 
@@ -219,108 +254,119 @@ EventRosterEntryDto
 
 ### Card UIDs: normalise before you compare
 
-**A card UID *is* the student number (REGNO).** No tap-to-bind screen exists or is needed — students
-arrive card-ready from the roster import.
+**A card UID *is* the student number (REGNO).** No tap-to-bind screen is needed — students arrive
+card-ready from the roster import.
 
 Normalisation is uppercase with all non-alphanumerics stripped: `04:A7:B8:C9`, `04-a7-b8-c9` and
-`04a7b8c9` are **one card**, stored as `04A7B8C9`. The server normalises on the way in, so you may
-send the raw reader format — but if you cache or compare UIDs locally, normalise first and compare
-second, or your local dedupe will disagree with ours.
+`04a7b8c9` are **one card**, stored as `04A7B8C9`. The server normalises inbound, so you may send the
+raw reader format — but normalise before any *local* cache or comparison, or your dedupe will
+disagree with ours.
 
-> **Security note, for your awareness rather than your code.** Student numbers are sequential and
-> printed on the ID card, so a UID is guessable. Anyone who can reach the tap endpoint can forge a
-> classmate's attendance. This is a property of the card scheme, not something either side can fully
-> fix in software — which is why device API-key auth is a hard requirement before go-live, and why
-> taps should be constrained to the event window and audited.
+> **Security note, for awareness rather than code.** Student numbers are sequential and printed on the
+> ID, so a UID is guessable. Device auth, the event window, and audit are the mitigations — which is
+> why device keys are not optional.
 
-### `deviceTapId`: always send one, and keep it stable
+### `deviceTapId`: always send one, keep it stable
 
-This is the idempotency key the whole offline sync design rests on. Send it on **every** tap, online
-or queued. A retry carrying the same `deviceTapId` is absorbed rather than duplicated — that is what
-makes it safe for your queue to retry aggressively after a network failure.
+The idempotency key the whole offline design rests on. Generate it once, when the tap happens on the
+device, and **never regenerate it on retry**. Required on batch, strongly recommended on single taps.
 
-Generate it once, when the tap happens on the device, and never regenerate it on retry.
+### Everything is UTC — and your clock is load-bearing
 
-### Everything is UTC
+`tappedAt` plus the event's `graceMinutes` is what decides **Present vs Late**. Send UTC with an
+explicit `Z`. A bare or offset-bearing local time misjudges the boundary by the server's offset —
+eight hours in Manila. This has already been a real defect on our side once.
 
-`startAt`, `endAt`, `tappedAt`, `checkInAt`, `checkOutAt` are all UTC. Send `tappedAt` as UTC with an
-explicit `Z`.
+**We will never silently rewrite your `tappedAt`.** Instead:
 
-A bare or offset-bearing local time gets compared against a UTC `startAt` and **misjudges Present vs
-Late by the server's offset — eight hours in Manila.** This has already been a real defect on our
-side once. `tappedAt` plus the event's `graceMinutes` is what decides Present vs Late, so your device
-clock is load-bearing; tell us how you intend to handle clock skew.
+- Every response carries `serverTime`. Compute an offset and apply it before enqueueing.
+- Send `clientClockAt` on each batch — your clock at send time. Its difference from our clock is pure
+  skew, free of queue latency, and we log and alert on drift.
+- A `tappedAt` **more than 5 minutes in the future** is rejected (`TappedAtOutOfRange`). The past is
+  never age-limited — an old queued tap is the entire point of the endpoint.
+- A `tappedAt` outside the event window — default **60 minutes either side** of `StartAt`/`EndAt`,
+  configurable per school — is rejected (`TappedAtOutsideEventWindow`). *Submission* lateness is
+  unconstrained; only the claimed tap time is checked.
 
 ---
 
-## Not built yet — do not design around these
+## Live attendance: polling, not SignalR
 
-| Missing | Why it matters to you |
+**Decision taken 2026-07-29.** The plan named a SignalR hub; we are shipping a cursor-delta polling
+endpoint instead, and you should build against polling.
+
+The reason, so it does not look arbitrary: a SignalR client must fetch a snapshot on every reconnect
+to close the gap it missed — so this endpoint is required under *both* designs. It is also far
+kinder to a campus firewall, needs no backplane or sticky sessions on our side, and does not force
+your device key into a WebSocket query string where it lands in access logs.
+
+```
+GET /attendance/live/{eventId}?since=<cursor>
+```
+
+- **`since` absent** → snapshot: `{ eventId, cursor, counters, entries[], serverTime, pollAfterSeconds }`
+- **`since` present** → `{ eventId, cursor, counters, changes[], serverTime, pollAfterSeconds }`
+
+**Respect `pollAfterSeconds`** — it lets us back clients off under load without you shipping a
+release.
+
+If a hub is ever added, it will emit exactly the same delta object, so your reducer would not change.
+
+---
+
+## Not built yet
+
+| Missing | Status |
 |---|---|
-| `POST /attendance/tap/batch` | **The offline sync endpoint. Your most important one.** Phase 4. |
-| `GET /attendance/live/{eventId}` | Live attendance feed. Phase 4. |
-| SignalR hub `/hubs/attendance` | Real-time push. Phase 4. |
-| Device registration + API keys | `TapRequest.deviceId` and a `DeviceNotRegistered` outcome exist, but nothing issues or registers a device. Phase 4. |
-| Auth of any kind | See below. |
+| `POST /attendance/tap/batch` | Shape **frozen** above. Implementation: Phase 4d |
+| `GET /attendance/live/{eventId}` | Shape above, provisional in detail. Phase 4d |
+| Device registration + API keys | Header **frozen** above. Implementation: Phase 4b |
+| Rate limiting on capture endpoints | Phase 4b |
+| Auth for everything else | Phase 6 (JWT + RBAC) |
 
-### Auth does not exist yet
-
-**Every endpoint is currently open.** This is deliberate and recorded (ADR-001 D-6); JWT plus
-permission-based RBAC is Phase 6.
-
-The permission each endpoint *will* demand is already declared in code, so nothing will be
-re-derived later — `attendance.capture` for taps and card lookup, `attendance.write` for manual
-overrides. Your device key will be scoped to `attendance.capture` alone.
-
-**Build an auth header seam into your HTTP layer now.** Adding one later is far more disruptive than
-leaving an unused hook in place.
+**Until 4b lands, every endpoint is open.** Build the auth seam now regardless.
 
 ---
 
-## Open defects that affect your design
+## Open defects — both being fixed, both affect you
 
-Both are written as executable, reviewed, currently-skipped tests in `EAMS.Tests/KnownDefectTests` —
-the expected behaviour is already specified, so closing them is "delete one `Skip` and make it
-green" rather than "work out what correct means".
+### 1. A `TimeInOut` check-out discards its own `deviceTapId` — **fix decided, landing in 4c**
 
-### 1. A `TimeInOut` check-out discards its own `deviceTapId`
+Today a check-out returns `AlreadyRecorded` instead of `CheckedOut`, and its `deviceTapId` is not
+retained. The fix gives a check-out its **own** idempotency key with its own unique index behind it,
+so each half of a `TimeInOut` pair is independently retryable.
 
-It returns `AlreadyRecorded` instead of `CheckedOut`. **This is squarely in your path**: the
-idempotency key we publish as the foundation of offline sync is not honoured on the check-out half
-of a `TimeInOut` event. The test's own note says it should be settled before Phase 4.
+**What this means for you:** once 4c lands, replaying a check-out returns `DuplicateIgnored`, and
+`CheckedOut` means the check-out was newly recorded. Until then, do not trust check-out idempotency.
 
-**If you build a check-out queue on `deviceTapId` idempotency today, you are building on something
-known-broken.** No data loss occurs, but the contract lies. Flag your dependency on this and we will
-prioritise it.
+### 2. A device from another school can record a tap — **closes with 4b**
 
-### 2. A device from another school can record a tap
-
-Latent while the system is single-tenant, so it cannot bite today. It must close before multi-tenancy
-becomes real. Listed for completeness — it should not change your design.
+Latent while the system is single-tenant. Device authentication is itself the fix: once your key
+identifies the device, its school scopes the event lookup, and a foreign event is simply
+`EventNotFound`. No change on your side.
 
 ---
 
-## What we need from you
+## What we still need from you
 
-So Phase 4 designs the batch endpoint around your actual client rather than our guess:
+Four of these were designed *around* rather than *from*, because you were waiting on us. If any answer
+contradicts what is frozen above, tell us **now** — the batch shape, the required `deviceTapId`, and
+the clock-skew rules are the parts most likely to move.
 
-1. **Offline queue semantics** — retry and backoff policy, how long a tap can sit queued, what you do
-   with a permanently rejected one.
-2. **`deviceTapId` generation** — what it is derived from, and its uniqueness guarantee.
-3. **Batch size and shape** — how many taps per `POST /attendance/tap/batch`, and whether you need
-   per-row results or a single accept/reject. (We will give you per-row; confirm.)
-4. **Device identity** — how you want a device registered and keyed, and what happens on reinstall.
-5. **Clock skew** — how you correct or flag a device clock that has drifted, given `tappedAt` decides
-   Present vs Late.
-6. **Whether you need the machine-readable tap outcome** described in the gap note above.
+1. **Offline queue semantics** — retry/backoff policy, how long a tap may sit queued, what you do with
+   a permanently rejected row.
+2. **`deviceTapId` generation** — what it derives from, and its uniqueness guarantee.
+3. **Batch size** — does 200 rows suit your flush strategy?
+4. **Device enrolment** — is QR-scan-at-issue the UX you want? What should happen on reinstall?
+5. **Clock skew** — how do you correct or flag a drifted device clock?
+6. **Does anything you have already built depend on tap *failures* returning `TapResult` rather than a
+   problem body?** We are changing that in 4c, and you are the only consumer we cannot check.
 
 ---
 
 ## How this document changes
 
-Phase 4 replaces it with a published OpenAPI contract; at that point this file becomes a pointer to
-that document. Until then it tracks the code, and anything marked ⚠ or "not built" is subject to
-change without a deprecation path.
+Phase 4e replaces it with a published OpenAPI contract; this file then becomes a pointer to it.
+Anything marked FROZEN will not change before then. Anything marked ⚠, provisional, or "not built" may.
 
-Questions and answers to the backend team. Quote the `traceId` from any error body you want us to
-look into.
+Questions to the backend team. Quote the `traceId` from any error body you want us to look into.
