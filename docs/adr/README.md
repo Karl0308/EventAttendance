@@ -15,9 +15,22 @@ it creates one hazard this file exists to close:
 |---|---|---|---|
 | [001](ADR-001-schema-drift-from-technical-plan.md) | Schema drift from the Technical Plan | **Accepted** | D-1…D-6. **Amended by ADR-002** — do not read its follow-up list as current |
 | [002](ADR-002-phase-1-2-schema-and-import-decisions.md) | Phase 1–2 schema and import decisions | **Accepted** (2026-07-28) | D-7…D-11. Amends ADR-001 by reference; closes four of its follow-ups. **Now immutable** |
-| [003](ADR-003-phase-3a-event-audience-and-close-freeze.md) | Phase 3a — the event audience and the close-time freeze | **Proposed** | D-12…D-21. Amends 001 and 002 by reference; closes GAP 6. The first ADR about *behaviour* rather than schema |
+| [003](ADR-003-phase-3a-event-audience-and-close-freeze.md) | Phase 3a — the event audience and the close-time freeze | **Accepted** (2026-07-29) | D-12…D-21. Amends 001 and 002 by reference; closes GAP 6. The first ADR about *behaviour* rather than schema. **Now immutable** |
 
 Decision numbers run continuously across documents, so `D-9` is unambiguous without naming the ADR.
+
+## Decided, but not yet registered
+
+An index that only lists written ADRs cannot warn you about a decision nobody wrote down. This is
+that warning.
+
+| Pending | Made at | Currently lives only in |
+|---|---|---|
+| **D-22** — a soft-deleted student's card may be **deactivated**, but a new card may not be **issued** to them. Releasing what a deleted student holds is bookkeeping; issuing to them is a claim. This is the only one of five write methods that deliberately bypasses the `!IsDeleted` lookup | Phase 3b-1 review gate, 2026-07-29 | `StudentService.DeactivateCardAsync` remarks, and `StudentSoftDeleteStrandingTests` |
+
+Deferred to the ADR-004 consolidation at JJ's direction, not forgotten. Both directions of the
+asymmetry are pinned by tests, so it cannot silently collapse — but a reader who wonders *why* one
+method differs has only a code comment to find.
 
 ## What is decided where
 

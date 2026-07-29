@@ -1,6 +1,6 @@
 # ADR-003: Phase 3a — the Event Audience and the Close-Time Freeze
 
-**Status**: Proposed
+**Status**: Accepted (2026-07-29, by JJ)
 **Date**: 2026-07-28
 **Deciders**: JJ; JoseArch (Team X)
 **Relationship to ADR-001 / ADR-002**: **Amends both by reference.** Neither is edited; both remain
