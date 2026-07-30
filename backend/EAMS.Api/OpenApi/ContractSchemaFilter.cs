@@ -133,7 +133,7 @@ internal sealed class ContractSchemaFilter : ISchemaFilter
             {
                 ["index"] = new OpenApiInteger(0),
                 ["deviceTapId"] = new OpenApiString(DeviceTapId),
-                ["code"] = new OpenApiString("Recorded"),
+                ["code"] = new OpenApiString(TapOutcome.Recorded.ToString()),
                 ["status"] = new OpenApiInteger(200),
                 ["record"] = AttendanceExample(AttendanceStatus.Present),
                 ["message"] = new OpenApiString("Checked in at 09:02 (Present)."),
@@ -142,7 +142,7 @@ internal sealed class ContractSchemaFilter : ISchemaFilter
             {
                 ["index"] = new OpenApiInteger(1),
                 ["deviceTapId"] = new OpenApiString("b8c4d2f6-1a37-4e50-8c92-7f3b6d1e04bb"),
-                ["code"] = new OpenApiString("CardNotFound"),
+                ["code"] = new OpenApiString(TapOutcome.CardNotFound.ToString()),
                 ["status"] = new OpenApiInteger(404),
                 ["record"] = new OpenApiNull(),
                 ["message"] = new OpenApiString("No active card matches that UID."),
@@ -151,7 +151,7 @@ internal sealed class ContractSchemaFilter : ISchemaFilter
             {
                 ["index"] = new OpenApiInteger(2),
                 ["deviceTapId"] = new OpenApiString("c9d5e3a7-4b28-4f61-90d3-8a2c7e5f19cc"),
-                ["code"] = new OpenApiString("DuplicateIgnored"),
+                ["code"] = new OpenApiString(TapOutcome.DuplicateIgnored.ToString()),
                 ["status"] = new OpenApiInteger(200),
                 ["record"] = AttendanceExample(AttendanceStatus.Late),
                 ["message"] = new OpenApiString("That tap was already recorded."),

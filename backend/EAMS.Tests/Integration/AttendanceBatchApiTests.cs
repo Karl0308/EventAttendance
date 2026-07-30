@@ -14,8 +14,9 @@ namespace EAMS.Tests.Integration;
 /// <c>GET /attendance/live/{eventId}</c>, asserted on the bytes rather than through the service.
 ///
 /// <para>
-/// The batch shape is frozen with an external mobile developer
-/// (<c>docs/api/attendance-contract-handoff.md</c> §3), and the parts of it that a service-level test
+/// The batch shape is frozen with an external mobile developer (the <c>TapBatchRequest</c> /
+/// <c>TapBatchResult</c> schemas in the generated OpenAPI document), and the parts of it that a
+/// service-level test
 /// cannot see are exactly the parts that were frozen: the transport status being 200 while a row's own
 /// <c>status</c> is a 404, the field names after camelCasing, and which keys are present at all.
 /// <c>ApiContractTests</c> records why that gap matters — a 404 quietly becoming a 200 breaks a client

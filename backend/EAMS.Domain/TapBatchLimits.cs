@@ -8,7 +8,8 @@ namespace EAMS.Domain;
 public static class TapBatchLimits
 {
     /// <summary>
-    /// Rows per request. Published as 200 in <c>docs/api/attendance-contract-handoff.md</c> §3, and the
+    /// Rows per request. Published as 200 in the generated OpenAPI document and in
+    /// <c>docs/api/attendance-contract-handoff.md</c>, and the
     /// number is echoed in every <c>BatchTooLarge</c> body so a client can chunk to it without a
     /// release — which is the whole reason it is a published number rather than a private constant.
     ///

@@ -30,10 +30,20 @@ public class EventsController : ControllerBase
         [FromQuery] string? status, CancellationToken ct)
         => Ok(await _events.ListAsync(status, ct));
 
+    /// <summary><c>GET /events/{id}</c> — one event.</summary>
+    /// <remarks>
+    /// The event's own record only. Its counts are <c>GET /events/{id}/summary</c> and its audience is
+    /// <c>GET /events/{id}/roster</c> — kept apart so rendering an event detail page does not pay for
+    /// aggregates the caller may not be showing.
+    /// </remarks>
+    /// <param name="id">The event.</param>
+    /// <param name="ct">Cancellation token.</param>
+    /// <response code="200">The event.</response>
+    /// <response code="404">No such event, or it is soft-deleted.</response>
     [HttpGet("{id:guid}")]
     [HasPermissionNotEnforced("events.read")]
     [ProducesResponseType(typeof(EventDto), StatusCodes.Status200OK)]
-    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status404NotFound)]
     public async Task<ActionResult<EventDto>> Get(Guid id, CancellationToken ct)
     {
         var e = await _events.GetAsync(id, ct);
@@ -82,7 +92,10 @@ public class EventsController : ControllerBase
     [HttpGet("{id:guid}/summary")]
     [HasPermissionNotEnforced("events.read")]
     [ProducesResponseType(typeof(EventSummaryDto), StatusCodes.Status200OK)]
-    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    // typeof: [ApiController] turns NotFound() into a ProblemDetails, so declaring the status alone
+    // publishes a 404 the document says carries no body — while 4e's <response> paragraph above
+    // describes one.
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status404NotFound)]
     public async Task<ActionResult<EventSummaryDto>> Summary(Guid id, CancellationToken ct)
     {
         var summary = await _events.GetSummaryAsync(id, ct);
@@ -123,12 +136,26 @@ public class EventsController : ControllerBase
         return CreatedAtAction(nameof(Get), new { id = response.Event!.Id }, response.Event);
     }
 
+    /// <summary><c>PUT /events/{id}</c> — update an event.</summary>
+    /// <remarks>
+    /// A full replace of the event's own fields; the audience is not part of this body and moves through
+    /// the <c>attendees</c> routes instead. A status transition the event cannot make is <c>409</c>
+    /// rather than <c>400</c> — the request is well-formed, the event is simply not in a state that
+    /// allows it.
+    /// </remarks>
+    /// <param name="id">The event.</param>
+    /// <param name="request">The new field values.</param>
+    /// <param name="ct">Cancellation token.</param>
+    /// <response code="200">The updated event.</response>
+    /// <response code="400">The body is invalid.</response>
+    /// <response code="404">No such event, or it is soft-deleted.</response>
+    /// <response code="409">The event's current status does not allow this change.</response>
     [HttpPut("{id:guid}")]
     [HasPermissionNotEnforced("events.write")]
     [ProducesResponseType(typeof(EventDto), StatusCodes.Status200OK)]
-    [ProducesResponseType(StatusCodes.Status400BadRequest)]
-    [ProducesResponseType(StatusCodes.Status404NotFound)]
-    [ProducesResponseType(StatusCodes.Status409Conflict)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status404NotFound)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status409Conflict)]
     public async Task<ActionResult<EventDto>> Update(
         Guid id, [FromBody] EventWriteRequest request, CancellationToken ct)
     {
@@ -210,7 +237,26 @@ public class EventsController : ControllerBase
         return response.Outcome == EventWriteOutcome.Saved ? NoContent() : AudienceFailure(response);
     }
 
-    /// <inheritdoc cref="DetachGroup"/>
+    /// <summary>
+    /// <c>DELETE /events/{id}/attendees/students/{studentId}</c> — detach one individually-attached
+    /// student from the event's audience.
+    /// </summary>
+    /// <remarks>
+    /// Idempotent, on the same reasoning as <see cref="DetachGroup"/>: detaching a student who is not
+    /// attached is <c>204</c>, not <c>404</c>, so a retry is safe. A missing <em>event</em> is still
+    /// <c>404</c> — that one is named by the URL.
+    ///
+    /// <para>
+    /// Spelled out rather than left as <c>&lt;inheritdoc&gt;</c>: Swashbuckle does not resolve that tag,
+    /// so this operation shipped with an empty description while looking documented in the source.
+    /// </para>
+    /// </remarks>
+    /// <param name="id">The event.</param>
+    /// <param name="studentId">The student to detach.</param>
+    /// <param name="ct">Cancellation token.</param>
+    /// <response code="204">Detached, or was not attached.</response>
+    /// <response code="404">No such event.</response>
+    /// <response code="409">The event's status does not allow an audience change.</response>
     [HttpDelete("{id:guid}/attendees/students/{studentId:guid}")]
     [HasPermissionNotEnforced("events.write")]
     [ProducesResponseType(StatusCodes.Status204NoContent)]

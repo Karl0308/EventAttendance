@@ -54,10 +54,20 @@ public class StudentsController : ControllerBase
         CancellationToken ct)
         => Ok(await _students.ListAsync(search, course, status, ct));
 
+    /// <summary><c>GET /students/{id}</c> — one student by primary key.</summary>
+    /// <remarks>
+    /// By <c>Id</c>, not by student number. A capture client holding a card UID wants
+    /// <c>GET /students/by-card/{cardUid}</c> instead — the UID <em>is</em> the student number, so that
+    /// route is the one that avoids a lookup round trip.
+    /// </remarks>
+    /// <param name="id">The student's primary key.</param>
+    /// <param name="ct">Cancellation token.</param>
+    /// <response code="200">The student.</response>
+    /// <response code="404">No such student.</response>
     [HttpGet("{id:guid}")]
     [HasPermissionNotEnforced("students.read")]
     [ProducesResponseType(typeof(StudentDto), StatusCodes.Status200OK)]
-    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status404NotFound)]
     public async Task<ActionResult<StudentDto>> Get(Guid id, CancellationToken ct)
     {
         var s = await _students.GetAsync(id, ct);

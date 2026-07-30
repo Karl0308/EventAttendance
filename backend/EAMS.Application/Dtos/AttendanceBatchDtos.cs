@@ -2,8 +2,8 @@ namespace EAMS.Application.Dtos;
 
 /// <summary>
 /// The body of <c>POST /attendance/tap/batch</c> — Technical Plan §8.2's offline queue flush, and the
-/// shape frozen with the external mobile developer in
-/// <c>docs/api/attendance-contract-handoff.md</c> §3 (Phase 4d, D-31).
+/// shape frozen with the external mobile developer, published as the <c>TapBatchRequest</c> /
+/// <c>TapBatchResult</c> schemas in the generated OpenAPI document (Phase 4d, D-31).
 /// </summary>
 /// <param name="ClientClockAt">
 /// The device's own clock at the moment it sent this batch.

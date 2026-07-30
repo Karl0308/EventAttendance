@@ -602,6 +602,14 @@ public class AttendanceLiveTests : IntegrationTest
         Assert.Equal(AttendanceLiveOptions.MaxPageRows, first.Entries!.Count);
         Assert.True(first.HasMore, "A truncated page must say so, or a client waits pollAfterSeconds per page.");
 
+        // The counters are bounded by the CURSOR, not by the ceiling — which on a truncated page are
+        // different values. Bounding them by the ceiling counts the rows this page deliberately withheld,
+        // so the headline reads 501 over a list of 500 names: the exact defect 4e set out to close, just
+        // reached by truncation instead of by a long-running transaction. The published contract asserts
+        // this cannot happen, so it is the document that is wrong if this ever regresses.
+        Assert.Equal(first.Entries.Count, first.Counters.Present);
+        Assert.Equal(first.Entries.Count, first.Counters.Unexpected);
+
         var second = await LiveAsync(world.EventId, first.Cursor);
 
         Assert.False(second.HasMore);

@@ -582,11 +582,20 @@ internal sealed class EventService : IEventService
         // ADR-003 D-12/D-13 record that this denominator fails silently when it is duplicated, so
         // sharing the one implementation is what stops a second copy drifting plausibly.
         //
+        // Bounded by `cursor` rather than by `ceiling`, and the difference is the whole point. They are
+        // the same value on an untruncated page; on a truncated one the cursor stops at the last row
+        // DELIVERED, so counting to the ceiling would count the rows this page deliberately withheld and
+        // the headline would read 501 over a list of 500 names — the same defect reached by paging
+        // instead of by a long transaction. The cost is that a dashboard paging through a large event
+        // sees the headline climb with the list instead of jumping to the total; `hasMore` already tells
+        // the client it is mid-page, and a number that matches the names beside it is the property the
+        // published contract sells.
+        //
         // Note what this does NOT make: an atomic read. The rows and the counters are still separate
-        // statements against a moving database, so a row committed between them raises the ceiling for
-        // neither — both are bounded by the same `ceiling` value, read once above. That is the property
-        // that matters: the counters can no longer describe a wider set than the rows do.
-        var counters = await SummaryForAsync(ev, ceiling, ct);
+        // statements against a moving database, so a row committed between them raises the bound for
+        // neither — both are bounded by the same value, read once above. That is the property that
+        // matters: the counters can no longer describe a wider set than the rows do.
+        var counters = await SummaryForAsync(ev, cursor, ct);
 
         var deltas = rows.Select(r => new AttendanceDeltaDto(
             ev.Id, r.StudentId, r.Status, r.CheckInAt,

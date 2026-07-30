@@ -48,10 +48,19 @@ public class DevicesController : ControllerBase
     public async Task<ActionResult<IEnumerable<DeviceDto>>> List(CancellationToken ct)
         => Ok(await _devices.ListAsync(ct));
 
+    /// <summary><c>GET /devices/{id}</c> — one registered device.</summary>
+    /// <remarks>
+    /// <b>No key material, ever</b> — same rule as the list. The plaintext key exists only in the 201
+    /// that issued it; what comes back here is the public key id and the lifecycle timestamps.
+    /// </remarks>
+    /// <param name="id">The device.</param>
+    /// <param name="ct">Cancellation token.</param>
+    /// <response code="200">The device.</response>
+    /// <response code="404">No such device in this school.</response>
     [HttpGet("{id:guid}")]
     [HasPermissionNotEnforced("devices.read")]
     [ProducesResponseType(typeof(DeviceDto), StatusCodes.Status200OK)]
-    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status404NotFound)]
     public async Task<ActionResult<DeviceDto>> Get(Guid id, CancellationToken ct)
     {
         var device = await _devices.GetAsync(id, ct);

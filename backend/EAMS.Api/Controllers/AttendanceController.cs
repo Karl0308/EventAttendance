@@ -422,6 +422,12 @@ public class AttendanceController : ControllerBase
     /// <response code="404"><c>EventNotFound</c> or <c>StudentNotFound</c>, same body shape.</response>
     [HttpPost("manual")]
     [HasPermissionNotEnforced("attendance.write")]
+    // Without these the document infers TapResult for every status this action produces, which 4c made
+    // untrue: a generated client would deserialize a problem body into TapResult and read `success` off
+    // a field that is not there. The <response> tags above supply the prose, not the schema.
+    [ProducesResponseType(typeof(TapResult), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status404NotFound)]
     public async Task<ActionResult<TapResult>> Manual(
         [FromQuery] Guid eventId, [FromQuery] Guid studentId,
         [FromQuery] string status = "Present",

@@ -172,6 +172,95 @@ public class OpenApiDocumentTests : IntegrationTest
         Assert.Contains("deviceTapId", description!, StringComparison.Ordinal);
     }
 
+    /// <summary>
+    /// <b>Every operation, not just the one above.</b> <c>CS1591</c> ("missing XML comment") is
+    /// suppressed across both projects — for a good reason, since it fires on every DTO member and
+    /// answering it buries the comments that carry a decision. The cost of that suppression is the
+    /// build-level signal that an <em>action</em> shipped undocumented, and this is what buys it back:
+    /// an endpoint added without a <c>&lt;summary&gt;</c> lands in the published contract with an empty
+    /// description, which is the same drift <see cref="EamsOpenApi.XmlCommentPaths"/> throws to prevent,
+    /// one granularity down.
+    /// </summary>
+    [Fact]
+    public async Task Every_operation_carries_a_summary()
+    {
+        using var document = await DocumentAsync();
+
+        var undocumented = document.RootElement.GetProperty("paths").EnumerateObject()
+            // The probe controllers live in this test project, so the test host discovers them and the
+            // real one never does. They are not the published surface.
+            .Where(path => !path.Name.StartsWith("/test-only/", StringComparison.Ordinal))
+            .SelectMany(path => path.Value.EnumerateObject()
+                .Select(operation => (Route: $"{operation.Name.ToUpperInvariant()} {path.Name}", operation.Value)))
+            .Where(o => !o.Value.TryGetProperty("summary", out var s)
+                     || string.IsNullOrWhiteSpace(s.GetString()))
+            .Select(o => o.Route)
+            .ToList();
+
+        Assert.True(
+            undocumented.Count == 0,
+            "These operations ship in the published contract with no summary: " +
+            string.Join(", ", undocumented) +
+            ". Add a /// <summary> to the action. CS1591 is suppressed project-wide, so the compiler " +
+            "will not tell you — this test is the replacement for that warning.");
+    }
+
+    /// <summary>
+    /// <b>Each capture operation publishes exactly the responses it documents, with the right body.</b>
+    ///
+    /// <para>
+    /// The gap this closes is silent and it was open for the whole of 4e. Swashbuckle attaches a
+    /// <c>&lt;response code="N"&gt;</c> paragraph only to a response the <c>ApiDescription</c> already
+    /// declares — so a <c>&lt;response&gt;</c> tag with no matching <c>[ProducesResponseType]</c>
+    /// produces no warning, no error, and no entry: the paragraph simply evaporates. That is exactly how
+    /// <c>POST /attendance/manual</c> came to document a problem body while the document advertised
+    /// <c>TapResult</c> for its failures, which is a generated client deserializing an RFC 7807 body into
+    /// the wrong type and reading <c>success</c> off a field that is not there.
+    /// </para>
+    ///
+    /// <para>
+    /// The status set is asserted <em>exactly</em> rather than as a subset. A missing declaration and a
+    /// stray one are both drift, and only an exact comparison catches the first — which is the direction
+    /// that actually bit.
+    /// </para>
+    ///
+    /// <para>
+    /// Transcribed, never derived, for the reason the outcome-token tests record: reading the expected
+    /// set off the attributes would assert that the pipeline equals itself. <c>401</c>, <c>403</c> and
+    /// <c>429</c> carry no body by design — they are produced by the authentication handler and the rate
+    /// limiter, not by an action returning a DTO — so they are declared here with an empty schema.
+    /// </para>
+    /// </summary>
+    [Theory]
+    [InlineData(Tap, "post", "200:TapResult,400:ProblemDetails,404:ProblemDetails,401:,403:,429:")]
+    [InlineData(TapBatch, "post", "200:TapBatchResult,400:ProblemDetails,401:,403:,429:")]
+    [InlineData(Manual, "post", "200:TapResult,400:ProblemDetails,404:ProblemDetails")]
+    [InlineData(Live, "get", "200:AttendanceLiveDto,400:ProblemDetails,404:ProblemDetails,429:")]
+    public async Task Each_capture_operation_publishes_exactly_its_documented_responses(
+        string path, string method, string expected)
+    {
+        using var document = await DocumentAsync();
+
+        var declared = Operation(document, path, method).GetProperty("responses");
+
+        var expectedByStatus = expected.Split(',')
+            .Select(pair => pair.Split(':'))
+            .ToDictionary(parts => parts[0], parts => parts[1]);
+
+        Assert.Equal(
+            expectedByStatus.Keys.OrderBy(s => s, StringComparer.Ordinal),
+            declared.EnumerateObject().Select(r => r.Name).OrderBy(s => s, StringComparer.Ordinal));
+
+        foreach (var (status, schema) in expectedByStatus.Where(e => e.Value.Length > 0))
+        {
+            Assert.True(
+                schema == SchemaRefOf(declared, status),
+                $"{method.ToUpperInvariant()} {path} publishes '{SchemaRefOf(declared, status)}' as its " +
+                $"{status} body, but the contract documents '{schema}'. A client generated from this " +
+                "document deserializes the wrong type — silently, since both are objects.");
+        }
+    }
+
     // -------------------------------------------------------------------------- the security scheme
 
     /// <summary>

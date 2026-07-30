@@ -133,10 +133,23 @@ public class SisImportController : ControllerBase
         }
     }
 
+    /// <summary>
+    /// <c>GET /sis/import/{batchId}</c> — one import batch and its counts.
+    /// </summary>
+    /// <remarks>
+    /// The batch header, not its rows: totals and status, with the staged rows behind
+    /// <c>GET /sis/import/{batchId}/rows</c>. This is the poll target between uploading a batch and
+    /// running it, and it is what makes a <c>404</c> from <c>POST .../run</c> unambiguous — both verbs
+    /// agree about which batches exist.
+    /// </remarks>
+    /// <param name="batchId">The batch.</param>
+    /// <param name="ct">Cancellation token.</param>
+    /// <response code="200">The batch.</response>
+    /// <response code="404">No such batch.</response>
     [HttpGet("{batchId:guid}")]
     [HasPermissionNotEnforced("sis.import")]
     [ProducesResponseType(typeof(SisImportBatchDto), StatusCodes.Status200OK)]
-    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status404NotFound)]
     public async Task<ActionResult<SisImportBatchDto>> Get(Guid batchId, CancellationToken ct)
     {
         var batch = await _import.GetAsync(batchId, ct);

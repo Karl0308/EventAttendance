@@ -6,9 +6,9 @@ using Xunit;
 namespace EAMS.Tests.Unit;
 
 /// <summary>
-/// <b><see cref="TapOutcome"/>'s member names are published contract</b>, frozen in
-/// <c>docs/api/attendance-contract-handoff.md</c> §2 and being built against right now by a mobile
-/// developer we cannot recompile (Phase 4c, D-37).
+/// <b><see cref="TapOutcome"/>'s member names are published contract</b>, frozen as the
+/// <c>TapOutcomeCode</c> schema in the generated OpenAPI document and being built against right now by
+/// a mobile developer we cannot recompile (Phase 4c, D-37).
 ///
 /// <para>
 /// That makes an ordinary, invisible refactor into a breaking change: renaming
@@ -95,10 +95,10 @@ public class TapOutcomeContractTests
         {
             Assert.True(
                 PublishedTokens.Contains(outcome.ToString()),
-                $"TapOutcome.{outcome} is not in the frozen token list in " +
-                "docs/api/attendance-contract-handoff.md §2. Either it was renamed — which is a " +
+                $"TapOutcome.{outcome} is not in the frozen token list here or in the generated " +
+                "OpenAPI document's TapOutcomeCode schema. Either it was renamed — which is a " +
                 "breaking change for the mobile client and needs a contract revision, not an edit " +
-                "here — or it is new and the document has not been updated yet.");
+                "here — or it is new and has not been published yet.");
         }
     }
 
@@ -115,9 +115,9 @@ public class TapOutcomeContractTests
         {
             Assert.True(
                 declared.Contains(token),
-                $"'{token}' is published in docs/api/attendance-contract-handoff.md §2 but no " +
-                "TapOutcome declares it. A published token that cannot be returned is a branch the " +
-                "mobile client wrote and will never reach.");
+                $"'{token}' is published as a TapOutcomeCode but no TapOutcome declares it. A " +
+                "published token that cannot be returned is a branch the mobile client wrote and " +
+                "will never reach.");
         }
     }
 
@@ -147,7 +147,7 @@ public class TapOutcomeContractTests
             Assert.True(
                 published.Status == AttendanceController.StatusCodeFor(outcome),
                 $"TapOutcome.{outcome} maps to {AttendanceController.StatusCodeFor(outcome)}, but " +
-                $"docs/api/attendance-contract-handoff.md §2 publishes {published.Status}. The " +
+                $"the published contract says {published.Status}. The " +
                 "(code, HTTP) pair is frozen contract — §8.2's offline queue branches on the status " +
                 "and drops anything 2xx, so a rejection mapped to 200 is a tap the client deletes " +
                 "and we never wrote.");
@@ -155,8 +155,8 @@ public class TapOutcomeContractTests
     }
 
     /// <summary>
-    /// The exemption was a loan, and Phase 4d repaid it. Every token in
-    /// <c>docs/api/attendance-contract-handoff.md</c> §2 is now something this API can actually return.
+    /// The exemption was a loan, and Phase 4d repaid it. Every token in the published
+    /// <c>TapOutcomeCode</c> schema is now something this API can actually return.
     ///
     /// <para>
     /// Failing here means somebody added an entry to <see cref="NotYetOnTheWire"/>. That is sometimes

@@ -24,7 +24,7 @@ Decision numbers run continuously across documents, so `D-9` is unambiguous with
 An index that only lists written ADRs cannot warn you about a decision nobody wrote down. This is
 that warning.
 
-Decision numbers run continuously, so a gap in this list is itself a signal. **D-22 through D-37 are
+Decision numbers run continuously, so a gap in this list is itself a signal. **D-22 through D-42 are
 all unwritten.** Twelve of them are cited by number in shipped production code, comments and tests.
 
 | Pending | Decision | Status | Lives only in |
@@ -38,15 +38,26 @@ all unwritten.** Twelve of them are cited by number in shipped production code, 
 | **D-28** | Enforcement narrowed to the capture endpoints only; `[HasPermissionNotEnforced]` stays alongside `[Authorize]`; no config off-switch; a Development-seeded device supplies the local key. **ADR-001 D-6's do-not-expose constraint stays in force** | shipped 4b | `Program.cs`, `AuthorizationSeamTests` |
 | **D-29** | Live attendance is a cursor-delta polling endpoint. The SignalR hub of §5/§6.4 is **deferred** behind a delta DTO that is a superset of §6.4's declared payload | shipped 4d | `EventService.GetLiveAttendanceAsync`, `AttendanceService.TapBatchAsync` |
 | **D-30** | A `rowversion` cursor on `AttendanceRecords`, mapped **non-concurrency** so write semantics are unchanged | shipped 4d | `EventService.GetLiveAttendanceAsync`, `AttendanceService.TapBatchAsync` |
-| **D-31** | `POST /attendance/tap/batch`: per-row results correlated by index **and** `deviceTapId`; always HTTP 200 for a well-formed batch, never 207. **Retrying a whole batch after a `5xx` is safe because every row is idempotent — not because the batch is atomic.** Rows are committed individually (D-32), so a partial failure leaves earlier rows written | shipped 4d | `AttendanceService.TapBatchAsync`, frozen handoff doc |
+| **D-31** | `POST /attendance/tap/batch`: per-row results correlated by index **and** `deviceTapId`; always HTTP 200 for a well-formed batch, never 207. **Retrying a whole batch after a `5xx` is safe because every row is idempotent — not because the batch is atomic.** Rows are committed individually (D-32), so a partial failure leaves earlier rows written | shipped 4d | `AttendanceService.TapBatchAsync`, `TapBatchRequest`/`TapBatchResult` schemas (D-38) |
 | **D-32** | Batch rows processed in ascending `tappedAt`, each in its own transaction, through the **same decision function** as `/tap` | shipped 4d | `EventService.GetLiveAttendanceAsync`, `AttendanceService.TapBatchAsync` |
-| **D-33** | `deviceTapId` **required** on the batch path, optional on single tap, and **bounded at the column's 100 characters**. An over-length value is a truncation error rather than a unique violation, so it escapes the recovery filter and surfaces as an unrecoverable batch `5xx` that an offline queue retries forever | shipped 4d | `AttendanceService.DecideAsync`, frozen handoff doc |
+| **D-33** | `deviceTapId` **required** on the batch path, optional on single tap, and **bounded at the column's 100 characters**. An over-length value is a truncation error rather than a unique violation, so it escapes the recovery filter and surfaces as an unrecoverable batch `5xx` that an offline queue retries forever | shipped 4d | `AttendanceService.DecideAsync`, `TapBatchLimits`, the retained companion doc (D-38) |
 | **D-34** | A check-out gets its **own** idempotency key and its own filtered unique index, so each half of a `TimeInOut` pair is independently retryable and the guarantee is index-backed | shipped 4c | `AttendanceService.FindByDeviceTapAsync`, `KnownDefectTests` |
 | **D-35** | `SchoolId` denormalized onto `AttendanceRecords` and the idempotency index re-scoped, closing the filter/constraint divergence before a queue drain could make its permanent-500 loop reachable | shipped 4b | `RowLevelTenancy` migration, `AttendanceTenancyTests` |
 | **D-36** | `tappedAt` is **never rewritten**. Future taps beyond 5 minutes rejected; `tappedAt` validated against a configurable event window; submission lateness unconstrained | shipped 4c | `TapTimeWindow`, `TapTimeWindowTests` |
-| **D-37** | `code` (the outcome member name) ships on every tap body, success and failure; failures become RFC 7807. **Outcome tokens are frozen published contract**, pinned by a test | shipped 4c | `TapOutcomeContractTests`, frozen handoff doc |
+| **D-37** | `code` (the outcome member name) ships on every tap body, success and failure; failures become RFC 7807. **Outcome tokens are frozen published contract**, pinned by a test | shipped 4c | `TapOutcomeContractTests`, `TapOutcomeCode` schema (D-38) |
+| **D-38** | **The generated OpenAPI document is the contract**, superseding the hand-written `attendance-contract-handoff.md`. That file is retained, cut to what a schema cannot express — queue actions per token, UID normalisation, the never-rewrite-`tappedAt` rule, the open questions. Descriptions are generated from the XML comments, so contract and code cannot drift | shipped 4e | `EamsOpenApi`, `OpenApiDocumentTests`, `docs/api/attendance-contract-handoff.md` |
+| **D-39** | The device credential is published as an OpenAPI **`apiKey` in the `Authorization` header**, not as `type: http, scheme: DeviceKey`. The `http` form is semantically exact but its `scheme` is defined against the IANA registry, and generators reject or silently drop an unregistered value — leaving a generated client unable to send the header at all. Cost: the caller supplies the `DeviceKey ` prefix itself | shipped 4e | `EamsOpenApi.DeviceKeyScheme` |
+| **D-40** | `TapResult.success` is **deprecated in the schema, not removed**. It is redundant with `code`, but 4c already changed that body once and the mobile developer's question about whether it broke him is unanswered; a second breaking change to the same body before he replies is not ours to make | shipped 4e | `ContractSchemaFilter`, `The_redundant_success_flag_is_deprecated_rather_than_removed` |
+| **D-41** | The Swagger **UI is Development-only; the generator is registered unconditionally**, so tooling can build the contract from a production binary while ADR-001 D-6's do-not-expose constraint holds. Collapsing the two is the tidy-up that one test exists to stop | shipped 4e | `Program.cs`, `The_document_generates_in_production_even_though_it_is_not_served` |
+| **D-42** | The live endpoint's counters are bounded by the **cursor actually returned**, not by the read ceiling. 4d shipped them unbounded and said so; 4e's first attempt bounded them by the ceiling, which fixed the long-transaction case and left the same defect on every truncated page. **Closes 4d's known-and-accepted counter defect** | shipped 4e | `EventService.SummaryForAsync`, `A_snapshot_is_capped_and_the_remaining_rows_page_through_the_cursor` |
 
 Deferred to the ADR-004 consolidation at JJ's direction, not forgotten.
+
+> **D-42 is the one to read if you only read one.** The defect it closes was *documented* by 4d rather
+> than fixed, then half-closed by 4e in a way that left three comments — two of which generate into the
+> published contract — asserting an invariant that was false on any page of more than 500 rows. A
+> generated contract that states something untrue is worse than the hand-written one it replaced,
+> because the whole premise is that it cannot be. Found at the review gate, not by the suite.
 
 > **Two of these have the silent-failure shape this file exists to catch.**
 >

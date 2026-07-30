@@ -12,8 +12,9 @@ namespace EAMS.Tests.Integration;
 
 /// <summary>
 /// <c>POST /attendance/tap/batch</c> — Technical Plan §8.2's offline queue flush (Phase 4d, D-31 to
-/// D-33). The shape is frozen with an external mobile developer in
-/// <c>docs/api/attendance-contract-handoff.md</c> §3, so everything asserted here is somebody else's
+/// D-33). The shape is frozen with an external mobile developer and published as the
+/// <c>TapBatchRequest</c> / <c>TapBatchResult</c> schemas in the generated OpenAPI document, so
+/// everything asserted here is somebody else's
 /// interface rather than an implementation detail.
 ///
 /// <para>
