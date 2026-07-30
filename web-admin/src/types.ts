@@ -3,6 +3,11 @@
 // Deliberately a subset: `StudentDto` also carries firstName/middleName/lastName/gender/photoUrl and
 // `EventDto` carries description/requireRegistration, none of which the SPA reads. `api.ts` drops
 // them at the boundary rather than widening these types with fields nothing renders.
+//
+// The `<Dto>PagedResult` envelope the admin lists now return is deliberately NOT here. No component
+// consumes it: `api.ts` walks the pages and hands back rows, so paging stays a fact about the wire
+// rather than a type spreading through the component tree. Its shape lives in `api.ts` as `PageOf<T>`.
+// If a grid ever needs true server-side paging, that is a design change to raise before it is typed.
 
 export interface Card {
   id: string;

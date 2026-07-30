@@ -24,8 +24,12 @@ const baseUrl = (import.meta.env.VITE_API_BASE_URL ?? DEFAULT_BASE_URL).replace(
 // Errors
 // ---------------------------------------------------------------------------------------------
 
-/** `network` — never reached the server. `http` — server refused. `malformed` — reply off-contract. */
-export type ApiErrorKind = "network" | "http" | "malformed";
+/**
+ * `network` — never reached the server. `http` — server refused. `malformed` — reply off-contract.
+ * `too-large` — the list is real and well-formed but has more pages than this seam will walk; see
+ * `MAX_LIST_REQUESTS`. It is a client-side ceiling, not a server fault, and retrying cannot clear it.
+ */
+export type ApiErrorKind = "network" | "http" | "malformed" | "too-large";
 
 /** RFC 7807 body as this API emits it. `title`/`detail` are prose and are reworded freely. */
 export interface ApiProblem {
@@ -219,6 +223,136 @@ async function getJsonOrMissing(
 }
 
 // ---------------------------------------------------------------------------------------------
+// Paging — the envelope stops here
+// ---------------------------------------------------------------------------------------------
+//
+// Every §6.2/§6.3 admin list now answers with `<Dto>PagedResult` instead of a bare array:
+// `{ items, page, pageSize, total, hasMore }`, `?page=` 1-based, `?pageSize=` defaulting to 50.
+// This seam unwraps it and keeps handing components plain arrays (see the per-method notes), so a
+// page of 50 must not be mistaken for the whole list: against the dev database `GET /students`
+// answers `total: 61, hasMore: true` with 50 rows, and taking that first page as the answer would
+// drop eleven students with nothing on screen saying so.
+//
+// `GET /attendance/live/{eventId}` is deliberately NOT in here. It pages by cursor
+// (`since`/`cursor`/`hasMore`/`pollAfterSeconds`) as frozen published contract, its `hasMore` answers
+// a different question, and routing it through `listAll` would be wrong twice over. It has no caller
+// in this SPA today; if one is added it gets its own reader.
+
+/** One page as it arrives. Internal: no component sees this type. */
+interface PageOf<T> {
+  items: T[];
+  /** The page actually served — echoed back, so a clamp is visible rather than silent. */
+  page: number;
+  pageSize: number;
+  total: number;
+  hasMore: boolean;
+}
+
+/**
+ * The ceiling that matters: how many rows this SPA will hold in memory and hand to a client-side
+ * grid. Read from `total` on the first page, so one request settles it.
+ *
+ * It is expressed in rows because rows are what the limit is actually about. An earlier version
+ * bounded *requests* instead and claimed that avoided restating the server's page size — it did not,
+ * it hid it: a 40-request bound means 40 × whatever `Paging.DefaultPageSize` happens to be, so a
+ * server-side change from 50 to 20 would have quietly cut this client's protection from 2000 rows to
+ * 800 with no code change and no failing test. A row count means the same thing whatever the server
+ * pages by. Crossing it is a design signal — that list has outgrown load-everything and needs
+ * server-side paging — so it fails loud instead of truncating.
+ */
+const MAX_LIST_ROWS = 2000;
+
+/**
+ * Asked of every list read. This is a client saying "give me a big page", not a copy of the server's
+ * cap: the contract guarantees an over-sized `?pageSize=` is **clamped rather than refused**, and the
+ * reply echoes the size actually applied, so the server stays the authority on its own maximum. The
+ * alternative — sending no `pageSize` and taking the default — cost four times the round trips to
+ * dodge a coupling it did not actually dodge, and those trips are sequential: unnoticeable on a LAN,
+ * seconds of blank dashboard over a real network.
+ */
+const REQUESTED_PAGE_SIZE = 200;
+
+/**
+ * Backstop, not the design. `MAX_LIST_ROWS` is what enforces the ceiling; this only stops an
+ * unbounded loop if a server ever reports `hasMore` forever, which no correct one does.
+ */
+const MAX_LIST_REQUESTS = 40;
+
+/** `?page=` is 1-based, per the contract. Named so the offset convention is stated, not remembered. */
+const FIRST_PAGE = 1;
+
+/**
+ * The smallest page that still carries a `total` — for reads that want the count and not the rows.
+ * One row comes back and is thrown away; `items` is still validated, so the shape check is not lost.
+ */
+const COUNT_ONLY_PAGE_SIZE = 1;
+
+const tooLarge = (what: string, why: string) =>
+  new ApiError(
+    "too-large",
+    0,
+    `${what} is too large to show in full: ${why}. The list needs server-side paging.`,
+  );
+
+function asPage<T>(
+  body: unknown,
+  what: string,
+  mapItem: (row: Row, what: string) => T,
+): PageOf<T> {
+  const row = asRow(body, what);
+  return {
+    items: asRows(row.items, `${what}.items`).map((item, i) =>
+      mapItem(item, `${what}.items[${i}]`),
+    ),
+    page: reqNum(row, "page", what),
+    pageSize: reqNum(row, "pageSize", what),
+    total: reqNum(row, "total", what),
+    hasMore: reqBool(row, "hasMore", what),
+  };
+}
+
+/**
+ * Walks every page of a list and returns the rows, so callers keep the whole-list semantics they had
+ * before the envelope landed. Sequential by necessity: `hasMore` for page N only arrives with page N.
+ *
+ * `request` doubles as the page number rather than stepping from the `page` the server echoed. The
+ * echo is the more trusting option in the one way that matters: a server that clamped a page number
+ * from above would pin the echo and this loop would ask for the same page until the backstop fired,
+ * where a counter of our own runs past the end and terminates on the empty page's `hasMore: false`.
+ */
+async function listAll<T>(
+  what: string,
+  path: string,
+  query: Record<string, string | undefined>,
+  mapItem: (row: Row, what: string) => T,
+): Promise<T[]> {
+  const rows: T[] = [];
+
+  for (let request = FIRST_PAGE; request <= MAX_LIST_REQUESTS; request++) {
+    const page = asPage(
+      await getJson(what, path, {
+        ...query,
+        page: String(request),
+        pageSize: String(REQUESTED_PAGE_SIZE),
+      }),
+      what,
+      mapItem,
+    );
+
+    // Checked before the rows are kept, and on every page rather than only the first: `total` is the
+    // server's own count against this filter, so the refusal costs one request, not forty.
+    if (page.total > MAX_LIST_ROWS) {
+      throw tooLarge(what, `it holds ${page.total} rows and this screen shows at most ${MAX_LIST_ROWS}`);
+    }
+
+    rows.push(...page.items);
+    if (!page.hasMore) return rows;
+  }
+
+  throw tooLarge(what, `walking it did not reach the end within ${MAX_LIST_REQUESTS} requests`);
+}
+
+// ---------------------------------------------------------------------------------------------
 // DTO mappers
 // ---------------------------------------------------------------------------------------------
 
@@ -304,13 +438,33 @@ async function listStudents(filter?: {
   // therefore returns a plausible, non-empty, INCOMPLETE answer — 12 of 52 students in the real
   // roster (~23%) sit in 2+ sections. Wired because the signature has always had it; do not build
   // UI that treats the result as the full set for a course.
+  //
+  // Unwrapped at the seam: `Students.tsx` filters and pages its grid client-side over the rows it
+  // holds, and `Dashboard.tsx` counts them, so both need the whole set rather than a window into it.
   const what = "GET /students";
+  return listAll(
+    what,
+    "/students",
+    { search: filter?.search, course: filter?.course, status: filter?.status },
+    toStudent,
+  );
+}
+
+/**
+ * How many students there are, without the students.
+ *
+ * `total` is the server's own count against the same filter that would have produced the rows, so
+ * this is one request and no DTO mapping — where `listStudents()` walks every page and maps every
+ * row, each with its `cards` array, to produce the same integer. It returns a `number`, so the
+ * Dashboard's KPI gets its value without paging following it into the component.
+ */
+async function countStudents(): Promise<number> {
+  const what = "GET /students (count)";
   const body = await getJson(what, "/students", {
-    search: filter?.search,
-    course: filter?.course,
-    status: filter?.status,
+    page: String(FIRST_PAGE),
+    pageSize: String(COUNT_ONLY_PAGE_SIZE),
   });
-  return asRows(body, what).map((row, i) => toStudent(row, `${what}[${i}]`));
+  return asPage(body, what, () => null).total;
 }
 
 async function getStudent(id: string): Promise<Student | undefined> {
@@ -320,9 +474,10 @@ async function getStudent(id: string): Promise<Student | undefined> {
 }
 
 async function listEvents(status?: string): Promise<EventItem[]> {
+  // Unwrapped at the seam. The sort below is the reason it has to be: ordering one page of a paged
+  // list would put "newest" only within that page, which looks right and is not.
   const what = "GET /events";
-  const body = await getJson(what, "/events", { status });
-  const events = asRows(body, what).map((row, i) => toEvent(row, `${what}[${i}]`));
+  const events = await listAll(what, "/events", { status }, toEvent);
   // Newest first — the order the dashboard and the events list have always rendered. The contract
   // makes no ordering promise, so it stays a client concern rather than an assumption.
   return events.sort((a, b) => b.startAt.localeCompare(a.startAt));
@@ -335,9 +490,10 @@ async function getEvent(id: string): Promise<EventItem | undefined> {
 }
 
 async function listAttendance(eventId: string): Promise<AttendanceRecord[]> {
+  // Unwrapped at the seam. `EventDetail.tsx` prints `Live attendance ({records.length})` next to the
+  // grid, so a partial page would render a count that contradicts the event summary beside it.
   const what = "GET /attendance";
-  const body = await getJson(what, "/attendance", { eventId });
-  return asRows(body, what).map((row, i) => toAttendance(row, `${what}[${i}]`));
+  return listAll(what, "/attendance", { eventId }, toAttendance);
 }
 
 async function eventSummary(eventId: string): Promise<EventSummary | undefined> {
@@ -392,6 +548,7 @@ async function untappedCards(eventId: string): Promise<{ uid: string; name: stri
 
 export const api = {
   listStudents,
+  countStudents,
   getStudent,
   listEvents,
   getEvent,
