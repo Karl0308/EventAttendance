@@ -36,17 +36,30 @@ internal sealed class AcademicReferenceService : IAcademicReferenceService
 
     // ------------------------------------------------------------------------------------- terms
 
-    public async Task<IReadOnlyList<TermDto>> ListTermsAsync(CancellationToken ct = default) =>
-        await _db.Terms.AsNoTracking()
+    // Every paged read below goes through PagedQuery.ToPageAsync and none of them writes its own
+    // count. That helper started life here, private to this class, covering these five lists while
+    // the other four services open-coded the identical five lines; it now lives in
+    // EAMS.Infrastructure so the guarantee it documents — one queryable, counted and paged, with no
+    // second predicate for the total to drift onto — covers all nine.
+
+    public Task<PagedResult<TermDto>> ListTermsAsync(
+        PageRequest page, CancellationToken ct = default) =>
+        _db.Terms.AsNoTracking().ToPageAsync(
             // Current first, then newest code first. Term codes are operator-authored and sort
             // chronologically by construction ('2025-2026-1' < '2025-2026-2'), so this is the order a
             // picker wants without needing StartsOn to have been filled in — and it frequently is not,
             // since the source has no term-date columns at all.
-            .OrderByDescending(t => t.IsCurrent)
-            .ThenByDescending(t => t.Code)
-            .Select(t => new TermDto(
-                t.Id, t.Code, t.SchoolYear, t.Semester, t.IsCurrent, t.StartsOn, t.EndsOn))
-            .ToListAsync(ct);
+            //
+            // ThenBy(Id) makes it a total order. Code is unique per school, but the unfiltered query an
+            // untenanted caller sees spans schools, so equal keys are reachable — and equal keys are
+            // exactly what SQL Server may return in a different order on each execution.
+            q => q
+                .OrderByDescending(t => t.IsCurrent)
+                .ThenByDescending(t => t.Code)
+                .ThenBy(t => t.Id)
+                .Select(t => new TermDto(
+                    t.Id, t.Code, t.SchoolYear, t.Semester, t.IsCurrent, t.StartsOn, t.EndsOn)),
+            page, ct);
 
     /// <summary>
     /// <c>FirstOrDefault</c> rather than <c>Single</c>, and the difference is what happens when the
@@ -64,35 +77,40 @@ internal sealed class AcademicReferenceService : IAcademicReferenceService
 
     // ---------------------------------------------------------------------------------- colleges
 
-    public async Task<IReadOnlyList<CollegeDto>> ListCollegesAsync(CancellationToken ct = default) =>
-        await _db.Colleges.AsNoTracking()
-            .OrderBy(c => c.Name)
-            .Select(c => new CollegeDto(c.Id, c.Name, c.Code))
-            .ToListAsync(ct);
+    public Task<PagedResult<CollegeDto>> ListCollegesAsync(
+        PageRequest page, CancellationToken ct = default) =>
+        _db.Colleges.AsNoTracking().ToPageAsync(
+            // Name is the natural key and is unique per school, but the query spans schools when no
+            // tenant is pinned — so Id is what makes this a total order.
+            q => q
+                .OrderBy(c => c.Name).ThenBy(c => c.Id)
+                .Select(c => new CollegeDto(c.Id, c.Name, c.Code)),
+            page, ct);
 
     // ---------------------------------------------------------------------------------- programs
 
-    public async Task<IReadOnlyList<AcademicProgramDto>> ListProgramsAsync(
-        Guid? collegeId, CancellationToken ct = default)
+    public Task<PagedResult<AcademicProgramDto>> ListProgramsAsync(
+        Guid? collegeId, PageRequest page, CancellationToken ct = default)
     {
         var query = _db.Programs.AsNoTracking();
 
         if (collegeId is { } college) query = query.Where(p => p.CollegeId == college);
 
-        return await query
-            .OrderBy(p => p.Code)
-            // p.College is a required navigation, so this is an inner join and the null-forgiving
-            // operator is a modelling artifact rather than a real possibility — the same reading the
-            // query filters take on every other required navigation in this model.
-            .Select(p => new AcademicProgramDto(
-                p.Id, p.Code, p.Name, p.CollegeId, p.College!.Name))
-            .ToListAsync(ct);
+        return query.ToPageAsync(
+            q => q
+                .OrderBy(p => p.Code).ThenBy(p => p.Id)
+                // p.College is a required navigation, so this is an inner join and the null-forgiving
+                // operator is a modelling artifact rather than a real possibility — the same reading
+                // the query filters take on every other required navigation in this model.
+                .Select(p => new AcademicProgramDto(
+                    p.Id, p.Code, p.Name, p.CollegeId, p.College!.Name)),
+            page, ct);
     }
 
     // ----------------------------------------------------------------------------------- courses
 
-    public async Task<IReadOnlyList<CourseDto>> ListCoursesAsync(
-        Guid? collegeId, string? search, CancellationToken ct = default)
+    public Task<PagedResult<CourseDto>> ListCoursesAsync(
+        Guid? collegeId, string? search, PageRequest page, CancellationToken ct = default)
     {
         var query = _db.Courses.AsNoTracking();
 
@@ -109,23 +127,64 @@ internal sealed class AcademicReferenceService : IAcademicReferenceService
                 c.Code.Contains(search) || (c.Title != null && c.Title.Contains(search)));
         }
 
-        return await query
-            .OrderBy(c => c.Code)
-            // Optional navigation here, unlike Programs above: a course's college is genuinely
-            // nullable, so this is a left join and the conditional is real rather than defensive.
-            .Select(c => new CourseDto(
-                c.Id, c.Code, c.Title, c.CollegeId, c.College == null ? null : c.College.Name))
-            .ToListAsync(ct);
+        return query.ToPageAsync(
+            q => q
+                .OrderBy(c => c.Code).ThenBy(c => c.Id)
+                // Optional navigation here, unlike Programs above: a course's college is genuinely
+                // nullable, so this is a left join and the conditional is real rather than defensive.
+                .Select(c => new CourseDto(
+                    c.Id, c.Code, c.Title, c.CollegeId, c.College == null ? null : c.College.Name)),
+            page, ct);
     }
 
     // -------------------------------------------------------------------------- course offerings
 
-    public async Task<IReadOnlyList<CourseOfferingDto>> ListCourseOfferingsAsync(
-        Guid? termId, Guid? courseId, string? section, CancellationToken ct = default)
+    /// <summary>
+    /// <inheritdoc cref="IAcademicReferenceService.ListCourseOfferingsAsync" path="/summary"/>
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>An absent <c>termId</c> scopes to the current term and, when no term is flagged current,
+    /// returns an empty page.</b> The alternative — falling back to every term — is what this replaced:
+    /// section names repeat every semester against a different cohort, so an unscoped list stacks
+    /// several distinct audiences under identical names, and it grows with every import the
+    /// institution has ever run.
+    /// </para>
+    ///
+    /// <para>
+    /// The empty answer is deliberate and is the same answer this layer already gives every filter
+    /// that matches nothing. <b>The failure mode being avoided is the silent one</b>: a default that
+    /// widens when it cannot resolve returns <em>more</em> data than asked for and looks completely
+    /// normal doing it, and the day it happens — the gap between semesters, when nobody has moved the
+    /// <c>IsCurrent</c> flag — is the day nobody is looking. A caller that needs to distinguish "no
+    /// offerings this term" from "no term is current" asks <c>GET /academic/terms/current</c>, which
+    /// answers precisely that and 404s.
+    /// </para>
+    /// </remarks>
+    public async Task<PagedResult<CourseOfferingDto>> ListCourseOfferingsAsync(
+        Guid? termId, Guid? courseId, string? section, PageRequest page,
+        CancellationToken ct = default)
     {
-        var query = _db.CourseOfferings.AsNoTracking();
+        // Resolved before the query is built, not folded into it as a subquery predicate: a
+        // `o.Term.IsCurrent` filter would silently mean "every term" the moment no term is flagged,
+        // because a predicate matching nothing and a predicate that is absent are indistinguishable
+        // once written that way. Resolving it to an id makes "no current term" a value this method has
+        // to make a decision about.
+        var scopedTerm = termId ?? await _db.Terms.AsNoTracking()
+            .Where(t => t.IsCurrent)
+            // FirstOrDefault rather than Single, matching GetCurrentTermAsync: the filtered unique
+            // index is what caps this at one row, and a data problem in one school must not become a
+            // 500 on a picker every screen opens.
+            .Select(t => (Guid?)t.Id)
+            .FirstOrDefaultAsync(ct);
 
-        if (termId is { } term) query = query.Where(o => o.TermId == term);
+        if (scopedTerm is null)
+        {
+            return new PagedResult<CourseOfferingDto>([], page.Page, page.PageSize, Total: 0);
+        }
+
+        var query = _db.CourseOfferings.AsNoTracking().Where(o => o.TermId == scopedTerm);
+
         if (courseId is { } course) query = query.Where(o => o.CourseId == course);
 
         if (!string.IsNullOrWhiteSpace(section))
@@ -137,23 +196,35 @@ internal sealed class AcademicReferenceService : IAcademicReferenceService
             query = query.Where(o => o.SectionKey == sectionKey);
         }
 
-        return await query
-            .OrderBy(o => o.Course!.Code)
-            .ThenBy(o => o.SectionKey)
-            .Select(o => new CourseOfferingDto(
-                o.Id,
-                o.TermId, o.Term!.Code,
-                o.CourseId, o.Course!.Code, o.Course!.Title,
-                o.SectionName, o.SectionKey,
-                // A correlated subquery count inside the same round trip, never a loaded collection:
-                // this list is one row per section across a whole term, so an Include here would be
-                // the textbook N+1 — and it would pull every enrollment row in the term across the
-                // wire to produce one integer per offering.
-                //
-                // Soft-deleted students are excluded because this number is an audience size, and
-                // every other read in the system treats a soft-deleted student as gone. A count that
-                // included them would overstate the denominator of an event nobody had held yet.
-                o.Enrollments.Count(e => !e.Student!.IsDeleted)))
-            .ToListAsync(ct);
+        return await query.ToPageAsync(
+            q => q
+                .OrderBy(o => o.Course!.Code)
+                .ThenBy(o => o.SectionKey)
+                // (Course code, section key) is unique within a term by the import's own index, and
+                // the query is now always term-scoped — so this tiebreaker is belt-and-braces rather
+                // than load-bearing. It stays because "the natural key happens to be unique here" is
+                // an argument that survives exactly until someone adds a filter, and an unordered page
+                // boundary fails silently.
+                .ThenBy(o => o.Id)
+                .Select(o => new CourseOfferingDto(
+                    o.Id,
+                    o.TermId, o.Term!.Code,
+                    o.CourseId, o.Course!.Code, o.Course!.Title,
+                    o.SectionName, o.SectionKey,
+                    // A correlated subquery count inside the same round trip, never a loaded
+                    // collection: this list is one row per section across a whole term, so an Include
+                    // here would be the textbook N+1 — and it would pull every enrollment row in the
+                    // term across the wire to produce one integer per offering.
+                    //
+                    // Soft-deleted students are excluded because this number is an audience size, and
+                    // every other read in the system treats a soft-deleted student as gone. A count
+                    // that included them would overstate the denominator of an event nobody had held
+                    // yet.
+                    //
+                    // It is on the page query and not on the count query, which is the other reason
+                    // PageAsync takes an unprojected queryable: a COUNT(*) has no business running one
+                    // correlated subquery per offering to produce numbers it then discards.
+                    o.Enrollments.Count(e => !e.Student!.IsDeleted))),
+            page, ct);
     }
 }

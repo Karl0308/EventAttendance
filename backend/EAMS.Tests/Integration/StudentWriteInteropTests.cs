@@ -335,7 +335,9 @@ public class StudentWriteInteropTests : IntegrationTest
         // ...and still gone from every operator-facing read.
         Assert.True(stored.IsDeleted);
         Assert.Null(await StudentsOn(read).GetAsync(manualId));
-        Assert.DoesNotContain(await StudentsOn(read).ListAsync(null, null, null), s => s.Id == manualId);
+        Assert.DoesNotContain(
+            (await StudentsOn(read).ListAsync(null, null, null, PageRequest.Default)).Items,
+            s => s.Id == manualId);
     }
 
     // -------------------------------------------------------------------------- the tap path

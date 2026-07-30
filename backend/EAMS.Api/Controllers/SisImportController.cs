@@ -48,7 +48,7 @@ public class SisImportController : ControllerBase
     /// batch in a way nothing downstream can detect.
     /// </param>
     [HttpPost("upload")]
-    [HasPermissionNotEnforced("sis.import")]
+    [HasPermissionNotEnforced(EamsPermissions.SisImport)]
     [RequestSizeLimit(MaxUploadBytes)]
     [ProducesResponseType(typeof(SisImportPreviewDto), StatusCodes.Status201Created)]
     [ProducesResponseType(StatusCodes.Status400BadRequest)]
@@ -98,7 +98,7 @@ public class SisImportController : ControllerBase
     /// leaves it identical and reports every row <c>Skipped</c>.
     /// </summary>
     [HttpPost("{batchId:guid}/run")]
-    [HasPermissionNotEnforced("sis.import")]
+    [HasPermissionNotEnforced(EamsPermissions.SisImport)]
     [ProducesResponseType(typeof(SisImportBatchDto), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     [ProducesResponseType(StatusCodes.Status409Conflict)]
@@ -147,7 +147,7 @@ public class SisImportController : ControllerBase
     /// <response code="200">The batch.</response>
     /// <response code="404">No such batch.</response>
     [HttpGet("{batchId:guid}")]
-    [HasPermissionNotEnforced("sis.import")]
+    [HasPermissionNotEnforced(EamsPermissions.SisImport)]
     [ProducesResponseType(typeof(SisImportBatchDto), StatusCodes.Status200OK)]
     [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status404NotFound)]
     public async Task<ActionResult<SisImportBatchDto>> Get(Guid batchId, CancellationToken ct)
@@ -161,7 +161,7 @@ public class SisImportController : ControllerBase
     /// <c>?result=Failed</c> is the query an operator runs after every import.
     /// </summary>
     [HttpGet("{batchId:guid}/rows")]
-    [HasPermissionNotEnforced("sis.import")]
+    [HasPermissionNotEnforced(EamsPermissions.SisImport)]
     [ProducesResponseType(typeof(IEnumerable<SisImportRowDto>), StatusCodes.Status200OK)]
     public async Task<ActionResult<IEnumerable<SisImportRowDto>>> Rows(
         Guid batchId, [FromQuery] string? result, CancellationToken ct)

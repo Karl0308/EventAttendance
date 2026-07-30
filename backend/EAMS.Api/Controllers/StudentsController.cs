@@ -44,15 +44,25 @@ public class StudentsController : ControllerBase
     /// admin grid; do not build reporting on it.
     /// </param>
     /// <param name="status"><c>Active</c>, <c>Inactive</c> or <c>Graduated</c>.</param>
+    /// <param name="page">
+    /// 1-based page number, default 1. Out-of-range values are clamped, never refused; the response
+    /// echoes the page actually served.
+    /// </param>
+    /// <param name="pageSize">
+    /// Rows per page. Default 50, maximum 200 — a larger value is clamped to the maximum and the
+    /// response says so in its own <c>pageSize</c>.
+    /// </param>
     /// <param name="ct">Cancellation token.</param>
-    /// <response code="200">The matching students, possibly empty.</response>
+    /// <response code="200">One page of matching students, possibly empty.</response>
     [HttpGet]
-    [HasPermissionNotEnforced("students.read")]
-    [ProducesResponseType(typeof(IEnumerable<StudentDto>), StatusCodes.Status200OK)]
-    public async Task<ActionResult<IEnumerable<StudentDto>>> List(
+    [HasPermissionNotEnforced(EamsPermissions.StudentsRead)]
+    [ProducesResponseType(typeof(PagedResult<StudentDto>), StatusCodes.Status200OK)]
+    public async Task<ActionResult<PagedResult<StudentDto>>> List(
         [FromQuery] string? search, [FromQuery] string? course, [FromQuery] string? status,
+        [FromQuery] int? page, [FromQuery] int? pageSize,
         CancellationToken ct)
-        => Ok(await _students.ListAsync(search, course, status, ct));
+        => Ok(await _students.ListAsync(
+            search, course, status, PageRequest.From(page, pageSize), ct));
 
     /// <summary><c>GET /students/{id}</c> — one student by primary key.</summary>
     /// <remarks>
@@ -65,7 +75,7 @@ public class StudentsController : ControllerBase
     /// <response code="200">The student.</response>
     /// <response code="404">No such student.</response>
     [HttpGet("{id:guid}")]
-    [HasPermissionNotEnforced("students.read")]
+    [HasPermissionNotEnforced(EamsPermissions.StudentsRead)]
     [ProducesResponseType(typeof(StudentDto), StatusCodes.Status200OK)]
     [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status404NotFound)]
     public async Task<ActionResult<StudentDto>> Get(Guid id, CancellationToken ct)
@@ -140,7 +150,7 @@ public class StudentsController : ControllerBase
     /// §6.2 <c>POST /students</c> — manual roster entry, alongside the §10 bulk import.
     /// </summary>
     [HttpPost]
-    [HasPermissionNotEnforced("students.write")]
+    [HasPermissionNotEnforced(EamsPermissions.StudentsWrite)]
     [ProducesResponseType(typeof(StudentDto), StatusCodes.Status201Created)]
     [ProducesResponseType(StatusCodes.Status400BadRequest)]
     [ProducesResponseType(StatusCodes.Status409Conflict)]
@@ -163,7 +173,7 @@ public class StudentsController : ControllerBase
     /// </para>
     /// </summary>
     [HttpPut("{id:guid}")]
-    [HasPermissionNotEnforced("students.write")]
+    [HasPermissionNotEnforced(EamsPermissions.StudentsWrite)]
     [ProducesResponseType(typeof(StudentDto), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status400BadRequest)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
@@ -177,7 +187,7 @@ public class StudentsController : ControllerBase
 
     /// <summary>§6.2 <c>DELETE /students/{id}</c> — soft (§4.3 <c>IsDeleted</c>).</summary>
     [HttpDelete("{id:guid}")]
-    [HasPermissionNotEnforced("students.write")]
+    [HasPermissionNotEnforced(EamsPermissions.StudentsWrite)]
     [ProducesResponseType(StatusCodes.Status204NoContent)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     public async Task<IActionResult> Delete(Guid id, CancellationToken ct)
@@ -198,7 +208,7 @@ public class StudentsController : ControllerBase
     /// </para>
     /// </summary>
     [HttpPost("{id:guid}/cards")]
-    [HasPermissionNotEnforced("students.write")]
+    [HasPermissionNotEnforced(EamsPermissions.StudentsWrite)]
     [ProducesResponseType(typeof(CardDto), StatusCodes.Status201Created)]
     [ProducesResponseType(StatusCodes.Status400BadRequest)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
@@ -224,7 +234,7 @@ public class StudentsController : ControllerBase
     /// </para>
     /// </summary>
     [HttpDelete("{id:guid}/cards/{cardId:guid}")]
-    [HasPermissionNotEnforced("students.write")]
+    [HasPermissionNotEnforced(EamsPermissions.StudentsWrite)]
     [ProducesResponseType(StatusCodes.Status204NoContent)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     public async Task<IActionResult> DeactivateCard(Guid id, Guid cardId, CancellationToken ct)

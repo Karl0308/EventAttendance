@@ -109,7 +109,12 @@ public record LiveAttendanceResponse(LiveOutcome Outcome, string Message, Attend
 /// <summary>Technical Plan §6.3 and the §6.7/§12 event summary and roster.</summary>
 public interface IEventService
 {
-    Task<IReadOnlyList<EventDto>> ListAsync(string? status, CancellationToken ct = default);
+    /// <summary>
+    /// §6.3 <c>GET /events</c> — "Paged", per the plan. Newest start first, then by <c>Id</c> so two
+    /// events starting at the same instant cannot trade places between pages.
+    /// </summary>
+    Task<PagedResult<EventDto>> ListAsync(
+        string? status, PageRequest page, CancellationToken ct = default);
 
     Task<EventDto?> GetAsync(Guid id, CancellationToken ct = default);
 

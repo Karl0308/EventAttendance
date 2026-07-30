@@ -1,3 +1,4 @@
+using EAMS.Application.Dtos;
 using EAMS.Tests.Integration.Infrastructure;
 using Microsoft.EntityFrameworkCore;
 using Xunit;
@@ -77,7 +78,7 @@ public class AcademicReferenceTests : IntegrationTest
             TestData.NewTerm(school.Id, "2024-2025-2", isCurrent: true));
         await db.SaveChangesAsync();
 
-        var terms = await AcademicOn(db).ListTermsAsync();
+        var terms = (await AcademicOn(db).ListTermsAsync(PageRequest.Default)).Items;
 
         // The current one leads even though its code sorts below '2025-2026-2'.
         Assert.Equal(
@@ -96,14 +97,14 @@ public class AcademicReferenceTests : IntegrationTest
         School.CurrentSchoolId = second;
 
         await using var db = NewDbContext();
-        var terms = await AcademicOn(db).ListTermsAsync();
+        var terms = (await AcademicOn(db).ListTermsAsync(PageRequest.Default)).Items;
 
         Assert.Single(terms);
 
         // Negative control: unpinned, the same call sees both schools' terms — so the assertion above
         // is about the filter rather than about how much the fixture happened to write.
         await using var unscoped = NewDbContext(new TestSchoolContext());
-        Assert.Equal(2, (await AcademicOn(unscoped).ListTermsAsync()).Count);
+        Assert.Equal(2, ((await AcademicOn(unscoped).ListTermsAsync(PageRequest.Default)).Items).Count);
     }
 
     [Fact]
@@ -172,7 +173,7 @@ public class AcademicReferenceTests : IntegrationTest
         School.CurrentSchoolId = second;
 
         await using var db = NewDbContext();
-        var colleges = await AcademicOn(db).ListCollegesAsync();
+        var colleges = (await AcademicOn(db).ListCollegesAsync(PageRequest.Default)).Items;
 
         Assert.Single(colleges);
         Assert.Equal("College of Criminal Justice", colleges[0].Name);
@@ -197,14 +198,14 @@ public class AcademicReferenceTests : IntegrationTest
 
         var service = AcademicOn(db);
 
-        Assert.Equal(["BSCRIM", "BSN"], (await service.ListProgramsAsync(null)).Select(p => p.Code));
+        Assert.Equal(["BSCRIM", "BSN"], ((await service.ListProgramsAsync(null, PageRequest.Default)).Items).Select(p => p.Code));
 
-        var filtered = await service.ListProgramsAsync(nursing.Id);
+        var filtered = (await service.ListProgramsAsync(nursing.Id, PageRequest.Default)).Items;
         Assert.Equal(["BSN"], filtered.Select(p => p.Code));
         Assert.Equal("College of Nursing", filtered[0].CollegeName);
 
         // The assertion that matters: a filter naming nothing returns nothing, never everything.
-        Assert.Empty(await service.ListProgramsAsync(Guid.NewGuid()));
+        Assert.Empty((await service.ListProgramsAsync(Guid.NewGuid(), PageRequest.Default)).Items);
     }
 
     [Fact]
@@ -214,7 +215,7 @@ public class AcademicReferenceTests : IntegrationTest
         School.CurrentSchoolId = second;
 
         await using var db = NewDbContext();
-        Assert.Single(await AcademicOn(db).ListProgramsAsync(null));
+        Assert.Single((await AcademicOn(db).ListProgramsAsync(null, PageRequest.Default)).Items);
     }
 
     // ----------------------------------------------------------------------------------- courses
@@ -237,11 +238,11 @@ public class AcademicReferenceTests : IntegrationTest
 
         var service = AcademicOn(db);
 
-        Assert.Equal(["SSCI 7"], (await service.ListCoursesAsync(null, "SSCI")).Select(c => c.Code));
-        Assert.Equal(["SSCI 7"], (await service.ListCoursesAsync(null, "Criminology")).Select(c => c.Code));
-        Assert.Equal(["NURS 1"], (await service.ListCoursesAsync(null, "Nursing")).Select(c => c.Code));
+        Assert.Equal(["SSCI 7"], ((await service.ListCoursesAsync(null, "SSCI", PageRequest.Default)).Items).Select(c => c.Code));
+        Assert.Equal(["SSCI 7"], ((await service.ListCoursesAsync(null, "Criminology", PageRequest.Default)).Items).Select(c => c.Code));
+        Assert.Equal(["NURS 1"], ((await service.ListCoursesAsync(null, "Nursing", PageRequest.Default)).Items).Select(c => c.Code));
 
-        Assert.Empty(await service.ListCoursesAsync(null, "Astrophysics"));
+        Assert.Empty((await service.ListCoursesAsync(null, "Astrophysics", PageRequest.Default)).Items);
     }
 
     /// <summary>
@@ -266,13 +267,13 @@ public class AcademicReferenceTests : IntegrationTest
 
         var service = AcademicOn(db);
 
-        Assert.Equal(2, (await service.ListCoursesAsync(null, null)).Count);
+        Assert.Equal(2, ((await service.ListCoursesAsync(null, null, PageRequest.Default)).Items).Count);
 
-        var filtered = await service.ListCoursesAsync(college.Id, null);
+        var filtered = (await service.ListCoursesAsync(college.Id, null, PageRequest.Default)).Items;
         Assert.Equal(["SSCI 7"], filtered.Select(c => c.Code));
         Assert.Equal("College of Criminal Justice", filtered[0].CollegeName);
 
-        Assert.Empty(await service.ListCoursesAsync(Guid.NewGuid(), null));
+        Assert.Empty((await service.ListCoursesAsync(Guid.NewGuid(), null, PageRequest.Default)).Items);
     }
 
     [Fact]
@@ -282,7 +283,7 @@ public class AcademicReferenceTests : IntegrationTest
         School.CurrentSchoolId = second;
 
         await using var db = NewDbContext();
-        Assert.Single(await AcademicOn(db).ListCoursesAsync(null, null));
+        Assert.Single((await AcademicOn(db).ListCoursesAsync(null, null, PageRequest.Default)).Items);
     }
 
     // -------------------------------------------------------------------------- course offerings
@@ -307,7 +308,7 @@ public class AcademicReferenceTests : IntegrationTest
             TestData.NewOffering(term.Id, course.Id, "BSFS 2-B"));
         await db.SaveChangesAsync();
 
-        var offerings = await AcademicOn(db).ListCourseOfferingsAsync(term.Id, null, null);
+        var offerings = (await AcademicOn(db).ListCourseOfferingsAsync(term.Id, null, null, PageRequest.Default)).Items;
 
         Assert.Equal(2, offerings.Count);
         Assert.Equal(["BSFS 2-A", "BSFS 2-B"], offerings.Select(o => o.SectionName).Order());
@@ -343,23 +344,91 @@ public class AcademicReferenceTests : IntegrationTest
 
         var service = AcademicOn(db);
 
-        Assert.Equal(3, (await service.ListCourseOfferingsAsync(null, null, null)).Count);
-        Assert.Equal(2, (await service.ListCourseOfferingsAsync(thisTerm.Id, null, null)).Count);
-        Assert.Equal(2, (await service.ListCourseOfferingsAsync(null, criminology.Id, null)).Count);
-        Assert.Single(await service.ListCourseOfferingsAsync(thisTerm.Id, criminology.Id, null));
+        // An absent termId is the *current* term, not every term — three offerings exist and this
+        // school's current term holds two of them. Before Phase 3b-3 this line read `Assert.Equal(3,
+        // ...)`, and that was the defect: two of those three were "BSFS 2-A" against entirely
+        // different cohorts a semester apart, indistinguishable in the response.
+        Assert.Equal(2, (await service.ListCourseOfferingsAsync(null, null, null, PageRequest.Default)).Items.Count);
+        Assert.Equal(2, ((await service.ListCourseOfferingsAsync(thisTerm.Id, null, null, PageRequest.Default)).Items).Count);
+
+        // Naming a term is still how you reach a past one; the default narrows, it does not lock.
+        Assert.Single((await service.ListCourseOfferingsAsync(lastTerm.Id, null, null, PageRequest.Default)).Items);
+
+        // Every other filter narrows *within* the scoped term. The criminology course has an offering
+        // in both terms and this answers with the current one only.
+        Assert.Single((await service.ListCourseOfferingsAsync(null, criminology.Id, null, PageRequest.Default)).Items);
+        Assert.Single((await service.ListCourseOfferingsAsync(thisTerm.Id, criminology.Id, null, PageRequest.Default)).Items);
+        Assert.Single((await service.ListCourseOfferingsAsync(lastTerm.Id, criminology.Id, null, PageRequest.Default)).Items);
 
         // 'BSFS 2-A', 'bsfs2a' and 'BSFS-2A' are one section. Matching the raw string would make the
         // filter depend on how the caller happened to type it — and would silently return nothing.
         foreach (var spelling in new[] { "BSFS 2-A", "bsfs2a", "BSFS-2A", " bsfs 2a " })
         {
-            Assert.Equal(
-                2,
-                (await service.ListCourseOfferingsAsync(null, null, spelling)).Count);
+            Assert.Single(
+                (await service.ListCourseOfferingsAsync(null, null, spelling, PageRequest.Default)).Items);
+
+            // The same spelling against the other term reaches that term's identically-named section —
+            // which is the whole reason the unscoped default was wrong.
+            Assert.Single(
+                (await service.ListCourseOfferingsAsync(lastTerm.Id, null, spelling, PageRequest.Default)).Items);
         }
 
-        Assert.Empty(await service.ListCourseOfferingsAsync(null, null, "NO SUCH SECTION"));
-        Assert.Empty(await service.ListCourseOfferingsAsync(Guid.NewGuid(), null, null));
-        Assert.Empty(await service.ListCourseOfferingsAsync(null, Guid.NewGuid(), null));
+        Assert.Empty((await service.ListCourseOfferingsAsync(null, null, "NO SUCH SECTION", PageRequest.Default)).Items);
+        Assert.Empty((await service.ListCourseOfferingsAsync(Guid.NewGuid(), null, null, PageRequest.Default)).Items);
+        Assert.Empty((await service.ListCourseOfferingsAsync(null, Guid.NewGuid(), null, PageRequest.Default)).Items);
+    }
+
+    /// <summary>
+    /// <b>No term is flagged current, and the answer is an empty page rather than every term's
+    /// offerings.</b>
+    ///
+    /// <para>
+    /// This is the test that makes the current-term default safe to have. A default that silently
+    /// widens when it cannot resolve is worse than no default: it returns <em>more</em> rows than the
+    /// caller asked for, it looks completely normal doing it, and the day it happens is the gap between
+    /// semesters when nobody has moved the <c>IsCurrent</c> flag yet. Zero current terms is a legal
+    /// state — the filtered unique index caps the flag at one per school, it does not pin it at one.
+    /// </para>
+    ///
+    /// <para>
+    /// Naming a term explicitly still works in that state, which is what keeps the endpoint usable
+    /// while an administrator sorts the flag out.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public async Task Offerings_answer_empty_when_no_term_is_current_rather_than_listing_every_term()
+    {
+        await using var db = NewDbContext();
+        var school = TestData.NewSchool();
+        db.Schools.Add(school);
+
+        var past = TestData.NewTerm(school.Id, "2024-2025-1", isCurrent: false);
+        var older = TestData.NewTerm(school.Id, "2023-2024-1", isCurrent: false);
+        db.Terms.AddRange(past, older);
+
+        var course = TestData.NewCourse(school.Id, "SSCI 7");
+        db.Courses.Add(course);
+        db.CourseOfferings.AddRange(
+            TestData.NewOffering(past.Id, course.Id, "BSFS 2-A"),
+            TestData.NewOffering(older.Id, course.Id, "BSFS 2-A"));
+        await db.SaveChangesAsync();
+
+        var service = AcademicOn(db);
+
+        Assert.Null(await service.GetCurrentTermAsync());
+
+        var defaulted = await service.ListCourseOfferingsAsync(null, null, null, PageRequest.Default);
+
+        Assert.Empty(defaulted.Items);
+
+        // Total is zero too, not "two rows we declined to return" — a grid rendering a page count off
+        // this must not offer a page 2 that is also empty.
+        Assert.Equal(0, defaulted.Total);
+
+        // And the rows are still reachable by naming their term, so this is a narrowed default rather
+        // than data that has gone missing.
+        Assert.Single((await service.ListCourseOfferingsAsync(past.Id, null, null, PageRequest.Default)).Items);
+        Assert.Single((await service.ListCourseOfferingsAsync(older.Id, null, null, PageRequest.Default)).Items);
     }
 
     /// <summary>
@@ -376,7 +445,7 @@ public class AcademicReferenceTests : IntegrationTest
         School.CurrentSchoolId = second;
 
         await using var db = NewDbContext();
-        var offerings = await AcademicOn(db).ListCourseOfferingsAsync(null, null, null);
+        var offerings = (await AcademicOn(db).ListCourseOfferingsAsync(null, null, null, PageRequest.Default)).Items;
 
         Assert.Single(offerings);
 
@@ -385,7 +454,24 @@ public class AcademicReferenceTests : IntegrationTest
         // The negative control, and without it this test could pass on a fixture that only ever wrote
         // one offering — which would assert nothing about the filter. Unpinned ("do not filter"), the
         // identical call sees both schools' rows, so the Single above is the filter's doing.
-        Assert.Equal(2, (await AcademicOn(unscoped).ListCourseOfferingsAsync(null, null, null)).Count);
+        //
+        // Both term ids are named explicitly rather than relying on the current-term default, because
+        // unpinned there are *two* current terms in scope — one per school — and "the" current term is
+        // then whichever row the database hands back first. That ambiguity is a property of the
+        // no-tenant dev fallback Phase 6 deletes, not of the filter under test, and letting it decide
+        // the row count here would make this assertion about the wrong thing.
+        var bothTerms = await unscoped.Terms.AsNoTracking().Select(t => t.Id).ToListAsync();
+        Assert.Equal(2, bothTerms.Count);
+
+        var acrossSchools = new List<CourseOfferingDto>();
+        foreach (var termId in bothTerms)
+        {
+            acrossSchools.AddRange(
+                (await AcademicOn(unscoped)
+                    .ListCourseOfferingsAsync(termId, null, null, PageRequest.Default)).Items);
+        }
+
+        Assert.Equal(2, acrossSchools.Count);
 
         var owner = (await unscoped.Terms.SingleAsync(t => t.Id == offerings[0].TermId)).SchoolId;
         Assert.Equal(second, owner);
@@ -418,7 +504,7 @@ public class AcademicReferenceTests : IntegrationTest
             TestData.NewEnrollment(deleted.Id, offering.Id));
         await db.SaveChangesAsync();
 
-        var offerings = await AcademicOn(db).ListCourseOfferingsAsync(term.Id, null, null);
+        var offerings = (await AcademicOn(db).ListCourseOfferingsAsync(term.Id, null, null, PageRequest.Default)).Items;
 
         Assert.Equal(1, Assert.Single(offerings).EnrolledCount);
     }
@@ -466,12 +552,12 @@ public class AcademicReferenceTests : IntegrationTest
             TestData.NewEnrollment(student.Id, second.Id));
         await db.SaveChangesAsync();
 
-        var offerings = await AcademicOn(db).ListCourseOfferingsAsync(term.Id, null, null);
+        var offerings = (await AcademicOn(db).ListCourseOfferingsAsync(term.Id, null, null, PageRequest.Default)).Items;
 
         Assert.Equal(2, offerings.Count);
         Assert.All(offerings, o => Assert.Equal(1, o.EnrolledCount));
 
         // And the cache's own value names no offering at all — proof the filter is not reading it.
-        Assert.Empty(await AcademicOn(db).ListCourseOfferingsAsync(term.Id, null, student.Section));
+        Assert.Empty((await AcademicOn(db).ListCourseOfferingsAsync(term.Id, null, student.Section, PageRequest.Default)).Items);
     }
 }

@@ -31,12 +31,14 @@ namespace EAMS.Api.Controllers;
 /// </para>
 ///
 /// <para>
-/// <b><c>groups.read</c> is a permission code this phase minted; §6 defines none.</b> §6's tables
-/// assign no route to groups at all. §7.1 guards the frontend's <c>/groups</c> page with
-/// <c>students.read</c>, which is the one contrary signal — reused here it would say "anyone who can
-/// browse the roster can browse its audiences". That is defensible and it is Phase 6's call; the
-/// attribute enforces nothing (ADR-001 D-6), so this is a line on the audit list rather than a
-/// decision that binds.
+/// <b>It declares <c>students.read</c>, and the <c>groups.read</c> it used to declare no longer
+/// exists (D-45).</b> Phase 3b-2 minted that code on the reasoning that §6's tables assign no route
+/// to groups at all — true, but it read past the one place the plan does answer this: §7.1 guards
+/// the frontend's <c>/groups</c> page with <c>students.read</c>. The plan is source of truth for the
+/// permission map, so the minted code was a contradiction rather than the addition
+/// <c>academic.read</c> is (D-44). It is deleted rather than kept as a synonym: two codes for one
+/// page is precisely the drift <see cref="EamsPermissions"/> was made a registry to stop, and a
+/// synonym would have to be granted twice by every role Phase 6 writes.
 /// </para>
 /// </remarks>
 [ApiController]
@@ -58,9 +60,12 @@ public class StudentGroupsController : ControllerBase
     /// </para>
     ///
     /// <para>
-    /// Unpaged, like the other reference lists: a school's group count is bounded by its academic
-    /// structure — one row per college, programme, section and offering per term, plus the handful of
-    /// manual ones — and a picker wants the whole set to filter client-side.
+    /// <b>Paged, and the argument that it need not be was wrong.</b> This used to say a school's group
+    /// count is bounded by its academic structure so a picker could hold the whole set — true of one
+    /// term, and the projection writes a fresh row per section and per offering on <em>every</em> term
+    /// it runs for, so the bound is "per term" multiplied by every term ever imported. <c>termId</c>
+    /// narrows it and is still the filter most worth passing; the page is what makes the answer
+    /// bounded when nobody passes one.
     /// </para>
     /// </remarks>
     /// <param name="sourceType">
@@ -75,12 +80,22 @@ public class StudentGroupsController : ControllerBase
     /// against an entirely different set of students, so an unscoped list holds several distinct
     /// cohorts under names differing only by the term suffix the projection composes in.
     /// </param>
+    /// <param name="page">
+    /// 1-based page number, default 1. Out-of-range values are clamped, never refused; the response
+    /// echoes the page actually served.
+    /// </param>
+    /// <param name="pageSize">
+    /// Rows per page. Default 50, maximum 200 — a larger value is clamped to the maximum and the
+    /// response says so in its own <c>pageSize</c>.
+    /// </param>
     /// <param name="ct">Cancellation token.</param>
-    /// <response code="200">The matching groups, possibly empty.</response>
+    /// <response code="200">One page of matching groups, possibly empty.</response>
     [HttpGet]
-    [HasPermissionNotEnforced("groups.read")]
-    [ProducesResponseType(typeof(IEnumerable<StudentGroupDto>), StatusCodes.Status200OK)]
-    public async Task<ActionResult<IEnumerable<StudentGroupDto>>> List(
-        [FromQuery] string? sourceType, [FromQuery] Guid? termId, CancellationToken ct)
-        => Ok(await _groups.ListAsync(sourceType, termId, ct));
+    [HasPermissionNotEnforced(EamsPermissions.StudentsRead)]
+    [ProducesResponseType(typeof(PagedResult<StudentGroupDto>), StatusCodes.Status200OK)]
+    public async Task<ActionResult<PagedResult<StudentGroupDto>>> List(
+        [FromQuery] string? sourceType, [FromQuery] Guid? termId,
+        [FromQuery] int? page, [FromQuery] int? pageSize,
+        CancellationToken ct)
+        => Ok(await _groups.ListAsync(sourceType, termId, PageRequest.From(page, pageSize), ct));
 }

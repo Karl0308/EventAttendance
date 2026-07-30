@@ -205,8 +205,25 @@ public record TapBatchResponse(
 /// <summary>Technical Plan §6.4 — RFID capture and organizer override.</summary>
 public interface IAttendanceService
 {
-    Task<IReadOnlyList<AttendanceDto>> ListAsync(
-        Guid? eventId, Guid? studentId, string? status, CancellationToken ct = default);
+    /// <summary>
+    /// §6.4 <c>GET /attendance</c> — the back-office read, paged.
+    ///
+    /// <para>
+    /// <b>Not to be confused with <c>GET /attendance/live/{eventId}</c>, which shares this controller
+    /// and must never be wrapped in a <see cref="PagedResult{T}"/>.</b> That one pages by cursor and
+    /// its shape is frozen published contract (D-29/D-30/D-42) that a mobile client polls today.
+    /// </para>
+    ///
+    /// <para>
+    /// Ordered newest check-in first, then by <c>Id</c>. The tiebreaker matters more here than
+    /// anywhere else in this API: <c>CheckInAt</c> is <em>nullable</em> and every <c>Absent</c> row
+    /// materialized at event close has it null, so a whole event's absentees sort as one
+    /// indistinguishable block that SQL Server may return in a different order on every query.
+    /// </para>
+    /// </summary>
+    Task<PagedResult<AttendanceDto>> ListAsync(
+        Guid? eventId, Guid? studentId, string? status, PageRequest page,
+        CancellationToken ct = default);
 
     /// <summary>
     /// The capture workflow, kept whole: resolve UID → validate the event window → idempotency

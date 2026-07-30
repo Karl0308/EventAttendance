@@ -493,7 +493,7 @@ public class EventWriteTests : IntegrationTest
         Assert.Null(await events.GetAsync(eventId));
         Assert.Null(await events.GetSummaryAsync(eventId));
         Assert.Null(await events.GetRosterAsync(eventId));
-        Assert.Empty(await events.ListAsync(null));
+        Assert.Empty((await events.ListAsync(null, PageRequest.Default)).Items);
 
         Assert.Equal(1, await read.AttendanceRecords.CountAsync());
         Assert.True((await read.Events.AsNoTracking().SingleAsync()).IsDeleted);

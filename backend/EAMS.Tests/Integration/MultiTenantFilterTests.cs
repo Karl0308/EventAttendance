@@ -1,4 +1,5 @@
-﻿using EAMS.Domain;
+﻿using EAMS.Application.Dtos;
+using EAMS.Domain;
 using EAMS.Tests.Integration.Infrastructure;
 using Microsoft.EntityFrameworkCore;
 using Xunit;
@@ -80,9 +81,14 @@ public class MultiTenantFilterTests : IntegrationTest
 
         await using var db = NewDbContext(PinnedTo(usa.SchoolId));
 
-        Assert.Equal(5, (await StudentsOn(db).ListAsync(null, null, null)).Count);
-        Assert.Single(await EventsOn(db).ListAsync(null));
-        Assert.Equal(5, (await AttendanceOn(db).ListAsync(null, null, null)).Count);
+        // Total, not Items.Count, on every tenancy assertion in this file. They agree today — the
+        // fixtures are single digits against a 50-row page — but Total counts the whole filtered set
+        // while Items counts one page, so a leak of more than a page's worth would be invisible to
+        // the second and is caught by the first. A tenancy test should not depend on the fixture
+        // staying smaller than the default page size.
+        Assert.Equal(5, (await StudentsOn(db).ListAsync(null, null, null, PageRequest.Default)).Total);
+        Assert.Equal(1, (await EventsOn(db).ListAsync(null, PageRequest.Default)).Total);
+        Assert.Equal(5, (await AttendanceOn(db).ListAsync(null, null, null, PageRequest.Default)).Total);
         Assert.Equal(5, await db.RfidCards.CountAsync());
     }
 
@@ -124,9 +130,9 @@ public class MultiTenantFilterTests : IntegrationTest
 
         await using var db = NewDbContext(PinnedTo(null));
 
-        Assert.Equal(5, (await StudentsOn(db).ListAsync(null, null, null)).Count);
-        Assert.Equal(2, (await EventsOn(db).ListAsync(null)).Count);
-        Assert.Equal(5, (await AttendanceOn(db).ListAsync(null, null, null)).Count);
+        Assert.Equal(5, (await StudentsOn(db).ListAsync(null, null, null, PageRequest.Default)).Total);
+        Assert.Equal(2, (await EventsOn(db).ListAsync(null, PageRequest.Default)).Total);
+        Assert.Equal(5, (await AttendanceOn(db).ListAsync(null, null, null, PageRequest.Default)).Total);
     }
 
     // ---------------------------------------------------------- proof the filter is not inert
@@ -138,11 +144,11 @@ public class MultiTenantFilterTests : IntegrationTest
         await AddSchoolAsync("CICSS", studentCount: 2);
 
         await using var db = NewDbContext(PinnedTo(usa.SchoolId));
-        var students = await StudentsOn(db).ListAsync(null, null, null);
+        var students = await StudentsOn(db).ListAsync(null, null, null, PageRequest.Default);
 
-        Assert.Equal(3, students.Count);
-        Assert.All(students, s => Assert.StartsWith("USA-", s.StudentNumber));
-        Assert.Single(await EventsOn(db).ListAsync(null));
+        Assert.Equal(3, students.Total);
+        Assert.All(students.Items, s => Assert.StartsWith("USA-", s.StudentNumber));
+        Assert.Equal(1, (await EventsOn(db).ListAsync(null, PageRequest.Default)).Total);
     }
 
     /// <summary>
@@ -158,8 +164,8 @@ public class MultiTenantFilterTests : IntegrationTest
 
         await using var db = NewDbContext(PinnedTo(usa.SchoolId));
 
-        Assert.Equal(3, (await AttendanceOn(db).ListAsync(null, null, null)).Count);
-        Assert.Empty(await AttendanceOn(db).ListAsync(cicss.EventId, null, null));
+        Assert.Equal(3, (await AttendanceOn(db).ListAsync(null, null, null, PageRequest.Default)).Total);
+        Assert.Equal(0, (await AttendanceOn(db).ListAsync(cicss.EventId, null, null, PageRequest.Default)).Total);
         Assert.Null(await EventsOn(db).GetAsync(cicss.EventId));
         Assert.Null(await EventsOn(db).GetSummaryAsync(cicss.EventId));
     }

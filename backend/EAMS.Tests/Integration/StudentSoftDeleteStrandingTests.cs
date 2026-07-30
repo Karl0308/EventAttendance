@@ -361,7 +361,8 @@ public class StudentSoftDeleteStrandingTests : IntegrationTest
         // not disagree with them.
         Assert.Null(await students.GetAsync(world.DeletedStudentId));
         Assert.DoesNotContain(
-            await students.ListAsync(null, null, null), s => s.Id == world.DeletedStudentId);
+            (await students.ListAsync(null, null, null, PageRequest.Default)).Items,
+            s => s.Id == world.DeletedStudentId);
 
         Assert.Null(await students.GetByCardUidAsync(CardSerial));
     }

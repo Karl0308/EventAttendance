@@ -26,8 +26,8 @@ internal sealed class StudentGroupService : IStudentGroupService
     private readonly EamsDbContext _db;
     public StudentGroupService(EamsDbContext db) => _db = db;
 
-    public async Task<IReadOnlyList<StudentGroupDto>> ListAsync(
-        string? sourceType, Guid? termId, CancellationToken ct = default)
+    public async Task<PagedResult<StudentGroupDto>> ListAsync(
+        string? sourceType, Guid? termId, PageRequest page, CancellationToken ct = default)
     {
         var query = _db.StudentGroups.AsNoTracking();
 
@@ -43,29 +43,40 @@ internal sealed class StudentGroupService : IStudentGroupService
             // offering manual groups to a flow that asked for cohorts, and nothing in the response
             // says the filter was ignored. Empty is a visible wrong answer; unfiltered is an
             // invisible one.
-            if (!GroupSourceType.TryNormalize(sourceType, out var canonical)) return [];
+            if (!GroupSourceType.TryNormalize(sourceType, out var canonical))
+            {
+                return new PagedResult<StudentGroupDto>([], page.Page, page.PageSize, Total: 0);
+            }
+
             query = query.Where(g => g.SourceType == canonical);
         }
 
         if (termId is { } term) query = query.Where(g => g.TermId == term);
 
-        return await query
-            .OrderBy(g => g.Name)
-            .Select(g => new StudentGroupDto(
-                g.Id, g.Name, g.Type,
-                g.SourceType, g.SourceEntityType,
-                g.TermId,
-                // Optional navigation — null on a manual group, which belongs to no term.
-                g.Term == null ? null : g.Term.Code,
-                // A correlated subquery count, never a loaded Members collection: this endpoint backs
-                // a picker that lists every group in a school, so including the memberships would pull
-                // one row per student per group to produce one integer each.
-                //
-                // Soft-deleted students are excluded, matching CourseOfferingDto.EnrolledCount and
-                // every other read in the system — this is an audience size, and a deleted student is
-                // not in the audience.
-                g.Members.Count(m => !m.Student!.IsDeleted),
-                g.LastSyncedAt))
-            .ToListAsync(ct);
+        // Counted and paged through PagedQuery.ToPageAsync — the seam all nine admin lists share, so
+        // the total cannot end up describing a different filter than the rows do.
+        return await query.ToPageAsync(
+            // ThenBy(Id) is the total order. Group names are unique per (school, source, term) by the
+            // projection's index but not globally, and the unfiltered query an untenanted caller sees
+            // spans schools — so "BSFS 2-A (2025-2026-1)" can appear twice, and equal sort keys are
+            // what a page boundary silently reorders across.
+            ordered => ordered
+                .OrderBy(g => g.Name).ThenBy(g => g.Id)
+                .Select(g => new StudentGroupDto(
+                    g.Id, g.Name, g.Type,
+                    g.SourceType, g.SourceEntityType,
+                    g.TermId,
+                    // Optional navigation — null on a manual group, which belongs to no term.
+                    g.Term == null ? null : g.Term.Code,
+                    // A correlated subquery count, never a loaded Members collection: this endpoint
+                    // backs a picker that lists every group in a school, so including the memberships
+                    // would pull one row per student per group to produce one integer each.
+                    //
+                    // Soft-deleted students are excluded, matching CourseOfferingDto.EnrolledCount and
+                    // every other read in the system — this is an audience size, and a deleted student
+                    // is not in the audience.
+                    g.Members.Count(m => !m.Student!.IsDeleted),
+                    g.LastSyncedAt)),
+            page, ct);
     }
 }

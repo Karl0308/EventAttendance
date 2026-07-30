@@ -1,5 +1,6 @@
 using System.Net;
 using System.Text.Json;
+using EAMS.Application.Dtos;
 using EAMS.Domain;
 using EAMS.Tests.Integration.Infrastructure;
 using Microsoft.EntityFrameworkCore;
@@ -74,14 +75,40 @@ public class AcademicApiTests : IntegrationTest
         return school.Id;
     }
 
+    /// <summary>
+    /// The <c>items</c> array out of a <c>PagedResult</c> body.
+    ///
+    /// <para>
+    /// <b>It asserts the envelope on the way through rather than reaching straight for
+    /// <c>items</c>.</b> Every route on this controller pages, and <c>GetProperty("items")</c> on a
+    /// body that is still a bare array throws a <c>JsonElement</c> exception that reads like a test-
+    /// harness fault; the explicit <c>Object</c> check makes "this endpoint lost its envelope" the
+    /// message rather than something to go and diagnose.
+    /// </para>
+    /// </summary>
     private static async Task<JsonElement> ArrayAsync(HttpClient client, string route)
     {
         var response = await client.GetAsync(route);
         response.EnsureSuccessStatusCode();
 
         var body = JsonDocument.Parse(await response.Content.ReadAsStringAsync()).RootElement;
-        Assert.Equal(JsonValueKind.Array, body.ValueKind);
-        return body.Clone();
+
+        Assert.Equal(JsonValueKind.Object, body.ValueKind);
+
+        var items = body.GetProperty("items");
+        Assert.Equal(JsonValueKind.Array, items.ValueKind);
+
+        // page / pageSize / total travel with every one of these responses; a route that dropped one
+        // would still serve rows, and a grid would silently lose its page count.
+        Assert.Equal(Paging.FirstPage, body.GetProperty("page").GetInt32());
+        Assert.Equal(Paging.DefaultPageSize, body.GetProperty("pageSize").GetInt32());
+
+        // Equality, not >=. Every fixture in this file is well under one page, so the total and the
+        // served row count must agree exactly — ">=" was satisfied by a total that was too large as
+        // readily as by a correct one, which is the assertion passing for the wrong reason.
+        Assert.Equal(items.GetArrayLength(), body.GetProperty("total").GetInt32());
+
+        return items.Clone();
     }
 
     // ------------------------------------------------------------------------- every route answers

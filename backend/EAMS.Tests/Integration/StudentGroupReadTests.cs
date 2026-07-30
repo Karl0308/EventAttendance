@@ -1,3 +1,4 @@
+using EAMS.Application.Dtos;
 using EAMS.Domain;
 using EAMS.Tests.Integration.Infrastructure;
 using Xunit;
@@ -73,7 +74,7 @@ public class StudentGroupReadTests : IntegrationTest
         await ArrangeProjectedSchoolAsync();
 
         await using var db = NewDbContext();
-        var groups = await StudentGroupsOn(db).ListAsync(null, null);
+        var groups = (await StudentGroupsOn(db).ListAsync(null, null, PageRequest.Default)).Items;
 
         Assert.Contains(groups, g => g.SourceType == GroupSourceType.Manual);
         Assert.Contains(groups, g => g.SourceType == GroupSourceType.Derived);
@@ -99,7 +100,7 @@ public class StudentGroupReadTests : IntegrationTest
         await ArrangeProjectedSchoolAsync();
 
         await using var db = NewDbContext();
-        var groups = await StudentGroupsOn(db).ListAsync(GroupSourceType.Manual, null);
+        var groups = (await StudentGroupsOn(db).ListAsync(GroupSourceType.Manual, null, PageRequest.Default)).Items;
 
         var manual = Assert.Single(groups);
         Assert.Null(manual.TermId);
@@ -124,7 +125,7 @@ public class StudentGroupReadTests : IntegrationTest
         School.CurrentSchoolId = second;
 
         await using var db = NewDbContext();
-        var groups = await StudentGroupsOn(db).ListAsync(null, null);
+        var groups = (await StudentGroupsOn(db).ListAsync(null, null, PageRequest.Default)).Items;
 
         Assert.NotEmpty(groups);
         Assert.Contains(groups, g => g.Name == "SSC Officers (ZZZ)");
@@ -133,7 +134,7 @@ public class StudentGroupReadTests : IntegrationTest
         // Negative control: unpinned, both schools' groups are visible from the identical call — so the
         // exclusion above is the query filter's doing and not an artifact of the fixture.
         await using var unscoped = NewDbContext(new TestSchoolContext());
-        var all = await StudentGroupsOn(unscoped).ListAsync(null, null);
+        var all = (await StudentGroupsOn(unscoped).ListAsync(null, null, PageRequest.Default)).Items;
         Assert.Contains(all, g => g.Name == "SSC Officers (AAA)");
         Assert.Contains(all, g => g.Name == "SSC Officers (ZZZ)");
     }
@@ -148,15 +149,15 @@ public class StudentGroupReadTests : IntegrationTest
         await using var db = NewDbContext();
         var service = StudentGroupsOn(db);
 
-        var derived = await service.ListAsync(GroupSourceType.Derived, null);
+        var derived = (await service.ListAsync(GroupSourceType.Derived, null, PageRequest.Default)).Items;
         Assert.NotEmpty(derived);
         Assert.All(derived, g => Assert.Equal(GroupSourceType.Derived, g.SourceType));
 
-        var manual = await service.ListAsync(GroupSourceType.Manual, null);
+        var manual = (await service.ListAsync(GroupSourceType.Manual, null, PageRequest.Default)).Items;
         Assert.All(manual, g => Assert.Equal(GroupSourceType.Manual, g.SourceType));
 
         Assert.Equal(
-            (await service.ListAsync(null, null)).Count,
+            ((await service.ListAsync(null, null, PageRequest.Default)).Items).Count,
             derived.Count + manual.Count);
     }
 
@@ -174,7 +175,7 @@ public class StudentGroupReadTests : IntegrationTest
         await ArrangeProjectedSchoolAsync();
 
         await using var db = NewDbContext();
-        var groups = await StudentGroupsOn(db).ListAsync(spelling, null);
+        var groups = (await StudentGroupsOn(db).ListAsync(spelling, null, PageRequest.Default)).Items;
 
         Assert.NotEmpty(groups);
         Assert.All(groups, g => Assert.Equal(GroupSourceType.Derived, g.SourceType));
@@ -194,8 +195,8 @@ public class StudentGroupReadTests : IntegrationTest
         await using var db = NewDbContext();
         var service = StudentGroupsOn(db);
 
-        Assert.NotEmpty(await service.ListAsync(null, null));
-        Assert.Empty(await service.ListAsync("Banana", null));
+        Assert.NotEmpty((await service.ListAsync(null, null, PageRequest.Default)).Items);
+        Assert.Empty((await service.ListAsync("Banana", null, PageRequest.Default)).Items);
     }
 
     // --------------------------------------------------------------------------------- termId
@@ -246,8 +247,8 @@ public class StudentGroupReadTests : IntegrationTest
         await using var read = NewDbContext();
         var service = StudentGroupsOn(read);
 
-        var thisTermGroups = await service.ListAsync(null, thisTermId);
-        var lastTermGroups = await service.ListAsync(null, lastTermId);
+        var thisTermGroups = (await service.ListAsync(null, thisTermId, PageRequest.Default)).Items;
+        var lastTermGroups = (await service.ListAsync(null, lastTermId, PageRequest.Default)).Items;
 
         Assert.NotEmpty(thisTermGroups);
         Assert.NotEmpty(lastTermGroups);
@@ -257,7 +258,7 @@ public class StudentGroupReadTests : IntegrationTest
         // Same section, two terms, disjoint groups — which is exactly why the name carries the term.
         Assert.Empty(thisTermGroups.Select(g => g.Id).Intersect(lastTermGroups.Select(g => g.Id)));
 
-        Assert.Empty(await service.ListAsync(null, Guid.NewGuid()));
+        Assert.Empty((await service.ListAsync(null, Guid.NewGuid(), PageRequest.Default)).Items);
     }
 
     /// <summary>
@@ -293,7 +294,7 @@ public class StudentGroupReadTests : IntegrationTest
         }
 
         await using var read = NewDbContext();
-        var groups = await StudentGroupsOn(read).ListAsync(null, null);
+        var groups = (await StudentGroupsOn(read).ListAsync(null, null, PageRequest.Default)).Items;
 
         Assert.Equal(1, Assert.Single(groups, g => g.Id == groupId).MemberCount);
     }

@@ -47,15 +47,38 @@ internal sealed class AttendanceService : IAttendanceService
         a.Student?.FullName ?? "", a.Student?.StudentNumber ?? "",
         a.CheckInAt, a.CheckOutAt, a.Status, a.CaptureMethod);
 
-    public async Task<IReadOnlyList<AttendanceDto>> ListAsync(
-        Guid? eventId, Guid? studentId, string? status, CancellationToken ct = default)
+    /// <inheritdoc cref="IAttendanceService.ListAsync"/>
+    /// <remarks>
+    /// <para>
+    /// Counted and paged through <c>PagedQuery.ToPageAsync</c>, the seam all nine admin lists share,
+    /// so the total cannot be answering a different filter than the rows. <c>Include(Student)</c> goes
+    /// in the ordering callback and so lands on the page query alone — the count has no use for the
+    /// join.
+    /// </para>
+    ///
+    /// <para>
+    /// <b><c>ThenBy(Id)</c> is load-bearing here in a way it is not on the other lists.</b>
+    /// <c>CheckInAt</c> is nullable and <c>ChangeStatusAsync</c>'s close materializes one
+    /// <c>Absent</c>/<c>Import</c> row per un-tapped invitee, all with it null — so a closed
+    /// institution-wide event produces thousands of rows whose entire sort key is identical. Without a
+    /// unique tiebreaker SQL Server may order that block differently on each request, and consecutive
+    /// pages then overlap and skip.
+    /// </para>
+    /// </remarks>
+    public Task<PagedResult<AttendanceDto>> ListAsync(
+        Guid? eventId, Guid? studentId, string? status, PageRequest page,
+        CancellationToken ct = default)
     {
-        var q = _db.AttendanceRecords.Include(a => a.Student).AsQueryable();
+        var q = _db.AttendanceRecords.AsQueryable();
         if (eventId is not null) q = q.Where(a => a.EventId == eventId);
         if (studentId is not null) q = q.Where(a => a.StudentId == studentId);
         if (!string.IsNullOrWhiteSpace(status)) q = q.Where(a => a.Status == status);
-        var list = await q.OrderByDescending(a => a.CheckInAt).ToListAsync(ct);
-        return list.Select(ToDto).ToList();
+
+        return q.ToPageAsync(
+            ordered => ordered
+                .Include(a => a.Student)
+                .OrderByDescending(a => a.CheckInAt).ThenBy(a => a.Id),
+            ToDto, page, ct);
     }
 
     // Technical Plan §6.4. The whole capture decision lives here in one place: resolve UID →

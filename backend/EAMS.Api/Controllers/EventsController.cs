@@ -21,14 +21,23 @@ public class EventsController : ControllerBase
     /// <c>Draft</c>, <c>Open</c>, <c>Closed</c> or <c>Cancelled</c>. A capture client wants
     /// <c>?status=Open</c> — a tap against any other status is <c>400 EventNotOpen</c>.
     /// </param>
+    /// <param name="page">
+    /// 1-based page number, default 1. Out-of-range values are clamped, never refused; the response
+    /// echoes the page actually served.
+    /// </param>
+    /// <param name="pageSize">
+    /// Rows per page. Default 50, maximum 200 — a larger value is clamped to the maximum and the
+    /// response says so in its own <c>pageSize</c>.
+    /// </param>
     /// <param name="ct">Cancellation token.</param>
-    /// <response code="200">The matching events, possibly empty.</response>
+    /// <response code="200">One page of matching events, possibly empty.</response>
     [HttpGet]
-    [HasPermissionNotEnforced("events.read")]
-    [ProducesResponseType(typeof(IEnumerable<EventDto>), StatusCodes.Status200OK)]
-    public async Task<ActionResult<IEnumerable<EventDto>>> List(
-        [FromQuery] string? status, CancellationToken ct)
-        => Ok(await _events.ListAsync(status, ct));
+    [HasPermissionNotEnforced(EamsPermissions.EventsRead)]
+    [ProducesResponseType(typeof(PagedResult<EventDto>), StatusCodes.Status200OK)]
+    public async Task<ActionResult<PagedResult<EventDto>>> List(
+        [FromQuery] string? status, [FromQuery] int? page, [FromQuery] int? pageSize,
+        CancellationToken ct)
+        => Ok(await _events.ListAsync(status, PageRequest.From(page, pageSize), ct));
 
     /// <summary><c>GET /events/{id}</c> — one event.</summary>
     /// <remarks>
@@ -41,7 +50,7 @@ public class EventsController : ControllerBase
     /// <response code="200">The event.</response>
     /// <response code="404">No such event, or it is soft-deleted.</response>
     [HttpGet("{id:guid}")]
-    [HasPermissionNotEnforced("events.read")]
+    [HasPermissionNotEnforced(EamsPermissions.EventsRead)]
     [ProducesResponseType(typeof(EventDto), StatusCodes.Status200OK)]
     [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status404NotFound)]
     public async Task<ActionResult<EventDto>> Get(Guid id, CancellationToken ct)
@@ -90,7 +99,7 @@ public class EventsController : ControllerBase
     // move to `reports.read` with it; that is one attribute, and Phase 6 will be looking at all of
     // them anyway.
     [HttpGet("{id:guid}/summary")]
-    [HasPermissionNotEnforced("events.read")]
+    [HasPermissionNotEnforced(EamsPermissions.EventsRead)]
     [ProducesResponseType(typeof(EventSummaryDto), StatusCodes.Status200OK)]
     // typeof: [ApiController] turns NotFound() into a ProblemDetails, so declaring the status alone
     // publishes a 404 the document says carries no body — while 4e's <response> paragraph above
@@ -107,7 +116,7 @@ public class EventsController : ControllerBase
     /// Report. <c>events.read</c> for the same reason the summary carries it.
     /// </summary>
     [HttpGet("{id:guid}/roster")]
-    [HasPermissionNotEnforced("events.read")]
+    [HasPermissionNotEnforced(EamsPermissions.EventsRead)]
     [ProducesResponseType(typeof(EventRosterDto), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     public async Task<ActionResult<EventRosterDto>> Roster(Guid id, CancellationToken ct)
@@ -123,7 +132,7 @@ public class EventsController : ControllerBase
     /// only way to move it, which is what makes the roster freeze unskippable.
     /// </summary>
     [HttpPost]
-    [HasPermissionNotEnforced("events.write")]
+    [HasPermissionNotEnforced(EamsPermissions.EventsWrite)]
     [ProducesResponseType(typeof(EventDto), StatusCodes.Status201Created)]
     [ProducesResponseType(StatusCodes.Status400BadRequest)]
     [ProducesResponseType(StatusCodes.Status409Conflict)]
@@ -151,7 +160,7 @@ public class EventsController : ControllerBase
     /// <response code="404">No such event, or it is soft-deleted.</response>
     /// <response code="409">The event's current status does not allow this change.</response>
     [HttpPut("{id:guid}")]
-    [HasPermissionNotEnforced("events.write")]
+    [HasPermissionNotEnforced(EamsPermissions.EventsWrite)]
     [ProducesResponseType(typeof(EventDto), StatusCodes.Status200OK)]
     [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status400BadRequest)]
     [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status404NotFound)]
@@ -172,7 +181,7 @@ public class EventsController : ControllerBase
     /// </para>
     /// </summary>
     [HttpPatch("{id:guid}/status")]
-    [HasPermissionNotEnforced("events.write")]
+    [HasPermissionNotEnforced(EamsPermissions.EventsWrite)]
     [ProducesResponseType(typeof(EventDto), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status400BadRequest)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
@@ -185,7 +194,7 @@ public class EventsController : ControllerBase
 
     /// <summary>§6.3 <c>DELETE /events/{id}</c> — soft (§4.5 <c>IsDeleted</c>).</summary>
     [HttpDelete("{id:guid}")]
-    [HasPermissionNotEnforced("events.write")]
+    [HasPermissionNotEnforced(EamsPermissions.EventsWrite)]
     [ProducesResponseType(StatusCodes.Status204NoContent)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     public async Task<IActionResult> Delete(Guid id, CancellationToken ct)
@@ -201,7 +210,7 @@ public class EventsController : ControllerBase
     /// Idempotent; the response reports what was attached versus what already was.
     /// </summary>
     [HttpPost("{id:guid}/attendees")]
-    [HasPermissionNotEnforced("events.write")]
+    [HasPermissionNotEnforced(EamsPermissions.EventsWrite)]
     [ProducesResponseType(typeof(EventAudienceResultDto), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status400BadRequest)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
@@ -226,7 +235,7 @@ public class EventsController : ControllerBase
     /// </para>
     /// </summary>
     [HttpDelete("{id:guid}/attendees/groups/{studentGroupId:guid}")]
-    [HasPermissionNotEnforced("events.write")]
+    [HasPermissionNotEnforced(EamsPermissions.EventsWrite)]
     [ProducesResponseType(StatusCodes.Status204NoContent)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     [ProducesResponseType(StatusCodes.Status409Conflict)]
@@ -258,7 +267,7 @@ public class EventsController : ControllerBase
     /// <response code="404">No such event.</response>
     /// <response code="409">The event's status does not allow an audience change.</response>
     [HttpDelete("{id:guid}/attendees/students/{studentId:guid}")]
-    [HasPermissionNotEnforced("events.write")]
+    [HasPermissionNotEnforced(EamsPermissions.EventsWrite)]
     [ProducesResponseType(StatusCodes.Status204NoContent)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     [ProducesResponseType(StatusCodes.Status409Conflict)]

@@ -37,7 +37,7 @@ public interface IAcademicReferenceService
     /// Every term in the resolved school, current first and then newest code first — the order a term
     /// picker wants, since the answer is almost always "this one" and otherwise "the one before".
     /// </summary>
-    Task<IReadOnlyList<TermDto>> ListTermsAsync(CancellationToken ct = default);
+    Task<PagedResult<TermDto>> ListTermsAsync(PageRequest page, CancellationToken ct = default);
 
     /// <summary>
     /// The term flagged <c>IsCurrent</c>, or <c>null</c> when none is.
@@ -58,7 +58,7 @@ public interface IAcademicReferenceService
     Task<TermDto?> GetCurrentTermAsync(CancellationToken ct = default);
 
     /// <summary>Every college in the resolved school, by name.</summary>
-    Task<IReadOnlyList<CollegeDto>> ListCollegesAsync(CancellationToken ct = default);
+    Task<PagedResult<CollegeDto>> ListCollegesAsync(PageRequest page, CancellationToken ct = default);
 
     /// <summary>
     /// Degree programmes, optionally narrowed to one college.
@@ -68,8 +68,8 @@ public interface IAcademicReferenceService
     /// everything — a filter that silently stops filtering is how an "invite this college" flow ends
     /// up inviting the institution.
     /// </param>
-    Task<IReadOnlyList<AcademicProgramDto>> ListProgramsAsync(
-        Guid? collegeId, CancellationToken ct = default);
+    Task<PagedResult<AcademicProgramDto>> ListProgramsAsync(
+        Guid? collegeId, PageRequest page, CancellationToken ct = default);
 
     /// <summary>
     /// Courses, optionally narrowed to one college and/or matched against a search term.
@@ -84,24 +84,46 @@ public interface IAcademicReferenceService
     /// is a worse experience than searching both. Substring, case-insensitive by the database's
     /// collation.
     /// </param>
-    Task<IReadOnlyList<CourseDto>> ListCoursesAsync(
-        Guid? collegeId, string? search, CancellationToken ct = default);
+    Task<PagedResult<CourseDto>> ListCoursesAsync(
+        Guid? collegeId, string? search, PageRequest page, CancellationToken ct = default);
 
     /// <summary>
     /// Course offerings — <b>the section grain</b>, and the row an event-audience picker is really
     /// looking for. A course taught to two sections is two entries.
     /// </summary>
     /// <param name="termId">
-    /// Null lists every term's offerings. Callers should almost always pass one: section names repeat
-    /// every semester against a different cohort, so an unscoped list contains several distinct
-    /// audiences under identical names.
+    /// <b>Null means the term flagged <c>IsCurrent</c>, not "every term".</b>
+    ///
+    /// <para>
+    /// It used to mean every term, and that was the defect. Section names repeat every semester
+    /// against an entirely different cohort, so an unscoped list holds several distinct audiences
+    /// under identical names — and every offering the institution has ever imported grows without
+    /// bound, so the one filter a caller was most likely to omit was also the one that decided
+    /// whether the response stayed a sane size. Defaulting to the current term is what the interface's
+    /// old wording already told callers to do ("callers should almost always pass one"); making it the
+    /// default rather than the advice is the difference between a rule and a hope.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>When no term is flagged current, this returns an empty page.</b> Zero current terms is a
+    /// real state — <c>IsCurrent</c> is capped at <em>one</em> per school by a filtered unique index,
+    /// not pinned at one, and between semesters nobody has moved the flag yet. Falling back to every
+    /// term in that case would reinstate the exact unbounded read this default exists to close, and
+    /// would do it on the one day nobody is watching. Empty is also what this layer already answers
+    /// for every other filter that matches nothing (an unknown <paramref name="termId"/>, an
+    /// undocumented group source type): a filter that silently stops filtering is an invisible wrong
+    /// answer, and an empty list is a visible one. A caller that needs to tell "no offerings this
+    /// term" from "no term is current" asks <see cref="GetCurrentTermAsync"/>, which answers the
+    /// second question directly.
+    /// </para>
     /// </param>
-    /// <param name="courseId">Null lists offerings of every course.</param>
+    /// <param name="courseId">Null lists offerings of every course within the scoped term.</param>
     /// <param name="section">
     /// <b>Normalized before it is compared, never after.</b> <c>'BSFS 2-A'</c>, <c>'bsfs2a'</c> and
     /// <c>'BSFS-2A'</c> are one section, and matching the raw string would make the filter depend on
     /// how the caller happened to type it. Pass the display form; the service normalizes.
     /// </param>
-    Task<IReadOnlyList<CourseOfferingDto>> ListCourseOfferingsAsync(
-        Guid? termId, Guid? courseId, string? section, CancellationToken ct = default);
+    Task<PagedResult<CourseOfferingDto>> ListCourseOfferingsAsync(
+        Guid? termId, Guid? courseId, string? section, PageRequest page,
+        CancellationToken ct = default);
 }

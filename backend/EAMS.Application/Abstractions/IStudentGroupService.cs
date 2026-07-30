@@ -52,6 +52,6 @@ public interface IStudentGroupService
     /// the projection composes into them.
     /// </para>
     /// </param>
-    Task<IReadOnlyList<StudentGroupDto>> ListAsync(
-        string? sourceType, Guid? termId, CancellationToken ct = default);
+    Task<PagedResult<StudentGroupDto>> ListAsync(
+        string? sourceType, Guid? termId, PageRequest page, CancellationToken ct = default);
 }

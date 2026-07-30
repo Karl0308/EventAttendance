@@ -634,7 +634,7 @@ public class StudentWriteTests : IntegrationTest
         var students = StudentsOn(read);
 
         Assert.Null(await students.GetAsync(studentId));
-        Assert.Empty(await students.ListAsync(null, null, null));
+        Assert.Empty((await students.ListAsync(null, null, null, PageRequest.Default)).Items);
 
         var stored = await read.Students.AsNoTracking().SingleAsync(s => s.Id == studentId);
         Assert.True(stored.IsDeleted);

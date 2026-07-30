@@ -43,7 +43,7 @@ public class DevicesController : ControllerBase
     /// <param name="ct">Cancellation token.</param>
     /// <response code="200">The devices, possibly empty.</response>
     [HttpGet]
-    [HasPermissionNotEnforced("devices.read")]
+    [HasPermissionNotEnforced(EamsPermissions.DevicesRead)]
     [ProducesResponseType(typeof(IEnumerable<DeviceDto>), StatusCodes.Status200OK)]
     public async Task<ActionResult<IEnumerable<DeviceDto>>> List(CancellationToken ct)
         => Ok(await _devices.ListAsync(ct));
@@ -58,7 +58,7 @@ public class DevicesController : ControllerBase
     /// <response code="200">The device.</response>
     /// <response code="404">No such device in this school.</response>
     [HttpGet("{id:guid}")]
-    [HasPermissionNotEnforced("devices.read")]
+    [HasPermissionNotEnforced(EamsPermissions.DevicesRead)]
     [ProducesResponseType(typeof(DeviceDto), StatusCodes.Status200OK)]
     [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status404NotFound)]
     public async Task<ActionResult<DeviceDto>> Get(Guid id, CancellationToken ct)
@@ -78,7 +78,7 @@ public class DevicesController : ControllerBase
     /// none to forget to protect. An operator who loses it rotates.
     /// </remarks>
     [HttpPost]
-    [HasPermissionNotEnforced("devices.write")]
+    [HasPermissionNotEnforced(EamsPermissions.DevicesWrite)]
     [ProducesResponseType(typeof(DeviceKeyIssuedDto), StatusCodes.Status201Created)]
     [ProducesResponseType(StatusCodes.Status400BadRequest)]
     [ProducesResponseType(StatusCodes.Status409Conflict)]
@@ -97,7 +97,7 @@ public class DevicesController : ControllerBase
     /// different statements.
     /// </summary>
     [HttpPut("{id:guid}")]
-    [HasPermissionNotEnforced("devices.write")]
+    [HasPermissionNotEnforced(EamsPermissions.DevicesWrite)]
     [ProducesResponseType(typeof(DeviceDto), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status400BadRequest)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
@@ -113,7 +113,7 @@ public class DevicesController : ControllerBase
     /// stops working the moment this returns.
     /// </summary>
     [HttpPost("{id:guid}/regenerate-key")]
-    [HasPermissionNotEnforced("devices.write")]
+    [HasPermissionNotEnforced(EamsPermissions.DevicesWrite)]
     [ProducesResponseType(typeof(DeviceKeyIssuedDto), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     [ProducesResponseType(StatusCodes.Status409Conflict)]
@@ -142,7 +142,7 @@ public class DevicesController : ControllerBase
     /// </para>
     /// </remarks>
     [HttpPost("{id:guid}/revoke-key")]
-    [HasPermissionNotEnforced("devices.write")]
+    [HasPermissionNotEnforced(EamsPermissions.DevicesWrite)]
     [ProducesResponseType(typeof(DeviceDto), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     public async Task<ActionResult<DeviceDto>> RevokeKey(Guid id, CancellationToken ct)

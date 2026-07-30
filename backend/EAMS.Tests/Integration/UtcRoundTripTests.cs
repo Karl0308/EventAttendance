@@ -162,7 +162,7 @@ public class UtcRoundTripTests : IntegrationTest
         list.EnsureSuccessStatusCode();
 
         using var listed = JsonDocument.Parse(await list.Content.ReadAsStringAsync());
-        var onRead = listed.RootElement[0].GetProperty("checkInAt").GetString();
+        var onRead = listed.RootElement.GetProperty("items")[0].GetProperty("checkInAt").GetString();
 
         Assert.EndsWith("Z", onCreate);
         Assert.EndsWith("Z", onRead);

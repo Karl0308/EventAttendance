@@ -26,13 +26,16 @@ namespace EAMS.Api.Controllers;
 /// </para>
 ///
 /// <para>
-/// <b><c>academic.read</c> is a permission code this phase minted; §6 does not define one.</b> The
-/// plan's §6 tables predate the academic layer entirely and assign it no routes, so there was nothing
-/// to inherit. The nearest signal is §7.1, which guards the frontend's <c>/groups</c> page with
-/// <c>students.read</c> — reused here it would have meant "anyone who can browse the roster can browse
-/// its structure", which is defensible but collapses two questions Phase 6 should get to answer
+/// <b><c>academic.read</c> is a permission code Phase 3b-2 minted, and D-44 keeps it.</b> The plan's
+/// §6 tables predate the academic layer entirely and assign it no routes, so there was nothing to
+/// inherit and this is an <em>addition</em> to the plan's map rather than a contradiction of it —
+/// which is exactly what separates it from the <c>groups.read</c> that D-45 deleted, where §7.1 had
+/// already assigned <c>students.read</c> to the same page. The nearest signal here is that same
+/// §7.1 line: reused, it would have meant "anyone who can browse the roster can browse its
+/// structure", which is defensible but collapses two questions Phase 6 should get to answer
 /// separately. The attribute enforces nothing (ADR-001 D-6), so this is a declaration of intent on
-/// the audit list Phase 6's rename walks, and changing it then is one edit per action.
+/// the audit list Phase 6's rename walks, and changing it then is one edit per action. The code
+/// itself now lives once, on <see cref="EamsPermissions"/>, rather than at six call sites.
 /// </para>
 /// </remarks>
 // Permission codes are this phase's, not §6.2's — see the remarks. ADR-001 D-6's bargain was that
@@ -56,13 +59,18 @@ public class AcademicController : ControllerBase
     /// an arbitrary list on real data. Term codes are operator-authored and sort chronologically by
     /// construction, which is what this falls back to.
     /// </remarks>
+    /// <param name="page">1-based page number, default 1. Out-of-range values are clamped, not refused.</param>
+    /// <param name="pageSize">
+    /// Rows per page. Default 50, maximum 200; a larger value is clamped and the response says so.
+    /// </param>
     /// <param name="ct">Cancellation token.</param>
-    /// <response code="200">The terms, possibly empty.</response>
+    /// <response code="200">One page of terms, possibly empty.</response>
     [HttpGet("terms")]
-    [HasPermissionNotEnforced("academic.read")]
-    [ProducesResponseType(typeof(IEnumerable<TermDto>), StatusCodes.Status200OK)]
-    public async Task<ActionResult<IEnumerable<TermDto>>> Terms(CancellationToken ct)
-        => Ok(await _academic.ListTermsAsync(ct));
+    [HasPermissionNotEnforced(EamsPermissions.AcademicRead)]
+    [ProducesResponseType(typeof(PagedResult<TermDto>), StatusCodes.Status200OK)]
+    public async Task<ActionResult<PagedResult<TermDto>>> Terms(
+        [FromQuery] int? page, [FromQuery] int? pageSize, CancellationToken ct)
+        => Ok(await _academic.ListTermsAsync(PageRequest.From(page, pageSize), ct));
 
     /// <summary>
     /// <c>GET /academic/terms/current</c> — the term flagged current, or 404 when none is.
@@ -86,7 +94,7 @@ public class AcademicController : ControllerBase
     /// <response code="200">The current term.</response>
     /// <response code="404">No term in this school is flagged current.</response>
     [HttpGet("terms/current")]
-    [HasPermissionNotEnforced("academic.read")]
+    [HasPermissionNotEnforced(EamsPermissions.AcademicRead)]
     [ProducesResponseType(typeof(TermDto), StatusCodes.Status200OK)]
     // typeof: [ApiController] turns NotFound() into a ProblemDetails, so declaring the status alone
     // would publish a 404 the document says carries no body while the pipeline returns one.
@@ -103,18 +111,25 @@ public class AcademicController : ControllerBase
     /// <c>GET /academic/colleges</c> — every college, by name.
     /// </summary>
     /// <remarks>
-    /// Unfiltered and unpaged on purpose: a college list is a handful of rows per institution and is
-    /// the top of every drill-down in the audience picker, so a cursor would be ceremony over a
-    /// dropdown. <c>code</c> is nullable — the roster source has no college code column, so the
-    /// natural key is the normalized name and the code exists only to be filled in later.
+    /// Unfiltered, and paged like every other admin list — a college list really is a handful of rows
+    /// per institution, but "this table is small today" is a property of the data rather than of the
+    /// endpoint, and the two lists on this controller that were argued unbounded on exactly that
+    /// reasoning (offerings, groups) are the two that grew per term. <c>code</c> is nullable: the
+    /// roster source has no college code column, so the natural key is the normalized name and the
+    /// code exists only to be filled in later.
     /// </remarks>
+    /// <param name="page">1-based page number, default 1. Out-of-range values are clamped, not refused.</param>
+    /// <param name="pageSize">
+    /// Rows per page. Default 50, maximum 200; a larger value is clamped and the response says so.
+    /// </param>
     /// <param name="ct">Cancellation token.</param>
-    /// <response code="200">The colleges, possibly empty.</response>
+    /// <response code="200">One page of colleges, possibly empty.</response>
     [HttpGet("colleges")]
-    [HasPermissionNotEnforced("academic.read")]
-    [ProducesResponseType(typeof(IEnumerable<CollegeDto>), StatusCodes.Status200OK)]
-    public async Task<ActionResult<IEnumerable<CollegeDto>>> Colleges(CancellationToken ct)
-        => Ok(await _academic.ListCollegesAsync(ct));
+    [HasPermissionNotEnforced(EamsPermissions.AcademicRead)]
+    [ProducesResponseType(typeof(PagedResult<CollegeDto>), StatusCodes.Status200OK)]
+    public async Task<ActionResult<PagedResult<CollegeDto>>> Colleges(
+        [FromQuery] int? page, [FromQuery] int? pageSize, CancellationToken ct)
+        => Ok(await _academic.ListCollegesAsync(PageRequest.From(page, pageSize), ct));
 
     // ---------------------------------------------------------------------------------- programs
 
@@ -126,14 +141,19 @@ public class AcademicController : ControllerBase
     /// a filter that silently stops filtering is how an "invite this college" flow ends up inviting
     /// the institution.
     /// </param>
+    /// <param name="page">1-based page number, default 1. Out-of-range values are clamped, not refused.</param>
+    /// <param name="pageSize">
+    /// Rows per page. Default 50, maximum 200; a larger value is clamped and the response says so.
+    /// </param>
     /// <param name="ct">Cancellation token.</param>
-    /// <response code="200">The matching programmes, possibly empty.</response>
+    /// <response code="200">One page of matching programmes, possibly empty.</response>
     [HttpGet("programs")]
-    [HasPermissionNotEnforced("academic.read")]
-    [ProducesResponseType(typeof(IEnumerable<AcademicProgramDto>), StatusCodes.Status200OK)]
-    public async Task<ActionResult<IEnumerable<AcademicProgramDto>>> Programs(
-        [FromQuery] Guid? collegeId, CancellationToken ct)
-        => Ok(await _academic.ListProgramsAsync(collegeId, ct));
+    [HasPermissionNotEnforced(EamsPermissions.AcademicRead)]
+    [ProducesResponseType(typeof(PagedResult<AcademicProgramDto>), StatusCodes.Status200OK)]
+    public async Task<ActionResult<PagedResult<AcademicProgramDto>>> Programs(
+        [FromQuery] Guid? collegeId, [FromQuery] int? page, [FromQuery] int? pageSize,
+        CancellationToken ct)
+        => Ok(await _academic.ListProgramsAsync(collegeId, PageRequest.From(page, pageSize), ct));
 
     // ----------------------------------------------------------------------------------- courses
 
@@ -150,14 +170,20 @@ public class AcademicController : ControllerBase
     /// title while one typing "SSCI" is naming the code, and asking which they meant is worse than
     /// searching both. Substring, case-insensitive by the database's collation.
     /// </param>
+    /// <param name="page">1-based page number, default 1. Out-of-range values are clamped, not refused.</param>
+    /// <param name="pageSize">
+    /// Rows per page. Default 50, maximum 200; a larger value is clamped and the response says so.
+    /// </param>
     /// <param name="ct">Cancellation token.</param>
-    /// <response code="200">The matching courses, possibly empty.</response>
+    /// <response code="200">One page of matching courses, possibly empty.</response>
     [HttpGet("courses")]
-    [HasPermissionNotEnforced("academic.read")]
-    [ProducesResponseType(typeof(IEnumerable<CourseDto>), StatusCodes.Status200OK)]
-    public async Task<ActionResult<IEnumerable<CourseDto>>> Courses(
-        [FromQuery] Guid? collegeId, [FromQuery] string? search, CancellationToken ct)
-        => Ok(await _academic.ListCoursesAsync(collegeId, search, ct));
+    [HasPermissionNotEnforced(EamsPermissions.AcademicRead)]
+    [ProducesResponseType(typeof(PagedResult<CourseDto>), StatusCodes.Status200OK)]
+    public async Task<ActionResult<PagedResult<CourseDto>>> Courses(
+        [FromQuery] Guid? collegeId, [FromQuery] string? search,
+        [FromQuery] int? page, [FromQuery] int? pageSize, CancellationToken ct)
+        => Ok(await _academic.ListCoursesAsync(
+            collegeId, search, PageRequest.From(page, pageSize), ct));
 
     // -------------------------------------------------------------------------- course offerings
 
@@ -183,23 +209,41 @@ public class AcademicController : ControllerBase
     /// </para>
     /// </remarks>
     /// <param name="termId">
-    /// Omit to list every term's. Callers should almost always pass one: section names repeat each
-    /// semester against a different cohort, so an unscoped list holds several distinct audiences under
-    /// identical names.
+    /// <b>Omit to get the current term, not every term.</b> Section names repeat each semester against
+    /// a different cohort, so an unscoped list stacked several distinct audiences under identical
+    /// names and grew with every import the institution had ever run — this endpoint returned every
+    /// offering of every term, which is the defect the default closes.
+    ///
+    /// <para>
+    /// <b>When no term is flagged current, the response is an empty page.</b> Zero current terms is a
+    /// real state — the flag is capped at one per school, not pinned at one, and between semesters
+    /// nobody has moved it yet. Widening back to every term in that case would restore the unbounded
+    /// read on the one day nobody is watching for it. Ask <c>GET /academic/terms/current</c> to tell
+    /// "no offerings this term" from "no term is current"; it 404s on the second.
+    /// </para>
     /// </param>
-    /// <param name="courseId">Omit to list offerings of every course.</param>
+    /// <param name="courseId">Omit to list offerings of every course in the scoped term.</param>
     /// <param name="section">
     /// The section's display name. <b>Normalized before it is compared</b> — <c>BSFS 2-A</c>,
     /// <c>bsfs2a</c> and <c>BSFS-2A</c> are one section — so the filter does not depend on how the
     /// caller happened to type it.
     /// </param>
+    /// <param name="page">1-based page number, default 1. Out-of-range values are clamped, not refused.</param>
+    /// <param name="pageSize">
+    /// Rows per page. Default 50, maximum 200; a larger value is clamped and the response says so.
+    /// </param>
     /// <param name="ct">Cancellation token.</param>
-    /// <response code="200">The matching offerings, possibly empty.</response>
+    /// <response code="200">
+    /// One page of matching offerings, possibly empty — including when no term is flagged current and
+    /// none was named.
+    /// </response>
     [HttpGet("course-offerings")]
-    [HasPermissionNotEnforced("academic.read")]
-    [ProducesResponseType(typeof(IEnumerable<CourseOfferingDto>), StatusCodes.Status200OK)]
-    public async Task<ActionResult<IEnumerable<CourseOfferingDto>>> CourseOfferings(
+    [HasPermissionNotEnforced(EamsPermissions.AcademicRead)]
+    [ProducesResponseType(typeof(PagedResult<CourseOfferingDto>), StatusCodes.Status200OK)]
+    public async Task<ActionResult<PagedResult<CourseOfferingDto>>> CourseOfferings(
         [FromQuery] Guid? termId, [FromQuery] Guid? courseId, [FromQuery] string? section,
+        [FromQuery] int? page, [FromQuery] int? pageSize,
         CancellationToken ct)
-        => Ok(await _academic.ListCourseOfferingsAsync(termId, courseId, section, ct));
+        => Ok(await _academic.ListCourseOfferingsAsync(
+            termId, courseId, section, PageRequest.From(page, pageSize), ct));
 }

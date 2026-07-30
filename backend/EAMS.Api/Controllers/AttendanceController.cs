@@ -68,21 +68,42 @@ public class AttendanceController : ControllerBase
     /// <c>GET /attendance</c> — recorded attendance rows, every filter optional.
     /// </summary>
     /// <remarks>
-    /// Unfiltered and unpaged, so it is a back-office read rather than something to poll. The live
-    /// dashboard's read is <c>GET /attendance/live/{eventId}</c>, which is bounded and cursored.
+    /// <para>
+    /// A back-office read rather than something to poll: offset-paged, newest check-in first. The live
+    /// dashboard's read is <c>GET /attendance/live/{eventId}</c>, which is cursored.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>The two are not variations on one endpoint and must not be made into one.</b> This answers
+    /// "give me rows 40 to 60 of what matched"; the live one answers "what changed after this cursor",
+    /// and its <c>since</c>/<c>cursor</c>/<c>hasMore</c> shape is frozen published contract
+    /// (D-29/D-30/D-42) that a mobile client polls today. Offset paging over a live feed also loses
+    /// rows outright — an insert below the offset shifts everything up by one and the next page skips
+    /// it — which is exactly why that endpoint was built on a <c>rowversion</c> cursor instead.
+    /// </para>
     /// </remarks>
     /// <param name="eventId">Restrict to one event.</param>
     /// <param name="studentId">Restrict to one student.</param>
     /// <param name="status">One of <c>Present</c>, <c>Late</c>, <c>Absent</c>, <c>Excused</c>.</param>
+    /// <param name="page">
+    /// 1-based page number, default 1. Out-of-range values are clamped, never refused; the response
+    /// echoes the page actually served.
+    /// </param>
+    /// <param name="pageSize">
+    /// Rows per page. Default 50, maximum 200 — a larger value is clamped to the maximum and the
+    /// response says so in its own <c>pageSize</c>.
+    /// </param>
     /// <param name="ct">Cancellation token.</param>
-    /// <response code="200">The matching rows, possibly empty. Never a 404 for an empty filter.</response>
+    /// <response code="200">One page of matching rows, possibly empty. Never a 404 for an empty filter.</response>
     [HttpGet]
-    [HasPermissionNotEnforced("attendance.read")]
-    [ProducesResponseType(typeof(IEnumerable<AttendanceDto>), StatusCodes.Status200OK)]
-    public async Task<ActionResult<IEnumerable<AttendanceDto>>> List(
+    [HasPermissionNotEnforced(EamsPermissions.AttendanceRead)]
+    [ProducesResponseType(typeof(PagedResult<AttendanceDto>), StatusCodes.Status200OK)]
+    public async Task<ActionResult<PagedResult<AttendanceDto>>> List(
         [FromQuery] Guid? eventId, [FromQuery] Guid? studentId, [FromQuery] string? status,
+        [FromQuery] int? page, [FromQuery] int? pageSize,
         CancellationToken ct)
-        => Ok(await _attendance.ListAsync(eventId, studentId, status, ct));
+        => Ok(await _attendance.ListAsync(
+            eventId, studentId, status, PageRequest.From(page, pageSize), ct));
 
     /// <summary>
     /// <c>POST /attendance/tap</c> — the core capture path (Technical Plan §6.4).
@@ -332,7 +353,7 @@ public class AttendanceController : ControllerBase
     /// </response>
     [HttpGet("live/{eventId:guid}")]
     [EnableRateLimiting(CaptureRateLimiting.LivePolicyName)]
-    [HasPermissionNotEnforced("attendance.read")]
+    [HasPermissionNotEnforced(EamsPermissions.AttendanceRead)]
     [ProducesResponseType(typeof(AttendanceLiveDto), StatusCodes.Status200OK)]
     [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status400BadRequest)]
     [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status404NotFound)]
@@ -421,7 +442,7 @@ public class AttendanceController : ControllerBase
     /// </response>
     /// <response code="404"><c>EventNotFound</c> or <c>StudentNotFound</c>, same body shape.</response>
     [HttpPost("manual")]
-    [HasPermissionNotEnforced("attendance.write")]
+    [HasPermissionNotEnforced(EamsPermissions.AttendanceWrite)]
     // Without these the document infers TapResult for every status this action produces, which 4c made
     // untrue: a generated client would deserialize a problem body into TapResult and read `success` off
     // a field that is not there. The <response> tags above supply the prose, not the schema.

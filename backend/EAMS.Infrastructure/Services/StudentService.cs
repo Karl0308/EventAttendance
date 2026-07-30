@@ -65,10 +65,21 @@ internal sealed class StudentService : IStudentService
 
     // ------------------------------------------------------------------------------------ reads
 
-    public async Task<IReadOnlyList<StudentDto>> ListAsync(
-        string? search, string? course, string? status, CancellationToken ct = default)
+    /// <summary>
+    /// <inheritdoc cref="IStudentService.ListAsync" path="/summary"/>
+    /// </summary>
+    /// <remarks>
+    /// Counted and paged through <see cref="PagedQuery.ToPageAsync{TEntity, TDto}(IQueryable{TEntity},
+    /// Func{IQueryable{TEntity}, IQueryable{TEntity}}, Func{TEntity, TDto}, PageRequest,
+    /// CancellationToken)"/>, which is the single seam all nine admin lists share — a total built from
+    /// a filter that has drifted from the one that produced the rows is the paging bug that never
+    /// looks like one, and having one implementation of the pairing is what removes the chance.
+    /// </remarks>
+    public Task<PagedResult<StudentDto>> ListAsync(
+        string? search, string? course, string? status, PageRequest page,
+        CancellationToken ct = default)
     {
-        var q = _db.Students.Include(s => s.Cards).Where(s => !s.IsDeleted);
+        var q = _db.Students.Where(s => !s.IsDeleted);
 
         if (!string.IsNullOrWhiteSpace(search))
             q = q.Where(s => s.FirstName.Contains(search) || s.LastName.Contains(search)
@@ -76,8 +87,16 @@ internal sealed class StudentService : IStudentService
         if (!string.IsNullOrWhiteSpace(course)) q = q.Where(s => s.Course == course);
         if (!string.IsNullOrWhiteSpace(status)) q = q.Where(s => s.Status == status);
 
-        var list = await q.OrderBy(s => s.LastName).ToListAsync(ct);
-        return list.Select(ToDto).ToList();
+        return q.ToPageAsync(
+            // Include here rather than on the filter, so the join lands on the page and not on the
+            // COUNT. ThenBy(Id) is the total order: surnames are not unique — a roster of fifty-two
+            // has several — and SQL Server may return equal keys in a different order on every
+            // execution, so without a unique tiebreaker page 2 can repeat a row page 1 already served
+            // and skip one entirely. Nothing about that failure is visible in a single page.
+            ordered => ordered
+                .Include(s => s.Cards)
+                .OrderBy(s => s.LastName).ThenBy(s => s.Id),
+            ToDto, page, ct);
     }
 
     public async Task<StudentDto?> GetAsync(Guid id, CancellationToken ct = default)

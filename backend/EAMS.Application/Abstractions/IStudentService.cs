@@ -87,8 +87,15 @@ public record StudentCardResponse(StudentWriteOutcome Outcome, string Message, C
 /// <summary>Technical Plan §6.2. Implemented in EAMS.Infrastructure; controllers see only this.</summary>
 public interface IStudentService
 {
-    Task<IReadOnlyList<StudentDto>> ListAsync(
-        string? search, string? course, string? status, CancellationToken ct = default);
+    /// <summary>
+    /// §6.2 <c>GET /students</c> — "Paged list", as the plan says at §6.2 and as this did not do until
+    /// Phase 3b-3. Ordered by last name, then by <c>Id</c>: the tiebreaker is not decoration, it is
+    /// what stops two students sharing a surname from swapping places between page 1 and page 2 and
+    /// being served twice or not at all.
+    /// </summary>
+    Task<PagedResult<StudentDto>> ListAsync(
+        string? search, string? course, string? status, PageRequest page,
+        CancellationToken ct = default);
 
     Task<StudentDto?> GetAsync(Guid id, CancellationToken ct = default);
 

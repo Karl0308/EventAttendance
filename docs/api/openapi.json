@@ -13,32 +13,43 @@
         ],
         "summary": "`GET /academic/terms` — every term, current first and then newest first.",
         "description": "The order is deliberate and does not depend on `startsOn`: the roster source has no term\r\ndate columns at all, so those two fields are frequently null and sorting on them would produce\r\nan arbitrary list on real data. Term codes are operator-authored and sort chronologically by\r\nconstruction, which is what this falls back to.",
+        "parameters": [
+          {
+            "name": "page",
+            "in": "query",
+            "description": "1-based page number, default 1. Out-of-range values are clamped, not refused.",
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          },
+          {
+            "name": "pageSize",
+            "in": "query",
+            "description": "Rows per page. Default 50, maximum 200; a larger value is clamped and the response says so.",
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
         "responses": {
           "200": {
-            "description": "The terms, possibly empty.",
+            "description": "One page of terms, possibly empty.",
             "content": {
               "text/plain": {
                 "schema": {
-                  "type": "array",
-                  "items": {
-                    "$ref": "#/components/schemas/TermDto"
-                  }
+                  "$ref": "#/components/schemas/TermDtoPagedResult"
                 }
               },
               "application/json": {
                 "schema": {
-                  "type": "array",
-                  "items": {
-                    "$ref": "#/components/schemas/TermDto"
-                  }
+                  "$ref": "#/components/schemas/TermDtoPagedResult"
                 }
               },
               "text/json": {
                 "schema": {
-                  "type": "array",
-                  "items": {
-                    "$ref": "#/components/schemas/TermDto"
-                  }
+                  "$ref": "#/components/schemas/TermDtoPagedResult"
                 }
               }
             }
@@ -103,33 +114,44 @@
           "Academic"
         ],
         "summary": "`GET /academic/colleges` — every college, by name.",
-        "description": "Unfiltered and unpaged on purpose: a college list is a handful of rows per institution and is\r\nthe top of every drill-down in the audience picker, so a cursor would be ceremony over a\r\ndropdown. `code` is nullable — the roster source has no college code column, so the\r\nnatural key is the normalized name and the code exists only to be filled in later.",
+        "description": "Unfiltered, and paged like every other admin list — a college list really is a handful of rows\r\nper institution, but \"this table is small today\" is a property of the data rather than of the\r\nendpoint, and the two lists on this controller that were argued unbounded on exactly that\r\nreasoning (offerings, groups) are the two that grew per term. `code` is nullable: the\r\nroster source has no college code column, so the natural key is the normalized name and the\r\ncode exists only to be filled in later.",
+        "parameters": [
+          {
+            "name": "page",
+            "in": "query",
+            "description": "1-based page number, default 1. Out-of-range values are clamped, not refused.",
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          },
+          {
+            "name": "pageSize",
+            "in": "query",
+            "description": "Rows per page. Default 50, maximum 200; a larger value is clamped and the response says so.",
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
         "responses": {
           "200": {
-            "description": "The colleges, possibly empty.",
+            "description": "One page of colleges, possibly empty.",
             "content": {
               "text/plain": {
                 "schema": {
-                  "type": "array",
-                  "items": {
-                    "$ref": "#/components/schemas/CollegeDto"
-                  }
+                  "$ref": "#/components/schemas/CollegeDtoPagedResult"
                 }
               },
               "application/json": {
                 "schema": {
-                  "type": "array",
-                  "items": {
-                    "$ref": "#/components/schemas/CollegeDto"
-                  }
+                  "$ref": "#/components/schemas/CollegeDtoPagedResult"
                 }
               },
               "text/json": {
                 "schema": {
-                  "type": "array",
-                  "items": {
-                    "$ref": "#/components/schemas/CollegeDto"
-                  }
+                  "$ref": "#/components/schemas/CollegeDtoPagedResult"
                 }
               }
             }
@@ -152,34 +174,43 @@
               "type": "string",
               "format": "uuid"
             }
+          },
+          {
+            "name": "page",
+            "in": "query",
+            "description": "1-based page number, default 1. Out-of-range values are clamped, not refused.",
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          },
+          {
+            "name": "pageSize",
+            "in": "query",
+            "description": "Rows per page. Default 50, maximum 200; a larger value is clamped and the response says so.",
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
           }
         ],
         "responses": {
           "200": {
-            "description": "The matching programmes, possibly empty.",
+            "description": "One page of matching programmes, possibly empty.",
             "content": {
               "text/plain": {
                 "schema": {
-                  "type": "array",
-                  "items": {
-                    "$ref": "#/components/schemas/AcademicProgramDto"
-                  }
+                  "$ref": "#/components/schemas/AcademicProgramDtoPagedResult"
                 }
               },
               "application/json": {
                 "schema": {
-                  "type": "array",
-                  "items": {
-                    "$ref": "#/components/schemas/AcademicProgramDto"
-                  }
+                  "$ref": "#/components/schemas/AcademicProgramDtoPagedResult"
                 }
               },
               "text/json": {
                 "schema": {
-                  "type": "array",
-                  "items": {
-                    "$ref": "#/components/schemas/AcademicProgramDto"
-                  }
+                  "$ref": "#/components/schemas/AcademicProgramDtoPagedResult"
                 }
               }
             }
@@ -210,34 +241,43 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "name": "page",
+            "in": "query",
+            "description": "1-based page number, default 1. Out-of-range values are clamped, not refused.",
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          },
+          {
+            "name": "pageSize",
+            "in": "query",
+            "description": "Rows per page. Default 50, maximum 200; a larger value is clamped and the response says so.",
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
           }
         ],
         "responses": {
           "200": {
-            "description": "The matching courses, possibly empty.",
+            "description": "One page of matching courses, possibly empty.",
             "content": {
               "text/plain": {
                 "schema": {
-                  "type": "array",
-                  "items": {
-                    "$ref": "#/components/schemas/CourseDto"
-                  }
+                  "$ref": "#/components/schemas/CourseDtoPagedResult"
                 }
               },
               "application/json": {
                 "schema": {
-                  "type": "array",
-                  "items": {
-                    "$ref": "#/components/schemas/CourseDto"
-                  }
+                  "$ref": "#/components/schemas/CourseDtoPagedResult"
                 }
               },
               "text/json": {
                 "schema": {
-                  "type": "array",
-                  "items": {
-                    "$ref": "#/components/schemas/CourseDto"
-                  }
+                  "$ref": "#/components/schemas/CourseDtoPagedResult"
                 }
               }
             }
@@ -256,7 +296,7 @@
           {
             "name": "termId",
             "in": "query",
-            "description": "Omit to list every term's. Callers should almost always pass one: section names repeat each\r\nsemester against a different cohort, so an unscoped list holds several distinct audiences under\r\nidentical names.",
+            "description": "<b>Omit to get the current term, not every term.</b> Section names repeat each semester against\r\n             a different cohort, so an unscoped list stacked several distinct audiences under identical\r\n             names and grew with every import the institution had ever run — this endpoint returned every\r\n             offering of every term, which is the defect the default closes.\r\n            \r\n             \r\n<b>When no term is flagged current, the response is an empty page.</b> Zero current terms is a\r\n             real state — the flag is capped at one per school, not pinned at one, and between semesters\r\n             nobody has moved it yet. Widening back to every term in that case would restore the unbounded\r\n             read on the one day nobody is watching for it. Ask `GET /academic/terms/current` to tell\r\n             \"no offerings this term\" from \"no term is current\"; it 404s on the second.\r\n             ",
             "schema": {
               "type": "string",
               "format": "uuid"
@@ -265,7 +305,7 @@
           {
             "name": "courseId",
             "in": "query",
-            "description": "Omit to list offerings of every course.",
+            "description": "Omit to list offerings of every course in the scoped term.",
             "schema": {
               "type": "string",
               "format": "uuid"
@@ -278,34 +318,43 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "name": "page",
+            "in": "query",
+            "description": "1-based page number, default 1. Out-of-range values are clamped, not refused.",
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          },
+          {
+            "name": "pageSize",
+            "in": "query",
+            "description": "Rows per page. Default 50, maximum 200; a larger value is clamped and the response says so.",
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
           }
         ],
         "responses": {
           "200": {
-            "description": "The matching offerings, possibly empty.",
+            "description": "One page of matching offerings, possibly empty — including when no term is flagged current and\r\nnone was named.",
             "content": {
               "text/plain": {
                 "schema": {
-                  "type": "array",
-                  "items": {
-                    "$ref": "#/components/schemas/CourseOfferingDto"
-                  }
+                  "$ref": "#/components/schemas/CourseOfferingDtoPagedResult"
                 }
               },
               "application/json": {
                 "schema": {
-                  "type": "array",
-                  "items": {
-                    "$ref": "#/components/schemas/CourseOfferingDto"
-                  }
+                  "$ref": "#/components/schemas/CourseOfferingDtoPagedResult"
                 }
               },
               "text/json": {
                 "schema": {
-                  "type": "array",
-                  "items": {
-                    "$ref": "#/components/schemas/CourseOfferingDto"
-                  }
+                  "$ref": "#/components/schemas/CourseOfferingDtoPagedResult"
                 }
               }
             }
@@ -319,7 +368,7 @@
           "Attendance"
         ],
         "summary": "`GET /attendance` — recorded attendance rows, every filter optional.",
-        "description": "Unfiltered and unpaged, so it is a back-office read rather than something to poll. The live\r\ndashboard's read is `GET /attendance/live/{eventId}`, which is bounded and cursored.",
+        "description": "\r\n\r\n             A back-office read rather than something to poll: offset-paged, newest check-in first. The live\r\n             dashboard's read is `GET /attendance/live/{eventId}`, which is cursored.\r\n             \r\n\r\n\r\n  <b>The two are not variations on one endpoint and must not be made into one.</b> This answers\r\n             \"give me rows 40 to 60 of what matched\"; the live one answers \"what changed after this cursor\",\r\n             and its `since`/`cursor`/`hasMore` shape is frozen published contract\r\n             (D-29/D-30/D-42) that a mobile client polls today. Offset paging over a live feed also loses\r\n             rows outright — an insert below the offset shifts everything up by one and the next page skips\r\n             it — which is exactly why that endpoint was built on a `rowversion` cursor instead.\r\n             ",
         "parameters": [
           {
             "name": "eventId",
@@ -346,34 +395,43 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "name": "page",
+            "in": "query",
+            "description": "1-based page number, default 1. Out-of-range values are clamped, never refused; the response\r\nechoes the page actually served.",
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          },
+          {
+            "name": "pageSize",
+            "in": "query",
+            "description": "Rows per page. Default 50, maximum 200 — a larger value is clamped to the maximum and the\r\nresponse says so in its own `pageSize`.",
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
           }
         ],
         "responses": {
           "200": {
-            "description": "The matching rows, possibly empty. Never a 404 for an empty filter.",
+            "description": "One page of matching rows, possibly empty. Never a 404 for an empty filter.",
             "content": {
               "text/plain": {
                 "schema": {
-                  "type": "array",
-                  "items": {
-                    "$ref": "#/components/schemas/AttendanceDto"
-                  }
+                  "$ref": "#/components/schemas/AttendanceDtoPagedResult"
                 }
               },
               "application/json": {
                 "schema": {
-                  "type": "array",
-                  "items": {
-                    "$ref": "#/components/schemas/AttendanceDto"
-                  }
+                  "$ref": "#/components/schemas/AttendanceDtoPagedResult"
                 }
               },
               "text/json": {
                 "schema": {
-                  "type": "array",
-                  "items": {
-                    "$ref": "#/components/schemas/AttendanceDto"
-                  }
+                  "$ref": "#/components/schemas/AttendanceDtoPagedResult"
                 }
               }
             }
@@ -1467,34 +1525,43 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "name": "page",
+            "in": "query",
+            "description": "1-based page number, default 1. Out-of-range values are clamped, never refused; the response\r\nechoes the page actually served.",
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          },
+          {
+            "name": "pageSize",
+            "in": "query",
+            "description": "Rows per page. Default 50, maximum 200 — a larger value is clamped to the maximum and the\r\nresponse says so in its own `pageSize`.",
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
           }
         ],
         "responses": {
           "200": {
-            "description": "The matching events, possibly empty.",
+            "description": "One page of matching events, possibly empty.",
             "content": {
               "text/plain": {
                 "schema": {
-                  "type": "array",
-                  "items": {
-                    "$ref": "#/components/schemas/EventDto"
-                  }
+                  "$ref": "#/components/schemas/EventDtoPagedResult"
                 }
               },
               "application/json": {
                 "schema": {
-                  "type": "array",
-                  "items": {
-                    "$ref": "#/components/schemas/EventDto"
-                  }
+                  "$ref": "#/components/schemas/EventDtoPagedResult"
                 }
               },
               "text/json": {
                 "schema": {
-                  "type": "array",
-                  "items": {
-                    "$ref": "#/components/schemas/EventDto"
-                  }
+                  "$ref": "#/components/schemas/EventDtoPagedResult"
                 }
               }
             }
@@ -2633,7 +2700,7 @@
           "StudentGroups"
         ],
         "summary": "`GET /student-groups` — the audiences an event can be attached to, every filter optional.",
-        "description": "\r\n\r\n  `memberCount` is the number an organizer is really choosing on — \"invite BSCRIM 2-A\" is a\r\n             different decision at 8 students than at 80 — and a derived group showing zero is the visible\r\n             signal that the projection has not run for its term. Soft-deleted students are excluded, so it\r\n             agrees with the `expected` denominator `GET /events/{id}/summary` computes.\r\n             \r\n\r\n\r\n             Unpaged, like the other reference lists: a school's group count is bounded by its academic\r\n             structure — one row per college, programme, section and offering per term, plus the handful of\r\n             manual ones — and a picker wants the whole set to filter client-side.\r\n             ",
+        "description": "\r\n\r\n  `memberCount` is the number an organizer is really choosing on — \"invite BSCRIM 2-A\" is a\r\n             different decision at 8 students than at 80 — and a derived group showing zero is the visible\r\n             signal that the projection has not run for its term. Soft-deleted students are excluded, so it\r\n             agrees with the `expected` denominator `GET /events/{id}/summary` computes.\r\n             \r\n\r\n\r\n  <b>Paged, and the argument that it need not be was wrong.</b> This used to say a school's group\r\n             count is bounded by its academic structure so a picker could hold the whole set — true of one\r\n             term, and the projection writes a fresh row per section and per offering on <em>every</em> term\r\n             it runs for, so the bound is \"per term\" multiplied by every term ever imported. `termId`\r\n             narrows it and is still the filter most worth passing; the page is what makes the answer\r\n             bounded when nobody passes one.\r\n             ",
         "parameters": [
           {
             "name": "sourceType",
@@ -2651,34 +2718,43 @@
               "type": "string",
               "format": "uuid"
             }
+          },
+          {
+            "name": "page",
+            "in": "query",
+            "description": "1-based page number, default 1. Out-of-range values are clamped, never refused; the response\r\nechoes the page actually served.",
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          },
+          {
+            "name": "pageSize",
+            "in": "query",
+            "description": "Rows per page. Default 50, maximum 200 — a larger value is clamped to the maximum and the\r\nresponse says so in its own `pageSize`.",
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
           }
         ],
         "responses": {
           "200": {
-            "description": "The matching groups, possibly empty.",
+            "description": "One page of matching groups, possibly empty.",
             "content": {
               "text/plain": {
                 "schema": {
-                  "type": "array",
-                  "items": {
-                    "$ref": "#/components/schemas/StudentGroupDto"
-                  }
+                  "$ref": "#/components/schemas/StudentGroupDtoPagedResult"
                 }
               },
               "application/json": {
                 "schema": {
-                  "type": "array",
-                  "items": {
-                    "$ref": "#/components/schemas/StudentGroupDto"
-                  }
+                  "$ref": "#/components/schemas/StudentGroupDtoPagedResult"
                 }
               },
               "text/json": {
                 "schema": {
-                  "type": "array",
-                  "items": {
-                    "$ref": "#/components/schemas/StudentGroupDto"
-                  }
+                  "$ref": "#/components/schemas/StudentGroupDtoPagedResult"
                 }
               }
             }
@@ -2716,34 +2792,43 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "name": "page",
+            "in": "query",
+            "description": "1-based page number, default 1. Out-of-range values are clamped, never refused; the response\r\nechoes the page actually served.",
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          },
+          {
+            "name": "pageSize",
+            "in": "query",
+            "description": "Rows per page. Default 50, maximum 200 — a larger value is clamped to the maximum and the\r\nresponse says so in its own `pageSize`.",
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
           }
         ],
         "responses": {
           "200": {
-            "description": "The matching students, possibly empty.",
+            "description": "One page of matching students, possibly empty.",
             "content": {
               "text/plain": {
                 "schema": {
-                  "type": "array",
-                  "items": {
-                    "$ref": "#/components/schemas/StudentDto"
-                  }
+                  "$ref": "#/components/schemas/StudentDtoPagedResult"
                 }
               },
               "application/json": {
                 "schema": {
-                  "type": "array",
-                  "items": {
-                    "$ref": "#/components/schemas/StudentDto"
-                  }
+                  "$ref": "#/components/schemas/StudentDtoPagedResult"
                 }
               },
               "text/json": {
                 "schema": {
-                  "type": "array",
-                  "items": {
-                    "$ref": "#/components/schemas/StudentDto"
-                  }
+                  "$ref": "#/components/schemas/StudentDtoPagedResult"
                 }
               }
             }
@@ -3390,6 +3475,40 @@
         "additionalProperties": false,
         "description": "A degree programme — BSCRIM, BSFS, BSN. The CLR entity is `AcademicProgram` rather than\r\n`Program` (the API's top-level-statements entry point owns that name); the table, the route\r\nand this DTO all keep the plan's word."
       },
+      "AcademicProgramDtoPagedResult": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AcademicProgramDto"
+            },
+            "description": "This page's rows, in the endpoint's documented order. Empty is an ordinary answer — for an empty\r\nfilter and for a page past the end alike."
+          },
+          "page": {
+            "type": "integer",
+            "description": "The 1-based page actually served, which is <em>not</em> necessarily the one requested: an\r\nout-of-range `?page=` is clamped and this is where a client sees that it was.",
+            "format": "int32"
+          },
+          "pageSize": {
+            "type": "integer",
+            "description": "The page size actually applied, after the EAMS.Application.Dtos.Paging.MaxPageSize clamp. The field that\r\nmakes clamping discoverable rather than silent.",
+            "format": "int32"
+          },
+          "total": {
+            "type": "integer",
+            "description": "Rows matching the filter across every page, counted in the database against the same filter that\r\nproduced Items. This is what a grid needs to render a page count; without it a\r\ncaller can only discover the end by walking into it.",
+            "format": "int32"
+          },
+          "hasMore": {
+            "type": "boolean",
+            "description": "Whether another page exists after this one.\r\n            \r\n\r\n<b>Derived here rather than left to the client, because the client gets it wrong.</b>`page * pageSize < total` is right and `items.Count == pageSize` is the version\r\npeople write — which reports a further page whenever the last page happens to be exactly full,\r\nso a paging loop makes one extra request every time the total is a multiple of the page size.\r\nComputing it once, on the side that already holds the total, is a byte on the wire against a\r\nclass of off-by-one nobody finds in review.\r\n",
+            "readOnly": true
+          }
+        },
+        "additionalProperties": false,
+        "description": "One page of an admin list read, plus what the caller needs to ask for the next one.\r\n            \r\n\r\n<b>Every §6.2/§6.3 admin list returns this; `GET /attendance/live/{eventId}` deliberately does\r\nnot.</b> That endpoint pages by cursor (`since`/`cursor`/`hasMore`) because it is a\r\npolling delta rather than a list — a client asks \"what changed after this point\", not \"give me rows\r\n40 to 60\" — and its shape is frozen published contract under D-29/D-30/D-42. Offset paging over a\r\nlive feed also drops rows: an insert below the cursor shifts every subsequent row up by one and the\r\nnext page skips it. The two mechanisms coexisting is correct, not an inconsistency to tidy.\r\n"
+      },
       "AttendanceDeltaDto": {
         "type": "object",
         "properties": {
@@ -3481,6 +3600,40 @@
           }
         },
         "additionalProperties": false
+      },
+      "AttendanceDtoPagedResult": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AttendanceDto"
+            },
+            "description": "This page's rows, in the endpoint's documented order. Empty is an ordinary answer — for an empty\r\nfilter and for a page past the end alike."
+          },
+          "page": {
+            "type": "integer",
+            "description": "The 1-based page actually served, which is <em>not</em> necessarily the one requested: an\r\nout-of-range `?page=` is clamped and this is where a client sees that it was.",
+            "format": "int32"
+          },
+          "pageSize": {
+            "type": "integer",
+            "description": "The page size actually applied, after the EAMS.Application.Dtos.Paging.MaxPageSize clamp. The field that\r\nmakes clamping discoverable rather than silent.",
+            "format": "int32"
+          },
+          "total": {
+            "type": "integer",
+            "description": "Rows matching the filter across every page, counted in the database against the same filter that\r\nproduced Items. This is what a grid needs to render a page count; without it a\r\ncaller can only discover the end by walking into it.",
+            "format": "int32"
+          },
+          "hasMore": {
+            "type": "boolean",
+            "description": "Whether another page exists after this one.\r\n            \r\n\r\n<b>Derived here rather than left to the client, because the client gets it wrong.</b>`page * pageSize < total` is right and `items.Count == pageSize` is the version\r\npeople write — which reports a further page whenever the last page happens to be exactly full,\r\nso a paging loop makes one extra request every time the total is a multiple of the page size.\r\nComputing it once, on the side that already holds the total, is a byte on the wire against a\r\nclass of off-by-one nobody finds in review.\r\n",
+            "readOnly": true
+          }
+        },
+        "additionalProperties": false,
+        "description": "One page of an admin list read, plus what the caller needs to ask for the next one.\r\n            \r\n\r\n<b>Every §6.2/§6.3 admin list returns this; `GET /attendance/live/{eventId}` deliberately does\r\nnot.</b> That endpoint pages by cursor (`since`/`cursor`/`hasMore`) because it is a\r\npolling delta rather than a list — a client asks \"what changed after this point\", not \"give me rows\r\n40 to 60\" — and its shape is frozen published contract under D-29/D-30/D-42. Offset paging over a\r\nlive feed also drops rows: an insert below the cursor shifts every subsequent row up by one and the\r\nnext page skips it. The two mechanisms coexisting is correct, not an inconsistency to tidy.\r\n"
       },
       "AttendanceLiveDto": {
         "type": "object",
@@ -3598,6 +3751,40 @@
         "additionalProperties": false,
         "description": "A college. Code is nullable because the roster source has no college code\r\ncolumn at all — the natural key is the normalized name, and the code exists so a real one can be\r\nrecorded later without a migration."
       },
+      "CollegeDtoPagedResult": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CollegeDto"
+            },
+            "description": "This page's rows, in the endpoint's documented order. Empty is an ordinary answer — for an empty\r\nfilter and for a page past the end alike."
+          },
+          "page": {
+            "type": "integer",
+            "description": "The 1-based page actually served, which is <em>not</em> necessarily the one requested: an\r\nout-of-range `?page=` is clamped and this is where a client sees that it was.",
+            "format": "int32"
+          },
+          "pageSize": {
+            "type": "integer",
+            "description": "The page size actually applied, after the EAMS.Application.Dtos.Paging.MaxPageSize clamp. The field that\r\nmakes clamping discoverable rather than silent.",
+            "format": "int32"
+          },
+          "total": {
+            "type": "integer",
+            "description": "Rows matching the filter across every page, counted in the database against the same filter that\r\nproduced Items. This is what a grid needs to render a page count; without it a\r\ncaller can only discover the end by walking into it.",
+            "format": "int32"
+          },
+          "hasMore": {
+            "type": "boolean",
+            "description": "Whether another page exists after this one.\r\n            \r\n\r\n<b>Derived here rather than left to the client, because the client gets it wrong.</b>`page * pageSize < total` is right and `items.Count == pageSize` is the version\r\npeople write — which reports a further page whenever the last page happens to be exactly full,\r\nso a paging loop makes one extra request every time the total is a multiple of the page size.\r\nComputing it once, on the side that already holds the total, is a byte on the wire against a\r\nclass of off-by-one nobody finds in review.\r\n",
+            "readOnly": true
+          }
+        },
+        "additionalProperties": false,
+        "description": "One page of an admin list read, plus what the caller needs to ask for the next one.\r\n            \r\n\r\n<b>Every §6.2/§6.3 admin list returns this; `GET /attendance/live/{eventId}` deliberately does\r\nnot.</b> That endpoint pages by cursor (`since`/`cursor`/`hasMore`) because it is a\r\npolling delta rather than a list — a client asks \"what changed after this point\", not \"give me rows\r\n40 to 60\" — and its shape is frozen published contract under D-29/D-30/D-42. Offset paging over a\r\nlive feed also drops rows: an insert below the cursor shifts every subsequent row up by one and the\r\nnext page skips it. The two mechanisms coexisting is correct, not an inconsistency to tidy.\r\n"
+      },
       "CourseDto": {
         "type": "object",
         "properties": {
@@ -3626,6 +3813,40 @@
         },
         "additionalProperties": false,
         "description": "A course, keyed on the normalized course code."
+      },
+      "CourseDtoPagedResult": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CourseDto"
+            },
+            "description": "This page's rows, in the endpoint's documented order. Empty is an ordinary answer — for an empty\r\nfilter and for a page past the end alike."
+          },
+          "page": {
+            "type": "integer",
+            "description": "The 1-based page actually served, which is <em>not</em> necessarily the one requested: an\r\nout-of-range `?page=` is clamped and this is where a client sees that it was.",
+            "format": "int32"
+          },
+          "pageSize": {
+            "type": "integer",
+            "description": "The page size actually applied, after the EAMS.Application.Dtos.Paging.MaxPageSize clamp. The field that\r\nmakes clamping discoverable rather than silent.",
+            "format": "int32"
+          },
+          "total": {
+            "type": "integer",
+            "description": "Rows matching the filter across every page, counted in the database against the same filter that\r\nproduced Items. This is what a grid needs to render a page count; without it a\r\ncaller can only discover the end by walking into it.",
+            "format": "int32"
+          },
+          "hasMore": {
+            "type": "boolean",
+            "description": "Whether another page exists after this one.\r\n            \r\n\r\n<b>Derived here rather than left to the client, because the client gets it wrong.</b>`page * pageSize < total` is right and `items.Count == pageSize` is the version\r\npeople write — which reports a further page whenever the last page happens to be exactly full,\r\nso a paging loop makes one extra request every time the total is a multiple of the page size.\r\nComputing it once, on the side that already holds the total, is a byte on the wire against a\r\nclass of off-by-one nobody finds in review.\r\n",
+            "readOnly": true
+          }
+        },
+        "additionalProperties": false,
+        "description": "One page of an admin list read, plus what the caller needs to ask for the next one.\r\n            \r\n\r\n<b>Every §6.2/§6.3 admin list returns this; `GET /attendance/live/{eventId}` deliberately does\r\nnot.</b> That endpoint pages by cursor (`since`/`cursor`/`hasMore`) because it is a\r\npolling delta rather than a list — a client asks \"what changed after this point\", not \"give me rows\r\n40 to 60\" — and its shape is frozen published contract under D-29/D-30/D-42. Offset paging over a\r\nlive feed also drops rows: an insert below the cursor shifts every subsequent row up by one and the\r\nnext page skips it. The two mechanisms coexisting is correct, not an inconsistency to tidy.\r\n"
       },
       "CourseOfferingDto": {
         "type": "object",
@@ -3667,6 +3888,40 @@
         },
         "additionalProperties": false,
         "description": "One course, in one term, taught to one named section — <b>the row an event-audience picker\r\nactually wants</b>.\r\n            \r\n\r\n<b>This is the real \"section\", and it is why `Students.Section` cannot answer the question.</b>\r\nThat column is the ADR-001 D-2 derived display cache and is single-valued; twelve of the fifty-two\r\nstudents in the real roster sit in more than one section, so no single-valued column can describe\r\nthem. A course taught to two sections is two rows here, which is the grain an invitation is issued\r\nat.\r\n\r\n<b>EAMS.Application.Dtos.CourseOfferingDto.SectionKey is published even though the other normalized keys are not.</b> It is\r\nthe only stable identifier a <em>cohort</em> has: a section is a key shared by every offering that\r\ncohort takes within a term (`BSFS2A` spans all of them) and has no row of its own to point at,\r\nwhich is exactly why the group projection keys section groups on it. A caller grouping offerings\r\ninto cohorts needs it; EAMS.Application.Dtos.CourseOfferingDto.SectionName is the display form and is null where the source\r\nwas blank — 39 sample rows are — in which case the key is the `Unspecified` sentinel rather\r\nthan null, because a nullable key component would have capped the table at one blank section.\r\n"
+      },
+      "CourseOfferingDtoPagedResult": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CourseOfferingDto"
+            },
+            "description": "This page's rows, in the endpoint's documented order. Empty is an ordinary answer — for an empty\r\nfilter and for a page past the end alike."
+          },
+          "page": {
+            "type": "integer",
+            "description": "The 1-based page actually served, which is <em>not</em> necessarily the one requested: an\r\nout-of-range `?page=` is clamped and this is where a client sees that it was.",
+            "format": "int32"
+          },
+          "pageSize": {
+            "type": "integer",
+            "description": "The page size actually applied, after the EAMS.Application.Dtos.Paging.MaxPageSize clamp. The field that\r\nmakes clamping discoverable rather than silent.",
+            "format": "int32"
+          },
+          "total": {
+            "type": "integer",
+            "description": "Rows matching the filter across every page, counted in the database against the same filter that\r\nproduced Items. This is what a grid needs to render a page count; without it a\r\ncaller can only discover the end by walking into it.",
+            "format": "int32"
+          },
+          "hasMore": {
+            "type": "boolean",
+            "description": "Whether another page exists after this one.\r\n            \r\n\r\n<b>Derived here rather than left to the client, because the client gets it wrong.</b>`page * pageSize < total` is right and `items.Count == pageSize` is the version\r\npeople write — which reports a further page whenever the last page happens to be exactly full,\r\nso a paging loop makes one extra request every time the total is a multiple of the page size.\r\nComputing it once, on the side that already holds the total, is a byte on the wire against a\r\nclass of off-by-one nobody finds in review.\r\n",
+            "readOnly": true
+          }
+        },
+        "additionalProperties": false,
+        "description": "One page of an admin list read, plus what the caller needs to ask for the next one.\r\n            \r\n\r\n<b>Every §6.2/§6.3 admin list returns this; `GET /attendance/live/{eventId}` deliberately does\r\nnot.</b> That endpoint pages by cursor (`since`/`cursor`/`hasMore`) because it is a\r\npolling delta rather than a list — a client asks \"what changed after this point\", not \"give me rows\r\n40 to 60\" — and its shape is frozen published contract under D-29/D-30/D-42. Offset paging over a\r\nlive feed also drops rows: an insert below the cursor shifts every subsequent row up by one and the\r\nnext page skips it. The two mechanisms coexisting is correct, not an inconsistency to tidy.\r\n"
       },
       "DeviceDto": {
         "type": "object",
@@ -3860,6 +4115,40 @@
         },
         "additionalProperties": false,
         "description": "Technical Plan §4.5, as a client sees it.\r\n            \r\n\r\n`Description` and `RequireRegistration` were added with the §6.3 write surface. They are\r\nnot decoration: `PUT /events/{id}` is a full replacement, so a client that cannot read a field\r\nit is about to send back has no way to preserve it — the round trip would blank the description of\r\nevery event edited through the UI. Additive on the wire; existing consumers ignore them.\r\n"
+      },
+      "EventDtoPagedResult": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/EventDto"
+            },
+            "description": "This page's rows, in the endpoint's documented order. Empty is an ordinary answer — for an empty\r\nfilter and for a page past the end alike."
+          },
+          "page": {
+            "type": "integer",
+            "description": "The 1-based page actually served, which is <em>not</em> necessarily the one requested: an\r\nout-of-range `?page=` is clamped and this is where a client sees that it was.",
+            "format": "int32"
+          },
+          "pageSize": {
+            "type": "integer",
+            "description": "The page size actually applied, after the EAMS.Application.Dtos.Paging.MaxPageSize clamp. The field that\r\nmakes clamping discoverable rather than silent.",
+            "format": "int32"
+          },
+          "total": {
+            "type": "integer",
+            "description": "Rows matching the filter across every page, counted in the database against the same filter that\r\nproduced Items. This is what a grid needs to render a page count; without it a\r\ncaller can only discover the end by walking into it.",
+            "format": "int32"
+          },
+          "hasMore": {
+            "type": "boolean",
+            "description": "Whether another page exists after this one.\r\n            \r\n\r\n<b>Derived here rather than left to the client, because the client gets it wrong.</b>`page * pageSize < total` is right and `items.Count == pageSize` is the version\r\npeople write — which reports a further page whenever the last page happens to be exactly full,\r\nso a paging loop makes one extra request every time the total is a multiple of the page size.\r\nComputing it once, on the side that already holds the total, is a byte on the wire against a\r\nclass of off-by-one nobody finds in review.\r\n",
+            "readOnly": true
+          }
+        },
+        "additionalProperties": false,
+        "description": "One page of an admin list read, plus what the caller needs to ask for the next one.\r\n            \r\n\r\n<b>Every §6.2/§6.3 admin list returns this; `GET /attendance/live/{eventId}` deliberately does\r\nnot.</b> That endpoint pages by cursor (`since`/`cursor`/`hasMore`) because it is a\r\npolling delta rather than a list — a client asks \"what changed after this point\", not \"give me rows\r\n40 to 60\" — and its shape is frozen published contract under D-29/D-30/D-42. Offset paging over a\r\nlive feed also drops rows: an insert below the cursor shifts every subsequent row up by one and the\r\nnext page skips it. The two mechanisms coexisting is correct, not an inconsistency to tidy.\r\n"
       },
       "EventRosterDto": {
         "type": "object",
@@ -4404,6 +4693,40 @@
         "additionalProperties": false,
         "description": "Technical Plan §4.3, as a client sees it.\r\n            \r\n\r\n<b>The name parts and `Gender`/`PhotoUrl` arrived with the §6.2 write surface</b>, and\r\nthey are not decoration — they are what makes `PUT /students/{id}` usable at all. The PUT is a\r\nfull replacement of a student's own fields, so a field a client cannot <em>read</em> is a field it\r\ncannot send back, and the round trip would blank it. `FullName` is computed and cannot be\r\nsplit back into three columns, so an edit form had no way to populate itself. Additive on the wire;\r\nexisting consumers ignore them. Same reasoning EAMS.Application.Dtos.EventDto records for\r\n`Description`.\r\n"
       },
+      "StudentDtoPagedResult": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/StudentDto"
+            },
+            "description": "This page's rows, in the endpoint's documented order. Empty is an ordinary answer — for an empty\r\nfilter and for a page past the end alike."
+          },
+          "page": {
+            "type": "integer",
+            "description": "The 1-based page actually served, which is <em>not</em> necessarily the one requested: an\r\nout-of-range `?page=` is clamped and this is where a client sees that it was.",
+            "format": "int32"
+          },
+          "pageSize": {
+            "type": "integer",
+            "description": "The page size actually applied, after the EAMS.Application.Dtos.Paging.MaxPageSize clamp. The field that\r\nmakes clamping discoverable rather than silent.",
+            "format": "int32"
+          },
+          "total": {
+            "type": "integer",
+            "description": "Rows matching the filter across every page, counted in the database against the same filter that\r\nproduced Items. This is what a grid needs to render a page count; without it a\r\ncaller can only discover the end by walking into it.",
+            "format": "int32"
+          },
+          "hasMore": {
+            "type": "boolean",
+            "description": "Whether another page exists after this one.\r\n            \r\n\r\n<b>Derived here rather than left to the client, because the client gets it wrong.</b>`page * pageSize < total` is right and `items.Count == pageSize` is the version\r\npeople write — which reports a further page whenever the last page happens to be exactly full,\r\nso a paging loop makes one extra request every time the total is a multiple of the page size.\r\nComputing it once, on the side that already holds the total, is a byte on the wire against a\r\nclass of off-by-one nobody finds in review.\r\n",
+            "readOnly": true
+          }
+        },
+        "additionalProperties": false,
+        "description": "One page of an admin list read, plus what the caller needs to ask for the next one.\r\n            \r\n\r\n<b>Every §6.2/§6.3 admin list returns this; `GET /attendance/live/{eventId}` deliberately does\r\nnot.</b> That endpoint pages by cursor (`since`/`cursor`/`hasMore`) because it is a\r\npolling delta rather than a list — a client asks \"what changed after this point\", not \"give me rows\r\n40 to 60\" — and its shape is frozen published contract under D-29/D-30/D-42. Offset paging over a\r\nlive feed also drops rows: an insert below the cursor shifts every subsequent row up by one and the\r\nnext page skips it. The two mechanisms coexisting is correct, not an inconsistency to tidy.\r\n"
+      },
       "StudentGroupDto": {
         "type": "object",
         "properties": {
@@ -4450,6 +4773,40 @@
         },
         "additionalProperties": false,
         "description": "Technical Plan §4.7 `StudentGroups`, as a client sees it — <b>the thing an event audience is\r\nactually attached to</b>. `POST /events/{id}/attendees` takes ids from this list.\r\n            \r\n\r\n<b>The provenance fields are the reason this list is usable as one picker.</b> ADR-001 D-1\r\nprojects colleges, programmes, sections and course offerings <em>into</em> this table as ordinary\r\nrows marked EAMS.Application.Dtos.StudentGroupDto.SourceType`Derived`, so an organizer picks \"BSFS 2-A (2025-2026-1)\"\r\nfrom the same list as \"SSC Officers\" and nothing downstream learns that one of them was\r\nmaterialized. Publishing the provenance lets a UI group and label the two kinds without needing a\r\nsecond endpoint or a naming convention.\r\n"
+      },
+      "StudentGroupDtoPagedResult": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/StudentGroupDto"
+            },
+            "description": "This page's rows, in the endpoint's documented order. Empty is an ordinary answer — for an empty\r\nfilter and for a page past the end alike."
+          },
+          "page": {
+            "type": "integer",
+            "description": "The 1-based page actually served, which is <em>not</em> necessarily the one requested: an\r\nout-of-range `?page=` is clamped and this is where a client sees that it was.",
+            "format": "int32"
+          },
+          "pageSize": {
+            "type": "integer",
+            "description": "The page size actually applied, after the EAMS.Application.Dtos.Paging.MaxPageSize clamp. The field that\r\nmakes clamping discoverable rather than silent.",
+            "format": "int32"
+          },
+          "total": {
+            "type": "integer",
+            "description": "Rows matching the filter across every page, counted in the database against the same filter that\r\nproduced Items. This is what a grid needs to render a page count; without it a\r\ncaller can only discover the end by walking into it.",
+            "format": "int32"
+          },
+          "hasMore": {
+            "type": "boolean",
+            "description": "Whether another page exists after this one.\r\n            \r\n\r\n<b>Derived here rather than left to the client, because the client gets it wrong.</b>`page * pageSize < total` is right and `items.Count == pageSize` is the version\r\npeople write — which reports a further page whenever the last page happens to be exactly full,\r\nso a paging loop makes one extra request every time the total is a multiple of the page size.\r\nComputing it once, on the side that already holds the total, is a byte on the wire against a\r\nclass of off-by-one nobody finds in review.\r\n",
+            "readOnly": true
+          }
+        },
+        "additionalProperties": false,
+        "description": "One page of an admin list read, plus what the caller needs to ask for the next one.\r\n            \r\n\r\n<b>Every §6.2/§6.3 admin list returns this; `GET /attendance/live/{eventId}` deliberately does\r\nnot.</b> That endpoint pages by cursor (`since`/`cursor`/`hasMore`) because it is a\r\npolling delta rather than a list — a client asks \"what changed after this point\", not \"give me rows\r\n40 to 60\" — and its shape is frozen published contract under D-29/D-30/D-42. Offset paging over a\r\nlive feed also drops rows: an insert below the cursor shifts every subsequent row up by one and the\r\nnext page skips it. The two mechanisms coexisting is correct, not an inconsistency to tidy.\r\n"
       },
       "StudentWriteRequest": {
         "type": "object",
@@ -4770,6 +5127,40 @@
         },
         "additionalProperties": false,
         "description": "Technical Plan §4 / ADR-001 D-1 `Terms`, as a client sees it.\r\n            \r\n\r\n<b>EAMS.Application.Dtos.TermDto.StartsOn and EAMS.Application.Dtos.TermDto.EndsOn are dates, not instants, and stay that way on\r\nthe wire.</b> A term boundary is a calendar date in the school's own timezone — it has no time of\r\nday, and serializing it as a UTC instant would shift it by eight hours in Manila and make \"does\r\nthis term contain today\" answerable two different ways. They publish as `YYYY-MM-DD`.\r\n"
+      },
+      "TermDtoPagedResult": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TermDto"
+            },
+            "description": "This page's rows, in the endpoint's documented order. Empty is an ordinary answer — for an empty\r\nfilter and for a page past the end alike."
+          },
+          "page": {
+            "type": "integer",
+            "description": "The 1-based page actually served, which is <em>not</em> necessarily the one requested: an\r\nout-of-range `?page=` is clamped and this is where a client sees that it was.",
+            "format": "int32"
+          },
+          "pageSize": {
+            "type": "integer",
+            "description": "The page size actually applied, after the EAMS.Application.Dtos.Paging.MaxPageSize clamp. The field that\r\nmakes clamping discoverable rather than silent.",
+            "format": "int32"
+          },
+          "total": {
+            "type": "integer",
+            "description": "Rows matching the filter across every page, counted in the database against the same filter that\r\nproduced Items. This is what a grid needs to render a page count; without it a\r\ncaller can only discover the end by walking into it.",
+            "format": "int32"
+          },
+          "hasMore": {
+            "type": "boolean",
+            "description": "Whether another page exists after this one.\r\n            \r\n\r\n<b>Derived here rather than left to the client, because the client gets it wrong.</b>`page * pageSize < total` is right and `items.Count == pageSize` is the version\r\npeople write — which reports a further page whenever the last page happens to be exactly full,\r\nso a paging loop makes one extra request every time the total is a multiple of the page size.\r\nComputing it once, on the side that already holds the total, is a byte on the wire against a\r\nclass of off-by-one nobody finds in review.\r\n",
+            "readOnly": true
+          }
+        },
+        "additionalProperties": false,
+        "description": "One page of an admin list read, plus what the caller needs to ask for the next one.\r\n            \r\n\r\n<b>Every §6.2/§6.3 admin list returns this; `GET /attendance/live/{eventId}` deliberately does\r\nnot.</b> That endpoint pages by cursor (`since`/`cursor`/`hasMore`) because it is a\r\npolling delta rather than a list — a client asks \"what changed after this point\", not \"give me rows\r\n40 to 60\" — and its shape is frozen published contract under D-29/D-30/D-42. Offset paging over a\r\nlive feed also drops rows: an insert below the cursor shifts every subsequent row up by one and the\r\nnext page skips it. The two mechanisms coexisting is correct, not an inconsistency to tidy.\r\n"
       }
     },
     "securitySchemes": {

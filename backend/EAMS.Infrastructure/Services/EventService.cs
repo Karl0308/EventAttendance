@@ -71,12 +71,23 @@ internal sealed class EventService : IEventService
 
     // ------------------------------------------------------------------------------------ reads
 
-    public async Task<IReadOnlyList<EventDto>> ListAsync(string? status, CancellationToken ct = default)
+    /// <inheritdoc cref="IEventService.ListAsync"/>
+    /// <remarks>
+    /// Counted and paged through <c>PagedQuery.ToPageAsync</c>, the seam all nine admin lists share,
+    /// so the total and the rows cannot end up answering different filters. <c>ThenBy(Id)</c> is the
+    /// total order: an institution schedules several events at the same start instant (every 8:00 AM
+    /// class-hour event), and equal sort keys are the one thing SQL Server may reorder between two
+    /// executions of the same query.
+    /// </remarks>
+    public Task<PagedResult<EventDto>> ListAsync(
+        string? status, PageRequest page, CancellationToken ct = default)
     {
         var q = _db.Events.AsNoTracking().Where(e => !e.IsDeleted);
         if (!string.IsNullOrWhiteSpace(status)) q = q.Where(e => e.Status == status);
-        var list = await q.OrderByDescending(e => e.StartAt).ToListAsync(ct);
-        return list.Select(ToDto).ToList();
+
+        return q.ToPageAsync(
+            ordered => ordered.OrderByDescending(e => e.StartAt).ThenBy(e => e.Id),
+            ToDto, page, ct);
     }
 
     public async Task<EventDto?> GetAsync(Guid id, CancellationToken ct = default)
