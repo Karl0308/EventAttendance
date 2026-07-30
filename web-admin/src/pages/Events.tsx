@@ -59,7 +59,7 @@ export default function Events() {
                       </Stack>
                     </Box>
                     <Stack spacing={1} alignItems="flex-end">
-                      <Chip size="small" label={e.status} color={statusColor(e.status) as never} />
+                      <Chip size="small" label={e.status} color={statusColor(e.status)} />
                       <Chip size="small" variant="outlined" label={e.attendanceMode} />
                     </Stack>
                   </Stack>

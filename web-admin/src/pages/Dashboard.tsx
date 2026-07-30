@@ -127,7 +127,7 @@ export default function Dashboard() {
                         primary={e.name}
                         secondary={`${e.location ?? ""} · ${new Date(e.startAt).toLocaleString()}`}
                       />
-                      <Chip size="small" label={e.status} color={statusColor(e.status) as never} />
+                      <Chip size="small" label={e.status} color={statusColor(e.status)} />
                     </ListItemButton>
                   ))}
                 </List>

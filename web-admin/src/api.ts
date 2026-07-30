@@ -26,8 +26,8 @@ const baseUrl = (import.meta.env.VITE_API_BASE_URL ?? DEFAULT_BASE_URL).replace(
 
 /**
  * `network` — never reached the server. `http` — server refused. `malformed` — reply off-contract.
- * `too-large` — the list is real and well-formed but has more pages than this seam will walk; see
- * `MAX_LIST_REQUESTS`. It is a client-side ceiling, not a server fault, and retrying cannot clear it.
+ * `too-large` — the list is real and well-formed but holds more rows than this seam will load; see
+ * `MAX_LIST_ROWS`. It is a client-side ceiling, not a server fault, and retrying cannot clear it.
  */
 export type ApiErrorKind = "network" | "http" | "malformed" | "too-large";
 

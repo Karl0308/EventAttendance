@@ -25,10 +25,16 @@ interface Guidance {
  * rewords freely, and a UI that pattern-matches them breaks on an edit nobody thought was breaking.
  *
  * `retryable` is decided *inside* this switch on purpose. It used to be a separate predicate beside
- * it, which meant one taxonomy read in two places: this switch has no `default` and no trailing
- * return, so a new `ApiErrorKind` fails to compile here — but the predicate would have silently
- * defaulted the new kind to retryable. One of the two guards would complain and the other would not,
- * so the quiet one was the one that mattered.
+ * it, which meant one taxonomy read in two places: a new `ApiErrorKind` failed to compile here, but
+ * the predicate would have silently defaulted that kind to retryable. One of the two guards would
+ * complain and the other would not, so the quiet one was the one that mattered.
+ *
+ * The `default` branch is that guard, not a fallback. Assigning `error.kind` to `never` is what makes
+ * an unhandled kind a compile error, and unlike leaning on the missing trailing return it does not
+ * depend on `strictNullChecks` staying on. Should it ever run anyway, it throws and names the kind:
+ * the alternative was returning `undefined` into the destructure below, which throws while rendering
+ * the error screen — and with no error boundary in `src/`, blanks the page at the exact moment the
+ * user was being told what went wrong.
  */
 function advise(error: unknown): Guidance {
   if (!(error instanceof ApiError)) {
@@ -69,9 +75,14 @@ function advise(error: unknown): Guidance {
         };
       }
       return {
-        message: "The API refused the request. Retrying is unlikely to change that on its own.",
+        message:
+          "The API refused the request. Retry if the reason may have cleared since — you have signed in again, or a conflicting edit has finished.",
         retryable: true,
       };
+    default: {
+      const unhandled: never = error.kind;
+      throw new Error(`Unhandled ApiErrorKind: ${String(unhandled)}`);
+    }
   }
 }
 
