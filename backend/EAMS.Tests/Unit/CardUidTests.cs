@@ -22,15 +22,32 @@ public class CardUidTests
         Assert.Equal(expected, CardUid.Normalize(input));
 
     [Theory]
-    // ADR-001 "Accepted Context": REGNO *is* the card UID, so REGNO-shaped input is not an edge
-    // case here — it is the production shape. A normalizer that only handled hex would break the
-    // real roster on day one.
-    [InlineData("usa00962", "USA00962")]
-    [InlineData("USA00962", "USA00962")]
-    [InlineData("usa-00962", "USA00962")]
-    [InlineData(" usa 00962 ", "USA00962")]
-    public void Normalize_handles_REGNO_shaped_input(string input, string expected) =>
+    // The CICSS export's shape: decimal digits, no separators, ten wide. A normalizer that only
+    // handled hex would break the real roster on day one, so this is the production case rather than
+    // an edge one. Until the client corrected us on 2026-07-30 this block used REGNO-shaped input on
+    // the premise that REGNO *was* the card UID; the serial is its own column and this is the shape it
+    // actually takes.
+    [InlineData("0012503326", "0012503326")]
+    [InlineData("0012503326 ", "0012503326")]
+    [InlineData("00 125 033 26", "0012503326")]
+    [InlineData("0012-5033-26", "0012503326")]
+    public void Normalize_handles_decimal_serial_input(string input, string expected) =>
         Assert.Equal(expected, CardUid.Normalize(input));
+
+    /// <summary>
+    /// <b>Leading zeros are significant and <see cref="CardUid.Normalize"/> must not touch them.</b>
+    /// <c>0012503326</c> and <c>12503326</c> are two different cards, and a normalizer that trimmed or
+    /// numerically round-tripped the value would silently merge them — or produce a UID no reader can
+    /// ever match, which is a student who simply never registers a tap with nothing to say why. Stated
+    /// as a non-equality because that is the assertion that fails if anything starts parsing this
+    /// string as a number.
+    /// </summary>
+    [Fact]
+    public void Normalize_preserves_significant_leading_zeros()
+    {
+        Assert.Equal("0012503326", CardUid.Normalize("0012503326"));
+        Assert.NotEqual(CardUid.Normalize("12503326"), CardUid.Normalize("0012503326"));
+    }
 
     [Fact]
     public void Normalize_is_idempotent()

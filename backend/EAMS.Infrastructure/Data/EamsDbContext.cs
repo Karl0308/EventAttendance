@@ -600,9 +600,11 @@ internal class EamsDbContext : DbContext
         e.HasOne(x => x.Student).WithMany(s => s.Cards).HasForeignKey(x => x.StudentId).IsRequired();
         e.HasOne(x => x.School).WithMany().HasForeignKey(x => x.SchoolId).IsRequired();
 
-        // ADR-001 D-3: replaces §4.4's global UNIQUE(CardUid). A reissued card carries the same
-        // REGNO, so the old row must survive deactivated — a global unique index makes that
-        // impossible to record. Tenant-scoped to match UNIQUE(SchoolId, StudentNumber) on Students.
+        // ADR-001 D-3: replaces §4.4's global UNIQUE(CardUid). A card is revoked and its serial can
+        // later be issued again — to the same student on a re-encoded card, or to a different one when
+        // a serial is recycled — and the old row must survive deactivated to explain the taps it
+        // produced. A global unique index makes that impossible to record. Tenant-scoped because two
+        // schools' card stocks are independent and may collide on a serial without meaning anything.
         e.HasIndex(x => new { x.SchoolId, x.CardUid }).IsUnique()
             .HasFilter("[IsActive] = 1")
             .HasDatabaseName("UX_RfidCards_SchoolId_CardUid_Active");
@@ -1095,8 +1097,9 @@ internal class EamsDbContext : DbContext
                 .HasForeignKey(x => x.ProfileId).IsRequired();
 
             // TargetField is in the key because one source column legitimately feeds several targets —
-            // REGNO is both Students.StudentNumber and RfidCards.CardUid, under two different
-            // normalization rules. What must not repeat is the same column feeding the same target.
+            // COLLEGE_NAME feeds both College.Name (verbatim) and College.NameKey (normalized), and
+            // COURSE_CODE, PROGRAM and SECTION_NAME each do the same. What must not repeat is the same
+            // column feeding the same target.
             e.HasIndex(x => new { x.ProfileId, x.SourceColumnKey, x.TargetField }).IsUnique()
                 .HasFilter(null)
                 .HasDatabaseName("UX_SisImportProfileColumns_Profile_Column_Target");

@@ -15,9 +15,9 @@ namespace EAMS.Tests.Integration;
 /// <see cref="StudentWriteTests"/> proves each step in isolation, but it arranges the interesting
 /// starting states by writing rows directly — <c>A_deactivated_card_uid_can_be_issued_again</c> inserts
 /// an already-inactive card rather than deactivating one. That leaves the actual sequence untested:
-/// <b>assign → deactivate → reissue</b> is ADR-001 D-3's entire reason for existing (the registrar
-/// hands out a replacement ID carrying the same REGNO), and it is the one path where a mistake costs
-/// the issuance history rather than a request.
+/// <b>assign → deactivate → reissue</b> is ADR-001 D-3's entire reason for existing (a card is retired
+/// and its serial issued again, on a re-encoded replacement or on a recycled card), and it is the one
+/// path where a mistake costs the issuance history rather than a request.
 /// </para>
 ///
 /// <para>
@@ -59,7 +59,8 @@ public class StudentCardLifecycleTests : IntegrationTest
     /// <b>ADR-001 D-3's scenario, run end to end through the endpoints for the first time.</b>
     ///
     /// <para>
-    /// A student loses their ID; the registrar issues a replacement carrying the <em>same REGNO</em>.
+    /// A student loses their ID; the registrar issues a replacement encoded with the <em>same
+    /// serial</em>.
     /// Under §4.4's literal <c>UNIQUE(CardUid)</c> this is unrecordable without erasing the original
     /// row, which is why D-3 rescoped it to <c>WHERE IsActive = 1</c>. The property that matters is not
     /// that the second assignment succeeds — it is that <b>both rows survive</b>, because
@@ -92,7 +93,7 @@ public class StudentCardLifecycleTests : IntegrationTest
         Guid replacementCardId;
         await using (var db = NewDbContext())
         {
-            // The same REGNO, written in a different reader's format — because the replacement card is
+            // The same serial, written in a different reader's format — because the replacement card is
             // read by whatever hardware is nearest, and normalization is what makes it the same card.
             var reissued = await StudentsOn(db).AddCardAsync(
                 studentId, new StudentCardRequest("04-A7-B8-C9", "Replacement ID"));
@@ -126,7 +127,7 @@ public class StudentCardLifecycleTests : IntegrationTest
     }
 
     /// <summary>
-    /// The same sequence with the REGNO changing hands. Distinct from the test above because the
+    /// The same sequence with the serial changing hands. Distinct from the test above because the
     /// deactivation and the reissue are performed by <em>different</em> student resources, so the
     /// service's "is this already ours?" short circuit cannot be what makes it work — only the filtered
     /// index can.

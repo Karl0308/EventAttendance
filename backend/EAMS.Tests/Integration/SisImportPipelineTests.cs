@@ -1,6 +1,7 @@
 using EAMS.Application.Abstractions;
 using EAMS.Application.Dtos;
 using EAMS.Domain;
+using EAMS.Infrastructure.Sis;
 using EAMS.Tests.Integration.Infrastructure;
 using Microsoft.EntityFrameworkCore;
 using Xunit;
@@ -584,13 +585,27 @@ public class SisImportPipelineTests : IntegrationTest
     }
 
     /// <summary>
-    /// <b>REGNO is stored verbatim, in both shapes, and is also the card UID.</b> 51 are
-    /// <c>USA#####</c> text and one is a ten-digit number that Excel stores numerically; neither is
-    /// reformatted into the other, and the numeric one must not arrive as <c>2.021005781E+09</c> —
-    /// which would be a card UID no reader can ever produce.
+    /// <b>REGNO is stored verbatim in both shapes, and the card UID comes from the RFID column — not
+    /// from REGNO.</b>
+    ///
+    /// <para>
+    /// Until 2026-07-30 this pipeline derived <c>RfidCards.CardUid</c> from REGNO, and this test
+    /// asserted the two were equal. The client corrected us: they are separate columns, and the serial
+    /// is the physical card's own identity. The REGNO half of the old assertion survives unchanged — 51
+    /// are <c>USA#####</c> text, one is a ten-digit number Excel stores numerically, and neither is
+    /// reformatted into the other or arrives as <c>2.021005781E+09</c>. What is rewritten is the claim
+    /// that the card carries the same value.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>The leading zeros are the point of the card half.</b> <c>0012503326</c> is a different card
+    /// from <c>12503326</c>, and a normalizer or a cell reader that dropped the zeros would produce a
+    /// UID no reader can ever match — a student who simply never registers a tap, with nothing anywhere
+    /// to say why. The negative assertion is what makes it falsifiable.
+    /// </para>
     /// </summary>
     [Fact]
-    public async Task Both_regno_shapes_are_stored_verbatim_as_the_student_number_and_the_card_uid()
+    public async Task Regno_is_stored_verbatim_and_the_card_uid_comes_from_the_rfid_column()
     {
         var world = await ArrangeAsync();
         await ImportAsync(world.TermId);
@@ -602,13 +617,27 @@ public class SisImportPipelineTests : IntegrationTest
         Assert.Equal("2021005781", legacy.StudentNumber);
 
         var legacyCard = await read.RfidCards.SingleAsync(c => c.StudentId == legacy.Id);
-        Assert.Equal("2021005781", legacyCard.CardUid);
+        Assert.Equal(SyntheticRoster.PedroRfid, legacyCard.CardUid);
         Assert.True(legacyCard.IsActive);
         Assert.Equal(world.SchoolId, legacyCard.SchoolId); // ADR-001 D-3 denormalization
 
         var modern = await read.Students.SingleAsync(s => s.StudentNumber == SyntheticRoster.MariaRegNo);
         Assert.Equal("USA00001", modern.StudentNumber);
-        Assert.Equal("USA00001", (await read.RfidCards.SingleAsync(c => c.StudentId == modern.Id)).CardUid);
+
+        var modernCard = await read.RfidCards.SingleAsync(c => c.StudentId == modern.Id);
+        Assert.Equal(SyntheticRoster.MariaRfid, modernCard.CardUid);
+
+        // The separation, stated as a negative: no card carries a student number, and no student number
+        // carries a serial. This is the assertion that fails the moment anything re-derives one from the
+        // other.
+        var studentNumbers = await read.Students.Select(s => s.StudentNumber).ToListAsync();
+        Assert.All(await read.RfidCards.ToListAsync(),
+            c => Assert.DoesNotContain(c.CardUid, studentNumbers));
+
+        // Leading zeros survived the cell read, RosterText.Clean and CardUid.Normalize.
+        Assert.StartsWith("00", modernCard.CardUid, StringComparison.Ordinal);
+        Assert.Equal(0, await read.RfidCards
+            .CountAsync(c => c.CardUid == SyntheticRoster.MariaRfidWithLeadingZerosLost));
 
         Assert.All(await read.RfidCards.ToListAsync(),
             c => Assert.DoesNotContain("E+", c.CardUid, StringComparison.OrdinalIgnoreCase));
@@ -1029,18 +1058,29 @@ public class SisImportPipelineTests : IntegrationTest
         await using var read = NewDbContext();
 
         var profiles = await read.SisImportProfiles.Include(p => p.Columns).ToListAsync();
-        var profile = Assert.Single(profiles);          // idempotent: the second upload reuses version 1
-        Assert.Equal(1, profile.Version);
+        var profile = Assert.Single(profiles);          // idempotent: the second upload reuses the version
         Assert.True(profile.IsActive);
         Assert.NotEmpty(profile.Columns);
 
-        // REGNO feeds two targets under two different rules, which is why TargetField is in the key.
+        // REGNO maps to the student number and to nothing else. Until 2026-07-30 it also fed
+        // RfidCard.CardUid and this asserted so; the client corrected us that the serial is its own
+        // column, and this is the surviving rule.
         var regNoRules = profile.Columns
             .Where(c => c.SourceColumnKey == SisRosterColumns.HeaderKey(SisRosterColumns.RegNo))
             .ToList();
-        Assert.Equal(2, regNoRules.Count);
-        Assert.Contains(regNoRules, c => c.TargetField == "RfidCard.CardUid");
-        Assert.All(regNoRules, c => Assert.True(c.IsRequired));
+        var regNoRule = Assert.Single(regNoRules);
+        Assert.Equal("Student.StudentNumber", regNoRule.TargetField);
+        Assert.True(regNoRule.IsRequired);
+
+        // The card UID is mapped, from the RFID column, and optionally — a file without that column
+        // must still import. This row is the seam: the pipeline finds the RFID source column by looking
+        // this TargetField up here, so a client export naming the column something else is a new profile
+        // version rather than a code change.
+        var cardRule = Assert.Single(profile.Columns, c => c.TargetField == "RfidCard.CardUid");
+        Assert.Equal(
+            SisRosterColumns.HeaderKey(SisRosterColumns.RfidCardSerial), cardRule.SourceColumnKey);
+        Assert.False(cardRule.IsRequired);
+        Assert.Equal("CardUid.Normalize", cardRule.NormalizationRule);
 
         var batches = await read.SisImportBatches.ToListAsync();
         Assert.Equal(2, batches.Count);
@@ -1052,6 +1092,377 @@ public class SisImportPipelineTests : IntegrationTest
         // is the stronger claim. This asserts the column is populated and stable, not that anything
         // depends on it.
         Assert.Single(batches.Select(b => b.FileHash).Distinct());
+    }
+
+    // ================== CRITICAL: v1 → v2 supersession, the path that runs on every existing database
+
+    /// <summary>One row of a mapping, as it is authored rather than as it is stored.</summary>
+    private sealed record MappingRow(
+        string SourceColumn, string TargetField, string NormalizationRule, bool IsRequired);
+
+    /// <summary>
+    /// <b>Version 1 of the built-in mapping, spelled out rather than derived from
+    /// <see cref="SisImportProfileTemplate"/>.</b> The template <em>is</em> version 2 now, so building
+    /// version 1 out of it would make this fixture say whatever today's code says — and the whole point
+    /// of a versioned profile is that the superseded version keeps saying what it said before the
+    /// correction.
+    ///
+    /// <para>
+    /// The second row is the one that matters: <c>REGNO → RfidCard.CardUid</c>, <b>required</b>. That
+    /// was the mapping the client corrected on 2026-07-30, and it is the row every database that
+    /// already has data is still holding.
+    /// </para>
+    /// </summary>
+    private static readonly IReadOnlyList<MappingRow> VersionOneMapping =
+    [
+        new(SisRosterColumns.RegNo, "Student.StudentNumber", "RosterText.Clean", IsRequired: true),
+        new(SisRosterColumns.RegNo, "RfidCard.CardUid", "CardUid.Normalize", IsRequired: true),
+
+        new(SisRosterColumns.StudentFirstName, "Student.FirstName", "RosterText.CleanName", true),
+        new(SisRosterColumns.StudentMiddleName, "Student.MiddleName", "RosterText.CleanName", false),
+        new(SisRosterColumns.StudentLastName, "Student.LastName", "RosterText.CleanName", true),
+        new(SisRosterColumns.FullName, "(none)", "(not imported)", false),
+
+        new(SisRosterColumns.EmailId, "Student.AlternateEmail", "RosterText.CleanEmail", false),
+        new(SisRosterColumns.UsaEmail, "Student.Email", "RosterText.CleanEmail", false),
+
+        new(SisRosterColumns.CollegeName, "College.Name", "RosterText.Clean", true),
+        new(SisRosterColumns.CollegeName, "College.NameKey", "AcademicKey.NormalizeOrUnspecified", true),
+        new(SisRosterColumns.Program, "Program.Code", "RosterText.Clean", true),
+        new(SisRosterColumns.Program, "Program.CodeKey", "AcademicKey.NormalizeOrUnspecified", true),
+
+        new(SisRosterColumns.SectionName, "CourseOffering.SectionName", "RosterText.Clean", false),
+        new(SisRosterColumns.SectionName, "CourseOffering.SectionKey",
+            "AcademicKey.NormalizeOrUnspecified", false),
+
+        new(SisRosterColumns.CourseCode, "Course.Code", "RosterText.Clean", true),
+        new(SisRosterColumns.CourseCode, "Course.CodeKey", "AcademicKey.NormalizeOrUnspecified", true),
+        new(SisRosterColumns.CourseName, "Course.Title", "RosterText.Clean", false),
+
+        new(SisRosterColumns.TeacherFullName, "Instructor.DisplayName", "TeacherNames.Parse", false),
+        new(SisRosterColumns.TeacherFirstName, "Instructor.DisplayName", "TeacherNames.Parse", false),
+        new(SisRosterColumns.TeacherLastName, "Instructor.DisplayName", "TeacherNames.Parse", false),
+        new(SisRosterColumns.TeacherSuffix, "(none — honorific)", "TeacherNames.Parse", false),
+        new(SisRosterColumns.TeacherCollege, "(none)", "(not imported)", false),
+    ];
+
+    /// <summary>
+    /// The current built-in mapping, taken from the template. Deriving <em>this</em> one is correct
+    /// where deriving <see cref="VersionOneMapping"/> would not be: it stands in for a version an
+    /// operator would author from what the pipeline does today, so agreeing with the code is the point.
+    /// </summary>
+    private static List<MappingRow> BuiltInMapping() =>
+    [
+        .. SisImportProfileTemplate.Entries.Select(e =>
+            new MappingRow(e.SourceColumn, e.TargetField, e.NormalizationRule, e.IsRequired)),
+    ];
+
+    /// <summary>
+    /// Writes one version of the built-in profile straight to the database, under the same
+    /// <c>NameKey</c> <see cref="SisImportProfileTemplate"/> uses — which is what makes it a
+    /// <em>version</em> of that profile rather than an unrelated one, and therefore what puts it inside
+    /// <c>UX_SisImportProfiles_School_Name_Active</c>'s reach.
+    /// </summary>
+    private async Task<Guid> SeedProfileAsync(
+        Guid schoolId, int version, bool isActive, IReadOnlyList<MappingRow> mapping)
+    {
+        await using var db = NewDbContext();
+
+        var profile = new SisImportProfile
+        {
+            SchoolId = schoolId,
+            Name = SisImportProfileTemplate.ProfileName,
+            NameKey = AcademicKey.NormalizeOrUnspecified(SisImportProfileTemplate.ProfileName),
+            Version = version,
+            Source = SisImportSource.Excel,
+            IsActive = isActive,
+            Description = $"Seeded version {version}.",
+        };
+        db.SisImportProfiles.Add(profile);
+
+        for (var i = 0; i < mapping.Count; i++)
+        {
+            db.SisImportProfileColumns.Add(new SisImportProfileColumn
+            {
+                Profile = profile,
+                SourceColumn = mapping[i].SourceColumn,
+                SourceColumnKey = SisRosterColumns.HeaderKey(mapping[i].SourceColumn),
+                TargetField = mapping[i].TargetField,
+                NormalizationRule = mapping[i].NormalizationRule,
+                IsRequired = mapping[i].IsRequired,
+                Ordinal = i,
+            });
+        }
+
+        await db.SaveChangesAsync();
+        return profile.Id;
+    }
+
+    /// <summary>A batch that already ran, pinned to a profile version — the history D-4 has to keep.</summary>
+    private async Task<Guid> SeedCompletedBatchAsync(Guid schoolId, Guid termId, Guid profileId)
+    {
+        await using var db = NewDbContext();
+
+        var batch = new SisImportBatch
+        {
+            SchoolId = schoolId,
+            TermId = termId,
+            Source = SisImportSource.Excel,
+            FileName = "Copy-of-CCJ-july.xlsx",
+            Status = SisImportStatus.Completed,
+            ImportProfileId = profileId,
+        };
+        db.SisImportBatches.Add(batch);
+        await db.SaveChangesAsync();
+        return batch.Id;
+    }
+
+    /// <summary>
+    /// <b>The first upload after the 2026-07-30 bump, on a database that already holds an active
+    /// version 1 — which is every tenant with data, and the one code path CI's always-fresh database
+    /// never executes.</b>
+    ///
+    /// <para>
+    /// <c>Each_batch_records_the_versioned_mapping_it_ran_under</c> proves idempotence at version 2 on a
+    /// clean database: it never reaches the supersession at all. The risk is entirely in the ordering —
+    /// <c>UX_SisImportProfiles_School_Name_Active</c> is <c>UNIQUE(SchoolId, NameKey) WHERE
+    /// IsActive = 1</c>, so an INSERT of the new active version issued before the UPDATE that clears the
+    /// old one is a raw unique violation, and it would land on the operator's first upload after deploy,
+    /// on every tenant at once.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>Asserted against the database rather than against the model.</b> The counts and the flag are
+    /// read back on a fresh context, and version 1's column rows are compared field by field against the
+    /// mapping that was seeded — because "superseded, not deleted" is a data-preservation claim and the
+    /// only way it can fail is silently. The index itself is pinned by
+    /// <c>SisImportSchemaTests.A_profile_may_have_many_versions_but_only_one_active_one</c>; this test
+    /// pins that the pipeline stays on the right side of it.
+    /// </para>
+    /// </summary>
+    /// <summary>
+    /// <b>An OLDER active version must not be handed back to a new upload.</b>
+    ///
+    /// <para>
+    /// <c>EnsureBuiltInProfileAsync</c>'s own summary says the version-matched lookup exists so that a
+    /// stale version 1 cannot "take the card serial from the REGNO column and reinstate the defect". Its
+    /// fallback used to accept <em>any</em> active version, older ones included — so the defect the
+    /// lookup prevents arrived through the fallback instead. This is the arrangement that reaches it:
+    /// the built-in version present but deactivated, and version 1 active.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>Worse than the batch-replay case, which is deliberate and pinned elsewhere.</b> That one only
+    /// re-runs history under the rules it ran under. This one silently applies version 1's mapping to a
+    /// <em>new</em> upload of live data, so cards would be issued carrying student numbers today. The
+    /// assertion is therefore on the cards, not on which profile row came back — a client cannot see
+    /// profile resolution, and the serial is what the defect actually produces.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public async Task An_older_active_profile_does_not_supply_the_mapping_for_a_new_upload()
+    {
+        var world = await ArrangeAsync();
+
+        // The built-in version, present but not live — the state that sends resolution to the fallback.
+        await SeedProfileAsync(
+            world.SchoolId, SisImportProfileTemplate.BuiltInVersion, isActive: false, BuiltInMapping());
+        await SeedProfileAsync(world.SchoolId, version: 1, isActive: true, VersionOneMapping);
+
+        var batch = await ImportAsync(world.TermId);
+
+        Assert.Equal(0, batch.FailedRows);
+
+        await using var read = NewDbContext();
+        var cards = await read.RfidCards.IgnoreQueryFilters()
+            .Where(c => c.SchoolId == world.SchoolId).ToListAsync();
+
+        // Version 1 maps the card UID from REGNO, so under the old fallback every card here carried a
+        // student number. Naming both sides makes the failure say which mapping ran.
+        Assert.DoesNotContain(cards, c => c.CardUid == SyntheticRoster.MariaRegNo);
+        Assert.Contains(cards, c => c.CardUid == SyntheticRoster.MariaRfid);
+    }
+
+    [Fact]
+    public async Task An_active_v1_profile_is_superseded_by_v2_and_keeps_every_row_it_had()
+    {
+        var world = await ArrangeAsync();
+
+        var v1Id = await SeedProfileAsync(world.SchoolId, version: 1, isActive: true, VersionOneMapping);
+        var julyBatchId = await SeedCompletedBatchAsync(world.SchoolId, world.TermId, v1Id);
+
+        // The upload that would have thrown a DbUpdateException if the ordering argument were wrong.
+        var batch = await ImportAsync(world.TermId);
+
+        await using var read = NewDbContext();
+
+        var profiles = await read.SisImportProfiles.IgnoreQueryFilters()
+            .Include(p => p.Columns).ToListAsync();
+        Assert.Equal(2, profiles.Count);
+
+        var v1 = profiles.Single(p => p.Id == v1Id);
+        var v2 = profiles.Single(p => p.Id != v1Id);
+
+        Assert.Equal(1, v1.Version);
+        Assert.Equal(SisImportProfileTemplate.BuiltInVersion, v2.Version);
+
+        // At most one active version, which is the invariant the whole manoeuvre exists to preserve.
+        Assert.False(v1.IsActive);
+        Assert.True(v2.IsActive);
+        Assert.Single(profiles, p => p.IsActive);
+
+        // Superseded, not deleted, and not edited: every column row version 1 had is still there, in
+        // order, with the same four values it was written with.
+        Assert.Equal(
+            VersionOneMapping.Select(m =>
+                (m.SourceColumn, m.TargetField, m.NormalizationRule, m.IsRequired)),
+            v1.Columns.OrderBy(c => c.Ordinal).Select(c =>
+                (c.SourceColumn, c.TargetField, c.NormalizationRule, c.IsRequired)));
+
+        // Including the row the correction was about. Version 1 still says the card UID came from
+        // REGNO, because that is what the batches that ran under it actually did.
+        var v1Card = Assert.Single(
+            v1.Columns, c => c.TargetField == SisImportProfileTemplate.RfidCardUidTarget);
+        Assert.Equal(SisRosterColumns.HeaderKey(SisRosterColumns.RegNo), v1Card.SourceColumnKey);
+
+        // And version 2 says it does not.
+        var v2Card = Assert.Single(
+            v2.Columns, c => c.TargetField == SisImportProfileTemplate.RfidCardUidTarget);
+        Assert.Equal(SisRosterColumns.HeaderKey(SisRosterColumns.RfidCardSerial), v2Card.SourceColumnKey);
+
+        // The July batch still resolves to version 1 and to version 1's mapping. Nothing historical was
+        // rewritten to match the new rules.
+        var july = await read.SisImportBatches.IgnoreQueryFilters()
+            .SingleAsync(b => b.Id == julyBatchId);
+        Assert.Equal(v1Id, july.ImportProfileId);
+
+        // The new batch ran the new mapping: eight serials, taken from the RFID column.
+        var imported = await read.SisImportBatches.IgnoreQueryFilters()
+            .SingleAsync(b => b.Id == batch.Id);
+        Assert.Equal(v2.Id, imported.ImportProfileId);
+        Assert.Equal(0, batch.FailedRows);
+        Assert.Equal(ExpectedStudents, await read.RfidCards.CountAsync());
+        Assert.Equal(0, await read.RfidCards
+            .CountAsync(c => c.CardUid == SyntheticRoster.MariaRegNo));
+    }
+
+    /// <summary>
+    /// <b>And the other half of "kept, superseded": a batch pinned to version 1 still <em>executes</em>
+    /// version 1's mapping.</b> Preserving the rows is only worth something if they still explain — and
+    /// re-run — the batch that pointed at them.
+    ///
+    /// <para>
+    /// So this one reproduces the old defect on purpose. Version 1 maps <c>REGNO → RfidCard.CardUid</c>,
+    /// so a batch running under it issues cards carrying student numbers and never reads the file's RFID
+    /// column at all — even though this file has one, and even though the code that ships today would
+    /// read it. That is ADR-001 D-4 working: a batch is explained by the rules it ran under, not by
+    /// whatever is live when someone re-runs it.
+    /// </para>
+    ///
+    /// <para>
+    /// The batch is repointed after the upload because the upload necessarily supersedes version 1 —
+    /// that is the previous test's subject. Repointing is the only way to reach the state a batch
+    /// uploaded in July and re-run in August is genuinely in.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public async Task A_batch_pinned_to_v1_executes_v1s_mapping_and_not_the_live_one()
+    {
+        var world = await ArrangeAsync();
+        var v1Id = await SeedProfileAsync(world.SchoolId, version: 1, isActive: true, VersionOneMapping);
+
+        Guid batchId;
+        await using (var db = NewDbContext())
+        {
+            await using var content = SyntheticRoster.Build();
+            var preview = await SisImportOn(db).UploadAsync(
+                new SisImportUploadRequest(content, "Copy-of-CCJ.xlsx", world.TermId));
+            batchId = preview.Batch.Id;
+        }
+
+        await using (var repoint = NewDbContext())
+        {
+            var staged = await repoint.SisImportBatches.IgnoreQueryFilters()
+                .SingleAsync(b => b.Id == batchId);
+            staged.ImportProfileId = v1Id;
+            await repoint.SaveChangesAsync();
+        }
+
+        await using (var run = NewDbContext())
+            Assert.Equal(0, (await SisImportOn(run).RunAsync(batchId, world.TermId)).FailedRows);
+
+        await using var read = NewDbContext();
+
+        var maria = await read.Students.SingleAsync(s => s.StudentNumber == SyntheticRoster.MariaRegNo);
+        var card = Assert.Single(await read.RfidCards.Where(c => c.StudentId == maria.Id).ToListAsync());
+        Assert.Equal(SyntheticRoster.MariaRegNo, card.CardUid);
+
+        // The file's own RFID column was never read, so no card anywhere carries a serial from it.
+        Assert.Equal(0, await read.RfidCards.CountAsync(c => c.CardUid == SyntheticRoster.MariaRfid));
+        Assert.Equal(ExpectedStudents, await read.RfidCards.CountAsync());
+
+        // D-4 lets the old mapping run; it does not let it run quietly. Without this the only evidence
+        // that a re-run minted student-number cards would be the serials themselves, which is precisely
+        // the thing nobody re-reads. The operator gets one line per affected row in the batch report.
+        var warned = await read.SisImportRows.IgnoreQueryFilters()
+            .Where(r => r.BatchId == batchId
+                     && r.WarningCode == SisImportWarningCode.RfidCardFromLegacyMapping)
+            .ToListAsync();
+
+        Assert.NotEmpty(warned);
+        Assert.All(warned, r => Assert.Contains(SisRosterColumns.RfidCardSerial, r.WarningMessage!));
+    }
+
+    /// <summary>
+    /// <b>The RFID source column is read from the batch's profile and from nowhere else — proved by a
+    /// mapping that names no such column while the file is full of serials.</b>
+    ///
+    /// <para>
+    /// An operator-authored version 3 is active and simply has no <c>RfidCard.CardUid</c> row. The file
+    /// is the ordinary eighteen-column workbook with every student's serial in it, and not one card is
+    /// issued. That is the ADR-001 D-4 seam doing the job it exists for: when the client's export
+    /// finally arrives calling the column something nobody has guessed, the fix is a profile version and
+    /// not a deploy — and the corollary, tested here, is that the constant
+    /// <see cref="SisRosterColumns.RfidCardSerial"/> genuinely supplies only the built-in default.
+    /// </para>
+    ///
+    /// <para>
+    /// Version 2 is seeded alongside it, inactive, because that is the state a real database is in once
+    /// an operator has authored version 3: <c>EnsureBuiltInProfileAsync</c> finds its own version
+    /// present, declines to reactivate it, and hands back the live one. Omitting it would instead
+    /// exercise the insert path and re-supersede version 3, which is a different question.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public async Task A_profile_naming_no_rfid_column_imports_every_student_with_no_card()
+    {
+        var world = await ArrangeAsync();
+
+        await SeedProfileAsync(
+            world.SchoolId, SisImportProfileTemplate.BuiltInVersion, isActive: false, BuiltInMapping());
+
+        var v3Id = await SeedProfileAsync(
+            world.SchoolId, version: 3, isActive: true,
+            [.. BuiltInMapping()
+                .Where(m => m.TargetField != SisImportProfileTemplate.RfidCardUidTarget)]);
+
+        var batch = await ImportAsync(world.TermId);
+
+        await using var read = NewDbContext();
+
+        var ran = await read.SisImportBatches.IgnoreQueryFilters().SingleAsync(b => b.Id == batch.Id);
+        Assert.Equal(v3Id, ran.ImportProfileId);
+
+        Assert.Equal(ExpectedStudents, await read.Students.CountAsync());
+        Assert.Equal(ExpectedEnrollments, await read.Enrollments.CountAsync());
+        Assert.Equal(0, await read.RfidCards.CountAsync());
+
+        Assert.Equal(0, batch.FailedRows);
+        Assert.Equal(6, batch.WarningRows);
+        Assert.True(batch.CountersReconcile);
+
+        Assert.All(await RowsOfAsync(batch.Id), r => Assert.DoesNotContain(
+            r.Entities, e => e.EntityType == SisImportEntityType.RfidCard));
     }
 
     // ============================================ CRITICAL 1: the fan-out points where it says it does
@@ -1139,37 +1550,38 @@ public class SisImportPipelineTests : IntegrationTest
     // ======================================= CRITICAL 2: a card is never moved between two students
 
     /// <summary>
-    /// <b>An active card whose UID matches but whose student does not is refused, not reassigned.</b>
+    /// <b>An active card whose serial matches but whose student does not is refused, not reassigned.</b>
     ///
     /// <para>
-    /// <b>It is reachable, not theoretical.</b> REGNO is both <c>Students.StudentNumber</c>, stored
-    /// verbatim and unique per school, and <c>RfidCards.CardUid</c>, which
-    /// <see cref="CardUid.Normalize"/> uppercases and strips punctuation. So <c>USA-00001</c> and
-    /// <c>USA00001</c> are two students — the unique index sees two different numbers — sharing one
-    /// card UID. Phase 3 adds hand-entered students, at which point a hyphen is enough.
+    /// <b>What arms this changed on 2026-07-30; that it is reachable did not.</b> The old premise was
+    /// that REGNO <em>was</em> the card UID, so <c>USA-00001</c> and <c>USA00001</c> were two students
+    /// by <c>UNIQUE(SchoolId, StudentNumber)</c> sharing one UID by <see cref="CardUid.Normalize"/>.
+    /// The client corrected us — the serial is its own column — and that case is gone. What replaces it
+    /// is more ordinary, not less: a serial already issued to somebody else, which is what a recycled
+    /// card, a cloned card or a mis-keyed export cell looks like. <c>UX_RfidCards_SchoolId_CardUid_Active</c>
+    /// is keyed on the serial and not on the student, so the file is free to say two students hold one
+    /// card and the database is not.
     /// </para>
     ///
     /// <para>
     /// Silently moving the card would cost the first student their active card, re-attribute every
     /// subsequent tap on that physical card to the wrong person, and leave every
     /// <c>AttendanceRecords.RfidCardId</c> already written pointing at a card whose <c>StudentId</c>
-    /// moved underneath it — the history destruction ADR-001 D-3 exists to prevent.
+    /// moved underneath it — the history destruction ADR-001 D-3 exists to prevent. That is unchanged.
     /// </para>
     /// </summary>
     [Fact]
-    public async Task A_card_uid_that_already_identifies_another_student_fails_the_row_and_moves_nothing()
+    public async Task A_card_serial_that_already_identifies_another_student_fails_the_row_and_moves_nothing()
     {
         var world = await ArrangeAsync();
 
         Guid incumbentId, cardId;
         await using (var arrange = NewDbContext())
         {
-            // Differs from the fixture's USA00001 by one hyphen, so it is a different StudentNumber and
-            // the same normalized card UID.
-            var incumbent = TestData.NewStudent(world.SchoolId, "USA-00001", "Original", null, "Owner");
+            // A different student entirely, holding the card whose serial the file hands to Maria.
+            var incumbent = TestData.NewStudent(world.SchoolId, "USA09999", "Original", null, "Owner");
             arrange.Students.Add(incumbent);
-            var issued = TestData.NewCard(
-                world.SchoolId, incumbent.Id, CardUid.Normalize(SyntheticRoster.MariaRegNo));
+            var issued = TestData.NewCard(world.SchoolId, incumbent.Id, SyntheticRoster.MariaRfid);
             arrange.RfidCards.Add(issued);
             await arrange.SaveChangesAsync();
             incumbentId = incumbent.Id;
@@ -1178,17 +1590,19 @@ public class SisImportPipelineTests : IntegrationTest
 
         var batch = await ImportAsync(world.TermId);
 
-        // Maria's four rows (2, 3, 4, 5) all name USA00001 and all fail.
+        // Maria's four rows (2, 3, 4, 5) all carry that serial and all fail.
         var rows = await RowsOfAsync(batch.Id);
         var failed = rows.Where(r => r.Result == SisImportRowResult.Failed).ToList();
         Assert.Equal(4, failed.Count);
         Assert.All(failed, r => Assert.StartsWith(
             SisImportFailureCode.RfidCardStudentMismatch, r.ErrorMessage!, StringComparison.Ordinal));
 
-        // The message names both students, which is the whole of what an operator needs to act.
-        Assert.All(failed, r => Assert.Contains("USA-00001", r.ErrorMessage!, StringComparison.Ordinal));
+        // The message names both students and the serial, which is the whole of what an operator needs.
+        Assert.All(failed, r => Assert.Contains("USA09999", r.ErrorMessage!, StringComparison.Ordinal));
         Assert.All(failed, r => Assert.Contains(
             SyntheticRoster.MariaRegNo, r.ErrorMessage!, StringComparison.Ordinal));
+        Assert.All(failed, r => Assert.Contains(
+            SyntheticRoster.MariaRfid, r.ErrorMessage!, StringComparison.Ordinal));
 
         Assert.Equal(4, batch.FailedRows);
         Assert.True(batch.CountersReconcile);
@@ -1200,8 +1614,7 @@ public class SisImportPipelineTests : IntegrationTest
         var card = await read.RfidCards.SingleAsync(c => c.Id == cardId);
         Assert.Equal(incumbentId, card.StudentId);
         Assert.True(card.IsActive);
-        Assert.Equal(1, await read.RfidCards
-            .CountAsync(c => c.CardUid == CardUid.Normalize(SyntheticRoster.MariaRegNo)));
+        Assert.Equal(1, await read.RfidCards.CountAsync(c => c.CardUid == SyntheticRoster.MariaRfid));
 
         // A failed row is genuinely not imported rather than partially imported: no USA00001 student
         // was created, and none of Maria's four enrollments exist.
@@ -1216,38 +1629,119 @@ public class SisImportPipelineTests : IntegrationTest
     }
 
     /// <summary>
-    /// The same rule with no card in the database at all: two REGNOs <em>inside one file</em> that
-    /// differ only by punctuation are two students and one card UID. Without the check the second
-    /// student would be handed the first one's card in the fan-out and issued none of their own —
-    /// the same misattribution, arriving on the first import rather than the second.
+    /// The same rule with no card in the database at all: <b>two students inside one file carrying the
+    /// same RFID serial</b>. Without the check the second would be handed the first one's card in the
+    /// fan-out and issued none of their own — the same misattribution, arriving on the first import
+    /// rather than the second.
+    ///
+    /// <para>
+    /// The old version of this test produced the collision by re-spelling one REGNO as a punctuated
+    /// variant of another, which was a real case only while the UID was derived from REGNO. It is not a
+    /// case any more, so the test is rewritten to the surviving rule rather than deleted: a duplicated
+    /// serial is what a cloned card or a copy-paste in the export actually looks like, and it is now
+    /// <em>more</em> reachable than the old shape ever was, because nothing about a serial is
+    /// constrained by the student columns.
+    /// </para>
     /// </summary>
     [Fact]
-    public async Task Two_regnos_in_one_file_that_share_a_card_uid_fail_the_later_one()
+    public async Task Two_students_in_one_file_sharing_an_rfid_serial_fail_the_later_one()
     {
         var world = await ArrangeAsync();
 
-        var regNoColumn = SisRosterColumns.All.ToList().IndexOf(SisRosterColumns.RegNo);
+        var rfidColumn = SisRosterColumns.All.ToList().IndexOf(SisRosterColumns.RfidCardSerial);
         var rows = SyntheticRoster.Rows();
 
-        // Row 7 (index 5) is Ana. Re-spell her REGNO as a punctuated variant of Maria's: a different
-        // StudentNumber, the same normalized card UID.
-        rows[5][regNoColumn] = "USA-00001";
+        // Row 7 (index 5) is Ana. Give her Maria's serial: a different student, the same physical card.
+        rows[5][rfidColumn] = SyntheticRoster.MariaRfid;
 
         var batch = await ImportAsync(world.TermId, SyntheticRoster.Build(rows));
 
         var staged = await RowsOfAsync(batch.Id);
         var failed = staged.Where(r => r.Result == SisImportRowResult.Failed).ToList();
 
-        // Maria's rows come first in the worksheet, so she is the UID's first claimant and keeps it.
+        // Maria's rows come first in the worksheet, so she is the serial's first claimant and keeps it.
         var loser = Assert.Single(failed);
         Assert.Equal(7, loser.RowNumber);
         Assert.StartsWith(
             SisImportFailureCode.RfidCardStudentMismatch, loser.ErrorMessage!, StringComparison.Ordinal);
 
         await using var read = NewDbContext();
-        Assert.Equal(0, await read.Students.CountAsync(s => s.StudentNumber == "USA-00001"));
-        Assert.Equal(1, await read.RfidCards
-            .CountAsync(c => c.CardUid == CardUid.Normalize(SyntheticRoster.MariaRegNo)));
+
+        // Ana is not imported at all — a failed row leaves no trace, including no student row.
+        Assert.Equal(0, await read.Students.CountAsync(s => s.StudentNumber == SyntheticRoster.AnaRegNo));
+
+        // And exactly one card carries the serial, held by the first claimant.
+        var card = Assert.Single(
+            await read.RfidCards.Where(c => c.CardUid == SyntheticRoster.MariaRfid).ToListAsync());
+        var maria = await read.Students
+            .SingleAsync(s => s.StudentNumber == SyntheticRoster.MariaRegNo);
+        Assert.Equal(maria.Id, card.StudentId);
+    }
+
+    /// <summary>
+    /// <b>One student carrying two different serials across two rows of one file. Permitted, and
+    /// reported here as an open decision rather than silently ruled on.</b>
+    ///
+    /// <para>
+    /// This shape became possible only on 2026-07-30: while the UID was derived from REGNO, one student
+    /// had exactly one UID by construction. With a separate serial column nothing prevents row 2 saying
+    /// serial A and row 4 saying serial B for the same REGNO — a mid-year replacement card that the
+    /// export lists twice, or a student legitimately holding two cards.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>It is allowed, deliberately.</b> <c>UX_RfidCards_SchoolId_CardUid_Active</c> is keyed on the
+    /// serial and not on the student, so two active cards for one student are legal at the schema level;
+    /// refusing them would be inventing a rule the client has never stated, and doing it inside an
+    /// importer is the worst place to invent one. No new warning code is raised either — a published
+    /// value needs JJ's approval, not a unilateral addition.
+    /// </para>
+    ///
+    /// <para>
+    /// What this test pins is that the permissive path is <em>safe</em>: it does not throw, it does not
+    /// fail either row, and each row's fan-out points at its own card rather than both rows collapsing
+    /// onto whichever serial was seen first. If JJ later rules that a second serial should warn or fail,
+    /// this test is the one to change, and it will say why it was permitted in the first place.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public async Task One_student_named_with_two_serials_gets_both_cards_and_a_correct_fan_out()
+    {
+        var world = await ArrangeAsync();
+
+        var rfidColumn = SisRosterColumns.All.ToList().IndexOf(SisRosterColumns.RfidCardSerial);
+        var rows = SyntheticRoster.Rows();
+
+        // Rows 2..5 are all Maria. Give row 4 (index 2) a second, unused serial.
+        const string secondSerial = "0012509999";
+        rows[2][rfidColumn] = secondSerial;
+
+        var batch = await ImportAsync(world.TermId, SyntheticRoster.Build(rows));
+
+        Assert.Equal(0, batch.FailedRows);
+        Assert.True(batch.CountersReconcile);
+
+        await using var read = NewDbContext();
+
+        var maria = await read.Students.SingleAsync(s => s.StudentNumber == SyntheticRoster.MariaRegNo);
+        var cards = await read.RfidCards.AsNoTracking()
+            .Where(c => c.StudentId == maria.Id).ToListAsync();
+
+        Assert.Equal(2, cards.Count);
+        Assert.All(cards, c => Assert.True(c.IsActive));
+        Assert.Contains(cards, c => c.CardUid == SyntheticRoster.MariaRfid);
+        Assert.Contains(cards, c => c.CardUid == secondSerial);
+
+        // The fan-out is per row and points at that row's own card — not both rows at the first serial,
+        // which is what a grouping that lost the second value would produce.
+        var staged = await RowsOfAsync(batch.Id);
+
+        Guid CardTouchOn(int rowNumber) => Assert.Single(
+            Row(staged, rowNumber).Entities, e => e.EntityType == SisImportEntityType.RfidCard)
+            .EntityId;
+
+        Assert.Equal(cards.Single(c => c.CardUid == SyntheticRoster.MariaRfid).Id, CardTouchOn(2));
+        Assert.Equal(cards.Single(c => c.CardUid == secondSerial).Id, CardTouchOn(4));
     }
 
     // ============================================== WARNING 3: a revoked card is not resurrected
@@ -1257,9 +1751,17 @@ public class SisImportPipelineTests : IntegrationTest
     ///
     /// <para>
     /// The prefetch used to filter on <c>IsActive</c>, so a card revoked because it was lost, stolen or
-    /// the student was suspended was invisible and the next import issued a fresh active card with the
-    /// same UID. Since the UID is the REGNO, that makes the revoked <em>physical</em> card work again —
+    /// the student was suspended was invisible and the next import issued a fresh active card carrying
+    /// the same serial. A serial names one physical card, so that makes the revoked card work again —
     /// silently reversing an operator's deliberate revocation, on a schedule.
+    /// </para>
+    ///
+    /// <para>
+    /// Separating the serial from REGNO on 2026-07-30 strengthened this rather than weakening it. The
+    /// export is a snapshot of who is enrolled and has no column saying why a card was revoked, so a
+    /// serial the registrar still lists against a student is exactly what a lost or stolen card looks
+    /// like in the next file — the roster cannot answer the only question that matters, so it does not
+    /// get to decide.
     /// </para>
     ///
     /// <para>
@@ -1280,8 +1782,7 @@ public class SisImportPipelineTests : IntegrationTest
                 world.SchoolId, SyntheticRoster.MariaRegNo, "Maria", null, "Santos");
             arrange.Students.Add(student);
             var revoked = TestData.NewCard(
-                world.SchoolId, student.Id, CardUid.Normalize(SyntheticRoster.MariaRegNo),
-                isActive: false);
+                world.SchoolId, student.Id, SyntheticRoster.MariaRfid, isActive: false);
             arrange.RfidCards.Add(revoked);
             await arrange.SaveChangesAsync();
             studentId = student.Id;
@@ -1292,9 +1793,9 @@ public class SisImportPipelineTests : IntegrationTest
 
         await using var read = NewDbContext();
 
-        // Still exactly one card for that UID, still deactivated, still the same row.
+        // Still exactly one card for that serial, still deactivated, still the same row.
         var card = Assert.Single(await read.RfidCards
-            .Where(c => c.CardUid == CardUid.Normalize(SyntheticRoster.MariaRegNo))
+            .Where(c => c.CardUid == SyntheticRoster.MariaRfid)
             .ToListAsync());
         Assert.Equal(revokedCardId, card.Id);
         Assert.False(card.IsActive);
@@ -1318,6 +1819,234 @@ public class SisImportPipelineTests : IntegrationTest
 
         // Everyone else got their card as usual — the rule is per UID, not a global switch.
         Assert.Equal(ExpectedStudents - 1, await read.RfidCards.CountAsync(c => c.IsActive));
+    }
+
+    // ============================= CRITICAL: the roster we actually hold has no RFID column at all
+
+    /// <summary>
+    /// <b>A file with no RFID column imports every student, issues no card, fails nothing and complains
+    /// about nothing.</b> This is not an edge case. It is the only roster in hand, so it is the shape
+    /// every import has until the client's RFID-bearing export arrives — and a student with no card is
+    /// the normal outcome rather than an anomaly.
+    ///
+    /// <para>
+    /// <b>The assertion carrying the weight is the absent <see cref="SisImportEntityType.RfidCard"/>
+    /// touch on every row.</b> ADR-001 D-2's answer to "how do we know this student has no card?" is
+    /// that the fan-out says so by omission: recording nothing is a different statement from recording a
+    /// card that changed nothing, and it is queryable in exactly the same way. A pipeline that gathered
+    /// the card-less rows under one blank key would satisfy several counts above it and fail this one —
+    /// it would issue a single card carrying an empty UID and fail every student but the first for
+    /// sharing it.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>The warning count is identical to the RFID-bearing batch's six</b>, which is the second half
+    /// of the same decision. A warning per card-less row would fire on 100% of the rows of every batch,
+    /// make <c>CompletedWithWarnings</c> the permanent status of every import, and bury the six genuine
+    /// warnings under twelve noise ones.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public async Task A_roster_with_no_rfid_column_imports_every_student_and_issues_no_card()
+    {
+        var world = await ArrangeAsync();
+
+        await using var file = SyntheticRoster.BuildWithoutRfidColumn();
+        var batch = await ImportAsync(world.TermId, file);
+
+        Assert.Equal(0, batch.FailedRows);
+        Assert.Equal(11, batch.InsertedRows);
+        Assert.Equal(0, batch.UpdatedRows);
+        Assert.Equal(1, batch.SkippedRows);
+        Assert.True(batch.CountersReconcile);
+
+        // Six, exactly as The_batch_counters_reconcile_to_the_row_count reports for the same twelve rows
+        // *with* their serials. Removing the column added no warning to any row.
+        Assert.Equal(6, batch.WarningRows);
+
+        await using var read = NewDbContext();
+
+        Assert.Equal(ExpectedStudents, await read.Students.CountAsync());
+        Assert.Equal(ExpectedStudents, await read.StudentTermRecords.CountAsync());
+        Assert.Equal(ExpectedEnrollments, await read.Enrollments.CountAsync());
+        Assert.Equal(ExpectedOfferings, await read.CourseOfferings.CountAsync());
+
+        // Not one card — and in particular not one card carrying an empty UID.
+        Assert.Equal(0, await read.RfidCards.CountAsync());
+
+        var rows = await RowsOfAsync(batch.Id);
+        Assert.Equal(SyntheticRoster.DataRowCount, rows.Count);
+        Assert.All(rows, r => Assert.DoesNotContain(
+            r.Entities, e => e.EntityType == SisImportEntityType.RfidCard));
+
+        // Nor was any row warned about a card. The six warnings are the blank section, the two
+        // placeholder teachers, the title alias and the two-programme section pair; none names a serial.
+        Assert.All(rows, r => Assert.DoesNotContain(
+            SisRosterColumns.RfidCardSerial, r.WarningMessage ?? "", StringComparison.OrdinalIgnoreCase));
+    }
+
+    /// <summary>
+    /// <b>The same file cut down to the three rows that warn about nothing else, so the status is
+    /// falsifiable.</b> A card-less batch reports <c>Completed</c> — not <c>CompletedWithWarnings</c>.
+    ///
+    /// <para>
+    /// The full twelve rows cannot make this claim. They carry six warnings of their own, so
+    /// <c>CompletedWithWarnings</c> is the right answer there whether or not a missing card warns, and a
+    /// test asserting it on the full roster would pass against exactly the pipeline this rules out. See
+    /// <see cref="SyntheticRoster.RowsWithoutWarnings"/> for why the subset is picked by index.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public async Task A_card_less_batch_that_warns_about_nothing_else_completes_silently()
+    {
+        var world = await ArrangeAsync();
+
+        await using var file = SyntheticRoster.BuildWithoutRfidColumn(
+            SyntheticRoster.RowsWithoutWarnings());
+        var batch = await ImportAsync(world.TermId, file);
+
+        Assert.Equal(0, batch.WarningRows);
+        Assert.Equal(0, batch.FailedRows);
+        Assert.Equal(SisImportStatus.Completed, batch.Status);
+        Assert.NotEqual(SisImportStatus.CompletedWithWarnings, batch.Status);
+
+        Assert.Equal(3, batch.TotalRows);
+        Assert.Equal(3, batch.InsertedRows);
+        Assert.True(batch.CountersReconcile);
+
+        await using var read = NewDbContext();
+
+        // Maria, Ana and Rosa: three students, three enrollments in the one BSCRIM 2-A / SSCI7
+        // offering, and no cards at all.
+        Assert.Equal(3, await read.Students.CountAsync());
+        Assert.Equal(3, await read.Enrollments.CountAsync());
+        Assert.Equal(1, await read.CourseOfferings.CountAsync());
+        Assert.Equal(0, await read.RfidCards.CountAsync());
+
+        Assert.All(await RowsOfAsync(batch.Id), r =>
+        {
+            Assert.Null(r.WarningCode);
+            Assert.DoesNotContain(r.Entities, e => e.EntityType == SisImportEntityType.RfidCard);
+        });
+    }
+
+    /// <summary>
+    /// <b>The transitional file: an RFID column that is present but blank on some rows.</b> The rows
+    /// carrying a serial get a card, the blank ones get none, nobody fails and nothing is warned.
+    ///
+    /// <para>
+    /// It reaches the parse by a different route from an absent column — a cell dictionary holding
+    /// <c>""</c> rather than no entry at all — and both have to land in the same place, because both
+    /// mean "this row names no card". It is also the shape the first real export is most likely to have:
+    /// a column added to the registrar's report and filled in as the cards are issued.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>Rosa is the sharp case.</b> Her two rows are one student and only the second is blanked, so
+    /// she still holds exactly one card — and the fan-out records it against the row that named it and
+    /// records nothing against the row that did not. A grouping that folded the blanks together would
+    /// instead fail her second row for claiming a card that belongs to Juan.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public async Task A_blank_rfid_cell_costs_that_row_a_card_and_nobody_else_anything()
+    {
+        var world = await ArrangeAsync();
+
+        var rfidColumn = SisRosterColumns.All.ToList().IndexOf(SisRosterColumns.RfidCardSerial);
+        var rows = SyntheticRoster.Rows();
+
+        // Juan (worksheet row 6) and Omar (row 13) lose their serial outright; Rosa keeps hers on row 9
+        // and loses it on row 10. Worked out by hand: eight students, two of them card-less, six cards.
+        rows[4][rfidColumn] = "";
+        rows[8][rfidColumn] = "";
+        rows[11][rfidColumn] = "";
+
+        var batch = await ImportAsync(world.TermId, SyntheticRoster.Build(rows));
+
+        Assert.Equal(0, batch.FailedRows);
+        Assert.Equal(6, batch.WarningRows);      // unchanged — a blank serial is not one of them
+        Assert.True(batch.CountersReconcile);
+
+        await using var read = NewDbContext();
+
+        Assert.Equal(ExpectedStudents, await read.Students.CountAsync());
+        Assert.Equal(ExpectedEnrollments, await read.Enrollments.CountAsync());
+        Assert.Equal(6, await read.RfidCards.CountAsync());
+
+        foreach (var regNo in new[] { SyntheticRoster.JuanRegNo, SyntheticRoster.OmarRegNo })
+        {
+            var cardless = await read.Students.SingleAsync(s => s.StudentNumber == regNo);
+            Assert.Equal(0, await read.RfidCards.CountAsync(c => c.StudentId == cardless.Id));
+        }
+
+        var rosa = await read.Students.SingleAsync(s => s.StudentNumber == SyntheticRoster.RosaRegNo);
+        var rosaCard = Assert.Single(
+            await read.RfidCards.Where(c => c.StudentId == rosa.Id).ToListAsync());
+        Assert.Equal(SyntheticRoster.RosaRfid, rosaCard.CardUid);
+
+        var staged = await RowsOfAsync(batch.Id);
+
+        Assert.Equal(rosaCard.Id, Assert.Single(
+            Row(staged, 9).Entities, e => e.EntityType == SisImportEntityType.RfidCard).EntityId);
+
+        foreach (var rowNumber in new[] { 6, 10, 13 })
+            Assert.DoesNotContain(
+                Row(staged, rowNumber).Entities, e => e.EntityType == SisImportEntityType.RfidCard);
+    }
+
+    /// <summary>
+    /// <b>The leading zeros, followed past the card row to the only thing that consumes it: a tap.</b>
+    ///
+    /// <para>
+    /// <see cref="Regno_is_stored_verbatim_and_the_card_uid_comes_from_the_rfid_column"/> asserts that
+    /// <c>0012503326</c> reached <c>RfidCards.CardUid</c> intact, and
+    /// <c>TapFlowTests.A_tap_resolves_a_decimal_serial_without_losing_its_leading_zeros</c> asserts that
+    /// a card carrying that value can be tapped — but the card in that test is written by a fixture, so
+    /// the two halves have never been joined. This joins them: the card is the one the <em>import</em>
+    /// produced, and it is resolved through <see cref="IAttendanceService"/> rather than by a query the
+    /// test writes for itself.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>The negative half is what makes it falsifiable.</b>
+    /// <see cref="SyntheticRoster.MariaRfidWithLeadingZerosLost"/> is the value a numeric cell read — or
+    /// an integer round trip anywhere along the path — would have produced, and it must resolve to
+    /// nobody, or "the zeros survived" is a claim about a string rather than about a card that works.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public async Task An_imported_serial_resolves_a_tap_and_its_truncation_resolves_nothing()
+    {
+        var world = await ArrangeAsync();
+        await ImportAsync(world.TermId);
+
+        Guid eventId, mariaId;
+        await using (var arrange = NewDbContext())
+        {
+            var convocation = TestData.NewEvent(world.SchoolId);
+            arrange.Events.Add(convocation);
+            await arrange.SaveChangesAsync();
+
+            eventId = convocation.Id;
+            mariaId = (await arrange.Students
+                .SingleAsync(s => s.StudentNumber == SyntheticRoster.MariaRegNo)).Id;
+        }
+
+        await using var db = NewDbContext();
+        var attendance = AttendanceOn(db);
+
+        var recorded = await attendance.TapAsync(
+            new TapRequest(eventId, SyntheticRoster.MariaRfid, null, null, TestData.Now));
+
+        Assert.Equal(TapOutcome.Recorded, recorded.Outcome);
+        Assert.Equal(mariaId, recorded.Result.Record!.StudentId);
+        Assert.Equal(SyntheticRoster.MariaRegNo, recorded.Result.Record!.StudentNumber);
+
+        var truncated = await attendance.TapAsync(new TapRequest(
+            eventId, SyntheticRoster.MariaRfidWithLeadingZerosLost, null, null, TestData.Now));
+
+        Assert.Equal(TapOutcome.CardNotFound, truncated.Outcome);
     }
 
     // ================================= WARNING 1: an absent cell is not an instruction to erase

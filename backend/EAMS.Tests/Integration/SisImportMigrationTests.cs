@@ -67,7 +67,7 @@ public class SisImportMigrationTests : IntegrationTest
         INSERT INTO RfidCards (Id, SchoolId, StudentId, CardUid, Label, IsActive, IssuedAt, CreatedAt, UpdatedAt)
         VALUES
             (NEWID(), @school, @santos, N'04A1B2C3', N'Primary ID', 1, @now, @now, @now),
-            (NEWID(), @school, @flores, N'2021005781', N'Primary ID', 1, @now, @now, @now);
+            (NEWID(), @school, @flores, N'0012503326', N'Primary ID', 1, @now, @now, @now);
 
         INSERT INTO Terms (Id, SchoolId, Code, SchoolYear, Semester, IsCurrent, CreatedAt, UpdatedAt)
         VALUES (@term, @school, N'2025-2026-1', N'2025-2026', N'1st Semester', 1, @now, @now);
@@ -159,9 +159,16 @@ public class SisImportMigrationTests : IntegrationTest
                 // The new column arrives NULL on every existing row rather than defaulted to something.
                 Assert.Null(santos.AlternateEmail);
 
-                // The legacy ten-digit REGNO survives as a card UID unchanged — this migration must not
-                // reformat it, and neither must anything else.
-                Assert.Equal(1, await db.RfidCards.CountAsync(c => c.CardUid == "2021005781"));
+                // A ten-digit card serial with significant leading zeros survives the migration
+                // unchanged — this migration must not reformat it, and neither must anything else. The
+                // fixture used to assert the legacy REGNO here, on the premise that REGNO was the card
+                // UID; the client corrected that on 2026-07-30, and a leading-zero serial is the
+                // stronger version of the same "do not reformat an identifier" property anyway.
+                Assert.Equal(1, await db.RfidCards.CountAsync(c => c.CardUid == "0012503326"));
+                Assert.Equal(0, await db.RfidCards.CountAsync(c => c.CardUid == "12503326"));
+
+                // The legacy ten-digit REGNO still survives as a student number, unchanged.
+                Assert.Equal(1, await db.Students.CountAsync(s => s.StudentNumber == "2021005781"));
 
                 // And the new schema is usable against the rows that were already there.
                 var term = await db.Terms.AsNoTracking().FirstAsync();

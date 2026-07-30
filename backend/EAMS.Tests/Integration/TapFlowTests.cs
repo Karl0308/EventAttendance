@@ -801,16 +801,42 @@ public class TapFlowTests : IntegrationTest
         Assert.Equal(world.StudentId, response.Result.Record!.StudentId);
     }
 
-    /// <summary>REGNO is the card UID (ADR-001), so the lower-cased REGNO a reader emits must resolve.</summary>
+    /// <summary>
+    /// A reader that emits an alphanumeric UID in lower case must still resolve, because
+    /// <see cref="CardUid.Normalize"/> uppercases on the way in and on the way through.
+    /// </summary>
     [Fact]
-    public async Task A_tap_resolves_a_REGNO_shaped_card_uid_case_insensitively()
+    public async Task A_tap_resolves_an_alphanumeric_card_uid_case_insensitively()
     {
-        var world = await ArrangeAsync(cardUid: "USA00962");
+        var world = await ArrangeAsync(cardUid: "A4F00962");
 
-        var response = await TapAsync(new TapRequest(world.EventId, "usa00962", null, null, TestData.Now));
+        var response = await TapAsync(new TapRequest(world.EventId, "a4f00962", null, null, TestData.Now));
 
         Assert.Equal(TapOutcome.Recorded, response.Outcome);
         Assert.Equal(world.StudentId, response.Result.Record!.StudentId);
+    }
+
+    /// <summary>
+    /// <b>The CICSS card serial's shape, tapped.</b> Ten decimal digits with significant leading zeros:
+    /// <c>0012503326</c> is not <c>12503326</c>, so a reader, a normalizer or a JSON binder that treated
+    /// the UID as a number anywhere along the path would resolve the wrong card or none at all. The
+    /// negative half is what makes that falsifiable — the truncated form must not resolve this student.
+    /// </summary>
+    [Fact]
+    public async Task A_tap_resolves_a_decimal_serial_without_losing_its_leading_zeros()
+    {
+        var world = await ArrangeAsync(cardUid: "0012503326");
+
+        var recorded = await TapAsync(
+            new TapRequest(world.EventId, "0012503326", null, null, TestData.Now));
+
+        Assert.Equal(TapOutcome.Recorded, recorded.Outcome);
+        Assert.Equal(world.StudentId, recorded.Result.Record!.StudentId);
+
+        var truncated = await TapAsync(
+            new TapRequest(world.EventId, "12503326", null, null, TestData.Now));
+
+        Assert.Equal(TapOutcome.CardNotFound, truncated.Outcome);
     }
 
     // ---------------------------------------------------------------- record contents

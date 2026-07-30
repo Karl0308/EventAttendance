@@ -183,11 +183,30 @@ internal static class ExcelRosterReader
     /// <para>
     /// <b>Numbers are formatted explicitly, and one student depends on it.</b> 51 REGNOs are
     /// <c>USA#####</c> and arrive as text; the legacy <c>2021005781</c> arrives as a <em>number</em>,
-    /// and default .NET double formatting renders that as <c>2.021005781E+09</c>. REGNO is both the
-    /// student number and the RFID card UID, so the scientific-notation form would be stored as a card
-    /// UID that no reader can ever produce — a student who simply never registers a tap, with nothing
-    /// anywhere to say why. <see cref="RosterText.FormatNumericCell"/> is the fix and is tested against
-    /// exactly that value.
+    /// and default .NET double formatting renders that as <c>2.021005781E+09</c>. Stored, that is a
+    /// student number no later export will ever match, so the next import creates the student again as
+    /// a duplicate and every fact keyed off them splits in two.
+    /// <see cref="RosterText.FormatNumericCell"/> is the fix and is tested against exactly that value.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>The same conversion is lossy for the RFID card serial, and this is a known open seam rather
+    /// than an oversight.</b> A serial's leading zeros are significant — <c>0012503326</c> is not
+    /// <c>12503326</c> — and any cell Excel holds as a <em>number</em> has already lost them before this
+    /// method sees it: <see cref="IXLCell.GetDouble"/> returns <c>12503326</c> and no formatting of that
+    /// double can put back a zero the value never carried. A cell holding a serial <em>as text</em>,
+    /// which is how a leading-zero identifier is normally stored and how the fixture writes it, round
+    /// trips exactly and is what the tests pin.
+    /// </para>
+    ///
+    /// <para>
+    /// This method is deliberately NOT special-cased for the RFID column. It is shared by all eighteen,
+    /// and the legacy REGNO above depends on <see cref="RosterText.FormatNumericCell"/> — reading
+    /// numbers as their displayed string instead would fix a hypothetical and break a real student. The
+    /// recoverable case (a numeric cell under a <c>0000000000</c> display mask, where
+    /// <c>IXLCell.GetFormattedString()</c> would return the padded text) is worth building only against
+    /// the client's actual export, which does not exist yet; guessing at the mask now would be a rule
+    /// invented for a file nobody has seen.
     /// </para>
     ///
     /// <para>

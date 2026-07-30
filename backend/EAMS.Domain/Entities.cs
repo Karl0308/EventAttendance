@@ -160,7 +160,11 @@ public class RfidCard : AuditableEntity
     public Guid StudentId { get; set; }
     public Student? Student { get; set; }
 
-    public string CardUid { get; set; } = ""; // canonical uppercase hex — see CardUid.Normalize
+    // The physical card's serial, canonicalized by CardUid.Normalize (alphanumerics only, uppercased).
+    // NOT the student number: the two are separate columns from separate source columns. The CICSS
+    // export writes it as decimal digits — 0012503326 — whose leading zeros are significant, so this is
+    // a string and never a number. Readers elsewhere emit hex, which the same normalization covers.
+    public string CardUid { get; set; } = "";
     public string? Label { get; set; }
     public bool IsActive { get; set; } = true;
     public DateTime IssuedAt { get; set; } = DateTime.UtcNow;

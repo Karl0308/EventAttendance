@@ -343,9 +343,16 @@ public class SisImportSchemaTests : IntegrationTest
     }
 
     /// <summary>
-    /// One source column may feed several targets — REGNO is both <c>Students.StudentNumber</c> and
-    /// <c>RfidCards.CardUid</c>, under two different rules — but not the same target twice. That is why
-    /// <c>TargetField</c> is in the key.
+    /// One source column may feed several targets — <c>COLLEGE_NAME</c> feeds both
+    /// <c>College.Name</c> (verbatim) and <c>College.NameKey</c> (normalized) — but not the same target
+    /// twice. That is why <c>TargetField</c> is in the key.
+    ///
+    /// <para>
+    /// The example used to be REGNO feeding <c>Students.StudentNumber</c> and <c>RfidCards.CardUid</c>.
+    /// The client corrected that on 2026-07-30 — the card serial is its own source column — so the
+    /// index's justification is restated against a pair that is still live. The index itself is
+    /// unchanged and so is what it proves.
+    /// </para>
     /// </summary>
     [Fact]
     public async Task One_source_column_may_feed_two_targets_but_not_one_target_twice()
@@ -357,8 +364,8 @@ public class SisImportSchemaTests : IntegrationTest
         {
             var profile = NewProfile(world.SchoolId, version: 1, isActive: true);
             db.SisImportProfiles.Add(profile);
-            db.SisImportProfileColumns.Add(NewColumn(profile, "Student.StudentNumber"));
-            db.SisImportProfileColumns.Add(NewColumn(profile, "RfidCard.CardUid"));
+            db.SisImportProfileColumns.Add(NewColumn(profile, "College.Name"));
+            db.SisImportProfileColumns.Add(NewColumn(profile, "College.NameKey"));
             await db.SaveChangesAsync();
             profileId = profile.Id;
         }
@@ -367,7 +374,7 @@ public class SisImportSchemaTests : IntegrationTest
         Assert.Equal(2, await read.SisImportProfileColumns.CountAsync());
 
         await using var clash = NewDbContext();
-        var duplicate = NewColumn(null, "RfidCard.CardUid");
+        var duplicate = NewColumn(null, "College.NameKey");
         duplicate.ProfileId = profileId;
         clash.SisImportProfileColumns.Add(duplicate);
 
@@ -496,8 +503,8 @@ public class SisImportSchemaTests : IntegrationTest
     private static SisImportProfileColumn NewColumn(SisImportProfile? profile, string targetField) => new()
     {
         Profile = profile,
-        SourceColumn = SisRosterColumns.RegNo,
-        SourceColumnKey = SisRosterColumns.HeaderKey(SisRosterColumns.RegNo),
+        SourceColumn = SisRosterColumns.CollegeName,
+        SourceColumnKey = SisRosterColumns.HeaderKey(SisRosterColumns.CollegeName),
         TargetField = targetField,
         NormalizationRule = "RosterText.Clean",
         IsRequired = true,

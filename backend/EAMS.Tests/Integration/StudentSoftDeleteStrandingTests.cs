@@ -1,4 +1,4 @@
-﻿using System.Net;
+using System.Net;
 using System.Net.Http.Json;
 using EAMS.Application.Abstractions;
 using EAMS.Application.Dtos;
@@ -28,8 +28,8 @@ namespace EAMS.Tests.Integration;
 ///
 /// <list type="bullet">
 ///   <item><b>DEAD END 1 — the card, CLOSED.</b> <c>DeactivateCardAsync</c> no longer resolves its
-///   owner through the <c>!IsDeleted</c> filter, so a deleted student's REGNO card can be released and
-///   the UID reissued. <see cref="The_regno_of_a_soft_deleted_student_can_be_released_and_reissued"/>
+///   owner through the <c>!IsDeleted</c> filter, so a deleted student's card can be released and its
+///   serial reissued. <see cref="The_card_of_a_soft_deleted_student_can_be_released_and_reissued"/>
 ///   walks the whole sequence.</item>
 ///   <item><b>DEAD END 2 — the student number, OPEN.</b>
 ///   <see cref="A_deleted_students_number_names_a_restore_that_no_endpoint_performs"/> still passes,
@@ -46,22 +46,28 @@ public class StudentSoftDeleteStrandingTests : IntegrationTest
     private const string Route = "/api/v1/students";
 
     /// <summary>
-    /// REGNO, in both of the shapes ADR-001's accepted context says it takes: verbatim in
-    /// <c>Students.StudentNumber</c> and normalized in <c>RfidCards.CardUid</c>. Spelled as one pair
-    /// because the whole point of these tests is that <b>one</b> registrar identifier is stranded in
-    /// <b>two</b> places at once, and a fixture using unrelated values would make that look like two
-    /// unrelated problems.
+    /// The registrar's student number for the record being corrected. <b>Deliberately unrelated to
+    /// <see cref="CardSerial"/></b>: until 2026-07-30 these two constants were the same literal, on the
+    /// premise that REGNO <em>was</em> the card UID. The client corrected that — they are separate
+    /// columns — so a fixture that still spelled them as one value would be asserting the old model.
     /// </summary>
     private const string RegNo = "USA00042";
 
-    private const string RegNoAsCardUid = "USA00042";
+    /// <summary>
+    /// The serial on the physical card that student is holding. The stranding under test needs both
+    /// identifiers because a soft delete releases <em>neither</em>: the student number stays taken by
+    /// the deleted row and the card stays active in
+    /// <c>UX_RfidCards_SchoolId_CardUid_Active</c>, so the registrar re-entering the record hits two
+    /// separate refusals from one delete. Two values, not one, is what makes them two assertions.
+    /// </summary>
+    private const string CardSerial = "0012504242";
 
     private sealed record World(Guid SchoolId, Guid DeletedStudentId, Guid CardId, Guid SuccessorId);
 
     /// <summary>
-    /// A student holding their REGNO card, then soft-deleted — plus a second student the registrar
-    /// wants to hand that REGNO to. This is not a contrived arrangement: REGNO is reissued when a
-    /// record is corrected and re-entered, and deleting the bad row is the obvious first step.
+    /// A student holding their card, then soft-deleted — plus a second student the registrar wants to
+    /// hand that student number, and that card, to. This is not a contrived arrangement: a record
+    /// corrected and re-entered reuses both, and deleting the bad row is the obvious first step.
     /// </summary>
     private async Task<World> ArrangeAsync()
     {
@@ -89,7 +95,7 @@ public class StudentSoftDeleteStrandingTests : IntegrationTest
         await using (var db = NewDbContext())
         {
             var issued = await StudentsOn(db).AddCardAsync(
-                deletedId, new StudentCardRequest(RegNoAsCardUid, "Primary ID"));
+                deletedId, new StudentCardRequest(CardSerial, "Primary ID"));
 
             Assert.Equal(StudentWriteOutcome.Saved, issued.Outcome);
             cardId = issued.Card!.Id;
@@ -133,7 +139,7 @@ public class StudentSoftDeleteStrandingTests : IntegrationTest
     /// <para>
     /// This test asserted the opposite until the Phase 3b-1 review gate: step 2 answered
     /// <c>NotFound</c>, because <c>DeactivateCardAsync</c> resolved the owner through
-    /// <c>FindAsync</c>'s <c>!IsDeleted</c> filter, so the API refused to reissue the REGNO and then
+    /// <c>FindAsync</c>'s <c>!IsDeleted</c> filter, so the API refused to reissue the card and then
     /// refused the recovery it had just recommended. JJ's decision was to drop that filter from this
     /// one lookup; the sequence below is what the <c>CardUidInUse</c> message has always described.
     /// </para>
@@ -147,15 +153,15 @@ public class StudentSoftDeleteStrandingTests : IntegrationTest
     /// </para>
     /// </summary>
     [Fact]
-    public async Task The_regno_of_a_soft_deleted_student_can_be_released_and_reissued()
+    public async Task The_card_of_a_soft_deleted_student_can_be_released_and_reissued()
     {
         var world = await ArrangeAsync();
 
-        // 1. The successor cannot be given the REGNO while the deleted student's card holds it.
+        // 1. The successor cannot be given the serial while the deleted student's card holds it.
         await using (var db = NewDbContext())
         {
             var refused = await StudentsOn(db).AddCardAsync(
-                world.SuccessorId, new StudentCardRequest(RegNoAsCardUid, null));
+                world.SuccessorId, new StudentCardRequest(CardSerial, null));
 
             Assert.Equal(StudentWriteOutcome.CardUidInUse, refused.Outcome);
             Assert.Contains("deactivate the existing card first", refused.Message, StringComparison.Ordinal);
@@ -175,14 +181,14 @@ public class StudentSoftDeleteStrandingTests : IntegrationTest
         {
             Assert.Equal(StudentWriteOutcome.Saved,
                 (await StudentsOn(db).AddCardAsync(
-                    world.SuccessorId, new StudentCardRequest(RegNoAsCardUid, null))).Outcome);
+                    world.SuccessorId, new StudentCardRequest(CardSerial, null))).Outcome);
         }
 
         await using var read = NewDbContext();
 
         // Both rows survive — the released one deactivated, the reissued one active. That is ADR-001
         // D-3's entire reason for being a filtered index rather than a global one.
-        var cards = await read.RfidCards.AsNoTracking().Where(c => c.CardUid == RegNoAsCardUid).ToListAsync();
+        var cards = await read.RfidCards.AsNoTracking().Where(c => c.CardUid == CardSerial).ToListAsync();
         Assert.Equal(2, cards.Count);
         Assert.Equal(world.SuccessorId, Assert.Single(cards, c => c.IsActive).StudentId);
         Assert.Equal(world.DeletedStudentId, Assert.Single(cards, c => !c.IsActive).StudentId);
@@ -211,7 +217,7 @@ public class StudentSoftDeleteStrandingTests : IntegrationTest
         using var client = factory.CreateClient();
 
         var reissue = await client.PostAsJsonAsync(
-            $"{Route}/{world.SuccessorId}/cards", new { cardUid = RegNoAsCardUid });
+            $"{Route}/{world.SuccessorId}/cards", new { cardUid = CardSerial });
 
         Assert.Equal(HttpStatusCode.Conflict, reissue.StatusCode);
 
@@ -221,7 +227,7 @@ public class StudentSoftDeleteStrandingTests : IntegrationTest
         Assert.Equal(HttpStatusCode.NoContent, release.StatusCode);
 
         var retried = await client.PostAsJsonAsync(
-            $"{Route}/{world.SuccessorId}/cards", new { cardUid = RegNoAsCardUid });
+            $"{Route}/{world.SuccessorId}/cards", new { cardUid = CardSerial });
 
         Assert.Equal(HttpStatusCode.Created, retried.StatusCode);
     }
@@ -305,7 +311,7 @@ public class StudentSoftDeleteStrandingTests : IntegrationTest
         {
             Assert.Equal(StudentWriteOutcome.Saved,
                 (await StudentsOn(db).AddCardAsync(
-                    world.SuccessorId, new StudentCardRequest(RegNoAsCardUid, null))).Outcome);
+                    world.SuccessorId, new StudentCardRequest(CardSerial, null))).Outcome);
         }
 
         await using var read = NewDbContext();
@@ -357,7 +363,7 @@ public class StudentSoftDeleteStrandingTests : IntegrationTest
         Assert.DoesNotContain(
             await students.ListAsync(null, null, null), s => s.Id == world.DeletedStudentId);
 
-        Assert.Null(await students.GetByCardUidAsync(RegNoAsCardUid));
+        Assert.Null(await students.GetByCardUidAsync(CardSerial));
     }
 
     /// <summary>
@@ -381,6 +387,6 @@ public class StudentSoftDeleteStrandingTests : IntegrationTest
             (await client.GetAsync($"{Route}/{world.DeletedStudentId}")).StatusCode);
 
         Assert.Equal(HttpStatusCode.NotFound,
-            (await client.GetAsync($"{Route}/by-card/{RegNoAsCardUid}")).StatusCode);
+            (await client.GetAsync($"{Route}/by-card/{CardSerial}")).StatusCode);
     }
 }

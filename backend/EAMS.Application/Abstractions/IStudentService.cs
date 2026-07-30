@@ -150,8 +150,9 @@ public interface IStudentService
     /// §6.2 <c>DELETE /students/{id}/cards/{cardId}</c> — <b>deactivate, never delete</b>.
     ///
     /// <para>
-    /// ADR-001 D-3 is the whole reason: REGNO is the card UID, a reissued card carries the same REGNO,
-    /// and <c>AttendanceRecords.RfidCardId</c> points at the row that produced a past tap. Removing the
+    /// ADR-001 D-3 is the whole reason: <c>AttendanceRecords.RfidCardId</c> points at the row that
+    /// produced a past tap, and a serial that is revoked today may be issued again tomorrow — to the
+    /// same student on a re-encoded card, or to a different one when a serial is recycled. Removing the
     /// row would destroy the issuance history and make "which physical card was presented" unanswerable
     /// — which is precisely what the filtered unique index was introduced to keep possible.
     /// </para>

@@ -166,10 +166,19 @@ public static class RosterText
     /// <para>
     /// <b>This exists because of one student.</b> 51 of the 52 REGNOs are <c>USA#####</c> and arrive as
     /// text; one is the legacy <c>2021005781</c>, which Excel stores as a <em>number</em>. .NET's
-    /// default double formatting renders that as <c>2.021005781E+09</c>, and a student number of that
-    /// shape is silently wrong in the one column that is also the RFID card UID — the tap would never
-    /// match. Integral values are therefore formatted through <see cref="long"/>, invariantly, with no
-    /// exponent and no group separators.
+    /// default double formatting renders that as <c>2.021005781E+09</c> — a student number no later
+    /// export will ever match, so the next import creates that student a second time and every fact
+    /// keyed off them splits between the two. Integral values are therefore formatted through
+    /// <see cref="long"/>, invariantly, with no exponent and no group separators.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>It is a repair, not a round trip, and the difference matters for the RFID card serial.</b>
+    /// Leading zeros are gone before this method is reached: the cell's value is already the
+    /// <see cref="double"/> <c>12503326</c>, and no formatting of it can recover the
+    /// <c>0012503326</c> that was typed. A serial stored as <em>text</em> never enters this path and
+    /// survives exactly, which is the shape a leading-zero identifier normally takes. See
+    /// <c>ExcelRosterReader.ReadCell</c> for why the numeric case is left open rather than guessed at.
     /// </para>
     /// </summary>
     public static string FormatNumericCell(double value) =>

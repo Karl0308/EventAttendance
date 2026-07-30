@@ -1,4 +1,4 @@
-﻿using EAMS.Domain;
+using EAMS.Domain;
 using EAMS.Tests.Integration.Infrastructure;
 using Microsoft.Data.SqlClient;
 using Microsoft.EntityFrameworkCore;
@@ -266,20 +266,20 @@ public class SchemaConstraintTests : IntegrationTest
     }
 
     /// <summary>
-    /// ADR-001 D-3's whole reason for existing: the registrar reissues a lost ID carrying the
-    /// <em>same</em> REGNO. Under §4.4's literal global <c>UNIQUE(CardUid)</c> this sequence is
-    /// impossible without destroying the original row — and with it the ability to say which
-    /// physical card produced a past tap.
+    /// ADR-001 D-3's whole reason for existing: a card is retired and its <em>same serial</em> issued
+    /// again — a re-encoded replacement for a lost ID, or a serial recycled onto a new card. Under
+    /// §4.4's literal global <c>UNIQUE(CardUid)</c> this sequence is impossible without destroying the
+    /// original row — and with it the ability to say which physical card produced a past tap.
     /// </summary>
     [Fact]
     public async Task A_card_can_be_deactivated_and_the_same_uid_reissued()
     {
         var (schoolId, studentId, _) = await ArrangeAsync();
-        const string regno = "USA00962";
+        const string serial = "0012509620";
 
         await using (var db = NewDbContext())
         {
-            db.RfidCards.Add(TestData.NewCard(schoolId, studentId, regno));
+            db.RfidCards.Add(TestData.NewCard(schoolId, studentId, serial));
             await db.SaveChangesAsync();
         }
 
@@ -288,7 +288,7 @@ public class SchemaConstraintTests : IntegrationTest
             var original = await db.RfidCards.SingleAsync();
             original.IsActive = false;
             original.DeactivatedAt = TestData.Now;
-            db.RfidCards.Add(TestData.NewCard(schoolId, studentId, regno));
+            db.RfidCards.Add(TestData.NewCard(schoolId, studentId, serial));
             await db.SaveChangesAsync();
         }
 
@@ -296,23 +296,23 @@ public class SchemaConstraintTests : IntegrationTest
         var cards = await read.RfidCards.AsNoTracking().ToListAsync();
         Assert.Equal(2, cards.Count);
         Assert.Single(cards, c => c.IsActive);
-        Assert.All(cards, c => Assert.Equal(regno, c.CardUid));
+        Assert.All(cards, c => Assert.Equal(serial, c.CardUid));
     }
 
     [Fact]
     public async Task A_second_active_card_with_the_same_uid_is_rejected()
     {
         var (schoolId, studentId, _) = await ArrangeAsync();
-        const string regno = "USA00962";
+        const string serial = "0012509620";
 
         await using (var db = NewDbContext())
         {
-            db.RfidCards.Add(TestData.NewCard(schoolId, studentId, regno));
+            db.RfidCards.Add(TestData.NewCard(schoolId, studentId, serial));
             await db.SaveChangesAsync();
         }
 
         await using var second = NewDbContext();
-        second.RfidCards.Add(TestData.NewCard(schoolId, studentId, regno));
+        second.RfidCards.Add(TestData.NewCard(schoolId, studentId, serial));
 
         var rejected = await AssertRejectedAsync(() => second.SaveChangesAsync());
         var sql = AssertSqlError(rejected, UniqueViolation);
@@ -327,12 +327,12 @@ public class SchemaConstraintTests : IntegrationTest
     public async Task Several_inactive_cards_may_share_a_uid()
     {
         var (schoolId, studentId, _) = await ArrangeAsync();
-        const string regno = "USA00962";
+        const string serial = "0012509620";
 
         await using var db = NewDbContext();
-        db.RfidCards.Add(TestData.NewCard(schoolId, studentId, regno, isActive: false));
-        db.RfidCards.Add(TestData.NewCard(schoolId, studentId, regno, isActive: false));
-        db.RfidCards.Add(TestData.NewCard(schoolId, studentId, regno));
+        db.RfidCards.Add(TestData.NewCard(schoolId, studentId, serial, isActive: false));
+        db.RfidCards.Add(TestData.NewCard(schoolId, studentId, serial, isActive: false));
+        db.RfidCards.Add(TestData.NewCard(schoolId, studentId, serial));
         await db.SaveChangesAsync();
 
         await using var read = NewDbContext();
@@ -340,15 +340,16 @@ public class SchemaConstraintTests : IntegrationTest
     }
 
     /// <summary>
-    /// The index is tenant-scoped (ADR-001 D-3), matching <c>UNIQUE(SchoolId, StudentNumber)</c> on
-    /// Students. Two schools issuing the same REGNO must not collide — otherwise the first tenant to
-    /// use a number would lock every other tenant out of it.
+    /// The index is tenant-scoped (ADR-001 D-3), for the same reason
+    /// <c>UNIQUE(SchoolId, StudentNumber)</c> on Students is. Two schools buy card stock independently
+    /// and their serials say nothing about each other, so two tenants issuing the same serial must not
+    /// collide — otherwise the first tenant to use one would lock every other tenant out of it.
     /// </summary>
     [Fact]
     public async Task The_same_active_uid_is_allowed_in_a_different_school()
     {
         var (schoolId, studentId, _) = await ArrangeAsync();
-        const string regno = "USA00962";
+        const string serial = "0012509620";
 
         await using var db = NewDbContext();
         var otherSchool = TestData.NewSchool("CICSS");
@@ -356,12 +357,12 @@ public class SchemaConstraintTests : IntegrationTest
         var otherStudent = TestData.NewStudent(otherSchool.Id, "2023-0006", lastName: "Flores");
         db.Students.Add(otherStudent);
 
-        db.RfidCards.Add(TestData.NewCard(schoolId, studentId, regno));
-        db.RfidCards.Add(TestData.NewCard(otherSchool.Id, otherStudent.Id, regno));
+        db.RfidCards.Add(TestData.NewCard(schoolId, studentId, serial));
+        db.RfidCards.Add(TestData.NewCard(otherSchool.Id, otherStudent.Id, serial));
         await db.SaveChangesAsync();
 
         await using var read = NewDbContext();
-        Assert.Equal(2, await read.RfidCards.CountAsync(c => c.CardUid == regno && c.IsActive));
+        Assert.Equal(2, await read.RfidCards.CountAsync(c => c.CardUid == serial && c.IsActive));
     }
 
     // ------------------------------- CK_EventGroups_GroupOrStudent

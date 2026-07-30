@@ -207,12 +207,12 @@ internal sealed class SisImportService : ISisImportService
             .ExecuteDeleteAsync(ct);
 
         var ledger = new RowLedger(staged);
-        var parsed = ParseRows(staged, ledger);
+        var parsed = ParseRows(staged, await ResolveRfidColumnKeyAsync(batch, ct), ledger);
 
         var dimensions = await ResolveDimensionsAsync(term, parsed, ledger, ct);
         await _db.SaveChangesAsync(ct);
 
-        // The fact pass can fail rows of its own — a REGNO whose card UID belongs to another student —
+        // The fact pass can fail rows of its own — one whose RFID serial belongs to another student —
         // and those rows are excluded from the derived cache for the same reason they were excluded
         // from the facts: a failed row must not have contributed anything, including a Section string.
         var mismatchedRows = await ResolveFactsAsync(term, parsed, dimensions, ledger, ct);
@@ -227,6 +227,51 @@ internal sealed class SisImportService : ISisImportService
         await _projection.SyncTermAsync(term.Id, ct);
     }
 
+    /// <summary>
+    /// Which source column this batch takes the RFID card serial from, as a
+    /// <see cref="SisRosterColumns.HeaderKey"/> — or <c>null</c> when the mapping does not carry one, in
+    /// which case no row in the batch resolves a card.
+    ///
+    /// <para>
+    /// <b>Read from the batch's own ADR-001 D-4 profile rows, not from
+    /// <see cref="SisRosterColumns.RfidCardSerial"/>, and that is the whole point of the seam.</b> We do
+    /// not have the client's export and do not know what they will call the column. The profile is the
+    /// designed venue for exactly that unknown: when the file arrives naming it <c>CARD_SERIAL</c> or
+    /// <c>RFID NO.</c>, an operator authors profile version 3 with that <c>SourceColumn</c> and the
+    /// pipeline reads it with no code change and no redeploy. The constant supplies only the built-in
+    /// version's default. This is genuinely wired — the resolution below is the only thing that decides
+    /// which cell is read — rather than a table written for show.
+    /// </para>
+    ///
+    /// <para>
+    /// It reads the profile the <em>batch</em> points at, not the currently active one, for the same
+    /// reason D-4 exists: a batch re-run after a mapping change must execute the rules it was uploaded
+    /// under, not whatever is live today.
+    /// </para>
+    /// </summary>
+    private async Task<string?> ResolveRfidColumnKeyAsync(SisImportBatch batch, CancellationToken ct)
+    {
+        if (batch.ImportProfileId is not { } profileId) return null;
+
+        var target = SisImportProfileTemplate.RfidCardUidTarget;
+
+        // Ordinal, so a mapping that lists the target twice — which the profile's own unique index
+        // permits across two different source columns — resolves the same way on every run rather than
+        // by whatever order the server returns rows in.
+        var column = await _db.SisImportProfileColumns.IgnoreQueryFilters()
+            .Where(c => c.ProfileId == profileId && c.TargetField == target)
+            .OrderBy(c => c.Ordinal)
+            .FirstOrDefaultAsync(ct);
+
+        if (column is null) return null;
+
+        var key = column.SourceColumnKey.Length > 0
+            ? column.SourceColumnKey
+            : SisRosterColumns.HeaderKey(column.SourceColumn);
+
+        return key.Length == 0 ? null : key;
+    }
+
     // =========================================================================== parse (per row)
 
     /// <summary>
@@ -237,7 +282,11 @@ internal sealed class SisImportService : ISisImportService
     private sealed record ParsedRow(
         SisImportRow Staged,
         string RegNo,
-        string CardUid,
+        // The row's RFID card serial, normalized — or null when the row names no card, which is every
+        // row of every file until the client's RFID-bearing export arrives. Null is a first-class value
+        // here and not a defect: it means "this student has no card", the row still imports in full, and
+        // no RfidCards row is created. See ParseRows for why it is not even warned about.
+        string? CardUid,
         string FirstName,
         string? MiddleName,
         string LastName,
@@ -255,7 +304,30 @@ internal sealed class SisImportService : ISisImportService
         TeacherName Teacher,
         string? TeacherKey);
 
-    private List<ParsedRow> ParseRows(IReadOnlyList<SisImportRow> staged, RowLedger ledger)
+    /// <summary>
+    /// Interprets the staged rows. <paramref name="rfidColumnKey"/> is the
+    /// <see cref="SisRosterColumns.HeaderKey"/> the batch's profile maps to
+    /// <c>RfidCard.CardUid</c>, or <c>null</c> when the mapping names no such column.
+    ///
+    /// <para>
+    /// <b>A row with no RFID serial produces no warning and no fan-out row, deliberately.</b> This is
+    /// the normal case, not an anomaly: the roster in hand has no RFID column at all, so a warning would
+    /// fire on 100% of the rows of every batch and make <c>CompletedWithWarnings</c> the permanent
+    /// status of every import — destroying the one-field "do I need to go and look at this batch?"
+    /// signal that <see cref="SisImportStatus"/> exists to carry, and burying the genuine warnings
+    /// underneath it. Nor is the fact unrecorded: the absence of a
+    /// <see cref="SisImportEntityType.RfidCard"/> entry in the row's fan-out already says "this row
+    /// touched no card", which is the same positive trail a revoked card leaves and is queryable in
+    /// exactly the same way.
+    /// </para>
+    ///
+    /// <para>
+    /// It follows that the serial can never raise
+    /// <see cref="SisImportFailureCode.MissingRequiredValue"/> — there is nothing required about it.
+    /// </para>
+    /// </summary>
+    private List<ParsedRow> ParseRows(
+        IReadOnlyList<SisImportRow> staged, string? rfidColumnKey, RowLedger ledger)
     {
         var parsed = new List<ParsedRow>(staged.Count);
 
@@ -265,14 +337,15 @@ internal sealed class SisImportService : ISisImportService
             string Raw(string column) =>
                 cells.TryGetValue(SisRosterColumns.HeaderKey(column), out var v) ? v : "";
 
-            // REGNO is the one column without which the row names nobody: it is the student number, the
-            // card UID, and the key every fact in the row hangs off.
+            // REGNO is the one column without which the row names nobody: it is the student number and
+            // the key every fact in the row hangs off. It is NOT the card UID — the RFID serial is its
+            // own column, read below, and its absence is not an error.
             var regNo = RosterText.Clean(Raw(SisRosterColumns.RegNo));
             if (regNo is null)
             {
                 ledger.Fail(row, SisImportFailureCode.MissingRequiredValue,
-                    $"{SisRosterColumns.RegNo} is blank. It is the student number and the RFID card " +
-                    "UID; nothing in the row can be placed without it.");
+                    $"{SisRosterColumns.RegNo} is blank. It is the student number, and nothing in the " +
+                    "row can be placed without it.");
                 continue;
             }
 
@@ -325,15 +398,26 @@ internal sealed class SisImportService : ISisImportService
                 Raw(SisRosterColumns.TeacherLastName),
                 Raw(SisRosterColumns.TeacherSuffix));
 
+            var cardUid = ReadCardUid(rfidColumnKey, cells);
+
+            // A pre-2026-07-30 profile maps the card UID out of REGNO, and D-4 requires that mapping to
+            // go on running for the batches pinned to it. Allowed, but no longer silent: without this the
+            // only trace that a re-run minted student-number cards is the serials themselves.
+            if (cardUid is not null && IsLegacyCardUidColumn(rfidColumnKey))
+            {
+                ledger.Warn(row, SisImportWarningCode.RfidCardFromLegacyMapping,
+                    $"This batch's import profile maps the card serial from a column other than " +
+                    $"'{SisRosterColumns.RfidCardSerial}', so the card for this row carries " +
+                    $"'{cardUid}' — which is the student number, not an RFID serial. That is what the " +
+                    "profile version this batch is pinned to says to do, and re-running a batch under " +
+                    "its own rules is deliberate (ADR-001 D-4). Upload the file again to import it " +
+                    "under the current mapping instead.");
+            }
+
             parsed.Add(new ParsedRow(
                 Staged: row,
                 RegNo: regNo,
-                // Normalized as a UID because that is what every reader lookup normalizes to. Both
-                // roster shapes — USA00962 and the legacy 2021005781 — are already letters and digits
-                // only, so this is the identity function on them and neither is reformatted into the
-                // other. StudentNumber keeps the verbatim value; the two columns are deliberately
-                // separate (ADR-001, "Accepted Context").
-                CardUid: CardUid.Normalize(regNo),
+                CardUid: cardUid,
                 FirstName: firstName,
                 MiddleName: RosterText.CleanName(Raw(SisRosterColumns.StudentMiddleName)),
                 LastName: lastName,
@@ -365,6 +449,50 @@ internal sealed class SisImportService : ISisImportService
         }
 
         return parsed;
+    }
+
+    /// <summary>
+    /// One row's RFID card serial, or <c>null</c> when the mapping names no RFID column, the file has no
+    /// such column, or the cell is blank — three different absences that mean the same thing here and
+    /// are deliberately not distinguished, because the answer is identical in all three: this student
+    /// has no card and imports anyway.
+    ///
+    /// <para>
+    /// <see cref="RosterText.Clean"/> then <see cref="CardUid.Normalize"/>, in that order and for the
+    /// same reason every other column runs the two: invisible characters and stray whitespace first,
+    /// then the canonical UID form every reader lookup compares against. <b>Leading zeros survive both</b>
+    /// — neither strips a digit — so the <c>0012503326</c> the export carries is the
+    /// <c>0012503326</c> a tap has to match. What can still lose them is the cell arriving as an Excel
+    /// <em>number</em>; see <see cref="RosterText.FormatNumericCell"/>.
+    /// </para>
+    /// </summary>
+    /// <summary>
+    /// Whether the profile draws <c>RfidCard.CardUid</c> from something other than the RFID column.
+    ///
+    /// <para>
+    /// <c>null</c> is <b>not</b> legacy: it means the mapping names no card column at all, which is the
+    /// ordinary state of every import today and is deliberately silent (see <see cref="ParseRows"/>).
+    /// Only a mapping that names a <em>different</em> column is making a claim this system no longer
+    /// believes.
+    /// </para>
+    /// </summary>
+    private static bool IsLegacyCardUidColumn(string? rfidColumnKey) =>
+        rfidColumnKey is not null
+        && !string.Equals(
+            rfidColumnKey,
+            SisRosterColumns.HeaderKey(SisRosterColumns.RfidCardSerial),
+            StringComparison.Ordinal);
+
+    private static string? ReadCardUid(string? rfidColumnKey, IReadOnlyDictionary<string, string> cells)
+    {
+        if (rfidColumnKey is null) return null;
+        if (!cells.TryGetValue(rfidColumnKey, out var raw)) return null;
+
+        var cleaned = RosterText.Clean(raw);
+        if (cleaned is null) return null;
+
+        var normalized = CardUid.Normalize(cleaned);
+        return normalized.Length == 0 ? null : normalized;
     }
 
     private static Dictionary<string, string> ReadCells(SisImportRow row)
@@ -779,8 +907,8 @@ internal sealed class SisImportService : ISisImportService
     // ================================================================================ pass 2: facts
 
     /// <summary>
-    /// Writes the facts, and returns the rows it <em>refused</em> to write — the ones whose REGNO
-    /// resolves to a card UID owned by another student. They are the fact pass's own equivalent of
+    /// Writes the facts, and returns the rows it <em>refused</em> to write — the ones whose RFID serial
+    /// is owned by another student. They are the fact pass's own equivalent of
     /// <see cref="Dimensions.CollidedRows"/>, and the caller excludes them from the derived cache too.
     /// </summary>
     private async Task<IReadOnlySet<int>> ResolveFactsAsync(
@@ -792,7 +920,13 @@ internal sealed class SisImportService : ISisImportService
         if (live.Count == 0) return new HashSet<int>();
 
         var regNos = live.Select(r => r.RegNo).Distinct(StringComparer.Ordinal).ToList();
-        var cardUids = live.Select(r => r.CardUid).Distinct(StringComparer.Ordinal).ToList();
+
+        // OfType rather than a Where plus a null-forgiving cast: rows carrying no serial are simply not
+        // members of card space, and this is the one place that has to be said. Today that is every row
+        // of every file, so the query below is skipped outright rather than issued with an empty IN
+        // list — an import that touches no cards should not ask the database about them.
+        var cardUids = live.Select(r => r.CardUid).OfType<string>()
+            .Distinct(StringComparer.Ordinal).ToList();
 
         var students = await _db.Students.IgnoreQueryFilters()
             .Where(s => s.SchoolId == schoolId && regNos.Contains(s.StudentNumber))
@@ -802,12 +936,14 @@ internal sealed class SisImportService : ISisImportService
         // ones have to be visible. Include(Student) so a mismatch can name the other student rather
         // than quoting a GUID at an operator: the owner's StudentNumber is very often absent from this
         // file (that is how the two rows drifted apart), so it cannot be recovered from `students`.
-        var cards = (await _db.RfidCards.IgnoreQueryFilters()
-                .Include(c => c.Student)
-                .Where(c => c.SchoolId == schoolId && cardUids.Contains(c.CardUid))
-                .ToListAsync(ct))
-            .GroupBy(c => c.CardUid, StringComparer.Ordinal)
-            .ToDictionary(g => g.Key, g => g.ToList(), StringComparer.Ordinal);
+        var cards = cardUids.Count == 0
+            ? new Dictionary<string, List<RfidCard>>(StringComparer.Ordinal)
+            : (await _db.RfidCards.IgnoreQueryFilters()
+                    .Include(c => c.Student)
+                    .Where(c => c.SchoolId == schoolId && cardUids.Contains(c.CardUid))
+                    .ToListAsync(ct))
+                .GroupBy(c => c.CardUid, StringComparer.Ordinal)
+                .ToDictionary(g => g.Key, g => g.ToList(), StringComparer.Ordinal);
 
         // The one refusal that has to happen before anything is written. Detected from the rows and the
         // cards alone, deliberately ahead of ResolveStudents: failing a row after its student has been
@@ -867,11 +1003,14 @@ internal sealed class SisImportService : ISisImportService
             ledger.Touch(row.Staged, SisImportEntityType.Student,
                 student.Entity.Id, student.ActionFor(rowNumber));
 
-            // TryGetValue, not an indexer: a UID whose only card is deactivated resolves to no card at
-            // all (SisImportWarningCode.RfidCardRevoked). Recording nothing is the honest trail — this
-            // row touched no card, which is a different statement from touching one and changing
-            // nothing, and is exactly the distinction the fan-out exists to keep.
-            if (resolvedCards.TryGetValue(row.CardUid, out var card))
+            // Two absences, one trail entry withheld, and that is deliberate. A row can name no serial
+            // at all (no RFID column in the file — today, every row), or name one whose only card is
+            // deactivated (SisImportWarningCode.RfidCardRevoked). Either way no card touch is recorded,
+            // and recording nothing is the honest answer: this row touched no card, which is a different
+            // statement from touching one and changing nothing, and is exactly the distinction the
+            // fan-out exists to keep. It is also the positive record that a student has no card, which
+            // is why the no-serial case needs no warning of its own.
+            if (row.CardUid is { } uid && resolvedCards.TryGetValue(uid, out var card))
                 ledger.Touch(row.Staged, SisImportEntityType.RfidCard,
                     card.Entity.Id, card.ActionFor(rowNumber));
 
@@ -939,18 +1078,24 @@ internal sealed class SisImportService : ISisImportService
     }
 
     /// <summary>
-    /// Fails every row whose REGNO normalizes to a card UID that already belongs to someone else, and
-    /// returns their row numbers so the caller can drop them before a single fact is written.
+    /// Fails every row whose RFID serial already identifies someone else, and returns their row numbers
+    /// so the caller can drop them before a single fact is written.
     ///
     /// <para>
-    /// <b>Two shapes, one rule.</b> The UID's owner is the student on its active card if there is one,
-    /// and otherwise the first row in the file to claim it. Any row naming a different student fails.
-    /// That covers both the case the reviewer found — an active card in the database owned by another
-    /// student — and its twin, which has no card in the database at all: two REGNOs <em>inside one
-    /// file</em> that differ only by case or punctuation are two students by
-    /// <c>UNIQUE(SchoolId, StudentNumber)</c> and one card UID by <see cref="CardUid.Normalize"/>, so
-    /// without this the second student would silently be handed the first one's card in the fan-out and
-    /// receive none of their own.
+    /// <b>Two shapes, one rule.</b> The serial's owner is the student on its active card if there is
+    /// one, and otherwise the first row in the file to claim it. Any row naming a different student
+    /// fails. That covers a serial whose active card in the database belongs to another student, and its
+    /// twin with no card in the database at all: <em>two rows inside one file carrying the same serial
+    /// for two different REGNOs</em> — a mis-keyed export, a cloned card, or a serial recycled onto a new
+    /// card while the previous holder is still listed. Without this the second student would silently be
+    /// handed the first one's card in the fan-out and receive none of their own.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>Rows carrying no serial are not considered at all.</b> They are excluded from the grouping
+    /// rather than gathered under a blank key — see <see cref="GroupByCardUid"/>. Twelve students with
+    /// no card are not twelve students fighting over one, and grouping them together would fail eleven
+    /// of them for sharing a card that does not exist.
     /// </para>
     ///
     /// <para>
@@ -967,9 +1112,8 @@ internal sealed class SisImportService : ISisImportService
     {
         var mismatched = new HashSet<int>();
 
-        foreach (var group in GroupRows(live, r => r.CardUid))
+        foreach (var (uid, group) in GroupByCardUid(live))
         {
-            var uid = group.First.CardUid;
             var active = cards.TryGetValue(uid, out var forUid)
                 ? forUid.FirstOrDefault(c => c.IsActive)
                 : null;
@@ -991,17 +1135,19 @@ internal sealed class SisImportService : ISisImportService
 
                 mismatched.Add(row.Staged.RowNumber);
                 ledger.Fail(row.Staged, SisImportFailureCode.RfidCardStudentMismatch,
-                    $"REGNO '{row.RegNo}' normalizes to card UID '{uid}', which already identifies " +
+                    $"REGNO '{row.RegNo}' claims RFID card serial '{uid}', which already identifies " +
                     $"student '{ownerRegNo}'" +
                     (ownerId is null ? " (first claimant in this file)" : $" (StudentId {ownerId})") +
-                    ". REGNO is both Students.StudentNumber — stored verbatim, unique per school — and " +
-                    "RfidCards.CardUid, which is uppercased with punctuation stripped, so two student " +
-                    "numbers differing only in case or punctuation are two students sharing one card. " +
-                    "Moving the card would cost the first student their active card and re-attribute " +
-                    "every past and future tap on that physical card to the wrong person; issuing a " +
-                    "second active card would violate UX_RfidCards_SchoolId_CardUid_Active and fail " +
-                    "the whole batch. The card was left exactly as it was. Correct the REGNO in the " +
-                    "source — or merge the duplicate student in the back office — and re-import.");
+                    ". A serial names one physical card and " +
+                    "UX_RfidCards_SchoolId_CardUid_Active is keyed on it, so one card cannot be active " +
+                    "for two students: the file says it is and the database will not have it. Moving " +
+                    "the card would cost the first student their active card and re-attribute every " +
+                    "past and future tap on that physical card to the wrong person; issuing a second " +
+                    "active card would violate that index and fail the whole batch. The card was left " +
+                    "exactly as it was. The usual causes are a mis-keyed serial in the export, a cloned " +
+                    "card, or a serial re-issued to a new student while the previous holder is still " +
+                    "listed — fix the source, or deactivate the old card in the back office, and " +
+                    "re-import.");
             }
         }
 
@@ -1117,7 +1263,9 @@ internal sealed class SisImportService : ISisImportService
     }
 
     /// <summary>
-    /// Resolves each REGNO's card, and <b>never moves or resurrects one</b>.
+    /// Resolves the card behind each RFID serial named in the batch, and <b>never moves or resurrects
+    /// one</b>. Rows naming no serial reach here and resolve to nothing at all: no card row, no warning,
+    /// no fan-out entry. That is the normal outcome today and is the shape of a student with no card.
     ///
     /// <para>
     /// <b>An active card whose student differs is refused, not reassigned.</b> That refusal happens
@@ -1131,8 +1279,8 @@ internal sealed class SisImportService : ISisImportService
     /// <b>A card that exists but is deactivated is left deactivated</b>, and the row is warned rather
     /// than handed a new one — see <see cref="SisImportWarningCode.RfidCardRevoked"/>. This is why the
     /// prefetch loads inactive cards: filtered to <c>IsActive</c>, a card revoked without a replacement
-    /// is invisible here and the next import creates a fresh active card with the same UID, which —
-    /// since the UID is the REGNO — makes the revoked physical card work again.
+    /// is invisible here and the next import creates a fresh active card carrying the same serial —
+    /// which, since a serial names one physical card, makes the revoked card work again.
     /// </para>
     /// </summary>
     private Dictionary<string, Touched<RfidCard>> ResolveCards(
@@ -1142,24 +1290,24 @@ internal sealed class SisImportService : ISisImportService
     {
         var resolved = new Dictionary<string, Touched<RfidCard>>(StringComparer.Ordinal);
 
-        foreach (var group in GroupRows(parsed, r => r.CardUid))
+        foreach (var (uid, group) in GroupByCardUid(parsed))
         {
             var first = group.First;
             var studentId = students[first.RegNo].Entity.Id;
-            existing.TryGetValue(first.CardUid, out var forUid);
+            existing.TryGetValue(uid, out var forUid);
 
             if (forUid?.FirstOrDefault(c => c.IsActive) is { } card)
             {
                 if (card.StudentId != studentId)
                     throw new SisImportException(
-                        $"Card UID '{first.CardUid}' belongs to student {card.StudentId} but row " +
+                        $"Card UID '{uid}' belongs to student {card.StudentId} but row " +
                         $"{first.Staged.RowNumber} resolved it to {studentId}. This is refused before " +
                         "the fact pass runs (SisImportFailureCode.RfidCardStudentMismatch), so " +
                         "reaching this point means that pre-filter and this resolver disagree about " +
                         "who owns a UID. Stopping the run: the alternative is silently moving an " +
                         "active card between students, which re-attributes every tap on it.");
 
-                resolved[first.CardUid] = new Touched<RfidCard>(
+                resolved[uid] = new Touched<RfidCard>(
                     card, SisImportEntityAction.Unchanged, first.Staged.RowNumber);
                 continue;
             }
@@ -1172,16 +1320,17 @@ internal sealed class SisImportService : ISisImportService
                 var revoked = forUid.OrderByDescending(c => c.DeactivatedAt ?? c.IssuedAt).First();
                 foreach (var row in group.All)
                     ledger.Warn(row.Staged, SisImportWarningCode.RfidCardRevoked,
-                        $"Card UID '{first.CardUid}' exists but is deactivated" +
+                        $"RFID card serial '{uid}' exists but is deactivated" +
                         (revoked.DeactivatedAt is { } at ? $" (since {at:yyyy-MM-dd})" : "") +
                         (revoked.StudentId == studentId
                             ? ", for this same student."
                             : $", for student {revoked.StudentId}.") +
-                        " No card was created and the revoked one was left revoked. Because the UID is " +
-                        "the REGNO, issuing a replacement here would make that physical card work " +
-                        "again and silently undo whoever revoked it — lost, stolen or suspended is not " +
-                        "something the roster has a column for. Re-issue it in the back office if that " +
-                        "is what is wanted; the student imported normally and is enrolled either way.");
+                        " No card was created and the revoked one was left revoked. The serial names " +
+                        "one physical card, so issuing a replacement carrying it would make that same " +
+                        "card work again and silently undo whoever revoked it — lost, stolen or " +
+                        "suspended is not something the roster has a column for, so the roster does " +
+                        "not get to reverse the decision. Re-issue it in the back office if that is " +
+                        "what is wanted; the student imported normally and is enrolled either way.");
 
                 continue;
             }
@@ -1193,14 +1342,14 @@ internal sealed class SisImportService : ISisImportService
                 // student's own SchoolId, which it does by construction here.
                 SchoolId = schoolId,
                 StudentId = studentId,
-                CardUid = first.CardUid,
-                Label = "REGNO",
+                CardUid = uid,
+                Label = SisRosterColumns.RfidCardSerial,
                 IsActive = true,
                 IssuedAt = DateTime.UtcNow,
             };
             _db.RfidCards.Add(issued);
-            existing[first.CardUid] = [issued];
-            resolved[first.CardUid] = new Touched<RfidCard>(
+            existing[uid] = [issued];
+            resolved[uid] = new Touched<RfidCard>(
                 issued, SisImportEntityAction.Inserted, first.Staged.RowNumber);
         }
 
@@ -1455,27 +1604,89 @@ internal sealed class SisImportService : ISisImportService
     }
 
     /// <summary>
-    /// Ensures the built-in ADR-001 D-4 profile exists for this school and returns it. Idempotent: the
-    /// version is part of the natural key, so a second call finds the row rather than creating a
-    /// version 2 that differs from version 1 in nothing.
+    /// Ensures the built-in ADR-001 D-4 profile exists for this school at
+    /// <see cref="SisImportProfileTemplate.BuiltInVersion"/>, and returns it. Idempotent: the version is
+    /// part of the natural key, so a second call finds the row rather than creating a version that
+    /// differs from its predecessor in nothing.
+    ///
+    /// <para>
+    /// <b>The lookup matches the version, not merely <c>IsActive</c>, and that is what makes a bump
+    /// work.</b> Matching on <c>(SchoolId, NameKey, IsActive)</c> alone returns whatever version is
+    /// active — so raising <see cref="SisImportProfileTemplate.BuiltInVersion"/> would keep handing back
+    /// the stale one for ever, and every batch would execute the new mapping while claiming the old
+    /// one's rules. On the 2026-07-30 RFID correction that is not merely a wrong label: the pipeline
+    /// reads the RFID source column <em>out of</em> these rows, so a stale version 1 would take the card
+    /// serial from the REGNO column and reinstate the defect on exactly the databases that already have
+    /// data.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>The previous version is deactivated, not deleted, and this is the schema's own mechanism.</b>
+    /// <c>UX_SisImportProfiles_School_Name_Active</c> is <c>UNIQUE(SchoolId, NameKey) WHERE IsActive=1</c>
+    /// — at most one active version per school — so two live versions is not a shape this database
+    /// permits, and creating one would fail the upload with a raw constraint error. Superseding by
+    /// clearing the flag leaves the version 1 row and every one of its column rows byte-for-byte intact,
+    /// which is what <see cref="SisImportProfile.IsActive"/> documents and what every batch's
+    /// <c>ImportProfileId</c> still resolves to. Nothing historical is rewritten: an old batch continues
+    /// to be explained by the rules it ran under.
+    /// </para>
+    ///
+    /// <para>
+    /// <c>ExecuteUpdate</c> rather than tracked writes for the supersession, because both statements hit
+    /// one table under one filtered unique index and EF orders same-table commands by its own graph
+    /// rules, not by index safety — an INSERT of the new active version issued before the UPDATE that
+    /// clears the old one is a unique violation. Issuing the UPDATE immediately removes the ordering
+    /// question. A crash between the two leaves no active version, which the next upload repairs by
+    /// running this method again.
+    /// </para>
     /// </summary>
     private async Task<SisImportProfile> EnsureBuiltInProfileAsync(Guid schoolId, CancellationToken ct)
     {
         var nameKey = AcademicKey.NormalizeOrUnspecified(SisImportProfileTemplate.ProfileName);
+        var version = SisImportProfileTemplate.BuiltInVersion;
 
         var existing = await _db.SisImportProfiles.IgnoreQueryFilters()
-            .Where(p => p.SchoolId == schoolId && p.NameKey == nameKey && p.IsActive)
-            .OrderByDescending(p => p.Version)
-            .FirstOrDefaultAsync(ct);
+            .FirstOrDefaultAsync(
+                p => p.SchoolId == schoolId && p.NameKey == nameKey && p.Version == version, ct);
 
-        if (existing is not null) return existing;
+        if (existing is not null)
+        {
+            // Present but superseded by something newer an operator authored: that is their decision and
+            // this method does not fight it. Reactivating would silently overrule a live mapping.
+            if (existing.IsActive) return existing;
+
+            // `p.Version > version` is load-bearing, not a tidy-up. Without it this accepts ANY active
+            // version — including an OLDER one — which is the exact defect the summary above says the
+            // version-matched lookup exists to prevent, arriving through the fallback instead of through
+            // the lookup. A school whose operator activated version 1 would have every NEW upload read
+            // the card serial out of the REGNO column and reinstate the 2026-07-30 correction's defect,
+            // silently and on live data. Deferring to a newer operator-authored version is deliberate;
+            // deferring to an older one is the bug.
+            var newer = await _db.SisImportProfiles.IgnoreQueryFilters()
+                .Where(p => p.SchoolId == schoolId && p.NameKey == nameKey && p.IsActive
+                         && p.Version > version)
+                .OrderByDescending(p => p.Version)
+                .FirstOrDefaultAsync(ct);
+
+            // Falls back to the built-in row itself when the only active version is older — this method
+            // promises the built-in profile, and an older active version is a state the paragraph above
+            // does not contemplate and must not be allowed to satisfy.
+            return newer ?? existing;
+        }
+
+        await _db.SisImportProfiles.IgnoreQueryFilters()
+            .Where(p => p.SchoolId == schoolId && p.NameKey == nameKey && p.IsActive)
+            .ExecuteUpdateAsync(
+                s => s.SetProperty(p => p.IsActive, false)
+                      .SetProperty(p => p.UpdatedAt, DateTime.UtcNow),
+                ct);
 
         var profile = new SisImportProfile
         {
             SchoolId = schoolId,
             Name = SisImportProfileTemplate.ProfileName,
             NameKey = nameKey,
-            Version = SisImportProfileTemplate.BuiltInVersion,
+            Version = version,
             Source = SisImportSource.Excel,
             IsActive = true,
             Description = SisImportProfileTemplate.Description,
@@ -1571,4 +1782,50 @@ internal sealed class SisImportService : ISisImportService
         IReadOnlyList<ParsedRow> rows, Func<ParsedRow, TKey> key) where TKey : notnull =>
         rows.GroupBy(key)
             .Select(g => new RowGroup(g.First(), g.ToList()));
+
+    /// <summary>
+    /// <see cref="GroupRows{TKey}"/> for the RFID serial, which is the one grouping key that can be
+    /// absent.
+    ///
+    /// <para>
+    /// <b>Rows with no serial are excluded from the result entirely, not grouped under a blank key.</b>
+    /// That distinction is the whole reason this exists rather than
+    /// <c>GroupRows(rows, r =&gt; r.CardUid ?? "")</c>: a batch of a file with no RFID column is 536 rows
+    /// with no serial, and gathering them into one group makes them look like 536 students fighting over
+    /// a single card — <see cref="FailRowsWhoseCardBelongsToAnotherStudent"/> would fail 535 of them for
+    /// sharing a card that does not exist, and <see cref="ResolveCards"/> would issue one card with an
+    /// empty UID. Both are silent, both are catastrophic, and both are prevented here once instead of at
+    /// each call site.
+    /// </para>
+    ///
+    /// <para>
+    /// Written as a loop rather than a LINQ chain because the pattern match is what unwraps the nullable
+    /// — <c>Where(r =&gt; r.CardUid is not null)</c> leaves the compiler with <c>string?</c> and forces a
+    /// null-forgiving <c>!</c> at the grouping key, which is exactly the assertion this method exists to
+    /// avoid having to make. Worksheet order is preserved, so "first claimant" stays deterministic.
+    /// </para>
+    /// </summary>
+    private static List<(string CardUid, RowGroup Group)> GroupByCardUid(IReadOnlyList<ParsedRow> rows)
+    {
+        var byUid = new Dictionary<string, List<ParsedRow>>(StringComparer.Ordinal);
+        var order = new List<string>();
+
+        foreach (var row in rows)
+        {
+            if (row.CardUid is not { } uid) continue;
+
+            if (!byUid.TryGetValue(uid, out var members))
+            {
+                members = [];
+                byUid[uid] = members;
+                order.Add(uid);
+            }
+
+            members.Add(row);
+        }
+
+        return order
+            .Select(uid => (uid, new RowGroup(byUid[uid][0], byUid[uid])))
+            .ToList();
+    }
 }

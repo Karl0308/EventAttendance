@@ -52,11 +52,52 @@ internal static class SyntheticRoster
     public const string JuanRegNo = "USA00002";
     public const string AnaRegNo = "USA00003";
 
+    // ----------------------------------------------------------------- the RFID serials under test
+
+    /// <summary>
+    /// Maria's card serial, and the shape the client gave us: ten decimal digits with <b>significant
+    /// leading zeros</b>. It is deliberately nothing like her REGNO — the two were the same value until
+    /// the client corrected us on 2026-07-30, and a fixture where they still resembled each other would
+    /// let a regression back into REGNO-derived UIDs pass unnoticed.
+    ///
+    /// <para>
+    /// Written as a <b>text</b> cell by <see cref="Build(IReadOnlyList{string[]}, IReadOnlyList{string})"/>,
+    /// unlike <see cref="PedroRegNo"/>. That is the property under test rather than a convenience: a
+    /// leading-zero identifier stored as text round trips exactly, and one stored as a number has lost
+    /// its zeros before any code in this repository can see it.
+    /// </para>
+    /// </summary>
+    public const string MariaRfid = "0012503326";
+
+    /// <summary>Distinct from <see cref="MariaRfid"/> in its last digit only — a near miss is the useful kind.</summary>
+    public const string JuanRfid = "0012503327";
+
+    public const string AnaRfid = "0012503328";
+
+    /// <summary>
+    /// The legacy student's serial. No leading zero, so it proves the pipeline does not <em>require</em>
+    /// one — the rule is "preserve what the file says", not "pad to ten".
+    /// </summary>
+    public const string PedroRfid = "9900112233";
+
+    public const string RosaRfid = "0012503330";
+    public const string LuciaRfid = "0012503331";
+    public const string NinaRfid = "0012503332";
+    public const string OmarRfid = "0012503333";
+
+    /// <summary>
+    /// <see cref="MariaRfid"/> with its leading zeros removed — what an Excel <em>numeric</em> cell
+    /// would read back as. Named so a test can assert the pipeline never produces it, which is the whole
+    /// content of "leading zeros are significant".
+    /// </summary>
+    public const string MariaRfidWithLeadingZerosLost = "12503326";
+
     /// <summary>
     /// The one legacy REGNO, ten digits. Written as a <b>numeric</b> cell, which is how Excel stores it
-    /// and is the whole point: read with default double formatting it becomes <c>2.021005781E+09</c>,
-    /// and since REGNO is also the RFID card UID that student would simply never be able to tap, with
-    /// nothing anywhere to say why.
+    /// and is the whole point: read with default double formatting it becomes <c>2.021005781E+09</c> —
+    /// a student number no later export will ever match, so the next import creates that student a
+    /// second time and every fact keyed off them splits between the two, with no error anywhere to
+    /// explain it.
     /// </summary>
     public const string PedroRegNo = "2021005781";
 
@@ -150,7 +191,7 @@ internal static class SyntheticRoster
     public static List<string[]> Rows() =>
     [
         // Row 2 — the ordinary case, and the one that creates almost everything.
-        Row(MariaRegNo, "Maria", MiddleNamePlaceholder, "Santos",
+        Row(MariaRegNo, MariaRfid, "Maria", MiddleNamePlaceholder, "Santos",
             "maria.santos@gmail.com", "maria.santos@usa.edu.ph",
             PrimaryProgram, PrimarySectionName, RizalCourseCode, "Life and Works of Rizal",
             PrimaryTeacherFullName, "THERESA", "NAVARRO", "Ms.", "College of Law"),
@@ -159,7 +200,7 @@ internal static class SyntheticRoster
         // 27 "duplicate" (REGNO, COURSE_CODE) pairs: one real teacher row plus one placeholder row.
         // It also spells the course 'SSci7', so it proves the key collapse at the same time. Must be
         // Skipped with reason InstructorPlaceholder — not Failed, and not a second enrollment.
-        Row(MariaRegNo, "Maria", MiddleNamePlaceholder, "Santos",
+        Row(MariaRegNo, MariaRfid, "Maria", MiddleNamePlaceholder, "Santos",
             "maria.santos@gmail.com", "maria.santos@usa.edu.ph",
             PrimaryProgram, PrimarySectionName, RizalCourseCodeAlternateSpelling,
             "Life and Works of Rizal",
@@ -167,14 +208,14 @@ internal static class SyntheticRoster
             TeacherPlaceholder),
 
         // Row 4 — blank section (39 real rows) and a double-spaced course code, on one row.
-        Row(MariaRegNo, "Maria", MiddleNamePlaceholder, "Santos",
+        Row(MariaRegNo, MariaRfid, "Maria", MiddleNamePlaceholder, "Santos",
             "maria.santos@gmail.com", "maria.santos@usa.edu.ph",
             PrimaryProgram, "", DoubleSpacedCourseCode, "Criminalistics 2",
             GenerationalTeacherFullName, GenerationalTeacherFirstName, "SALCEDO", "Mr.",
             "College of Technology"),
 
         // Row 5 — first sighting of the two-titled elective, and the honorific-inside-the-name teacher.
-        Row(MariaRegNo, "Maria", MiddleNamePlaceholder, "Santos",
+        Row(MariaRegNo, MariaRfid, "Maria", MiddleNamePlaceholder, "Santos",
             "maria.santos@gmail.com", "maria.santos@usa.edu.ph",
             PrimaryProgram, PrimarySectionName, ElectiveCourseCode, ElectiveTitleFirstSeen,
             HonorificTeacherFullName, HonorificTeacherFirstName, "MORALES", "Mrs.",
@@ -182,13 +223,13 @@ internal static class SyntheticRoster
 
         // Row 6 — the same elective under a different title. Must warn and still import. Also the only
         // student with a genuinely blank middle name rather than the '-' placeholder.
-        Row(JuanRegNo, "Juan", "", "Cruz",
+        Row(JuanRegNo, JuanRfid, "Juan", "", "Cruz",
             "", "juan.cruz@usa.edu.ph",
             PrimaryProgram, PrimarySectionName, ElectiveCourseCode, ElectiveTitleAlias,
             PrimaryTeacherFullName, "THERESA", "NAVARRO", "Ms.", "College of Law"),
 
         // Row 7 — a real middle initial, which must not be mistaken for the placeholder.
-        Row(AnaRegNo, "Ana", MiddleInitial, "Reyes",
+        Row(AnaRegNo, AnaRfid, "Ana", MiddleInitial, "Reyes",
             "ana.reyes@gmail.com", "ana.reyes@usa.edu.ph",
             PrimaryProgram, PrimarySectionName, RizalCourseCode, "Life and Works of Rizal",
             PrimaryTeacherFullName, "THERESA", "NAVARRO", "Ms.", "College of Law"),
@@ -196,7 +237,7 @@ internal static class SyntheticRoster
         // Row 8 — the legacy numeric REGNO, on a row whose only teacher is the placeholder. Unlike row
         // 3 this one is the *only* row for its enrollment, so it must import rather than skip: the
         // placeholder suppresses the instructor, never the enrollment.
-        Row(PedroRegNo, "Pedro", MiddleNamePlaceholder, "Lim",
+        Row(PedroRegNo, PedroRfid, "Pedro", MiddleNamePlaceholder, "Lim",
             "pedro.lim@gmail.com", "pedro.lim@usa.edu.ph",
             PrimaryProgram, PrimarySectionName, RizalCourseCode, "Life and Works of Rizal",
             TeacherPlaceholder, TeacherPlaceholder, TeacherPlaceholder, TeacherPlaceholder,
@@ -204,12 +245,12 @@ internal static class SyntheticRoster
 
         // Rows 9 and 10 — one student under two section keys, which §4.3's single Section column cannot
         // represent and which is the entire reason the academic layer exists.
-        Row(RosaRegNo, "Rosa", MiddleNamePlaceholder, "Tan",
+        Row(RosaRegNo, RosaRfid, "Rosa", MiddleNamePlaceholder, "Tan",
             "rosa.tan@gmail.com", "rosa.tan@usa.edu.ph",
             PrimaryProgram, PrimarySectionName, RizalCourseCode, "Life and Works of Rizal",
             PrimaryTeacherFullName, "THERESA", "NAVARRO", "Ms.", "College of Law"),
 
-        Row(RosaRegNo, "Rosa", MiddleNamePlaceholder, "Tan",
+        Row(RosaRegNo, RosaRfid, "Rosa", MiddleNamePlaceholder, "Tan",
             "rosa.tan@gmail.com", "rosa.tan@usa.edu.ph",
             PrimaryProgram, RotcSectionName, "MS 32", "Military Science 32",
             SecondTeacherFullName, "ANTONIO", "QUIZON", "Mr.", "College of Technology"),
@@ -218,7 +259,7 @@ internal static class SyntheticRoster
         // zero-width space) and the section (a non-breaking space instead of a space). All three must
         // clean away, and the section in particular must resolve to the SAME offering as rows 2/7/9 —
         // if it does not, this student silently lands in a section of one.
-        Row(LuciaRegNo, ZeroWidthNoBreakSpace + LuciaFirstName, MiddleNamePlaceholder,
+        Row(LuciaRegNo, LuciaRfid, ZeroWidthNoBreakSpace + LuciaFirstName, MiddleNamePlaceholder,
             LuciaLastName + ZeroWidthSpace,
             "", "lucia.vergara@usa.edu.ph",
             PrimaryProgram, "BSCRIM" + NonBreakingSpace + "2-A", RizalCourseCode,
@@ -228,25 +269,88 @@ internal static class SyntheticRoster
         // Rows 12 and 13 — one section name under two programmes. Harmless (offerings are keyed by
         // course as well as section) but warned, because it is the leading indicator of the collision
         // that is NOT harmless on Courses.
-        Row(NinaRegNo, "Nina", MiddleNamePlaceholder, "Uy",
+        Row(NinaRegNo, NinaRfid, "Nina", MiddleNamePlaceholder, "Uy",
             "", "nina.uy@usa.edu.ph",
             PrimaryProgram, NursingSectionName, "NSTP 2", "National Service Training Program 2",
             SecondTeacherFullName, "ANTONIO", "QUIZON", "Mr.", "College of Technology"),
 
-        Row(OmarRegNo, "Omar", MiddleNamePlaceholder, "Diaz",
+        Row(OmarRegNo, OmarRfid, "Omar", MiddleNamePlaceholder, "Diaz",
             "", "omar.diaz@usa.edu.ph",
             SecondaryProgram, NursingSectionName, "NSTP 2", "National Service Training Program 2",
             SecondTeacherFullName, "ANTONIO", "QUIZON", "Mr.", "College of Technology"),
     ];
 
-    /// <summary>Builds the default workbook.</summary>
+    /// <summary>
+    /// The three rows of <see cref="Rows"/> that raise <b>no warning of any kind</b> — worksheet rows 2,
+    /// 7 and 9: Maria, Ana and Rosa, each filed under <see cref="PrimaryProgram"/> in
+    /// <see cref="PrimarySectionName"/>, all enrolled in <see cref="RizalCourseCode"/> under one
+    /// spelling and one title, all taught by <see cref="PrimaryTeacherFullName"/>.
+    ///
+    /// <para>
+    /// <b>It exists so a test can assert <c>Completed</c> rather than <c>CompletedWithWarnings</c>.</b>
+    /// The full twelve carry six deliberate warning rows — a blank section, two placeholder teachers, a
+    /// title alias and a two-programme section pair — so no batch built from them can ever be silent.
+    /// That makes them useless for pinning the one claim that needs an otherwise-silent batch to be
+    /// falsifiable: <em>a student with no RFID card is not a warning</em>. On the full roster that
+    /// assertion would pass against a pipeline that warned on every card-less row, because the status
+    /// was already <c>CompletedWithWarnings</c> for other reasons.
+    /// </para>
+    ///
+    /// <para>
+    /// Selected by index rather than by a predicate over the rows. A predicate would have to
+    /// re-implement the warning rules, and an expectation computed by the implementation's own logic
+    /// proves only that the code agrees with itself — the same argument this class's summary makes
+    /// about every count in <see cref="SisImportPipelineTests"/>.
+    /// </para>
+    /// </summary>
+    public static List<string[]> RowsWithoutWarnings()
+    {
+        var rows = Rows();
+        return [rows[0], rows[5], rows[7]];
+    }
+
+    /// <summary>
+    /// The columns of a workbook that <b>has no RFID column at all</b> — which is the roster we actually
+    /// hold, and therefore the shape the pipeline has to import cleanly with every student getting no
+    /// card and no complaint.
+    ///
+    /// <para>
+    /// It is a column list rather than a blanked-out cell on purpose: an absent column and a present-but-
+    /// empty one reach the parse by different routes (no dictionary entry versus an entry holding
+    /// <c>""</c>) and only one of them is today's reality. Rows stay parallel to
+    /// <see cref="SisRosterColumns.All"/> either way; the writer skips the columns that are not here.
+    /// </para>
+    /// </summary>
+    public static readonly IReadOnlyList<string> ColumnsWithoutRfid =
+        SisRosterColumns.All.Where(c => c != SisRosterColumns.RfidCardSerial).ToList();
+
+    /// <summary>Builds the default workbook: all eighteen columns, every student carrying a serial.</summary>
     public static MemoryStream Build() => Build(Rows());
 
     /// <summary>
     /// Builds a workbook from caller-supplied rows, so a test can change one cell — a corrected
-    /// surname, a removed student — and prove what the second import does about it.
+    /// surname, a removed student, a duplicated serial — and prove what the second import does about it.
     /// </summary>
-    public static MemoryStream Build(IReadOnlyList<string[]> rows)
+    public static MemoryStream Build(IReadOnlyList<string[]> rows) =>
+        Build(rows, SisRosterColumns.All);
+
+    /// <summary>
+    /// The roster as it exists today: the header row omits <see cref="SisRosterColumns.RfidCardSerial"/>
+    /// entirely, so no student has a card and none of them may fail because of it.
+    /// </summary>
+    public static MemoryStream BuildWithoutRfidColumn() =>
+        Build(Rows(), ColumnsWithoutRfid);
+
+    /// <inheritdoc cref="BuildWithoutRfidColumn()"/>
+    public static MemoryStream BuildWithoutRfidColumn(IReadOnlyList<string[]> rows) =>
+        Build(rows, ColumnsWithoutRfid);
+
+    /// <summary>
+    /// Builds a workbook carrying only <paramref name="columns"/>, in that order.
+    /// <paramref name="rows"/> stay parallel to <see cref="SisRosterColumns.All"/> regardless, so the
+    /// row constants above are written once and every shape reads from them.
+    /// </summary>
+    public static MemoryStream Build(IReadOnlyList<string[]> rows, IReadOnlyList<string> columns)
     {
         using var workbook = new XLWorkbook();
 
@@ -263,21 +367,28 @@ internal static class SyntheticRoster
         }
 
         var sheet = workbook.AddWorksheet(SheetName);
-        for (var c = 0; c < SisRosterColumns.All.Count; c++)
-            sheet.Cell(1, c + 1).Value = SisRosterColumns.All[c];
+        for (var c = 0; c < columns.Count; c++)
+            sheet.Cell(1, c + 1).Value = columns[c];
 
         for (var r = 0; r < rows.Count; r++)
         {
-            for (var c = 0; c < SisRosterColumns.All.Count; c++)
+            for (var c = 0; c < columns.Count; c++)
             {
-                var value = rows[r][c];
+                var value = rows[r][IndexOf(columns[c])];
                 var cell = sheet.Cell(r + 2, c + 1);
 
                 // An all-digit REGNO is written as a *number*, which is what Excel does with
                 // 2021005781 and is the case ExcelRosterReader.ReadCell exists to survive. Writing it
                 // as text here would make the fixture tidier than the file it stands in for, and the
                 // scientific-notation defect would ship.
-                if (c == IndexOf(SisRosterColumns.RegNo)
+                //
+                // The RFID column is deliberately NOT given the same treatment even though its values
+                // are all digits too. A card serial's leading zeros are significant, so writing
+                // 0012503326 as a number would destroy it inside the fixture and the test would be
+                // asserting against a value the file never contained. Text is also how a leading-zero
+                // identifier is genuinely stored, so this is the honest shape rather than the convenient
+                // one. See ExcelRosterReader.ReadCell for the numeric-cell case that remains open.
+                if (columns[c] == SisRosterColumns.RegNo
                     && value.Length > 0 && value.All(char.IsDigit))
                 {
                     cell.Value = double.Parse(value, System.Globalization.CultureInfo.InvariantCulture);
@@ -304,13 +415,13 @@ internal static class SyntheticRoster
     /// chances to make them disagree with the parts.
     /// </summary>
     private static string[] Row(
-        string regNo, string firstName, string middleName, string lastName,
+        string regNo, string rfid, string firstName, string middleName, string lastName,
         string personalEmail, string institutionalEmail,
         string program, string sectionName, string courseCode, string courseName,
         string teacherFullName, string teacherFirstName, string teacherLastName,
         string teacherSuffix, string teacherCollege) =>
     [
-        regNo, firstName, middleName, lastName,
+        regNo, rfid, firstName, middleName, lastName,
         string.Join(' ', new[] { firstName, middleName, lastName }
             .Where(p => !string.IsNullOrWhiteSpace(p) && p != MiddleNamePlaceholder)),
         personalEmail, institutionalEmail,

@@ -104,9 +104,21 @@ public class StudentsController : ControllerBase
     //
     // One of the four endpoints a device key gates (Phase 4a design, D-28) — and the only *read* among
     // them, which is why it is worth stating why it is gated at all while the rest of the roster is
-    // open. This endpoint resolves a card UID to a named student, a card UID is a student number, and
-    // student numbers are sequential and printed on the ID. Left open it is an enumeration oracle over
-    // the whole roster; behind a device key it is what a scan screen needs and nothing else.
+    // open. This endpoint resolves a card UID to a named student, and a card UID is a short serial that
+    // runs in near-sequential blocks. Left open it is an enumeration oracle over the whole roster;
+    // behind a device key it is what a scan screen needs and nothing else.
+    //
+    // NOTE (2026-07-30): TWO published XML comments in this controller still carry the old
+    // REGNO-is-the-card-UID claim, and both are false — the client corrected us that the RFID serial is
+    // its own column.
+    //
+    //   1. the <remarks> above, which say "a card UID IS the student number (REGNO)";
+    //   2. the <summary> on DeactivateCard below, which says "a reissued card carries the same REGNO".
+    //
+    // Both are left uncorrected on purpose: XML doc comments on a controller action are published into
+    // docs/api/openapi.json via IncludeXmlComments, so editing either changes the frozen contract
+    // document and trips The_committed_contract_is_the_generated_one. Correcting them is a contract
+    // revision, not a comment fix, and belongs in a change that regenerates the document deliberately.
     [HttpGet("by-card/{cardUid}")]
     [Authorize(AuthenticationSchemes = DeviceKey.AuthenticationScheme, Policy = EamsPermissions.AttendanceCapture)]
     [EnableRateLimiting(CaptureRateLimiting.PolicyName)]

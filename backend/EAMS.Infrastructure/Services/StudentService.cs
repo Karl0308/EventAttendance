@@ -366,11 +366,11 @@ internal sealed class StudentService : IStudentService
         // Deliberately NOT FindAsync: this is the one write that must still reach a soft-deleted
         // student, and resolving the owner through the !IsDeleted filter made it a dead end.
         //
-        // The sequence that exposed it is an ordinary registrar correction. REGNO is both
-        // Students.StudentNumber and RfidCards.CardUid (ADR-001, accepted context), so deleting a bad
-        // student row strands one identifier in two places: the card stays active — DeleteAsync
-        // explains why it must — and keeps the only active slot in
-        // UX_RfidCards_SchoolId_CardUid_Active, so reissuing the REGNO answers CardUidInUse. That
+        // The sequence that exposed it is an ordinary registrar correction: a student created wrongly,
+        // soft-deleted, and re-created. Deleting the bad row does not release their card — the card
+        // stays active, DeleteAsync explains why it must — so it keeps the only active slot in
+        // UX_RfidCards_SchoolId_CardUid_Active and handing that same physical card to the corrected
+        // student record answers CardUidInUse. That
         // refusal tells the operator to deactivate the existing card first, which is correct advice;
         // through FindAsync it answered 404, so the API refused an action and then refused the
         // recovery it had just recommended. Only direct SQL could clear it.
@@ -537,12 +537,12 @@ internal sealed class StudentService : IStudentService
     {
         stored = default;
 
-        // Cleaned, never uppercased, and deliberately not CardUid.Normalize'd even though REGNO is both
-        // this column and the card UID. ADR-001's accepted context keeps the two fields separate on
-        // purpose: StudentNumber holds the registrar's value verbatim and RfidCards.CardUid holds the
-        // uppercased, punctuation-stripped form of it. The §10 importer stores them exactly this way,
-        // and a manual create that normalized differently would produce a student the next import
-        // cannot match.
+        // Cleaned, never uppercased, and deliberately not CardUid.Normalize'd. A student number is not
+        // a card UID — they are separate columns fed by separate source columns — and the two carry
+        // different rules on purpose: StudentNumber holds the registrar's value verbatim, while
+        // RfidCards.CardUid holds the uppercased, punctuation-stripped form a reader can be matched
+        // against. The §10 importer stores them exactly this way, and a manual create that normalized
+        // the number differently would produce a student the next import cannot match.
         var number = RosterText.Clean(request.StudentNumber);
         if (!StudentText.IsValidRequiredValue(number, StudentText.StudentNumberMaxLength))
         {

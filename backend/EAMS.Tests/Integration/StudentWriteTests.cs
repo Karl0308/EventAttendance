@@ -764,9 +764,9 @@ public class StudentWriteTests : IntegrationTest
 
     /// <summary>
     /// ADR-001 D-3's reason for existing, from the other side: uniqueness is scoped to active cards, so
-    /// a UID freed by a deactivation can be issued again — to a different student, or to the same one
-    /// on a replacement card carrying the same REGNO. A global <c>UNIQUE(CardUid)</c> would make this
-    /// impossible to record without erasing the old row.
+    /// a serial freed by a deactivation can be issued again — to a different student when a card is
+    /// recycled, or to the same one on a re-encoded replacement. A global <c>UNIQUE(CardUid)</c> would
+    /// make this impossible to record without erasing the old row.
     /// </summary>
     [Fact]
     public async Task A_deactivated_card_uid_can_be_issued_again()

@@ -139,15 +139,36 @@ public class RosterTextTests
     /// <summary>
     /// <b>The single most consequential formatting rule in the pipeline.</b> One of the 52 REGNOs is
     /// the ten-digit <c>2021005781</c>, which Excel stores as a number. Rendered with .NET's default
-    /// double formatting it becomes <c>2.021005781E+09</c> — and REGNO is not only the student number,
-    /// it is the RFID card UID. That student's card would be stored as a UID no reader can produce, so
-    /// they would simply never register a tap, with no error anywhere to explain it.
+    /// double formatting it becomes <c>2.021005781E+09</c> — a student number no later export will ever
+    /// match, so the next import creates that student a second time and every fact keyed off them
+    /// splits between the two, with no error anywhere to explain it.
     /// </summary>
     [Fact]
     public void The_legacy_ten_digit_regno_never_becomes_scientific_notation()
     {
         Assert.Equal("2021005781", RosterText.FormatNumericCell(2021005781d));
         Assert.DoesNotContain("E", RosterText.FormatNumericCell(2021005781d));
+    }
+
+    /// <summary>
+    /// <b>The limit of what this method can do, pinned so nobody mistakes it for a round trip.</b> An
+    /// RFID serial's leading zeros are significant — <c>0012503326</c> is not <c>12503326</c> — and by
+    /// the time a value reaches here it is already a <see cref="double"/>, which never carried them.
+    /// No formatting can put back a digit the value does not have.
+    ///
+    /// <para>
+    /// This is not a defect in <see cref="RosterText.FormatNumericCell"/> and must not be "fixed" by
+    /// zero-padding: the width of a serial is a property of the client's card stock, not of this
+    /// method, and padding to ten would corrupt every serial of another length. The real defence is
+    /// that a serial is carried as a <em>text</em> cell, which never enters this path at all — see
+    /// <c>ExcelRosterReader.ReadCell</c>, which records the numeric case as a deliberately open seam.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public void A_numeric_cell_cannot_recover_leading_zeros_and_does_not_pretend_to()
+    {
+        Assert.Equal("12503326", RosterText.FormatNumericCell(12503326d));
+        Assert.NotEqual("0012503326", RosterText.FormatNumericCell(12503326d));
     }
 
     [Theory]

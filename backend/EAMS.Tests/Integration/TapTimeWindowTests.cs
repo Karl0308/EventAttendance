@@ -230,7 +230,7 @@ public class TapTimeWindowTests : IntegrationTest
     /// <b>The bypass this closes.</b> <c>tappedAt: null</c> means "now, on the server", and it is
     /// checked against the window exactly like a client-supplied value. Exempting it would have made
     /// omitting one field a way around the whole mechanism — the first thing anyone holding a guessed
-    /// card UID (which is a student number, ADR-001 D-3) would try.
+    /// card UID would try, and a card UID is a short serial running in near-sequential blocks.
     /// </summary>
     [Fact]
     public async Task A_server_stamped_tap_outside_the_window_is_rejected_too()

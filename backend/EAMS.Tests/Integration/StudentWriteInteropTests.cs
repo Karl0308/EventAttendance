@@ -171,18 +171,19 @@ public class StudentWriteInteropTests : IntegrationTest
     /// The card half of the same handshake.
     ///
     /// <para>
-    /// REGNO is both the student number and the card UID, so an operator who creates a student and
-    /// assigns their card by hand has written <em>both</em> of the values the importer will later try to
-    /// resolve. The importer's <c>RfidCardStudentMismatch</c> hard-fails a row whose UID is already
-    /// active on a different student — a correct and deliberate refusal — so a manual card assignment
-    /// that produced even a slightly different stored UID would fail that student's row on every future
-    /// import, permanently, with a message pointing at a student number that looks identical to the one
-    /// in the file.
+    /// An operator who enrols a student at the desk writes the same two values the importer will later
+    /// try to resolve: the student number, and the serial off the card in their hand. The importer's
+    /// <c>RfidCardStudentMismatch</c> hard-fails a row whose serial is already active on a different
+    /// student — a correct and deliberate refusal — so a manual assignment that stored even a slightly
+    /// different UID would fail that student's row on every future import, permanently, with a message
+    /// pointing at a card that looks identical to the one in the file. Both paths must therefore agree
+    /// on the stored form, and this runs both to prove it rather than comparing two normalizers.
     /// </para>
     ///
     /// <para>
     /// Assigned here in a reader's separator format, which is what a scan-to-enroll screen sends and is
-    /// the shape most likely to diverge.
+    /// the shape most likely to diverge — and with the serial's leading zeros intact, which is the part
+    /// a numeric round trip anywhere on either path would silently destroy.
     /// </para>
     /// </summary>
     [Fact]
@@ -200,10 +201,10 @@ public class StudentWriteInteropTests : IntegrationTest
         await using (var db = NewDbContext())
         {
             var issued = await StudentsOn(db).AddCardAsync(
-                manualId, new StudentCardRequest("usa:000:01", "Scanned at enrolment"));
+                manualId, new StudentCardRequest("00-125-033-26", "Scanned at enrolment"));
 
             Assert.Equal(StudentWriteOutcome.Saved, issued.Outcome);
-            Assert.Equal(SyntheticRoster.MariaRegNo, issued.Card!.CardUid);
+            Assert.Equal(SyntheticRoster.MariaRfid, issued.Card!.CardUid);
             manualCardId = issued.Card.Id;
         }
 
@@ -213,10 +214,10 @@ public class StudentWriteInteropTests : IntegrationTest
 
         await using var read = NewDbContext();
 
-        // One card for this UID, and it is the one the operator issued — not a second one the importer
-        // created because it did not recognise the first.
+        // One card for this serial, and it is the one the operator issued — not a second one the
+        // importer created because it did not recognise the first.
         var cards = await read.RfidCards.AsNoTracking()
-            .Where(c => c.CardUid == SyntheticRoster.MariaRegNo).ToListAsync();
+            .Where(c => c.CardUid == SyntheticRoster.MariaRfid).ToListAsync();
 
         Assert.Equal(manualCardId, Assert.Single(cards).Id);
         Assert.Equal(manualId, cards[0].StudentId);

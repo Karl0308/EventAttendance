@@ -32,10 +32,33 @@ internal static class SisImportProfileTemplate
     /// </summary>
     public const string ProfileName = "CICSS Faculty Evaluation Report";
 
-    public const int BuiltInVersion = 1;
+    /// <summary>
+    /// The version <see cref="Entries"/> describes. <b>Bumped to 2 on 2026-07-30</b>, when the client
+    /// corrected us that the RFID card serial is its own column and not REGNO: version 1 mapped
+    /// <c>REGNO → RfidCard.CardUid</c>, version 2 maps <c>REGNO → Student.StudentNumber</c> only and
+    /// reads the serial from <see cref="SisRosterColumns.RfidCardSerial"/>.
+    ///
+    /// <para>
+    /// Bumping it is not cosmetic. The pipeline resolves the RFID source column <em>from the profile</em>
+    /// rather than from a constant, so a database still holding version 1 would read the serial out of
+    /// the REGNO column — the exact defect this change removes — while a freshly seeded database would
+    /// not. A version is what makes the two agree.
+    /// </para>
+    /// </summary>
+    public const int BuiltInVersion = 2;
+
+    /// <summary>
+    /// The dotted target that marks the RFID source column, named once because two places must agree
+    /// about it: the entry below that records the mapping, and the pipeline that looks the mapping up.
+    /// A literal in both would let them drift, and the drift would be silent — a profile whose RFID row
+    /// nothing matches simply imports every student with no card.
+    /// </summary>
+    public const string RfidCardUidTarget = "RfidCard.CardUid";
 
     public const string Description =
-        "Built-in mapping for the CICSS 17-column roster export. Version 1 is seeded from " +
+        "Built-in mapping for the CICSS roster export. Version 2 separates the RFID card serial from " +
+        "REGNO (the client's 2026-07-30 correction); version 1 derived the card UID from REGNO and is " +
+        "kept, superseded, to explain the batches that ran under it. Seeded from " +
         nameof(SisImportProfileTemplate) + " so every batch points at the rules that actually ran.";
 
     /// <param name="SourceColumn">The header in the file.</param>
@@ -54,16 +77,24 @@ internal static class SisImportProfileTemplate
     private const string Unused = "(not imported)";
 
     /// <summary>
-    /// All seventeen columns, in file order. Columns that feed nothing are listed too — an absent row is
+    /// All eighteen columns, in file order. Columns that feed nothing are listed too — an absent row is
     /// indistinguishable from a forgotten one, and "we read this column and deliberately do nothing with
     /// it" is the more useful record.
     /// </summary>
     public static readonly IReadOnlyList<Entry> Entries =
     [
-        // REGNO is the student number *and* the card UID, and it is the only genuinely required column:
-        // without it a row names nobody. Two target fields, two rules, so it appears twice.
+        // REGNO is the student number and nothing else, and it is the only genuinely required column:
+        // without it a row names nobody. It is NOT the card UID — that was version 1's mapping and the
+        // client corrected it on 2026-07-30.
         new(SisRosterColumns.RegNo, "Student.StudentNumber", Verbatim, IsRequired: true),
-        new(SisRosterColumns.RegNo, "RfidCard.CardUid", Uid, IsRequired: true),
+
+        // The card serial, and the row that makes this table load-bearing rather than decorative. The
+        // pipeline finds the RFID source column by looking for THIS TargetField among the batch's
+        // profile columns — so when the client's export finally arrives with the column called
+        // something other than 'RFID', the fix is a new profile version with a different SourceColumn
+        // and not a line of code. Optional, because the roster in hand has no such column at all and a
+        // student with no card must import cleanly.
+        new(SisRosterColumns.RfidCardSerial, RfidCardUidTarget, Uid, IsRequired: false),
 
         new(SisRosterColumns.StudentFirstName, "Student.FirstName", Name, IsRequired: true),
         new(SisRosterColumns.StudentMiddleName, "Student.MiddleName", Name, IsRequired: false),

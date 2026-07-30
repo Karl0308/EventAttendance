@@ -24,8 +24,14 @@ Decision numbers run continuously across documents, so `D-9` is unambiguous with
 An index that only lists written ADRs cannot warn you about a decision nobody wrote down. This is
 that warning.
 
-Decision numbers run continuously, so a gap in this list is itself a signal. **D-22 through D-42 are
+Decision numbers run continuously, so a gap in this list is itself a signal. **D-22 through D-43 are
 all unwritten.** Twelve of them are cited by number in shipped production code, comments and tests.
+
+> **⚠ D-43 reverses a fact ADR-001 still asserts, and ADR-001 cannot say so itself.** ADR-001 is
+> `Accepted` and therefore immutable — it goes on stating that REGNO *is* the card UID at its lines 19,
+> 124–125 and 254, and roughly a dozen comments in the codebase now cite ADR-001 for the opposite.
+> **This row is the amendment** until the ADR-004 consolidation absorbs it. It is the exact hazard the
+> top of this file describes, so it is recorded here rather than by editing an accepted document.
 
 | Pending | Decision | Status | Lives only in |
 |---|---|---|---|
@@ -51,7 +57,15 @@ all unwritten.** Twelve of them are cited by number in shipped production code, 
 | **D-41** | The Swagger **UI is Development-only; the generator is registered unconditionally**, so tooling can build the contract from a production binary while ADR-001 D-6's do-not-expose constraint holds. Collapsing the two is the tidy-up that one test exists to stop | shipped 4e | `Program.cs`, `The_document_generates_in_production_even_though_it_is_not_served` |
 | **D-42** | The live endpoint's counters are bounded by the **cursor actually returned**, not by the read ceiling. 4d shipped them unbounded and said so; 4e's first attempt bounded them by the ceiling, which fixed the long-transaction case and left the same defect on every truncated page. **Closes 4d's known-and-accepted counter defect** | shipped 4e | `EventService.SummaryForAsync`, `A_snapshot_is_capped_and_the_remaining_rows_page_through_the_cursor` |
 
+| **D-43** | **REGNO is not the RFID card UID — they are separate columns** (client correction, 2026-07-30, reversing the 2026-07-28 assumption ADR-001 was written on). The serial is a decimal string, ten digits in the sample, **leading zeros significant**; it is what a tap authenticates on, and REGNO is not a tap identity. Consequences: the import maps the serial through a **profile column** (D-4) rather than a hardcoded header, since the client's export carrying it has not arrived; the column is **optional**, so a student with no serial imports with no card and that is the ordinary case, not an error; a batch pinned to a pre-correction profile still runs its own mapping per D-4 but now **warns** (`RfidCardFromLegacyMapping`) instead of minting student-number cards silently; and profile resolution refuses to fall back to an *older* active version, which had made the same defect reachable on new uploads | shipped 2026-07-30 | `SisImportProfileTemplate`, `SisImportService.ReadCardUid` / `IsLegacyCardUidColumn` / `EnsureBuiltInProfileAsync`, `SisRosterColumns.RfidCardSerial`, `SisImportPipelineTests`, `docs/api/attendance-contract-handoff.md` |
+
 Deferred to the ADR-004 consolidation at JJ's direction, not forgotten.
+
+> **What D-43 does NOT close.** The import layer is corrected; the **binding question is still open** —
+> the roster in hand has no RFID column, so every student currently imports with no card and every tap
+> against them is `CardNotFound`. Whether cards get bound in bulk from the client's next export or in
+> the field (a screen in the mobile app and an endpoint here, neither of which exists) is unanswered and
+> is the mobile developer's largest open scope item.
 
 > **D-42 is the one to read if you only read one.** The defect it closes was *documented* by 4d rather
 > than fixed, then half-closed by 4e in a way that left three comments — two of which generate into the

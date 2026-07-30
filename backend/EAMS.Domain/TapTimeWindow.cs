@@ -29,8 +29,10 @@ namespace EAMS.Domain;
 ///
 /// <para>
 /// <b>It is also the plan's own forgery mitigation, arrived at from the other side.</b> A card UID is a
-/// student number (ADR-001 D-3), student numbers are sequential and printed on the ID, so a UID is
-/// guessable. Bounding <em>when</em> a tap may be claimed for is what makes a guessed UID useless
+/// short serial the reader emits in the clear, carries no signature, and — in the CICSS export's
+/// ten-digit decimal form — runs in near-sequential blocks, so it is guessable and there is nothing in a
+/// tap that proves the card was present. Bounding <em>when</em> a tap may be claimed for is what makes a
+/// guessed UID useless
 /// outside the hour the event actually ran — and the same predicate happens to bound a badly skewed
 /// device clock, which is why one mechanism closes two problems.
 /// </para>
