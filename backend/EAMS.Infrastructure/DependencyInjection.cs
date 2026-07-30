@@ -80,6 +80,12 @@ public static class DependencyInjection
         services.AddScoped<IEventService, EventService>();
         services.AddScoped<IAttendanceService, AttendanceService>();
         services.AddScoped<IStudentGroupProjection, StudentGroupProjection>();
+
+        // Phase 3b-2's two read services. Scoped like the rest, because they take the request's
+        // EamsDbContext — and they take nothing else: a read decides no tenant, so neither has an
+        // ISchoolContext to pin. The global SchoolId query filter is what scopes them.
+        services.AddScoped<IAcademicReferenceService, AcademicReferenceService>();
+        services.AddScoped<IStudentGroupService, StudentGroupService>();
         services.AddScoped<ISisImportService, SisImportService>();
         services.AddScoped<IDeviceService, DeviceService>();
 

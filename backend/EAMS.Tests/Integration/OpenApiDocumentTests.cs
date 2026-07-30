@@ -1,4 +1,5 @@
 using System.Net;
+using System.Text.Encodings.Web;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using EAMS.Api.OpenApi;
@@ -488,6 +489,29 @@ public class OpenApiDocumentTests : IntegrationTest
     private const string CommittedContract = "docs/api/openapi.json";
 
     /// <summary>
+    /// How the committed contract is written.
+    ///
+    /// <para>
+    /// <b><see cref="JavaScriptEncoder.UnsafeRelaxedJsonEscaping"/> is the point of this, and the
+    /// default is wrong here.</b> The default encoder escapes every non-ASCII character, so the
+    /// descriptions in this document — which are the XML comments, written as markdown for a human —
+    /// come out as <c>—</c> for an em dash and <c>`</c> for a backtick. Still valid JSON and
+    /// still parsed correctly by codegen, but <c>docs/api/openapi.json</c> is read directly by the
+    /// external mobile developer, and a paragraph of escape sequences is not a paragraph.
+    /// </para>
+    ///
+    /// <para>
+    /// "Unsafe" names the HTML-injection risk of relaxed escaping. It does not apply: this is a file on
+    /// disk, not a string interpolated into a page.
+    /// </para>
+    /// </summary>
+    private static readonly JsonSerializerOptions PublishedContractOptions = new()
+    {
+        WriteIndented = true,
+        Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
+    };
+
+    /// <summary>
     /// <b><c>docs/api/openapi.json</c> is what the build actually serves.</b>
     ///
     /// <para>
@@ -517,8 +541,7 @@ public class OpenApiDocumentTests : IntegrationTest
 
         if (Environment.GetEnvironmentVariable(UpdateVariable) == "1")
         {
-            await File.WriteAllTextAsync(
-                path, served.ToJsonString(new JsonSerializerOptions { WriteIndented = true }));
+            await File.WriteAllTextAsync(path, served.ToJsonString(PublishedContractOptions));
             return;
         }
 

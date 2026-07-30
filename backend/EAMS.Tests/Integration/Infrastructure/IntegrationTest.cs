@@ -156,6 +156,23 @@ public abstract class IntegrationTest : IAsyncLifetime
     internal IStudentGroupProjection ProjectionOn(EamsDbContext db) => new StudentGroupProjection(db);
 
     /// <summary>
+    /// The Phase 3b-2 academic reference reads.
+    ///
+    /// <para>
+    /// <b>No <see cref="School"/> argument, unlike every builder above, and that is the thing to
+    /// notice.</b> The write services take the tenant because a write has to decide which school a new
+    /// row belongs to; a read decides nothing and is scoped by the global <c>SchoolId</c> query filter
+    /// instead. The tenant still reaches it — through <see cref="NewDbContext()"/>, which builds the
+    /// context on this test's <see cref="School"/> — so a tenancy test pins <see cref="School"/> and
+    /// passes the resulting context, rather than pinning the service.
+    /// </para>
+    /// </summary>
+    internal IAcademicReferenceService AcademicOn(EamsDbContext db) => new AcademicReferenceService(db);
+
+    /// <summary>The §4.7 group reads. Scoped exactly as <see cref="AcademicOn"/> is.</summary>
+    internal IStudentGroupService StudentGroupsOn(EamsDbContext db) => new StudentGroupService(db);
+
+    /// <summary>
     /// The §10 import pipeline, wired to the same context the test asserts against.
     ///
     /// <para>

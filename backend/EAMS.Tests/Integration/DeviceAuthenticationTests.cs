@@ -679,8 +679,11 @@ public class DeviceAuthenticationTests : IntegrationTest
                 .FirstAsync();
         }
 
+        // Through the constant, not a copy of its value: this test taps a card the SEED owns, and the
+        // literal it used to carry went stale the moment the seed's UIDs became decimal serials — a red
+        // suite whose cause lived in another project entirely.
         var response = await client.PostAsJsonAsync(
-            "/api/v1/attendance/tap", new { eventId, cardUid = "04A7B8C9" });
+            "/api/v1/attendance/tap", new { eventId, cardUid = SeedData.DevelopmentCardUid });
 
         Assert.True(
             response.IsSuccessStatusCode,

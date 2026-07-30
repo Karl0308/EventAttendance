@@ -42,6 +42,12 @@ public class CompositionRootTests
         Assert.NotNull(scope.ServiceProvider.GetRequiredService<IEventService>());
         Assert.NotNull(scope.ServiceProvider.GetRequiredService<IAttendanceService>());
         Assert.NotNull(scope.ServiceProvider.GetRequiredService<ISchoolContext>());
+
+        // Phase 3b-2's read services. Worth listing here for the reason the class remarks give: the
+        // integration suite constructs them directly, so a missing AddScoped would surface only as a
+        // 500 on the first request to a reference route in a running host.
+        Assert.NotNull(scope.ServiceProvider.GetRequiredService<IAcademicReferenceService>());
+        Assert.NotNull(scope.ServiceProvider.GetRequiredService<IStudentGroupService>());
     }
 
     /// <summary>

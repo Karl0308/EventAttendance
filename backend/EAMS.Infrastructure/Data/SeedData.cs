@@ -63,6 +63,20 @@ internal static class SeedData
     /// <summary>The seeded kiosk's name, so tests and tooling can find it without a magic string.</summary>
     public const string DevelopmentKioskName = "Development Kiosk";
 
+    /// <summary>
+    /// The card serial of the seeded student the capture tests tap, named here for the same reason as
+    /// the kiosk above: so a test refers to the seed rather than re-typing one of its values.
+    ///
+    /// <para>
+    /// <b>This constant exists because the copy of it was silently orphaned once.</b> The seed's UIDs
+    /// changed from hex to decimal serials on 2026-07-30 (register D-43) and
+    /// <c>DeviceAuthenticationTests</c> went on asserting the old literal — a red suite whose cause was
+    /// in a different project from the failure, and which no reviewer of either file could have seen by
+    /// reading it. A shared constant makes that drift a compile error instead.
+    /// </para>
+    /// </summary>
+    public const string DevelopmentCardUid = "0012503303";
+
     public static async Task InitializeAsync(EamsDbContext db, CancellationToken ct = default)
     {
         if (await db.Schools.AnyAsync(ct)) return;
@@ -95,7 +109,7 @@ internal static class SeedData
         {
             ("2023-0001", "Maria",   "Reyes",   "Santos",     "BSIT", "3rd Year", "A", "Female", "0012503301"),
             ("2023-0002", "Juan",    "Cruz",    "Dela Cruz",  "BSIT", "3rd Year", "A", "Male",   "0012503302"),
-            ("2023-0003", "Andrea",  null,      "Lim",        "BSCS", "2nd Year", "B", "Female", "0012503303"),
+            ("2023-0003", "Andrea",  null,      "Lim",        "BSCS", "2nd Year", "B", "Female", DevelopmentCardUid),
             ("2023-0004", "Miguel",  "Tan",     "Gonzales",   "BSCS", "2nd Year", "B", "Male",   "0012503304"),
             ("2023-0005", "Sofia",   "Villa",   "Ramos",      "BSIT", "1st Year", "C", "Female", "0012503305"),
             ("2023-0006", "Gabriel", null,      "Flores",     "BSA",  "4th Year", "A", "Male",   "0012503306"),

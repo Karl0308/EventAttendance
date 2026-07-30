@@ -6,6 +6,313 @@
     "version": "v1"
   },
   "paths": {
+    "/api/v1/academic/terms": {
+      "get": {
+        "tags": [
+          "Academic"
+        ],
+        "summary": "`GET /academic/terms` — every term, current first and then newest first.",
+        "description": "The order is deliberate and does not depend on `startsOn`: the roster source has no term\r\ndate columns at all, so those two fields are frequently null and sorting on them would produce\r\nan arbitrary list on real data. Term codes are operator-authored and sort chronologically by\r\nconstruction, which is what this falls back to.",
+        "responses": {
+          "200": {
+            "description": "The terms, possibly empty.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/TermDto"
+                  }
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/TermDto"
+                  }
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/TermDto"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/academic/terms/current": {
+      "get": {
+        "tags": [
+          "Academic"
+        ],
+        "summary": "`GET /academic/terms/current` — the term flagged current, or 404 when none is.",
+        "description": "\r\n\r\n  <b>404 rather than a 200 carrying null, because the two are different facts and a client has to\r\n             act on them differently.</b> \"No term is flagged current\" is a configuration state an\r\n             administrator fixes — it happens between semesters, before anyone has moved the flag — whereas\r\n             an empty 200 body reads as \"here is the current term, it just has no fields\". A caller\r\n             defaulting a term picker needs to tell those apart to know whether to prompt.\r\n             \r\n\r\n\r\n  <b>At most one term can be current, and the database is what guarantees it</b> — a filtered\r\n             unique index, not a convention. Two \"current\" terms would make every term-defaulting query pick\r\n             one at random, which surfaces months later as a report quietly about the wrong semester.\r\n             ",
+        "responses": {
+          "200": {
+            "description": "The current term.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/TermDto"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TermDto"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TermDto"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No term in this school is flagged current.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/academic/colleges": {
+      "get": {
+        "tags": [
+          "Academic"
+        ],
+        "summary": "`GET /academic/colleges` — every college, by name.",
+        "description": "Unfiltered and unpaged on purpose: a college list is a handful of rows per institution and is\r\nthe top of every drill-down in the audience picker, so a cursor would be ceremony over a\r\ndropdown. `code` is nullable — the roster source has no college code column, so the\r\nnatural key is the normalized name and the code exists only to be filled in later.",
+        "responses": {
+          "200": {
+            "description": "The colleges, possibly empty.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/CollegeDto"
+                  }
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/CollegeDto"
+                  }
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/CollegeDto"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/academic/programs": {
+      "get": {
+        "tags": [
+          "Academic"
+        ],
+        "summary": "`GET /academic/programs` — degree programmes, optionally narrowed to one college.",
+        "parameters": [
+          {
+            "name": "collegeId",
+            "in": "query",
+            "description": "Omit to list them all. An id matching no college returns an empty list rather than everything —\r\na filter that silently stops filtering is how an \"invite this college\" flow ends up inviting\r\nthe institution.",
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The matching programmes, possibly empty.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/AcademicProgramDto"
+                  }
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/AcademicProgramDto"
+                  }
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/AcademicProgramDto"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/academic/courses": {
+      "get": {
+        "tags": [
+          "Academic"
+        ],
+        "summary": "`GET /academic/courses` — courses, optionally narrowed by college and search term.",
+        "parameters": [
+          {
+            "name": "collegeId",
+            "in": "query",
+            "description": "Omit to list them all. A course's college is itself nullable, so an unattributed course matches\r\nno `collegeId` — which is correct: it is not known to be in one, rather than known not to\r\nbe.",
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "search",
+            "in": "query",
+            "description": "Matched against <b>both</b> the code and the title. A user typing \"criminology\" is naming the\r\ntitle while one typing \"SSCI\" is naming the code, and asking which they meant is worse than\r\nsearching both. Substring, case-insensitive by the database's collation.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The matching courses, possibly empty.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/CourseDto"
+                  }
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/CourseDto"
+                  }
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/CourseDto"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/academic/course-offerings": {
+      "get": {
+        "tags": [
+          "Academic"
+        ],
+        "summary": "`GET /academic/course-offerings` — <b>the section grain, and the row an audience picker is\r\n             really looking for.</b> A course taught to two sections is two entries.",
+        "description": "\r\n\r\n  <b>This is the endpoint that answers \"who is in BSCRIM 2-A\", and `students.section` is\r\n             not.</b> That column is the ADR-001 D-2 derived display cache: it is single-valued, and twelve\r\n             of the fifty-two students in the real roster sit in more than one section, so it is wrong for\r\n             roughly a quarter of them. An offering is the grain an invitation is actually issued at.\r\n             \r\n\r\n\r\n  `sectionKey` is published alongside `sectionName` because a <em>cohort</em> has no\r\n             row of its own — it is a key shared by every offering that cohort takes within a term, which is\r\n             why the group projection keys section groups on it. `sectionName` is null where the source\r\n             was blank (39 sample rows are); the key is a sentinel rather than null in that case, because a\r\n             nullable key component would have capped the table at one blank section under SQL Server's\r\n             unique index.\r\n             ",
+        "parameters": [
+          {
+            "name": "termId",
+            "in": "query",
+            "description": "Omit to list every term's. Callers should almost always pass one: section names repeat each\r\nsemester against a different cohort, so an unscoped list holds several distinct audiences under\r\nidentical names.",
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "courseId",
+            "in": "query",
+            "description": "Omit to list offerings of every course.",
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "section",
+            "in": "query",
+            "description": "The section's display name. <b>Normalized before it is compared</b> — `BSFS 2-A`,\r\n`bsfs2a` and `BSFS-2A` are one section — so the filter does not depend on how the\r\ncaller happened to type it.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The matching offerings, possibly empty.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/CourseOfferingDto"
+                  }
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/CourseOfferingDto"
+                  }
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/CourseOfferingDto"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/attendance": {
       "get": {
         "tags": [
@@ -2320,6 +2627,65 @@
         }
       }
     },
+    "/api/v1/student-groups": {
+      "get": {
+        "tags": [
+          "StudentGroups"
+        ],
+        "summary": "`GET /student-groups` — the audiences an event can be attached to, every filter optional.",
+        "description": "\r\n\r\n  `memberCount` is the number an organizer is really choosing on — \"invite BSCRIM 2-A\" is a\r\n             different decision at 8 students than at 80 — and a derived group showing zero is the visible\r\n             signal that the projection has not run for its term. Soft-deleted students are excluded, so it\r\n             agrees with the `expected` denominator `GET /events/{id}/summary` computes.\r\n             \r\n\r\n\r\n             Unpaged, like the other reference lists: a school's group count is bounded by its academic\r\n             structure — one row per college, programme, section and offering per term, plus the handful of\r\n             manual ones — and a picker wants the whole set to filter client-side.\r\n             ",
+        "parameters": [
+          {
+            "name": "sourceType",
+            "in": "query",
+            "description": "`Manual` (a person made it) or `Derived` (the projection owns it). Omit for both.\r\n             Matched case-insensitively; <b>a value outside the set returns an empty list, not every row</b>\r\n             — a mistyped filter that silently stops filtering is how a cohort-only flow ends up offering\r\n             manual groups.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "termId",
+            "in": "query",
+            "description": "Narrows to one term's derived groups. Omit for every term's, plus the manual groups, which\r\ncarry no term. <b>The filter most worth passing</b>: a section name is reused every semester\r\nagainst an entirely different set of students, so an unscoped list holds several distinct\r\ncohorts under names differing only by the term suffix the projection composes in.",
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The matching groups, possibly empty.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/StudentGroupDto"
+                  }
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/StudentGroupDto"
+                  }
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/StudentGroupDto"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/students": {
       "get": {
         "tags": [
@@ -2998,6 +3364,32 @@
   },
   "components": {
     "schemas": {
+      "AcademicProgramDto": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "code": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string",
+            "nullable": true
+          },
+          "collegeId": {
+            "type": "string",
+            "description": "Never null. The roster carries `COLLEGE_NAME` on every row, so a programme's college is\r\nalways derivable at import — which is why this is a required FK and\r\nEAMS.Application.Dtos.CourseDto.CollegeId is not.",
+            "format": "uuid"
+          },
+          "collegeName": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false,
+        "description": "A degree programme — BSCRIM, BSFS, BSN. The CLR entity is `AcademicProgram` rather than\r\n`Program` (the API's top-level-statements entry point owns that name); the table, the route\r\nand this DTO all keep the plan's word."
+      },
       "AttendanceDeltaDto": {
         "type": "object",
         "properties": {
@@ -3187,6 +3579,94 @@
           }
         },
         "additionalProperties": false
+      },
+      "CollegeDto": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "name": {
+            "type": "string"
+          },
+          "code": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "additionalProperties": false,
+        "description": "A college. Code is nullable because the roster source has no college code\r\ncolumn at all — the natural key is the normalized name, and the code exists so a real one can be\r\nrecorded later without a migration."
+      },
+      "CourseDto": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "code": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string",
+            "description": "<b>Nullable, and not identity.</b>\r\n`COURSE_CODE → COURSE_NAME` is not 1:1 in the source —\r\n            `'GE Elect 2'` resolves to two different names inside a single college's export — so two\r\n            source titles collapse onto one row and one of them is lost. A missing or surprising title here is\r\n            the import reporting that anomaly, not a bug in this endpoint.",
+            "nullable": true
+          },
+          "collegeId": {
+            "type": "string",
+            "description": "<b>Nullable today, and the nullability is load-bearing.</b> The course key is currently unique\r\n            across the whole institution; if generic codes (`GE Elect n`, `PE n`, `NSTP n`) turn\r\n            out to collide between colleges, the key widens to include this column. Clients should treat an\r\n            absent college as \"not yet attributed\", never as \"no college\".",
+            "format": "uuid",
+            "nullable": true
+          },
+          "collegeName": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "additionalProperties": false,
+        "description": "A course, keyed on the normalized course code."
+      },
+      "CourseOfferingDto": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "termId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "termCode": {
+            "type": "string"
+          },
+          "courseId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "courseCode": {
+            "type": "string"
+          },
+          "courseTitle": {
+            "type": "string",
+            "nullable": true
+          },
+          "sectionName": {
+            "type": "string",
+            "nullable": true
+          },
+          "sectionKey": {
+            "type": "string"
+          },
+          "enrolledCount": {
+            "type": "integer",
+            "description": "Students enrolled in this offering, excluding the soft-deleted — the size of the audience\r\ninviting this offering would produce. Counted in the database as part of the same query, never by\r\nloading the enrollment rows.",
+            "format": "int32"
+          }
+        },
+        "additionalProperties": false,
+        "description": "One course, in one term, taught to one named section — <b>the row an event-audience picker\r\nactually wants</b>.\r\n            \r\n\r\n<b>This is the real \"section\", and it is why `Students.Section` cannot answer the question.</b>\r\nThat column is the ADR-001 D-2 derived display cache and is single-valued; twelve of the fifty-two\r\nstudents in the real roster sit in more than one section, so no single-valued column can describe\r\nthem. A course taught to two sections is two rows here, which is the grain an invitation is issued\r\nat.\r\n\r\n<b>EAMS.Application.Dtos.CourseOfferingDto.SectionKey is published even though the other normalized keys are not.</b> It is\r\nthe only stable identifier a <em>cohort</em> has: a section is a key shared by every offering that\r\ncohort takes within a term (`BSFS2A` spans all of them) and has no row of its own to point at,\r\nwhich is exactly why the group projection keys section groups on it. A caller grouping offerings\r\ninto cohorts needs it; EAMS.Application.Dtos.CourseOfferingDto.SectionName is the display form and is null where the source\r\nwas blank — 39 sample rows are — in which case the key is the `Unspecified` sentinel rather\r\nthan null, because a nullable key component would have capped the table at one blank section.\r\n"
       },
       "DeviceDto": {
         "type": "object",
@@ -3924,6 +4404,53 @@
         "additionalProperties": false,
         "description": "Technical Plan §4.3, as a client sees it.\r\n            \r\n\r\n<b>The name parts and `Gender`/`PhotoUrl` arrived with the §6.2 write surface</b>, and\r\nthey are not decoration — they are what makes `PUT /students/{id}` usable at all. The PUT is a\r\nfull replacement of a student's own fields, so a field a client cannot <em>read</em> is a field it\r\ncannot send back, and the round trip would blank it. `FullName` is computed and cannot be\r\nsplit back into three columns, so an edit form had no way to populate itself. Additive on the wire;\r\nexisting consumers ignore them. Same reasoning EAMS.Application.Dtos.EventDto records for\r\n`Description`.\r\n"
       },
+      "StudentGroupDto": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "name": {
+            "type": "string"
+          },
+          "type": {
+            "type": "string",
+            "description": "§4.7's set plus `College` and `Program` — `Course`, `Section`, `Org`,\r\n`Custom`, `College`, `Program`. What kind of audience this is."
+          },
+          "sourceType": {
+            "type": "string",
+            "description": "`Manual` (a person made it) or `Derived` (the projection owns it). The distinction\r\n            matters to a caller: a derived group's membership is rewritten from the academic tables on every\r\n            import, so hand-editing it is not durable, while a manual group is nobody's to reconcile."
+          },
+          "sourceEntityType": {
+            "type": "string",
+            "description": "Which academic concept a derived group projects — `College`, `Program`, `Section`,\r\n`CourseOffering` — or `None` on a manual group. `None` is a sentinel rather than a\r\nnull so the column stays NOT NULL and the projection's unique index has no nullable component."
+          },
+          "termId": {
+            "type": "string",
+            "description": "The term a derived group belongs to; null on a manual group, which spans terms by nature.\r\n<b>Filtering by it is the main reason to filter at all</b> — section names are reused every\r\nsemester against an entirely different set of students, so \"BSFS 2-A\" without a term names several\r\ndistinct cohorts. EAMS.Application.Dtos.StudentGroupDto.Name carries the term for the same reason.",
+            "format": "uuid",
+            "nullable": true
+          },
+          "termCode": {
+            "type": "string",
+            "nullable": true
+          },
+          "memberCount": {
+            "type": "integer",
+            "description": "Members excluding the soft-deleted, counted in the database as part of the same query. This is the\r\nnumber an organizer is really choosing on — \"invite BSCRIM 2-A\" is a different decision at 8\r\nstudents than at 80 — and a group showing zero is the visible signal that a projection has not run\r\nfor its term.",
+            "format": "int32"
+          },
+          "lastSyncedAt": {
+            "type": "string",
+            "description": "When the projection last reconciled this group, stamped on every run <em>including</em> runs that\r\nchanged nothing — so \"synced, no change\" is distinguishable from \"never synced\". Null on a manual\r\ngroup, which the projection never touches.",
+            "format": "date-time",
+            "nullable": true
+          }
+        },
+        "additionalProperties": false,
+        "description": "Technical Plan §4.7 `StudentGroups`, as a client sees it — <b>the thing an event audience is\r\nactually attached to</b>. `POST /events/{id}/attendees` takes ids from this list.\r\n            \r\n\r\n<b>The provenance fields are the reason this list is usable as one picker.</b> ADR-001 D-1\r\nprojects colleges, programmes, sections and course offerings <em>into</em> this table as ordinary\r\nrows marked EAMS.Application.Dtos.StudentGroupDto.SourceType`Derived`, so an organizer picks \"BSFS 2-A (2025-2026-1)\"\r\nfrom the same list as \"SSC Officers\" and nothing downstream learns that one of them was\r\nmaterialized. Publishing the provenance lets a UI group and label the two kinds without needing a\r\nsecond endpoint or a naming convention.\r\n"
+      },
       "StudentWriteRequest": {
         "type": "object",
         "properties": {
@@ -4209,6 +4736,40 @@
           "code": "Recorded",
           "serverTime": "2026-07-29T05:31:22.117Z"
         }
+      },
+      "TermDto": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "code": {
+            "type": "string"
+          },
+          "schoolYear": {
+            "type": "string"
+          },
+          "semester": {
+            "type": "string"
+          },
+          "isCurrent": {
+            "type": "boolean",
+            "description": "At most one term per school carries this, enforced by a filtered unique index rather than by\r\nconvention. `GET /academic/terms/current` is the direct route to it; this flag is here so a\r\nlist rendering does not need a second request to mark the row."
+          },
+          "startsOn": {
+            "type": "string",
+            "format": "date",
+            "nullable": true
+          },
+          "endsOn": {
+            "type": "string",
+            "format": "date",
+            "nullable": true
+          }
+        },
+        "additionalProperties": false,
+        "description": "Technical Plan §4 / ADR-001 D-1 `Terms`, as a client sees it.\r\n            \r\n\r\n<b>EAMS.Application.Dtos.TermDto.StartsOn and EAMS.Application.Dtos.TermDto.EndsOn are dates, not instants, and stay that way on\r\nthe wire.</b> A term boundary is a calendar date in the school's own timezone — it has no time of\r\nday, and serializing it as a UTC instant would shift it by eight hours in Manila and make \"does\r\nthis term contain today\" answerable two different ways. They publish as `YYYY-MM-DD`.\r\n"
       }
     },
     "securitySchemes": {
@@ -4222,12 +4783,20 @@
   },
   "tags": [
     {
+      "name": "Academic",
+      "description": "ADR-001 D-1's academic layer over HTTP — <b>reads only</b>."
+    },
+    {
       "name": "Devices",
       "description": "Technical Plan §6.6 — devices (Phase 4a design, D-25).\r\n            \r\n\r\n<b>Only one action on this controller is gated: `heartbeat`.</b> It is the one a device calls\r\nabout itself. Everything else here is an administrator's surface and stays open under ADR-001 D-6\r\nwith a declared-but-inert `devices.*` permission, exactly like students and events — Phase 4b\r\nnarrowed the open surface to four endpoints, it did not roll authorization out.\r\n"
     },
     {
       "name": "SisImport",
       "description": "Technical Plan §10 — the school-year roster import.\r\n            \r\n\r\n<b>Every endpoint is decorated `sis.import` and every endpoint is open.</b>EAMS.Api.Authorization.HasPermissionNotEnforcedAttribute enforces nothing (ADR-001 D-6); the decoration\r\nrecords what Phase 6 must demand. That matters more here than anywhere else in this API: these four\r\nendpoints read and write the full roster of every student in the institution, including their names\r\nand institutional e-mail addresses, and the upload endpoint writes to the academic tables. This\r\nsystem must not be exposed beyond local/development use until §11 lands.\r\n"
+    },
+    {
+      "name": "StudentGroups",
+      "description": "Technical Plan §4.7 `StudentGroups` over HTTP — <b>reads only</b>."
     }
   ]
 }
