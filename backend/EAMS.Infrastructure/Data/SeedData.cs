@@ -77,16 +77,30 @@ internal static class SeedData
         };
         db.Schools.Add(school);
 
+        // `No` is the REGNO — Students.StudentNumber. `Uid` is the RFID card serial — RfidCards.CardUid.
+        // They are DIFFERENT VALUES for different things (client correction, 2026-07-30, register D-43):
+        // the REGNO identifies the person on the roster, the serial is what a reader actually scans.
+        //
+        // These serials are MOCK. The client's roster carries no RFID column yet, so until their next
+        // export arrives this is the only way to exercise a tap end to end. They are shaped like the real
+        // sample (0012503326) rather than invented freely, because the shape is the part that breaks
+        // things: ten decimal digits, no separators, and LEADING ZEROS THAT MATTER. Anything that parses
+        // one of these as a number turns 0012503301 into 12503301 and the card stops resolving — see
+        // RosterText.FormatNumericCell for the same hazard arriving via an Excel numeric cell.
+        //
+        // Two of the eight deliberately vary the zero count (three leading zeros, then one) so a reader
+        // or serializer that only ever sees the common "00" shape cannot pass by luck. Seeding is
+        // Development-only, so none of this can reach a real database.
         var seed = new (string No, string First, string? Middle, string Last, string Course, string Year, string Section, string Gender, string Uid)[]
         {
-            ("2023-0001", "Maria",   "Reyes",   "Santos",     "BSIT", "3rd Year", "A", "Female", "04A1B2C3"),
-            ("2023-0002", "Juan",    "Cruz",    "Dela Cruz",  "BSIT", "3rd Year", "A", "Male",   "04D4E5F6"),
-            ("2023-0003", "Andrea",  null,      "Lim",        "BSCS", "2nd Year", "B", "Female", "04A7B8C9"),
-            ("2023-0004", "Miguel",  "Tan",     "Gonzales",   "BSCS", "2nd Year", "B", "Male",   "0411A2B3"),
-            ("2023-0005", "Sofia",   "Villa",   "Ramos",      "BSIT", "1st Year", "C", "Female", "04C4D5E6"),
-            ("2023-0006", "Gabriel", null,      "Flores",     "BSA",  "4th Year", "A", "Male",   "04F7081A"),
-            ("2023-0007", "Isabella","Marie",   "Aquino",     "BSN",  "2nd Year", "A", "Female", "041B2C3D"),
-            ("2023-0008", "Diego",   "Luis",    "Mendoza",    "BSIT", "3rd Year", "A", "Male",   "044E5F60"),
+            ("2023-0001", "Maria",   "Reyes",   "Santos",     "BSIT", "3rd Year", "A", "Female", "0012503301"),
+            ("2023-0002", "Juan",    "Cruz",    "Dela Cruz",  "BSIT", "3rd Year", "A", "Male",   "0012503302"),
+            ("2023-0003", "Andrea",  null,      "Lim",        "BSCS", "2nd Year", "B", "Female", "0012503303"),
+            ("2023-0004", "Miguel",  "Tan",     "Gonzales",   "BSCS", "2nd Year", "B", "Male",   "0012503304"),
+            ("2023-0005", "Sofia",   "Villa",   "Ramos",      "BSIT", "1st Year", "C", "Female", "0012503305"),
+            ("2023-0006", "Gabriel", null,      "Flores",     "BSA",  "4th Year", "A", "Male",   "0012503306"),
+            ("2023-0007", "Isabella","Marie",   "Aquino",     "BSN",  "2nd Year", "A", "Female", "0001234567"),
+            ("2023-0008", "Diego",   "Luis",    "Mendoza",    "BSIT", "3rd Year", "A", "Male",   "0987654321"),
         };
 
         var students = new List<Student>();

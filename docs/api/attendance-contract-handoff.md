@@ -39,6 +39,73 @@ Look there for: every endpoint and payload shape, the `DeviceKey` security schem
 shape with its `code`/`serverTime` extensions, and the frozen token tables as machine-readable enums
 (`TapOutcomeCode`, `ManualOutcomeCode`, `LiveOutcomeCode`).
 
+## Connecting to the dev API
+
+The backend runs on a machine on the office LAN. **Ask us for the current IP** — it is DHCP, so it
+moves when the router reboots and any number written here would be wrong within a week.
+
+```
+http://<dev-host>:5080/api/v1     base path
+http://<dev-host>:5080            Swagger UI, browsable in a desktop browser
+```
+
+> **Android will block this before it ever reaches us.** Cleartext HTTP is disabled by default from
+> API 28, so a request to `http://<dev-host>:5080` fails with a generic network error that looks
+> exactly like the server being down. Add a network-security-config exception for the dev host (or set
+> `usesCleartextTraffic` on a dev build). This is the most common "your API is broken" report that is
+> not the API.
+
+### Get yourself a device key
+
+**Enrol your own — do not wait for us to send you one, and do not commit one anywhere.** Device
+enrolment is deliberately open on this network while human authentication is still Phase 6:
+
+```bash
+curl -X POST http://<dev-host>:5080/api/v1/devices \
+  -H "Content-Type: application/json" \
+  -d '{"name":"<your name> - capture app","deviceType":"Mobile","readerModel":"RN/Expo","isActive":true}'
+```
+
+The response carries `apiKey` **once and never again** — the server keeps only a hash. Put it straight
+into the platform keystore (`expo-secure-store` / Android Keystore), never `AsyncStorage`, and never a
+committed file. Lost it? `POST /api/v1/devices/{id}/regenerate-key`.
+
+Enrol your **own** device rather than sharing ours: every tap is attributed to the device that sent
+it, so a shared key makes your traffic and ours indistinguishable in the attendance record.
+
+### Test data you can scan
+
+The dev database is seeded with mock serials, shaped like the real thing — ten decimal digits,
+**leading zeros significant**:
+
+| Serial | Student | REGNO |
+|---|---|---|
+| `0012503301` | Maria Santos | `2023-0001` |
+| `0012503302` | Juan Dela Cruz | `2023-0002` |
+| `0012503303` | Andrea Lim | `2023-0003` |
+| `0012503304` | Miguel Gonzales | `2023-0004` |
+| `0012503305` | Sofia Ramos | `2023-0005` |
+| `0012503306` | Gabriel Flores | `2023-0006` |
+| `0001234567` | Isabella Aquino | `2023-0007` |
+| `0987654321` | Diego Mendoza | `2023-0008` |
+
+The last two vary the leading-zero count on purpose — if your reader or JSON layer ever coerces a
+serial to a number, those are the two that expose it fastest.
+
+**Three useful negative cases**, all of which should fail and are worth asserting against in your own
+tests:
+
+| Send this | Expect | Because |
+|---|---|---|
+| `2023-0001` (the REGNO) | `CardNotFound` | REGNO is not a tap identity |
+| `12503301` (zeros stripped) | `CardNotFound` | leading zeros are part of the serial |
+| any serial, no `Authorization` | `401 DeviceKeyMissing` | capture endpoints require a device key |
+
+Ask us for an open event's `eventId` — a tap needs one, and `tappedAt` must fall inside that event's
+window or you will get `TappedAtOutsideEventWindow` rather than a recorded tap.
+
+---
+
 ## Why this file still exists
 
 A schema says what a field *is*. It cannot say what your queue should *do*, and everything below is
