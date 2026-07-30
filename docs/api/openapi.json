@@ -1,0 +1,4233 @@
+{
+  "openapi": "3.0.1",
+  "info": {
+    "title": "EAMS API",
+    "description": "Events Attendance Monitoring System — attendance capture and administration.\n\n**This document supersedes `docs/api/attendance-contract-handoff.md` as the contract.**\nIt is generated from the source, so the outcome tokens, status codes and payload shapes\nbelow are what the running build actually does.\n\n- **Base path** `/api/v1`. JSON in and out, camelCase field names.\n- **All timestamps are UTC**, ISO 8601, with an explicit `Z`. A bare or offset-bearing\n  local time misjudges the Present/Late boundary by the server's offset.\n- **Errors are RFC 7807** `application/problem+json`. Every body carries a `traceId` to\n  quote back and, on the attendance surface, a stable `code` to branch on — never the\n  human-readable `title` or `detail`, which are reworded freely.\n- **Capture endpoints require a device key** (`DeviceKey` below). Everything else is open\n  for now: authentication for human users is Phase 6, and until it lands this API must\n  stay on a local or trusted network.\n\nSee the `TapOutcomeCode`, `ManualOutcomeCode` and `LiveOutcomeCode` schemas for the frozen\ntoken tables.",
+    "version": "v1"
+  },
+  "paths": {
+    "/api/v1/attendance": {
+      "get": {
+        "tags": [
+          "Attendance"
+        ],
+        "summary": "`GET /attendance` — recorded attendance rows, every filter optional.",
+        "description": "Unfiltered and unpaged, so it is a back-office read rather than something to poll. The live\r\ndashboard's read is `GET /attendance/live/{eventId}`, which is bounded and cursored.",
+        "parameters": [
+          {
+            "name": "eventId",
+            "in": "query",
+            "description": "Restrict to one event.",
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "studentId",
+            "in": "query",
+            "description": "Restrict to one student.",
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "description": "One of `Present`, `Late`, `Absent`, `Excused`.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The matching rows, possibly empty. Never a 404 for an empty filter.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/AttendanceDto"
+                  }
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/AttendanceDto"
+                  }
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/AttendanceDto"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/attendance/tap": {
+      "post": {
+        "tags": [
+          "Attendance"
+        ],
+        "summary": "`POST /attendance/tap` — the core capture path (Technical Plan §6.4).",
+        "description": "\r\n\r\n             One tap, decided by the same function every row of `POST /attendance/tap/batch` goes\r\n             through. Resolve the card UID → check the event and its window → absorb a replay by\r\n             `deviceTapId` → write or update the row → decide Present versus Late from\r\n             `tappedAt` and the event's `graceMinutes`.\r\n             \r\n\r\n\r\n  <b>Branch on `code`, never on `message`.</b> The token set and the status each one\r\n             arrives with are frozen contract — see the `TapOutcomeCode` schema. A success is a\r\n             `TapResult`; a rejection is an RFC 7807 body carrying the same `code` and\r\n             `serverTime`, so one accessor reads both.\r\n             \r\n\r\n\r\n  <b>Always send a `deviceTapId`, and never regenerate it on retry.</b> It is optional here\r\n             and required on the batch endpoint, but it is what makes a lost response recoverable: a replay\r\n             comes back `DuplicateIgnored` instead of writing a second row.\r\n             \r\n\r\n\r\n  <b>Send an explicit `tappedAt` too.</b> With `null` the instant being validated is\r\n             re-derived from our clock on <em>every</em> attempt, so a tap that landed at 10:00 and is\r\n             retried at 12:30 — after the event's window closed — comes back\r\n             `400 TappedAtOutsideEventWindow` rather than the `DuplicateIgnored` you would expect.\r\n             The stored row is correct either way; only reconciliation by code is wrong for it.\r\n             ",
+        "requestBody": {
+          "description": "The tap. See `TapRequest` for the per-field rules.",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TapRequest"
+              }
+            },
+            "text/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TapRequest"
+              }
+            },
+            "application/*+json": {
+              "schema": {
+                "$ref": "#/components/schemas/TapRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "401": {
+            "description": "No device key, or one that is malformed or unknown.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The key was revoked, or the device was retired.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Capture rate limit. Honour `Retry-After`.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "200": {
+            "description": "`Recorded`, `DuplicateIgnored`, `CheckedOut` or `AlreadyRecorded`. All four\r\n             mean the client can drop the tap from its queue.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/TapResult"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TapResult"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TapResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`EventNotOpen`, `DeviceMismatch`, `TappedAtOutOfRange` or\r\n             `TappedAtOutsideEventWindow`. Stop retrying — the same request will be refused forever.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`EventNotFound`, `CardNotFound` or `DeviceNotRegistered`. The last also covers a\r\n             device belonging to another school — deliberately indistinguishable.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "DeviceKey": []
+          }
+        ]
+      }
+    },
+    "/api/v1/attendance/tap/batch": {
+      "post": {
+        "tags": [
+          "Attendance"
+        ],
+        "summary": "`POST /attendance/tap/batch` — §8.2's offline queue flush (Phase 4d, D-31).",
+        "description": "\r\n\r\n  <b>A well-formed batch is always 200, never 207.</b> The transport status describes the batch;\r\n             each row's own `status` describes that tap. 207 Multi-Status is handled inconsistently by\r\n             proxies and client libraries, and — the part that bites — a client seeing any non-2xx is liable\r\n             to retry the entire batch, which is safe but pure waste when almost all of it landed.\r\n             \r\n\r\n\r\n  <b>The fourth and last endpoint a device key gates</b> (D-28). `[HasPermissionNotEnforced]`\r\n             stays alongside `[Authorize]` for the reason the tap endpoint records: the inert attribute is\r\n             the list Phase 6's rename walks, and the enforced-first endpoints are the ones a reader is least\r\n             likely to check. The `Policy` is named rather than left to the default — a bare\r\n             `[Authorize]` falls back to `RequireAuthenticatedUser()`, which a revoked key and a\r\n             deactivated device both satisfy by design, so it would admit exactly the credentials the 403\r\n             exists to refuse. `AuthorizationSeamTests` fails the build on either mistake.\r\n             \r\n\r\n\r\n  <b>Two size guards, and neither replaces the other.</b>\r\n  `[RequestSizeLimit]` refuses an\r\n             oversized body before it is buffered; EAMS.Domain.TapBatchLimits.MaxRows is checked in the service\r\n             after deserialization, when the row count is knowable. A body of 200 enormous rows passes the\r\n             first and fails nothing; a body of one row and four megabytes of whitespace passes the second.\r\n             \r\n\r\n\r\n  <b>It shares `/tap`'s rate-limit policy, so one flush of 200 taps spends one permit where\r\n             200 single taps would spend 200. That is intended, and it is recorded because nothing else would\r\n             say so.</b> The limiter's stated purpose is friction and detection against a runaway client, not\r\n             a contractual quota on taps — and a device that batches is being <em>well behaved</em>, so\r\n             charging it per row would penalise the shape §8.2 asks for and make the published\r\n             {PermitsPerWindow}-per-minute figure mean two different things depending on which endpoint was\r\n             used. What it does mean, stated plainly: the effective per-device write ceiling on this endpoint\r\n             is `PermitsPerWindow × MaxRows` — 120,000 taps a minute — so the limiter is not what bounds\r\n             batch write volume. The row cap and the body cap are. If a per-row budget is ever wanted, it\r\n             needs a token-bucket policy that charges by row count, which the fixed-window limiter cannot\r\n             express.\r\n             ",
+        "requestBody": {
+          "description": "The flush. See `TapBatchRequest`.",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TapBatchRequest"
+              }
+            },
+            "text/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TapBatchRequest"
+              }
+            },
+            "application/*+json": {
+              "schema": {
+                "$ref": "#/components/schemas/TapBatchRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "401": {
+            "description": "No device key, or one that is malformed or unknown.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The key was revoked, or the device was retired.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Capture rate limit. One flush spends one permit, whatever its row count.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "200": {
+            "description": "<b>Every well-formed batch, including an empty one.</b>\r\n`results` is dense — one entry per\r\n             submitted tap, in the order you sent them, so `results[i].index == i` and\r\n             `accepted + rejected == results.length`. Each row's own `status` is the status that tap\r\n             would have received as a single `POST /attendance/tap`.\r\n            \r\n             \r\n\r\n             On a `5xx`, retry the whole batch — that is always safe. Safe <b>because every row is\r\n             idempotent</b>, not because the batch is atomic: rows commit individually, so a server error\r\n             partway through leaves the earlier rows written and the retry absorbs them as\r\n             `DuplicateIgnored`.\r\n             ",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/TapBatchResult"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TapBatchResult"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TapBatchResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Transport or size only: a malformed body, or `BatchTooLarge`. The refusal echoes the limit\r\nas `maxBatchRows` in the problem body, so chunk from the response rather than hard-coding\r\nthe number. Nothing about the content of an individual row can produce a batch-level 4xx.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "DeviceKey": []
+          }
+        ]
+      }
+    },
+    "/api/v1/attendance/live/{eventId}": {
+      "get": {
+        "tags": [
+          "Attendance"
+        ],
+        "summary": "`GET /attendance/live/{eventId}` — the D-29 cursor-delta poll that stands in for §5/§6.4's\r\n             SignalR hub. Omit `since` for a snapshot; send back the previous response's `cursor`\r\n             for the changes since it.",
+        "description": "\r\n\r\n  <b>The permission is `attendance.read` and there is deliberately no `[Authorize]`.</b>\r\n             This is a dashboard read, not a capture, and the only authentication scheme that exists today is\r\n             the device key — which §11 scopes to `attendance.capture` and nothing else. Gating this\r\n             endpoint with it would force the admin SPA to hold a capture-scoped credential in a browser in\r\n             order to <em>watch</em> attendance, which inverts the split §6.4 draws between capturing and\r\n             reading and would hand a page that can only display data a key that can write it. It stays open\r\n             under ADR-001 D-6 with the rest of the admin surface, declares the permission Phase 6 will\r\n             enforce, and is listed alongside `GET /attendance` — the endpoint it is a live view of —\r\n             rather than alongside the tap.\r\n             \r\n\r\n\r\n  <b>\r\n    `Cache-Control: no-store`.</b> A cached delta is worse than a slow one: an intermediary\r\n             replaying a 200 for a cursor the client has already advanced past would make the dashboard\r\n             silently stop updating, and the client has no way to tell that from an event where nothing is\r\n             happening. `no-store` rather than `no-cache` because there is nothing here worth\r\n             revalidating — every response is keyed to a cursor that will never be asked for again.\r\n             ",
+        "parameters": [
+          {
+            "name": "eventId",
+            "in": "path",
+            "description": "The event to watch.",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "since",
+            "in": "query",
+            "description": "Omit for a snapshot; otherwise the `cursor` from your previous response, <b>verbatim</b>.\r\nOpaque — store it, send it back, never parse it. A blank value is treated as absent.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Exactly one of `entries` (you sent no cursor — <b>replace</b> your state) or `changes`\r\n(you sent one — <b>merge</b>). The other key is omitted entirely rather than sent as null.\r\n            \r\n\r\n<b>Do not ignore `hasMore`.</b> A response carries at most 500 rows; when it is true the\r\npage was truncated and you should poll again <em>immediately</em> rather than waiting\r\n`pollAfterSeconds`. Otherwise a 5,000-attendee event takes ten polls to fill a dashboard and\r\nlooks broken rather than paging.\r\n\r\n`counters` is `GET /events/{id}/summary`'s own object — the same numbers from the same\r\nquery, bounded by the same cursor ceiling as the rows beside them.\r\n",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/AttendanceLiveDto"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AttendanceLiveDto"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AttendanceLiveDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`InvalidCursor`. Re-poll with no `since`. Refused rather than silently downgraded to a\r\n             snapshot, which would look like \"nothing changed\" forever while your cursor stayed broken.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`EventNotFound`.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "240 polls per minute per client address — about one every 250 ms, far above the 5-second\r\ndefault. Partitioned separately from device-key capture limits, so a dashboard tab can never\r\nspend a kiosk's tap budget.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/attendance/manual": {
+      "post": {
+        "tags": [
+          "Attendance"
+        ],
+        "summary": "`POST /attendance/manual` — the organizer override (Technical Plan §6.4).",
+        "description": "\r\n\r\n  <b>Not a device path.</b> It carries `attendance.write` rather than the tap's\r\n             `attendance.capture`: a kiosk's device key is scoped to capture only, and an override is\r\n             the audited organizer action §6.4 describes. Collapsing the two permissions would let a reader\r\n             rewrite a status.\r\n             \r\n\r\n\r\n  <b>It keeps working on a `Closed` event, deliberately (ADR-003 D-17).</b> Closing is\r\n             terminal, and this is the only route back from a mistake — adding the tap path's status guard\r\n             here reads as a safety improvement in review and turns that terminal status into a dead end.\r\n             \r\n\r\n\r\n             Its `code` values are their own frozen table — see the `ManualOutcomeCode` schema —\r\n             and they travel through the identical `code` field a tap uses, on success bodies and RFC\r\n             7807 problem bodies alike.\r\n             ",
+        "parameters": [
+          {
+            "name": "eventId",
+            "in": "query",
+            "description": "The event to record against.",
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "studentId",
+            "in": "query",
+            "description": "The student.",
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "description": "One of §4.9's values — `Present`, `Late`, `Absent`, `Excused`. Anything else\r\nis `400 InvalidStatus` rather than a stored value no summary can count.",
+            "schema": {
+              "type": "string",
+              "default": "Present"
+            }
+          },
+          {
+            "name": "notes",
+            "in": "query",
+            "description": "Free text, at most EAMS.Domain.AttendanceNotes.MaxLength characters. Over-length is\r\n`400 InvalidNotes` — it used to reach SQL Server and come back as a truncation 500.",
+            "schema": {
+              "maxLength": 500,
+              "minLength": 0,
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Recorded. `code` is `Saved`.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/TapResult"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TapResult"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TapResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`InvalidStatus` or `InvalidNotes`, as an RFC 7807 body carrying `code` and\r\n             `serverTime`. <b>Not</b> a `TapResult` with `success: false` — that shape left\r\n             the 4xx responses in Phase 4c.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`EventNotFound` or `StudentNotFound`, same body shape.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/devices": {
+      "get": {
+        "tags": [
+          "Devices"
+        ],
+        "summary": "`GET /devices` — every registered device in this school.",
+        "description": "<b>No key material, ever.</b> The plaintext exists only in the 201 that issued it; this returns\r\n            the public key id and the lifecycle timestamps an operator needs to decide whether a credential\r\n            is still in use.",
+        "responses": {
+          "200": {
+            "description": "The devices, possibly empty.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/DeviceDto"
+                  }
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/DeviceDto"
+                  }
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/DeviceDto"
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "Devices"
+        ],
+        "summary": "§6.6 `POST /devices` — register, and issue the first key.",
+        "description": "<b>The 201 body is the only time this key is ever readable.</b> The server stores\r\n            `SHA-256(secret)` and nothing else, so there is no \"show it again\" endpoint to write and\r\n            none to forget to protect. An operator who loses it rotates.",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DeviceWriteRequest"
+              }
+            },
+            "text/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DeviceWriteRequest"
+              }
+            },
+            "application/*+json": {
+              "schema": {
+                "$ref": "#/components/schemas/DeviceWriteRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Created",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeviceKeyIssuedDto"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeviceKeyIssuedDto"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeviceKeyIssuedDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/devices/{id}": {
+      "get": {
+        "tags": [
+          "Devices"
+        ],
+        "summary": "`GET /devices/{id}` — one registered device.",
+        "description": "<b>No key material, ever</b> — same rule as the list. The plaintext key exists only in the 201\r\n            that issued it; what comes back here is the public key id and the lifecycle timestamps.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The device.",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The device.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeviceDto"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeviceDto"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeviceDto"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such device in this school.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "Devices"
+        ],
+        "summary": "§6.6 `PUT /devices/{id}` — the device's own fields. Never touches the key; see\r\n`Device.ApiKeyRevokedAt` for why retiring a device and burning its credential are two\r\ndifferent statements.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DeviceWriteRequest"
+              }
+            },
+            "text/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DeviceWriteRequest"
+              }
+            },
+            "application/*+json": {
+              "schema": {
+                "$ref": "#/components/schemas/DeviceWriteRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeviceDto"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeviceDto"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeviceDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not Found",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/devices/{id}/regenerate-key": {
+      "post": {
+        "tags": [
+          "Devices"
+        ],
+        "summary": "§6.6 `POST /devices/{id}/regenerate-key` — hard cut, no overlap window. The previous key\r\nstops working the moment this returns.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeviceKeyIssuedDto"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeviceKeyIssuedDto"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeviceKeyIssuedDto"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not Found",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/devices/{id}/revoke-key": {
+      "post": {
+        "tags": [
+          "Devices"
+        ],
+        "summary": "`POST /devices/{id}/revoke-key` — burn the credential without issuing a replacement.",
+        "description": "\r\n\r\n  <b>Not defined by §6.6, and added deliberately.</b> §6.6 offers only regeneration, which\r\n             conflates \"this key is compromised\" with \"give me a working one\" — but the published mobile\r\n             contract already distinguishes the two on the wire (`401` bad key versus `403` revoked\r\n             key), and without this route that 403 is unreachable and `Devices.ApiKeyRevokedAt` is a\r\n             column nothing can write. Recorded as drift.\r\n             \r\n\r\n\r\n             Idempotent: revoking twice, or revoking a device that never held a key, is a 200. The\r\n             postcondition — this device cannot authenticate — holds either way, so a retry after a timeout\r\n             is safe on the one operation an operator runs when something has gone wrong.\r\n             ",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeviceDto"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeviceDto"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeviceDto"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not Found",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/devices/{id}/heartbeat": {
+      "post": {
+        "tags": [
+          "Devices"
+        ],
+        "summary": "§6.6 `POST /devices/{id}/heartbeat` — liveness, and one of the four endpoints a device key\r\nauthenticates.",
+        "description": "\r\n\r\n  <b>The route id must be the authenticated device's own</b> — the same D-26 rule the tap path\r\n             applies, and it took a second look to see that it belongs here too.\r\n             \r\n\r\n\r\n             The first version of this action skipped the check, on the reasoning that one kiosk stamping a\r\n             sibling's `LastSeenAt` within its own school is a wrong liveness reading rather than a\r\n             data-integrity problem. That undercounts what this writes:\r\n             M:EAMS.Application.Abstractions.IDeviceService.HeartbeatAsync(System.Guid,System.Threading.CancellationToken) also\r\n             sets `ApiKeyLastUsedAt`, and <em>that</em> column is the signal an operator reads when\r\n             deciding whether a credential is still in use and therefore whether it is safe to revoke. A\r\n             retired-but-not-revoked kiosk that a neighbour keeps making look active is a key that never gets\r\n             burned. The check is shorter than the paragraph that argued against it.\r\n             \r\n\r\n\r\n  <b>404, not 403.</b> A device asking about a device that is not itself learns only that the URL\r\n             names nothing it can see — the same non-disclosure rule D-27 applies when it reuses\r\n             `DeviceNotRegistered` rather than inventing a cross-tenant 403.\r\n             ",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeviceDto"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeviceDto"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeviceDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not Found",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too Many Requests",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "DeviceKey": []
+          }
+        ]
+      }
+    },
+    "/api/v1/events": {
+      "get": {
+        "tags": [
+          "Events"
+        ],
+        "summary": "`GET /events` — the event list, optionally filtered by status.",
+        "parameters": [
+          {
+            "name": "status",
+            "in": "query",
+            "description": "`Draft`, `Open`, `Closed` or `Cancelled`. A capture client wants\r\n            `?status=Open` — a tap against any other status is `400 EventNotOpen`.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The matching events, possibly empty.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/EventDto"
+                  }
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/EventDto"
+                  }
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/EventDto"
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "Events"
+        ],
+        "summary": "§6.3 `POST /events`. Always creates a `Draft`; `PATCH /events/{id}/status` is the\r\nonly way to move it, which is what makes the roster freeze unskippable.",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EventWriteRequest"
+              }
+            },
+            "text/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EventWriteRequest"
+              }
+            },
+            "application/*+json": {
+              "schema": {
+                "$ref": "#/components/schemas/EventWriteRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Created",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/EventDto"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EventDto"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EventDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/events/{id}": {
+      "get": {
+        "tags": [
+          "Events"
+        ],
+        "summary": "`GET /events/{id}` — one event.",
+        "description": "The event's own record only. Its counts are `GET /events/{id}/summary` and its audience is\r\n`GET /events/{id}/roster` — kept apart so rendering an event detail page does not pay for\r\naggregates the caller may not be showing.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The event.",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The event.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/EventDto"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EventDto"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EventDto"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such event, or it is soft-deleted.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "Events"
+        ],
+        "summary": "`PUT /events/{id}` — update an event.",
+        "description": "A full replace of the event's own fields; the audience is not part of this body and moves through\r\nthe `attendees` routes instead. A status transition the event cannot make is `409`\r\nrather than `400` — the request is well-formed, the event is simply not in a state that\r\nallows it.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The event.",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "The new field values.",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EventWriteRequest"
+              }
+            },
+            "text/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EventWriteRequest"
+              }
+            },
+            "application/*+json": {
+              "schema": {
+                "$ref": "#/components/schemas/EventWriteRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The updated event.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/EventDto"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EventDto"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EventDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The body is invalid.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such event, or it is soft-deleted.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The event's current status does not allow this change.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "Events"
+        ],
+        "summary": "§6.3 `DELETE /events/{id}` — soft (§4.5 `IsDeleted`).",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "No Content"
+          },
+          "404": {
+            "description": "Not Found",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/events/{id}/summary": {
+      "get": {
+        "tags": [
+          "Events"
+        ],
+        "summary": "`GET /events/{id}/summary` — the §6.7/§12 Event Attendance Summary.",
+        "description": "\r\n\r\n  <b>\r\n    `expected` is the invited population, not the number who tapped</b> (ADR-003 D-19):\r\n             students in the event's attached groups plus its individually attached students, de-duplicated.\r\n             Zero means no audience is attached, and nothing falls back to a row count in that case — a\r\n             denominator that silently changes definition depending on whether a table is empty is worse than\r\n             one that is honestly absent.\r\n             \r\n\r\n\r\n  <b>\r\n    `attendanceRate` cannot exceed 100</b>, structurally rather than by clamping: numerator\r\n             and denominator are both computed over the expected set. Walk-ins are therefore not in it — they\r\n             are counted as `unexpected`, and `GET /events/{id}/roster` names them.\r\n             \r\n\r\n\r\n  <b>This read is unbounded, and that is the difference from the identical object inside\r\n             `GET /attendance/live/{eventId}`.</b> There is no cursor here and therefore no ceiling: it\r\n             counts every committed row at the moment it runs. The live endpoint bounds the same counters by\r\n             its own cursor ceiling so the headline number cannot exceed the list of names under it; the two\r\n             converge as soon as any in-flight write commits.\r\n             ",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The event.",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The summary.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/EventSummaryDto"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EventSummaryDto"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EventSummaryDto"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such event, or it is soft-deleted.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/events/{id}/roster": {
+      "get": {
+        "tags": [
+          "Events"
+        ],
+        "summary": "§6.3 `GET /events/{id}/roster` — expected versus actual, and the source of §12's Absentee\r\nReport. `events.read` for the same reason the summary carries it.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/EventRosterDto"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EventRosterDto"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EventRosterDto"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not Found",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/events/{id}/status": {
+      "patch": {
+        "tags": [
+          "Events"
+        ],
+        "summary": "§6.3 `PATCH /events/{id}/status` — Open / Close / Cancel.\r\n            \r\n\r\n\r\nClosing materializes the expected roster as `Absent` records; the response message says how\r\nmany. An illegal transition is a 400 naming what <em>is</em> reachable, never a silent write.\r\n",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EventStatusRequest"
+              }
+            },
+            "text/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EventStatusRequest"
+              }
+            },
+            "application/*+json": {
+              "schema": {
+                "$ref": "#/components/schemas/EventStatusRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/EventDto"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EventDto"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EventDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not Found",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/events/{id}/attendees": {
+      "post": {
+        "tags": [
+          "Events"
+        ],
+        "summary": "§6.3 `POST /events/{id}/attendees` — associate `{studentGroupIds[], studentIds[]}`.\r\nIdempotent; the response reports what was attached versus what already was.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EventAudienceRequest"
+              }
+            },
+            "text/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EventAudienceRequest"
+              }
+            },
+            "application/*+json": {
+              "schema": {
+                "$ref": "#/components/schemas/EventAudienceRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/EventAudienceResultDto"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EventAudienceResultDto"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EventAudienceResultDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not Found",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/events/{id}/attendees/groups/{studentGroupId}": {
+      "delete": {
+        "tags": [
+          "Events"
+        ],
+        "summary": "Detaches one group. Sub-resource `DELETE`s rather than a body on <c>DELETE\r\n/attendees</c>: a request body on `DELETE` is legal but is dropped by enough proxies and\r\nclient libraries to be a poor contract to publish, and the plan does not define removal at all.\r\n            \r\n\r\n\r\n204 whether or not the group was attached — the postcondition holds either way, so a retry is\r\nsafe. A missing <em>event</em> is still 404: that one is named by the URL.\r\n",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "studentGroupId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "No Content"
+          },
+          "404": {
+            "description": "Not Found",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/events/{id}/attendees/students/{studentId}": {
+      "delete": {
+        "tags": [
+          "Events"
+        ],
+        "summary": "`DELETE /events/{id}/attendees/students/{studentId}` — detach one individually-attached\r\n             student from the event's audience.",
+        "description": "Idempotent, on the same reasoning as M:EAMS.Api.Controllers.EventsController.DetachGroup(System.Guid,System.Guid,System.Threading.CancellationToken): detaching a student who is not\r\nattached is `204`, not `404`, so a retry is safe. A missing <em>event</em> is still\r\n`404` — that one is named by the URL.\r\n            \r\n\r\n\r\nSpelled out rather than left as `<inheritdoc>`: Swashbuckle does not resolve that tag,\r\nso this operation shipped with an empty description while looking documented in the source.\r\n",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The event.",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "studentId",
+            "in": "path",
+            "description": "The student to detach.",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Detached, or was not attached."
+          },
+          "404": {
+            "description": "No such event.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The event's status does not allow an audience change.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/sis/import/upload": {
+      "post": {
+        "tags": [
+          "SisImport"
+        ],
+        "summary": "Stages a workbook and returns what is in it. Writes nothing to the academic tables.",
+        "requestBody": {
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "file": {
+                    "type": "string",
+                    "description": "The `.xlsx`, as a multipart form file.",
+                    "format": "binary"
+                  },
+                  "termId": {
+                    "type": "string",
+                    "description": "The term this roster belongs to. <b>Required, and never inferred</b> — see ADR-001 D-5 and\r\n`SisImportBatch.TermId`. Guessing it from the filename or the upload date misfiles an entire\r\nbatch in a way nothing downstream can detect.",
+                    "format": "uuid"
+                  }
+                }
+              },
+              "encoding": {
+                "file": {
+                  "style": "form"
+                },
+                "termId": {
+                  "style": "form"
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Created",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/SisImportPreviewDto"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SisImportPreviewDto"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SisImportPreviewDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Unprocessable Content",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/sis/import/{batchId}/run": {
+      "post": {
+        "tags": [
+          "SisImport"
+        ],
+        "summary": "Runs a staged batch. Idempotent with respect to the database: running the same roster twice\r\nleaves it identical and reports every row `Skipped`.",
+        "parameters": [
+          {
+            "name": "batchId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SisImportRunRequest"
+              }
+            },
+            "text/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SisImportRunRequest"
+              }
+            },
+            "application/*+json": {
+              "schema": {
+                "$ref": "#/components/schemas/SisImportRunRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/SisImportBatchDto"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SisImportBatchDto"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SisImportBatchDto"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not Found",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/sis/import/{batchId}": {
+      "get": {
+        "tags": [
+          "SisImport"
+        ],
+        "summary": "`GET /sis/import/{batchId}` — one import batch and its counts.",
+        "description": "The batch header, not its rows: totals and status, with the staged rows behind\r\n`GET /sis/import/{batchId}/rows`. This is the poll target between uploading a batch and\r\nrunning it, and it is what makes a `404` from `POST .../run` unambiguous — both verbs\r\nagree about which batches exist.",
+        "parameters": [
+          {
+            "name": "batchId",
+            "in": "path",
+            "description": "The batch.",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The batch.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/SisImportBatchDto"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SisImportBatchDto"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SisImportBatchDto"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such batch.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/sis/import/{batchId}/rows": {
+      "get": {
+        "tags": [
+          "SisImport"
+        ],
+        "summary": "A batch's staged rows, optionally narrowed to one outcome —\r\n`?result=Failed` is the query an operator runs after every import.",
+        "parameters": [
+          {
+            "name": "batchId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "result",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/SisImportRowDto"
+                  }
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/SisImportRowDto"
+                  }
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/SisImportRowDto"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/students": {
+      "get": {
+        "tags": [
+          "Students"
+        ],
+        "summary": "`GET /students` — the roster, every filter optional.",
+        "parameters": [
+          {
+            "name": "search",
+            "in": "query",
+            "description": "Matches student number or name.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "course",
+            "in": "query",
+            "description": "<b>ADR-001 D-2 derived display cache.</b> A student can sit in several sections at once — twelve\r\n            of fifty-two in the real roster do — so this filter cannot represent the truth. It exists for the\r\n            admin grid; do not build reporting on it.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "description": "`Active`, `Inactive` or `Graduated`.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The matching students, possibly empty.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/StudentDto"
+                  }
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/StudentDto"
+                  }
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/StudentDto"
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "Students"
+        ],
+        "summary": "§6.2 `POST /students` — manual roster entry, alongside the §10 bulk import.",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StudentWriteRequest"
+              }
+            },
+            "text/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StudentWriteRequest"
+              }
+            },
+            "application/*+json": {
+              "schema": {
+                "$ref": "#/components/schemas/StudentWriteRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Created",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/StudentDto"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StudentDto"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StudentDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/students/{id}": {
+      "get": {
+        "tags": [
+          "Students"
+        ],
+        "summary": "`GET /students/{id}` — one student by primary key.",
+        "description": "By `Id`, not by student number. A capture client holding a card UID wants\r\n`GET /students/by-card/{cardUid}` instead — the UID <em>is</em> the student number, so that\r\nroute is the one that avoids a lookup round trip.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The student's primary key.",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The student.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/StudentDto"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StudentDto"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StudentDto"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such student.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "Students"
+        ],
+        "summary": "§6.2 `PUT /students/{id}`. A full replacement of the student's own editable fields.\r\n            \r\n\r\n\r\nSending back `course`, `yearLevel` or `section` — which\r\n`GET /students/{id}` returns — is a 400 with `code: \"FieldIsDerived\"`, not a silent\r\ndrop. See EAMS.Application.Abstractions.StudentWriteOutcome.FieldIsDerived.\r\n",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StudentWriteRequest"
+              }
+            },
+            "text/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StudentWriteRequest"
+              }
+            },
+            "application/*+json": {
+              "schema": {
+                "$ref": "#/components/schemas/StudentWriteRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/StudentDto"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StudentDto"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StudentDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not Found",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "Students"
+        ],
+        "summary": "§6.2 `DELETE /students/{id}` — soft (§4.3 `IsDeleted`).",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "No Content"
+          },
+          "404": {
+            "description": "Not Found",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/students/by-card/{cardUid}": {
+      "get": {
+        "tags": [
+          "Students"
+        ],
+        "summary": "`GET /students/by-card/{cardUid}` — UID→student resolution for the mobile scan screen.",
+        "description": "\r\n\r\n  <b>A card UID <em>is</em> the student number (REGNO).</b> There is no tap-to-bind screen to\r\n             build — students arrive card-ready from the roster import.\r\n             \r\n\r\n\r\n  <b>Normalisation is uppercase with every non-alphanumeric stripped.</b>\r\n  `04:A7:B8:C9`,\r\n             `04-a7-b8-c9` and `04a7b8c9` are one card, stored as `04A7B8C9`. The server\r\n             normalises what you send, so any reader format is accepted — but normalise before any\r\n             <em>local</em> cache or comparison, or your dedupe will disagree with ours.\r\n             ",
+        "parameters": [
+          {
+            "name": "cardUid",
+            "in": "path",
+            "description": "The raw or normalised UID.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The student, with every card they hold.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/StudentDto"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StudentDto"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StudentDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No <em>active</em> card matches that UID.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too Many Requests",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "DeviceKey": []
+          }
+        ]
+      }
+    },
+    "/api/v1/students/{id}/cards": {
+      "post": {
+        "tags": [
+          "Students"
+        ],
+        "summary": "§6.2 `POST /students/{id}/cards` — assign an RFID card `{cardUid, label}`.\r\n            \r\n\r\n<b>The `Location` header points at the student, not at the card.</b> §6.2 defines no\r\n`GET /cards/{id}`, and a 201 whose Location 404s is worse than one that names the resource\r\nthe new card is actually visible on — `GET /students/{id}` returns it in `cards[]`.\r\n",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StudentCardRequest"
+              }
+            },
+            "text/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StudentCardRequest"
+              }
+            },
+            "application/*+json": {
+              "schema": {
+                "$ref": "#/components/schemas/StudentCardRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Created",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/CardDto"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CardDto"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CardDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not Found",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/students/{id}/cards/{cardId}": {
+      "delete": {
+        "tags": [
+          "Students"
+        ],
+        "summary": "§6.2 `DELETE /students/{id}/cards/{cardId}` — <b>deactivate</b>. The row survives, because\r\nADR-001 D-3's whole point is that a reissued card carries the same REGNO and a past tap must\r\nkeep resolving to the physical card that produced it.\r\n            \r\n\r\n\r\n204 whether or not the card was still active — the postcondition holds either way, so a retry is\r\nsafe. A card that belongs to another student is still a 404: this URL claims it belongs to this\r\none.\r\n",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "cardId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "No Content"
+          },
+          "404": {
+            "description": "Not Found",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "AttendanceDeltaDto": {
+        "type": "object",
+        "properties": {
+          "eventId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "studentId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "status": {
+            "type": "string"
+          },
+          "checkInAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "presentCount": {
+            "type": "integer",
+            "description": "§6.4's field, and it is an <em>event-level</em> number repeated on every delta.\r\n            \r\n\r\n\r\nThat looks like denormalization because it is. §6.4 declares it on the hub payload, so a hub client\r\nreceiving a single delta over a socket has the headline counts without a second request — which is\r\nthe entire reason a hub payload would carry them. The value is `EventSummaryDto.Present`:\r\nstudents with a `Present` record, <em>not</em> Present + Late. Taking the summary's own field\r\nrather than inventing a third definition is the point — the dashboard header and\r\n`GET /events/{id}/summary` cannot disagree, because they are the same number from the same\r\nquery.\r\n",
+            "format": "int32"
+          },
+          "expectedCount": {
+            "type": "integer",
+            "description": "<inheritdoc cref=\"P:EAMS.Application.Dtos.AttendanceDeltaDto.PresentCount\" path=\"/summary\" /> The invited population — `EventSummaryDto.Expected`,\r\n            which is ADR-003 D-19's denominator and not \"how many rows exist\".",
+            "format": "int32"
+          },
+          "attendanceId": {
+            "type": "string",
+            "description": "The `AttendanceRecords.Id` this delta describes. Not in §6.4's declared payload; added because\r\na reducer keyed on `studentId` alone cannot tell an update from a second row, and §4.6\r\noccurrences will eventually make two rows per student per event legal.",
+            "format": "uuid"
+          },
+          "studentNumber": {
+            "type": "string"
+          },
+          "studentName": {
+            "type": "string"
+          },
+          "checkOutAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "captureMethod": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false,
+        "description": "One attendance row as the live dashboard sees it (Phase 4d, D-29).\r\n            \r\n\r\n<b>This type is deliberately a superset of the SignalR payload Technical Plan §6.4 declares</b>\r\n(`{eventId, studentId, status, checkInAt, presentCount, expectedCount}`) — those six names,\r\nspelled those ways, are the first six parameters below. That is the whole mechanism by which\r\ndeferring the hub stays reversible: if a hub is ever added it emits <em>this object</em>, unchanged,\r\nand the client's reducer does not move. Collapsing the extra fields into a leaner \"delta\" type, or\r\nrenaming `presentCount` to match `EventSummaryDto.Present`, would quietly cost that\r\nproperty and nothing would fail.\r\n"
+      },
+      "AttendanceDto": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "eventId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "studentId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "studentName": {
+            "type": "string"
+          },
+          "studentNumber": {
+            "type": "string"
+          },
+          "checkInAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "checkOutAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "status": {
+            "type": "string"
+          },
+          "captureMethod": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
+      "AttendanceLiveDto": {
+        "type": "object",
+        "properties": {
+          "eventId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "cursor": {
+            "type": "string",
+            "description": "Opaque. Store it, send it back as `?since=`, do not parse it. See\r\n`EAMS.Domain.AttendanceCursor` for what is inside and why.\r\n            \r\n\r\n<b>It advances even when nothing changed</b>, because it is a ceiling on what has been read rather\r\nthan the high-water mark of what was returned. Echoing the caller's own cursor back on an empty\r\ndelta would leave every poll re-scanning the same range forever after a quiet event.\r\n"
+          },
+          "counters": {
+            "$ref": "#/components/schemas/EventSummaryDto"
+          },
+          "entries": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AttendanceDeltaDto"
+            },
+            "nullable": true
+          },
+          "changes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AttendanceDeltaDto"
+            },
+            "nullable": true
+          },
+          "serverTime": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "pollAfterSeconds": {
+            "type": "integer",
+            "description": "How long the client should wait before polling again. <b>In the body on purpose</b>: it lets the\r\nserver back every dashboard off under load without anyone shipping a client release, which is the\r\none operational lever a polling design has and a hub does not.",
+            "format": "int32"
+          },
+          "hasMore": {
+            "type": "boolean",
+            "description": "True when this response was truncated at\r\nEAMS.Application.Abstractions.AttendanceLiveOptions.MaxPageRows and more\r\nrows are already available below EAMS.Application.Dtos.AttendanceLiveDto.Cursor. <b>Poll again immediately rather than waiting\r\nEAMS.Application.Dtos.AttendanceLiveDto.PollAfterSeconds.</b>\r\n\r\nWithout this the page cap would be its own defect: a five-thousand-row first snapshot at five\r\nhundred rows a page and five seconds between pages takes the better part of a minute to fill a\r\ndashboard that used to fill in one request. The flag costs one boolean and turns the cap into\r\npaging.\r\n"
+          }
+        },
+        "additionalProperties": false,
+        "description": "The body of `GET /attendance/live/{eventId}` — cursor-delta polling in place of the §5/§6.4\r\nSignalR hub (Phase 4d, D-29).\r\n            \r\n\r\n<b>Why polling, recorded here because the endpoint is the argument.</b> A hub client has to fetch a\r\nsnapshot on every reconnect to close the gap it missed, so an endpoint of exactly this shape is\r\nrequired under <em>both</em> designs — the hub would have been the second mechanism, not the first.\r\nPolling also needs no backplane and no sticky sessions, survives a campus firewall, and keeps a\r\ndevice key out of a WebSocket query string where it lands in access logs.\r\n\r\n<b>One type serves both calls, and exactly one of the two collections is present.</b>EAMS.Application.Dtos.AttendanceLiveDto.Entries when the caller sent no cursor, EAMS.Application.Dtos.AttendanceLiveDto.Changes when it sent one; the\r\nabsent one is omitted from the JSON entirely rather than serialized as `null`, so the two\r\npublished shapes are byte-for-byte what the document describes. The distinction is not cosmetic —\r\na client that received `{entries: [...], changes: null}` would have to guess which mode it is\r\nin, and the whole point of the split is that a snapshot <em>replaces</em> state while a delta\r\n<em>merges</em> into it.\r\n",
+        "example": {
+          "eventId": "3f2504e0-4f89-11d3-9a0c-0305e82c3301",
+          "cursor": "AAAAAAAAB9E",
+          "counters": {
+            "eventId": "3f2504e0-4f89-11d3-9a0c-0305e82c3301",
+            "eventName": "CICSS General Assembly",
+            "expected": 52,
+            "present": 38,
+            "late": 4,
+            "absent": 0,
+            "excused": 0,
+            "unexpected": 2,
+            "attendanceRate": 80.8
+          },
+          "entries": [
+            {
+              "eventId": "3f2504e0-4f89-11d3-9a0c-0305e82c3301",
+              "studentId": "0b8f3d5a-9c21-4a67-9c1e-6d2f0a4b7e33",
+              "status": "Present",
+              "checkInAt": "2026-07-29T09:02:11Z",
+              "presentCount": 38,
+              "expectedCount": 52,
+              "attendanceId": "9d1c7b44-2f0e-4a8b-93a6-5c7e1f2d3a44",
+              "studentNumber": "USA39912",
+              "studentName": "Maria Clara Reyes",
+              "checkOutAt": null,
+              "captureMethod": "Rfid"
+            }
+          ],
+          "serverTime": "2026-07-29T09:14:05.402Z",
+          "pollAfterSeconds": 5,
+          "hasMore": false
+        }
+      },
+      "CardDto": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "cardUid": {
+            "type": "string"
+          },
+          "label": {
+            "type": "string",
+            "nullable": true
+          },
+          "isActive": {
+            "type": "boolean"
+          }
+        },
+        "additionalProperties": false
+      },
+      "DeviceDto": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "name": {
+            "type": "string"
+          },
+          "deviceType": {
+            "type": "string"
+          },
+          "readerModel": {
+            "type": "string",
+            "nullable": true
+          },
+          "isActive": {
+            "type": "boolean"
+          },
+          "apiKeyId": {
+            "type": "string",
+            "description": "The <em>public</em> half of the key — the twelve characters between `eams_dk_` and the secret.\r\nSafe to show and to log: it identifies the credential without being one, which is what makes\r\n\"device 3's key id is `a91f…`, and the log line that failed says `a91f…`\" a possible\r\nsentence. Null when the device has never been issued a key.",
+            "nullable": true
+          },
+          "hasActiveKey": {
+            "type": "boolean",
+            "description": "Whether this device could authenticate right now: it has a key, the key is not revoked, and the\r\ndevice is active. A single boolean rather than three, because \"why can this kiosk not tap?\" is one\r\nquestion and the three columns answer it together."
+          },
+          "apiKeyIssuedAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "apiKeyLastUsedAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "apiKeyRevokedAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "lastSeenAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          }
+        },
+        "additionalProperties": false,
+        "description": "Technical Plan §4.10 / §6.6, as a client sees it.\r\n            \r\n\r\n<b>There is deliberately no key-shaped field on this record.</b> Not the secret, not the hash, not\r\nthe token. The plaintext key exists in exactly two responses — the 201 from `POST /devices` and\r\nthe 200 from `POST /devices/{id}/regenerate-key` — and in EAMS.Application.Dtos.DeviceKeyIssuedDto\r\nalone. Adding a `apiKey` here to \"make the list more useful\" would turn every\r\n`GET /devices` into a credential dump, which is precisely why\r\n`DeviceLifecycleTests.No_read_response_ever_carries_the_key` asserts on the serialized bytes\r\nrather than on the record's shape.\r\n"
+      },
+      "DeviceKeyIssuedDto": {
+        "type": "object",
+        "properties": {
+          "device": {
+            "$ref": "#/components/schemas/DeviceDto"
+          },
+          "apiKey": {
+            "type": "string",
+            "description": "The complete `eams_dk_<keyId>_<secret>` token. Frozen format — see\r\n`docs/api/attendance-contract-handoff.md`."
+          }
+        },
+        "additionalProperties": false,
+        "description": "The one and only carrier of a plaintext device key.\r\n            \r\n\r\n\r\nReturned at issue and at rotation, and never afterwards — the server keeps only\r\n`SHA-256(secret)`, so \"show me the key again\" has no implementation rather than a refused\r\none. An operator who loses it rotates.\r\n"
+      },
+      "DeviceWriteRequest": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "deviceType": {
+            "type": "string",
+            "nullable": true
+          },
+          "readerModel": {
+            "type": "string",
+            "nullable": true
+          },
+          "isActive": {
+            "type": "boolean"
+          }
+        },
+        "additionalProperties": false,
+        "description": "The body of `POST /devices` and `PUT /devices/{id}`.\r\n            \r\n\r\n<b>`SchoolId` is deliberately absent</b>, exactly as it is on `EventWriteRequest`: the\r\ntenant comes from EAMS.Application.Abstractions.ISchoolContext, never from the\r\nrequest. A caller-supplied tenant on a write is the hole Phase 4b closed on the tap path\r\n(D-27); this surface does not open a second one.\r\n\r\n<b>No key field either.</b> A key is minted by the server or it is not minted — see\r\n`DeviceKey.Issue` for why an operator-chosen key would invalidate the hashing decision.\r\n"
+      },
+      "EventAudienceRequest": {
+        "type": "object",
+        "properties": {
+          "studentGroupIds": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "nullable": true
+          },
+          "studentIds": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "nullable": true
+          }
+        },
+        "additionalProperties": false,
+        "description": "The body of `POST /events/{id}/attendees` — §6.3's `{studentIds[], groupIds[]}`.\r\n            \r\n\r\n\r\nBoth lists are optional and both may be sent at once. Sending neither is a no-op rather than an\r\nerror: it is what \"the organizer cleared the form and saved\" looks like, and 400-ing it would say\r\nthe request was malformed when it was merely empty.\r\n"
+      },
+      "EventAudienceResultDto": {
+        "type": "object",
+        "properties": {
+          "eventId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "groupsAttached": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "studentsAttached": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "groupsAlreadyAttached": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "studentsAlreadyAttached": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "expected": {
+            "type": "integer",
+            "description": "The event's expected-attendee count after this call — the same number\r\n`GET /events/{id}/summary` reports. Returned here so the UI can show the denominator move as\r\nsections are attached, without a follow-up request.",
+            "format": "int32"
+          },
+          "warnings": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Non-fatal observations about what was attached. Empty on the ordinary case. See\r\n`IEventService.AttachAudienceAsync` for why a term mismatch warns rather than refuses."
+          }
+        },
+        "additionalProperties": false,
+        "description": "What one call to `POST /events/{id}/attendees` did.\r\n            \r\n\r\n\r\nThe `Already` counters exist so idempotency is <em>observable</em> rather than merely true. A\r\nre-post returning `{attached: 0, alreadyAttached: 3}` tells a caller its earlier request landed;\r\na bare 200 would leave \"did that save?\" unanswerable without a second round trip.\r\n"
+      },
+      "EventDto": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "name": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string",
+            "nullable": true
+          },
+          "location": {
+            "type": "string",
+            "nullable": true
+          },
+          "startAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "endAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "attendanceMode": {
+            "type": "string"
+          },
+          "graceMinutes": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "requireRegistration": {
+            "type": "boolean"
+          },
+          "status": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false,
+        "description": "Technical Plan §4.5, as a client sees it.\r\n            \r\n\r\n`Description` and `RequireRegistration` were added with the §6.3 write surface. They are\r\nnot decoration: `PUT /events/{id}` is a full replacement, so a client that cannot read a field\r\nit is about to send back has no way to preserve it — the round trip would blank the description of\r\nevery event edited through the UI. Additive on the wire; existing consumers ignore them.\r\n"
+      },
+      "EventRosterDto": {
+        "type": "object",
+        "properties": {
+          "eventId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "eventName": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "isFrozen": {
+            "type": "boolean",
+            "description": "True once this event's audience has been snapshotted — both terminal statuses. The published\r\nstatement that these numbers can no longer move on their own: a later roster import that adds\r\nstudents to an attached section does not change them.\r\n            \r\n\r\n<b>It covers `Cancelled` as well as `Closed`, and did not always.</b> Cancelling now\r\nwrites the resolved audience down exactly as closing does — it simply materializes no absentees —\r\nso a cancelled event's denominator is as fixed as a closed one's. Reporting `false` for it\r\nwould be the same class of plausible-but-wrong published number this phase exists to remove.\r\n"
+          },
+          "expected": {
+            "type": "integer",
+            "description": "The invited population: every student in an attached group, plus every individually attached\r\nstudent, de-duplicated. This is the denominator §4.5 and §12 mean, and it is <em>not</em> the length\r\nof EAMS.Application.Dtos.EventRosterDto.Entries — a student who tapped without being invited is listed with\r\n`IsExpected = false` and is not counted here.\r\n            \r\n\r\n\r\nWhile the event is live the soft-deleted are excluded: a student the roster says does not exist\r\ncannot be expected to attend. Once EAMS.Application.Dtos.EventRosterDto.IsFrozen they are included, because by then this\r\nis a written-down record of who was invited and a student deleted next year must not retroactively\r\nshrink a past event's denominator.\r\n",
+            "format": "int32"
+          },
+          "present": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "late": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "absent": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "excused": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "notRecorded": {
+            "type": "integer",
+            "description": "Expected students with no attendance row at all. While the event is live this is the running\r\nabsentee list; after a <em>close</em> it is zero, because closing materializes every one of them as\r\nan `Absent` record. After a <em>cancellation</em> it is the whole audience, and that is the\r\nhonest answer: the invitation list was frozen, and nobody attended because the event did not happen.",
+            "format": "int32"
+          },
+          "unexpected": {
+            "type": "integer",
+            "description": "Entries flagged `IsExpected = false` — recorded but never invited. The same number\r\n`GET /events/{id}/summary` reports under the same name, so the two views of one event agree\r\nabout how many walk-ins it had.",
+            "format": "int32"
+          },
+          "entries": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/EventRosterEntryDto"
+            }
+          }
+        },
+        "additionalProperties": false,
+        "description": "`GET /events/{id}/roster` — §6.3's \"expected vs present roster\" and the source of §12's\r\n             Absentee Report.\r\n            \r\n             \r\n<b>The header counts and EAMS.Application.Dtos.EventRosterDto.Entries always reconcile.</b> The buckets are counted over\r\n             exactly the rows listed, so an operator adding up the roster gets the header. They also match\r\n             `GET /events/{id}/summary`, which counts the same attendance rows.\r\n             "
+      },
+      "EventRosterEntryDto": {
+        "type": "object",
+        "properties": {
+          "studentId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "studentNumber": {
+            "type": "string"
+          },
+          "fullName": {
+            "type": "string"
+          },
+          "section": {
+            "type": "string",
+            "nullable": true
+          },
+          "isExpected": {
+            "type": "boolean",
+            "description": "Whether the event's audience includes this student. False means a walk-in: they have an attendance\r\nrecord but no invitation. Listed rather than hidden, because the alternative is a roster whose rows\r\ndo not add up to the summary an organizer is looking at beside it."
+          },
+          "status": {
+            "type": "string",
+            "description": "The §4.9 status, or `null` for an expected student with no record yet. Null is the absentee\r\nsignal before a close; there are none after one.",
+            "nullable": true
+          },
+          "checkInAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "checkOutAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "captureMethod": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "additionalProperties": false,
+        "description": "One line of the roster."
+      },
+      "EventStatusRequest": {
+        "type": "object",
+        "properties": {
+          "status": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false,
+        "description": "The body of `PATCH /events/{id}/status`. See `EventStatusTransition`."
+      },
+      "EventSummaryDto": {
+        "type": "object",
+        "properties": {
+          "eventId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "eventName": {
+            "type": "string"
+          },
+          "expected": {
+            "type": "integer",
+            "description": "The invited population: students in the event's attached §4.8 groups plus its individually attached\r\nstudents, de-duplicated, excluding the soft-deleted.\r\n            \r\n\r\n<b>This used to be the recorded-row count</b>, which made the rate structurally incapable of falling\r\nbelow the share of rows somebody had marked `Absent` by hand, and made an absentee\r\nunrepresentable: a student who never taps has no row, so they were not counted as expected either.\r\nA number that was always about 100% and meant nothing.\r\n\r\n<b>Zero means no audience is attached</b>, not \"nobody was invited to a well-defined event\". Nothing\r\nfalls back to the old count in that case — a denominator that silently changes definition depending\r\non whether a table is empty is worse than one that is honestly absent. `GET /events/{id}/roster`\r\nis where to look: it lists whoever <em>did</em> tap, each flagged `isExpected: false`.\r\n",
+            "format": "int32"
+          },
+          "present": {
+            "type": "integer",
+            "description": "Counted over every attendance row on the event, including any belonging to a student the audience\r\ndoes not name. That is deliberate: these four must reconcile with\r\n`GET /attendance?eventId=` and with the roster, or the summary becomes a fifth opinion.",
+            "format": "int32"
+          },
+          "late": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "absent": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "excused": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "unexpected": {
+            "type": "integer",
+            "description": "Attendees who were recorded but never invited — walk-ins. Counted as <em>people</em>, so it is\r\nexactly the number of `GET /events/{id}/roster` entries flagged `isExpected: false`.\r\n            \r\n\r\n<b>This is where the over-100% signal went, and it is a better one than the rate was.</b>AttendanceRate used to divide every Present and Late row — walk-ins included —\r\nby a denominator that counted only the invited, so twenty-nine expected, twenty-nine present and\r\ntwo tapping alumni read 106.9%. Every underlying row was truthful and the headline number was\r\nimpossible. Folding the walk-ins into the rate was the wrong place to surface them: it corrupted\r\nthe one number an operator reads first, and it said \"something is off\" without saying how many or\r\nwho. Counting them here says both, and the roster names them.\r\n",
+            "format": "int32"
+          },
+          "attendanceRate": {
+            "type": "number",
+            "description": "The share of the <em>invited</em> who turned up: invited students with a `Present` or\r\n`Late` record, over Expected, as a percentage to one decimal place. Zero\r\nwhen Expected is zero.\r\n            \r\n\r\n<b>It cannot exceed 100, structurally rather than by clamping.</b> Numerator and denominator are\r\nboth computed over the expected set — the numerator as a SQL `INTERSECT` against it, which is\r\ndistinct on both sides — so the numerator is a subset of the denominator by construction. No cap is\r\napplied and none is needed; a clamp would have hidden the arithmetic rather than fixed it.\r\n\r\n\r\nWalk-ins are therefore <em>not</em> in this number. They are not discarded: see\r\nUnexpected, and note that Present and\r\nLate still count every row on the event, so the buckets keep reconciling with\r\n`GET /attendance?eventId=` while the rate answers the question it is named for.\r\n",
+            "format": "double"
+          }
+        },
+        "additionalProperties": false,
+        "description": "Technical Plan §6.7/§12 — the Event Attendance Summary."
+      },
+      "EventWriteRequest": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string",
+            "nullable": true
+          },
+          "location": {
+            "type": "string",
+            "nullable": true
+          },
+          "startAt": {
+            "type": "string",
+            "description": "UTC. Normalized through `UtcTime` on the way in — a bare or offset-bearing JSON date-time is\r\notherwise compared against a UTC `StartAt` and misjudges Present versus Late by the server's\r\noffset, which is eight hours in Manila.",
+            "format": "date-time"
+          },
+          "endAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "attendanceMode": {
+            "type": "string",
+            "description": "`Single` or `TimeInOut`; null or blank takes §4.5's `Single` default.",
+            "nullable": true
+          },
+          "graceMinutes": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "requireRegistration": {
+            "type": "boolean"
+          }
+        },
+        "additionalProperties": false,
+        "description": "The body of `POST /events` and `PUT /events/{id}`.\r\n            \r\n\r\n<b>`Status` is deliberately absent.</b>`PATCH /events/{id}/status` is the only door into\r\nthe column, which is what makes the roster freeze impossible to bypass — an event cannot reach\r\n`Closed` without passing through the one code path that materializes its absentees. A\r\n`status` field here would be a second door, and the first caller to use it would create a\r\nclosed event with no frozen roster and no error.\r\n\r\n<b>`SchoolId` is deliberately absent too.</b> The tenant comes from `ISchoolContext`, not\r\nfrom the request. A caller-supplied `SchoolId` on a write is exactly the hole\r\n`KnownDefectTests.A_device_from_another_school_cannot_record_a_tap` is still open on; this\r\nendpoint does not add a second one.\r\n"
+      },
+      "LiveOutcomeCode": {
+        "enum": [
+          "Ok",
+          "EventNotFound",
+          "InvalidCursor"
+        ],
+        "type": "string",
+        "description": "The `code` returned by `GET /attendance/live/{eventId}` when the poll is refused.\n`Ok` never appears in a body — a successful poll is the `AttendanceLiveDto` itself.\n\nOn `InvalidCursor`, re-poll with **no** `since` and take a fresh snapshot. The cursor\nis refused rather than silently downgraded to a snapshot, because a downgrade would\nlook like \"nothing changed\" forever while the client's cursor stayed broken.\n\n| `code` | HTTP |\n|---|---|\n| `Ok` | 200 |\n| `EventNotFound` | 404 |\n| `InvalidCursor` | 400 |"
+      },
+      "ManualOutcomeCode": {
+        "enum": [
+          "Saved",
+          "EventNotFound",
+          "StudentNotFound",
+          "InvalidStatus",
+          "InvalidNotes"
+        ],
+        "type": "string",
+        "description": "The `code` returned by `POST /attendance/manual` — the organizer override, which is\nnot a device path.\n\n**Frozen published contract on the same terms as `TapOutcomeCode`**, and pinned by the\nsame kind of test. It travels through the identical `code` field, so one accessor\nreads both.\n\n`POST /attendance/manual` deliberately keeps working on a `Closed` event: it is the\nonly recovery route out of a terminal status.\n\n| `code` | HTTP |\n|---|---|\n| `Saved` | 200 |\n| `EventNotFound` | 404 |\n| `StudentNotFound` | 404 |\n| `InvalidStatus` | 400 |\n| `InvalidNotes` | 400 |"
+      },
+      "ProblemDetails": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string",
+            "nullable": true
+          },
+          "title": {
+            "type": "string",
+            "nullable": true
+          },
+          "status": {
+            "type": "integer",
+            "format": "int32",
+            "nullable": true
+          },
+          "detail": {
+            "type": "string",
+            "nullable": true
+          },
+          "instance": {
+            "type": "string",
+            "nullable": true
+          },
+          "traceId": {
+            "type": "string",
+            "description": "**On every error body this API produces.** The correlation handle: the distributed\ntrace id when tracing is on, the per-connection request id otherwise.\n\nQuote it back when reporting a problem — it is the only value that finds the one log\nline explaining an otherwise opaque failure.",
+            "nullable": true
+          },
+          "code": {
+            "type": "string",
+            "description": "The stable, machine-readable outcome token. **Branch on this, never on `title` or\n`detail`** — those are prose written for a person and are reworded freely.\n\nPresent on the attendance, students and devices surfaces, and on authentication and\nrate-limit refusals. Absent on the events write surface. See the `TapOutcomeCode`,\n`ManualOutcomeCode` and `LiveOutcomeCode` schemas for the frozen token tables.\n\nOn the attendance surface it is the **same field, with the same values**, that a\nsuccess body carries — one accessor works across success and failure alike.",
+            "nullable": true
+          },
+          "serverTime": {
+            "type": "string",
+            "description": "The server's UTC clock when this response was produced. Present on tap and\nmanual-override failures.\n\nIt is on rejections deliberately, and it matters most on `TappedAtOutOfRange`: that\nresponse tells a device its clock is wrong, so it has to say what the right one is in\nthe same body. Compute an offset from it and apply that before enqueueing.",
+            "format": "date-time",
+            "nullable": true
+          }
+        },
+        "additionalProperties": {}
+      },
+      "SisImportBatchDto": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "termId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "termCode": {
+            "type": "string"
+          },
+          "source": {
+            "type": "string"
+          },
+          "fileName": {
+            "type": "string",
+            "nullable": true
+          },
+          "sourceSheetName": {
+            "type": "string",
+            "nullable": true
+          },
+          "fileHash": {
+            "type": "string",
+            "nullable": true
+          },
+          "status": {
+            "type": "string"
+          },
+          "totalRows": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "insertedRows": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "updatedRows": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "failedRows": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "skippedRows": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "warningRows": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "startedAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "finishedAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "countersReconcile": {
+            "type": "boolean",
+            "description": "Whether the counters add up. Exposed rather than left for the caller to compute because it is\r\nthe one check an operator runs, and a UI that has to derive it will eventually derive it wrong.",
+            "readOnly": true
+          }
+        },
+        "additionalProperties": false,
+        "description": "A batch's summary. The five outcome counters are the reconciliation ADR-001 D-5 exists to make\r\npossible: `InsertedRows + UpdatedRows + FailedRows + SkippedRows == TotalRows`, always.\r\nEAMS.Application.Dtos.SisImportBatchDto.WarningRows is orthogonal — a warned row is already counted in one of the four."
+      },
+      "SisImportPreviewDto": {
+        "type": "object",
+        "properties": {
+          "batch": {
+            "$ref": "#/components/schemas/SisImportBatchDto"
+          },
+          "columns": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "distinctStudents": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "distinctColleges": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "distinctPrograms": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "distinctCourses": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "distinctSections": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "distinctInstructors": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "blankSectionRows": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "placeholderInstructorRows": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "sampleRows": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SisImportRowDto"
+            }
+          }
+        },
+        "additionalProperties": false,
+        "description": "What an upload found, before anything is written to the academic tables.\r\n            \r\n\r\n\r\nThe distinct counts are the preview's whole purpose: they are what an operator compares against what\r\nthey expect the file to contain, and they are cheap because they come from the staged rows rather\r\nthan from a trial run. A file with one course in it is a wrong file, and this is where that is\r\nvisible — before the run, not after.\r\n"
+      },
+      "SisImportRowDto": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "rowNumber": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "result": {
+            "type": "string"
+          },
+          "skipReason": {
+            "type": "string",
+            "nullable": true
+          },
+          "warningCode": {
+            "type": "string",
+            "nullable": true
+          },
+          "warningMessage": {
+            "type": "string",
+            "nullable": true
+          },
+          "errorMessage": {
+            "type": "string",
+            "nullable": true
+          },
+          "studentId": {
+            "type": "string",
+            "format": "uuid",
+            "nullable": true
+          },
+          "rawData": {
+            "type": "string",
+            "nullable": true
+          },
+          "entities": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SisImportRowEntityDto"
+            }
+          }
+        },
+        "additionalProperties": false,
+        "description": "One staged source row and what became of it."
+      },
+      "SisImportRowEntityDto": {
+        "type": "object",
+        "properties": {
+          "entityType": {
+            "type": "string"
+          },
+          "entityId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "action": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false,
+        "description": "One entity a row touched. The answer to \"row 214 says Skipped — against what?\", which §4.12's single\r\nnullable `StudentId` could not give for a source whose grain spans six entities."
+      },
+      "SisImportRunRequest": {
+        "type": "object",
+        "properties": {
+          "termId": {
+            "type": "string",
+            "format": "uuid"
+          }
+        },
+        "additionalProperties": false,
+        "description": "The body of `POST /sis/import/{batchId}/run`.\r\n            \r\n\r\n<b>The term is required here even though the batch already carries one.</b> It is a confirmation,\r\nand it must match or the run is refused. ADR-001 D-5 names the failure this guards: a wrong term\r\nselection misfiles an entire batch, is invisible afterwards (every downstream query is term-scoped,\r\nso the data looks fine — it is simply in the wrong year), and is only recoverable by hand. Asking\r\ntwice, at upload and at the moment of writing, costs one field and turns the mistake into a 409.\r\n"
+      },
+      "StudentCardRequest": {
+        "type": "object",
+        "properties": {
+          "cardUid": {
+            "type": "string"
+          },
+          "label": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "additionalProperties": false,
+        "description": "The body of `POST /students/{id}/cards` — §6.2's `{cardUid, label}`.\r\n            \r\n\r\n\r\nThe UID is normalized before anything is compared or stored (`CardUid.Normalize`): readers\r\nemit `04:a7:b8:c9`, `04-A7-B8-C9` and `04 a7 b8 c9` for one card, and the stored form\r\nis the only one the filtered unique index can defend.\r\n"
+      },
+      "StudentDto": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "studentNumber": {
+            "type": "string"
+          },
+          "fullName": {
+            "type": "string"
+          },
+          "firstName": {
+            "type": "string"
+          },
+          "middleName": {
+            "type": "string",
+            "nullable": true
+          },
+          "lastName": {
+            "type": "string"
+          },
+          "email": {
+            "type": "string",
+            "nullable": true
+          },
+          "gender": {
+            "type": "string",
+            "nullable": true
+          },
+          "photoUrl": {
+            "type": "string",
+            "nullable": true
+          },
+          "course": {
+            "type": "string",
+            "description": "<b>Read-only. ADR-001 D-2 derived cache.</b> Present because the students grid renders and filters\r\n            on it. Sending it back on a write is refused with `FieldIsDerived` rather than ignored — a\r\n            caller that echoes the object it read would otherwise believe it had saved a section.",
+            "nullable": true
+          },
+          "yearLevel": {
+            "type": "string",
+            "description": "<inheritdoc cref=\"P:EAMS.Application.Dtos.StudentDto.Course\" />",
+            "nullable": true
+          },
+          "section": {
+            "type": "string",
+            "description": "<inheritdoc cref=\"P:EAMS.Application.Dtos.StudentDto.Course\" />",
+            "nullable": true
+          },
+          "status": {
+            "type": "string"
+          },
+          "cards": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CardDto"
+            }
+          }
+        },
+        "additionalProperties": false,
+        "description": "Technical Plan §4.3, as a client sees it.\r\n            \r\n\r\n<b>The name parts and `Gender`/`PhotoUrl` arrived with the §6.2 write surface</b>, and\r\nthey are not decoration — they are what makes `PUT /students/{id}` usable at all. The PUT is a\r\nfull replacement of a student's own fields, so a field a client cannot <em>read</em> is a field it\r\ncannot send back, and the round trip would blank it. `FullName` is computed and cannot be\r\nsplit back into three columns, so an edit form had no way to populate itself. Additive on the wire;\r\nexisting consumers ignore them. Same reasoning EAMS.Application.Dtos.EventDto records for\r\n`Description`.\r\n"
+      },
+      "StudentWriteRequest": {
+        "type": "object",
+        "properties": {
+          "studentNumber": {
+            "type": "string"
+          },
+          "firstName": {
+            "type": "string"
+          },
+          "middleName": {
+            "type": "string",
+            "nullable": true
+          },
+          "lastName": {
+            "type": "string"
+          },
+          "email": {
+            "type": "string",
+            "nullable": true
+          },
+          "gender": {
+            "type": "string",
+            "nullable": true
+          },
+          "photoUrl": {
+            "type": "string",
+            "nullable": true
+          },
+          "status": {
+            "type": "string",
+            "description": "One of `Active` / `Inactive` / `Graduated` (§4.3). Null or blank takes §4.3's\r\n`Active` default, so a create form that has no status field still produces a valid row.",
+            "nullable": true
+          }
+        },
+        "additionalProperties": {},
+        "description": "The body of `POST /students` and `PUT /students/{id}`.\r\n            \r\n\r\n<b>`Course`, `YearLevel` and `Section` are deliberately absent</b>, and their\r\nabsence is the whole point of this type. They are the ADR-001 D-2 derived display cache: a student\r\nenrolled in two sections cannot be described by a single-valued triple — 12 of the 52 students in\r\nthe real roster are — so the academic tables are the source of truth and these columns are refreshed\r\nfrom them. A writable field here would be a second, diverging answer to \"what section is this\r\nstudent in\", and `EamsDbContext`'s cache guard exists because `db.Students.Update(entity)`\r\n— the shape a REST PUT handler takes — is the exact path it was built to catch.\r\n\r\n<b>Absent is not enough on its own, which is what EAMS.Application.Dtos.StudentWriteRequest.UnmappedFields is for.</b> Without\r\nit, a client that reads a EAMS.Application.Dtos.StudentDto, edits the name and PUTs the whole object back\r\n— the ordinary shape of an edit form — would have its `course`/`section` silently dropped\r\nby the deserializer and would believe they were saved. Capturing what we did not model lets the\r\nservice refuse the request by name instead.\r\n\r\n<b>`SchoolId` and `IsDeleted` are absent too.</b> The tenant comes from\r\n`ISchoolContext`, never from the request (see `EventWriteRequest` for the same rule);\r\ndeletion is `DELETE /students/{id}`, so there is one door into the flag rather than two.\r\n`SisExternalId`, `LastSyncedAt` and `AlternateEmail` are absent because they belong\r\nto the §10 import pipeline — a manual edit must not be able to claim a student came from the SIS,\r\nand a PUT that omitted them would blank an importer's work.\r\n"
+      },
+      "TapBatchRequest": {
+        "type": "object",
+        "properties": {
+          "clientClockAt": {
+            "type": "string",
+            "description": "The device's own clock at the moment it sent this batch.\r\n            \r\n\r\n<b>It is measured, not validated.</b> Its difference from our clock is <em>pure skew</em> — unlike a\r\nrow's `tappedAt`, which also carries however long that row sat in the queue — so it is the one\r\nvalue that can tell a drifted device from a slow flush. A batch is never refused because of it:\r\nthe clock rules that <em>do</em> refuse (D-36) are per row and apply to `tappedAt` alone. This\r\nis logged, and a client that omits it simply is not measured.\r\n",
+            "format": "date-time",
+            "nullable": true
+          },
+          "taps": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TapRequest"
+            },
+            "description": "The queued taps, in whatever order the queue holds them. Each row is exactly the\r\nEAMS.Application.Dtos.TapRequest that `POST /attendance/tap` takes, `eventId` included.\r\n            \r\n\r\n<b>`eventId` stays per row rather than being hoisted onto the envelope</b>, and that is a\r\ndecision rather than an oversight: a device that switched events while offline holds a queue\r\nspanning both, and hoisting would force it to either split the flush or lie about one of them.\r\n\r\n\r\nNull and empty are the same thing and both are a 200 with no results — \"the queue had nothing to\r\nsend\" is not a malformed request.\r\n\r\n<b>The element type is nullable, and that annotation is load-bearing rather than pedantic.</b>`{\"taps\": [null]}` is valid JSON, and `System.Text.Json` puts a null in the list:\r\nASP.NET's implicit-required-from-nullable-reference-types covers bound parameters and properties\r\nand never covers <em>collection elements</em>, so nothing upstream rejects it. Declared\r\nnon-nullable, the compiler agreed the elements could not be null and the batch loop dereferenced\r\none straight into a `NullReferenceException` — a batch-level 500 that §8.2's queue retries\r\nforever. Saying `TapRequest?` is what makes the null a case the code has to answer.\r\n",
+            "nullable": true
+          }
+        },
+        "additionalProperties": false,
+        "description": "The body of `POST /attendance/tap/batch` — Technical Plan §8.2's offline queue flush, and the\r\nshape frozen with the external mobile developer, published as the `TapBatchRequest` /\r\n`TapBatchResult` schemas in the generated OpenAPI document (Phase 4d, D-31).",
+        "example": {
+          "clientClockAt": "2026-07-29T09:14:03Z",
+          "taps": [
+            {
+              "eventId": "3f2504e0-4f89-11d3-9a0c-0305e82c3301",
+              "cardUid": "USA39912",
+              "deviceTapId": "a7f3c1e2-8b44-4d19-9f0a-2c6d5e8b17aa",
+              "tappedAt": "2026-07-29T09:02:11Z"
+            },
+            {
+              "eventId": "3f2504e0-4f89-11d3-9a0c-0305e82c3301",
+              "cardUid": "USA40001",
+              "deviceTapId": "b8c4d2f6-1a37-4e50-8c92-7f3b6d1e04bb",
+              "tappedAt": "2026-07-29T09:04:47Z"
+            }
+          ]
+        }
+      },
+      "TapBatchResult": {
+        "type": "object",
+        "properties": {
+          "accepted": {
+            "type": "integer",
+            "description": "Rows whose EAMS.Application.Dtos.TapBatchRowResult.Status is below 400.",
+            "format": "int32"
+          },
+          "rejected": {
+            "type": "integer",
+            "description": "The rest. A rejected row is one this API will refuse identically on every retry — the client drops\r\nit and, per the published guidance, stops the queue rather than skipping past it.",
+            "format": "int32"
+          },
+          "serverTime": {
+            "type": "string",
+            "description": "Read once for the whole batch. A client computes its clock offset from this exactly as it does from\r\na single tap's `serverTime`.",
+            "format": "date-time"
+          },
+          "results": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TapBatchRowResult"
+            },
+            "description": "One entry per submitted tap, <b>in the request's array order</b>, so `results[i].index == i`.\r\n            \r\n\r\n\r\nThat is a stronger guarantee than the published contract asks for, and it is free: rows are\r\n<em>processed</em> in ascending `tappedAt` and then written back into their original slots. It\r\nis stated because the cheap client is the one that zips `results` against `taps`\r\npositionally, and a contract that merely says \"correlate by index\" would let a future change break\r\nthat client silently. Correlating by EAMS.Application.Dtos.TapBatchRowResult.Index or by\r\nEAMS.Application.Dtos.TapBatchRowResult.DeviceTapId works regardless and is what the document tells clients\r\nto do.\r\n"
+          }
+        },
+        "additionalProperties": false,
+        "description": "The body of a well-formed `POST /attendance/tap/batch`. <b>Always HTTP 200.</b>\r\n<b>Not 207 Multi-Status, and the reason is about clients rather than about correctness.</b> Proxies\r\nand HTTP libraries handle 207 inconsistently, and — the part that actually bites — a client that\r\nsees any non-2xx transport status is liable to retry the <em>whole</em> batch. Retrying is safe\r\nhere, because every row is idempotent, but it is pure waste when 197 of 200 rows landed. The batch\r\nstatus describes the batch; each row's EAMS.Application.Dtos.TapBatchRowResult.Status describes that tap.\r\n\r\n<b>A batch-level `4xx` is transport, auth or size only</b> — a malformed body,\r\n`BatchTooLarge`, a missing or bad key, a revoked one. Nothing about the content of a row can\r\nproduce one.\r\n\r\n<b>On a `5xx` the client retries the whole batch, and that is always safe</b> — every row is\r\nkeyed by `deviceTapId` and index-guarded, so a resend converges on the same rows however much\r\nof the first attempt landed. The published contract words this as \"a 5xx means nothing was\r\ncommitted\", which is stronger than what per-row commits provide; see\r\n`AttendanceService.TapBatchAsync` for the discrepancy and why idempotency rather than\r\natomicity is the property the client actually depends on.\r\n",
+        "example": {
+          "accepted": 2,
+          "rejected": 1,
+          "serverTime": "2026-07-29T09:14:05.402Z",
+          "results": [
+            {
+              "index": 0,
+              "deviceTapId": "a7f3c1e2-8b44-4d19-9f0a-2c6d5e8b17aa",
+              "code": "Recorded",
+              "status": 200,
+              "record": {
+                "id": "9d1c7b44-2f0e-4a8b-93a6-5c7e1f2d3a44",
+                "eventId": "3f2504e0-4f89-11d3-9a0c-0305e82c3301",
+                "studentId": "0b8f3d5a-9c21-4a67-9c1e-6d2f0a4b7e33",
+                "studentName": "Maria Clara Reyes",
+                "studentNumber": "USA39912",
+                "checkInAt": "2026-07-29T09:02:11Z",
+                "checkOutAt": null,
+                "status": "Present",
+                "captureMethod": "Rfid"
+              },
+              "message": "Checked in at 09:02 (Present)."
+            },
+            {
+              "index": 1,
+              "deviceTapId": "b8c4d2f6-1a37-4e50-8c92-7f3b6d1e04bb",
+              "code": "CardNotFound",
+              "status": 404,
+              "record": null,
+              "message": "No active card matches that UID."
+            },
+            {
+              "index": 2,
+              "deviceTapId": "c9d5e3a7-4b28-4f61-90d3-8a2c7e5f19cc",
+              "code": "DuplicateIgnored",
+              "status": 200,
+              "record": {
+                "id": "9d1c7b44-2f0e-4a8b-93a6-5c7e1f2d3a44",
+                "eventId": "3f2504e0-4f89-11d3-9a0c-0305e82c3301",
+                "studentId": "0b8f3d5a-9c21-4a67-9c1e-6d2f0a4b7e33",
+                "studentName": "Maria Clara Reyes",
+                "studentNumber": "USA39912",
+                "checkInAt": "2026-07-29T09:02:11Z",
+                "checkOutAt": null,
+                "status": "Late",
+                "captureMethod": "Rfid"
+              },
+              "message": "That tap was already recorded."
+            }
+          ]
+        }
+      },
+      "TapBatchRowResult": {
+        "type": "object",
+        "properties": {
+          "index": {
+            "type": "integer",
+            "description": "The row's position in the request's `taps` array — <em>not</em> its position in the order the\r\nserver processed it, and not necessarily its position in `results` either, though today those\r\ntwo agree. See EAMS.Application.Dtos.TapBatchResult.Results.",
+            "format": "int32"
+          },
+          "deviceTapId": {
+            "type": "string",
+            "description": "The row's idempotency key, echoed back. The second correlation handle: a client that has lost track\r\nof its own array can still reconcile, which matters because the array is exactly what a crashed\r\nclient no longer has.",
+            "nullable": true
+          },
+          "code": {
+            "type": "string",
+            "description": "The frozen outcome token — the same value, from the same table, that `POST /attendance/tap`\r\nreturns for the identical tap. <b>Branch on this.</b>"
+          },
+          "status": {
+            "type": "integer",
+            "description": "The HTTP status this row <em>would</em> have received as a single tap. The transport status is\r\nalways 200 for a well-formed batch, so this is the field §8.2's queue reads to decide drop, stop or\r\nretry — the same 2xx/4xx reasoning it already applies to a single tap's status line.",
+            "format": "int32"
+          },
+          "record": {
+            "$ref": "#/components/schemas/AttendanceDto"
+          },
+          "message": {
+            "type": "string",
+            "description": "Prose, never parsed, and present on success rows as well as failures — the same string the single\r\nendpoint puts in `TapResult.message` or in a problem body's `detail`."
+          }
+        },
+        "additionalProperties": false,
+        "description": "One row of a batch response."
+      },
+      "TapOutcomeCode": {
+        "enum": [
+          "Recorded",
+          "DuplicateIgnored",
+          "CheckedOut",
+          "AlreadyRecorded",
+          "EventNotFound",
+          "EventNotOpen",
+          "CardNotFound",
+          "DeviceNotRegistered",
+          "DeviceMismatch",
+          "TappedAtOutOfRange",
+          "TappedAtOutsideEventWindow",
+          "DeviceTapIdRequired",
+          "BatchTooLarge"
+        ],
+        "type": "string",
+        "description": "The `code` returned by `POST /attendance/tap` and by every row of\n`POST /attendance/tap/batch`, on success bodies and RFC 7807 problem bodies alike.\n\n**This list is frozen published contract.** A rename here is a breaking change for a\nclient we cannot recompile, and the symptom is a queue that quietly stops reconciling\nrather than anything that looks like a failure. A build-gating test pins it.\n\nQueue guidance: a `2xx` row is done — drop it. A `4xx` row will be refused identically\nforever — stop retrying rather than skipping past it, and flush strictly in order.\n`BatchTooLarge` is the one exception: chunk to `maxBatchRows` and resend.\n\n| `code` | HTTP |\n|---|---|\n| `Recorded` | 200 |\n| `DuplicateIgnored` | 200 |\n| `CheckedOut` | 200 |\n| `AlreadyRecorded` | 200 |\n| `EventNotFound` | 404 |\n| `EventNotOpen` | 400 |\n| `CardNotFound` | 404 |\n| `DeviceNotRegistered` | 404 |\n| `DeviceMismatch` | 400 |\n| `TappedAtOutOfRange` | 400 |\n| `TappedAtOutsideEventWindow` | 400 |\n| `DeviceTapIdRequired` | 400 |\n| `BatchTooLarge` | 400 |"
+      },
+      "TapRequest": {
+        "type": "object",
+        "properties": {
+          "eventId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "cardUid": {
+            "type": "string"
+          },
+          "deviceId": {
+            "type": "string",
+            "format": "uuid",
+            "nullable": true
+          },
+          "deviceTapId": {
+            "type": "string",
+            "nullable": true
+          },
+          "tappedAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          }
+        },
+        "additionalProperties": false,
+        "example": {
+          "eventId": "3f2504e0-4f89-11d3-9a0c-0305e82c3301",
+          "cardUid": "USA39912",
+          "deviceId": null,
+          "deviceTapId": "a7f3c1e2-8b44-4d19-9f0a-2c6d5e8b17aa",
+          "tappedAt": "2026-07-29T01:15:00Z"
+        }
+      },
+      "TapResult": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean",
+            "description": "**Deprecated — read `code` instead.** Retained for clients already reading it; the\nbehaviour is unchanged and it will not be removed without notice.\n\nIt carries no information `code` does not. It is `false` on exactly the outcomes that\narrive as a `4xx`, and a `4xx` is an RFC 7807 problem body that has no `success` member —\nso in every body where you can actually see this field it is `true`.",
+            "deprecated": true
+          },
+          "message": {
+            "type": "string",
+            "description": "<b>Prose. Never parse it.</b> It is written for a person reading a log or a kiosk screen and is\r\n            reworded whenever the wording is wrong; Code is what a client branches on."
+          },
+          "record": {
+            "$ref": "#/components/schemas/AttendanceDto"
+          },
+          "code": {
+            "type": "string",
+            "description": "The stable outcome token — `nameof` the EAMS.Application.Abstractions.TapOutcome\r\nor EAMS.Application.Abstractions.ManualOutcome member this response carries (Phase 4c,\r\nD-37).\r\n            \r\n\r\n<b>Why the field is `code` and not `outcome`.</b> A failure is an RFC 7807 problem body,\r\nwhich already carries `code` everywhere else in this API (`StudentsController`,\r\n`DevicesController`, the device-key handler, the rate limiter). Naming the success field the\r\nsame thing means one accessor — `body.code` — works across success and failure alike, which is\r\nthe whole of what the mobile client asked for: today all four tap successes are an\r\nindistinguishable 200 whose only differentiator is the prose above, so reconciling a flushed queue\r\nagainst what actually landed is impossible.\r\n\r\n<b>These token names are published contract.</b> Renaming `DuplicateIgnored` is a breaking\r\nchange for a consumer we cannot recompile, so `TapOutcomeContractTests` enumerates the enum\r\nagainst a frozen list and fails the build rather than letting a rename ship quietly.\r\n"
+          },
+          "serverTime": {
+            "type": "string",
+            "description": "The server's UTC clock at the moment this response was produced. The published contract promises it\r\non every response and the client computes a clock offset from it before enqueueing — which is the\r\nhalf of D-36 that lets a drifted device correct itself instead of having its taps refused. It is on\r\nrejections too, and most of all on `TappedAtOutOfRange`: that is precisely the response whose\r\nreader needs to know what time we think it is.",
+            "format": "date-time"
+          }
+        },
+        "additionalProperties": false,
+        "description": "The body of `POST /attendance/tap` and `POST /attendance/manual` on every path that\r\nproduced a record. Failures carry the same two machine-readable fields in an RFC 7807 body instead\r\n— see `AttendanceController`.",
+        "example": {
+          "success": true,
+          "message": "Checked in at 09:15 (Present).",
+          "record": {
+            "id": "9d1c7b44-2f0e-4a8b-93a6-5c7e1f2d3a44",
+            "eventId": "3f2504e0-4f89-11d3-9a0c-0305e82c3301",
+            "studentId": "0b8f3d5a-9c21-4a67-9c1e-6d2f0a4b7e33",
+            "studentName": "Maria Clara Reyes",
+            "studentNumber": "USA39912",
+            "checkInAt": "2026-07-29T09:02:11Z",
+            "checkOutAt": null,
+            "status": "Present",
+            "captureMethod": "Rfid"
+          },
+          "code": "Recorded",
+          "serverTime": "2026-07-29T05:31:22.117Z"
+        }
+      }
+    },
+    "securitySchemes": {
+      "DeviceKey": {
+        "type": "apiKey",
+        "description": "The kiosk / capture credential, scoped to `attendance.capture` and nothing else.\n\nSend the **entire header value including the scheme word**:\n\n```\nAuthorization: DeviceKey eams_dk_<keyId>_<secret>\n```\n\nIssued once by `POST /api/v1/devices` and never retrievable afterwards — the server stores\nonly a hash. Store it in the platform keystore (`expo-secure-store` / Android Keystore),\nnever in `AsyncStorage`. Lose it and rotate with `POST /api/v1/devices/{id}/regenerate-key`.\n\nCase is significant and lower-case is the only accepted form for the token itself.\n\nFailures: `401 DeviceKeyMissing` / `DeviceKeyMalformed` / `DeviceKeyInvalid`,\n`403 DeviceKeyRevoked` / `DeviceInactive`, `429 RateLimited` (honour `Retry-After`).\n`DeviceKeyInvalid` deliberately does not distinguish an unknown key id from a wrong secret.",
+        "name": "Authorization",
+        "in": "header"
+      }
+    }
+  },
+  "tags": [
+    {
+      "name": "Devices",
+      "description": "Technical Plan §6.6 — devices (Phase 4a design, D-25).\r\n            \r\n\r\n<b>Only one action on this controller is gated: `heartbeat`.</b> It is the one a device calls\r\nabout itself. Everything else here is an administrator's surface and stays open under ADR-001 D-6\r\nwith a declared-but-inert `devices.*` permission, exactly like students and events — Phase 4b\r\nnarrowed the open surface to four endpoints, it did not roll authorization out.\r\n"
+    },
+    {
+      "name": "SisImport",
+      "description": "Technical Plan §10 — the school-year roster import.\r\n            \r\n\r\n<b>Every endpoint is decorated `sis.import` and every endpoint is open.</b>EAMS.Api.Authorization.HasPermissionNotEnforcedAttribute enforces nothing (ADR-001 D-6); the decoration\r\nrecords what Phase 6 must demand. That matters more here than anywhere else in this API: these four\r\nendpoints read and write the full roster of every student in the institution, including their names\r\nand institutional e-mail addresses, and the upload endpoint writes to the academic tables. This\r\nsystem must not be exposed beyond local/development use until §11 lands.\r\n"
+    }
+  ]
+}

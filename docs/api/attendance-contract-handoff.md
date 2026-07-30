@@ -17,14 +17,23 @@
 
 ## Where the contract is
 
+**`docs/api/openapi.json`, in this repo, beside this file.** That is the one to generate your client
+from — you do not need to run our backend to get it. It is exported from a running build, so it is the
+document that build actually serves, not a hand-maintained copy.
+
+If you *are* running the backend locally:
+
 ```
-GET /swagger/v1/swagger.json     the document itself — generate your client from this
+GET /swagger/v1/swagger.json     the same document, live
 GET /                            Swagger UI, browsable (development environments only)
 ```
 
 The UI is deliberately not served outside development: until Phase 6 lands human authentication, an
 unauthenticated description of an API whose admin surface is open hands out the map as well as the
 door. The **document** builds in every environment, so client tooling is never blocked.
+
+> **If `openapi.json` and the running API ever disagree, the API is right and the file is stale — tell
+> us.** The file is a snapshot taken at a commit; the route is generated per request.
 
 Look there for: every endpoint and payload shape, the `DeviceKey` security scheme, the RFC 7807 error
 shape with its `code`/`serverTime` extensions, and the frozen token tables as machine-readable enums
@@ -59,7 +68,7 @@ drift 4e deleted 443 lines to end, and it would be unpinned by any test.
 | `DuplicateIgnored` | **Drop.** Already stored under this `deviceTapId` — the retry path working as designed, not an error. |
 | `AlreadyRecorded` | **Drop.** Nothing changed. See the reconciliation note below — this one has a catch. |
 | `EventNotFound` | **Poison.** Also what a device from another school gets for a foreign event; we never confirm the event exists elsewhere. |
-| `CardNotFound` | **Poison.** No student holds that UID. Your retries will not trigger a roster import. |
+| `CardNotFound` | **Poison — but show it, do not swallow it.** No student holds that UID; retrying will not bind one. Common during rollout while cards are still unbound (see the card-UID rule), so this is the one poison code that needs a real message on screen rather than a silent drop. |
 | `DeviceNotRegistered` | **Stop the queue and re-enrol.** A wiped or re-provisioned handset holds a stale device id. Retrying every queued tap forever is exactly the failure this token exists to prevent. |
 | `EventNotOpen` | **Poison.** |
 | `DeviceMismatch` | **Poison — client bug.** The body's `deviceId` disagrees with the authenticated device. Fix the sender; the row will never succeed as sent. |
@@ -86,19 +95,44 @@ additive** — say the word and we add something like `RowFailed` (batch still 2
 
 ## Three rules to implement on your side
 
-### Card UIDs: normalise before you compare
+### Card UIDs: they are the RFID serial, and they are strings
 
-**A card UID *is* the student number (REGNO).** No tap-to-bind screen is needed — students arrive
-card-ready from the roster import.
+**The card UID is the physical RFID serial — not the student number.** The two are separate values on
+separate columns, and REGNO is **not** a tap identity: authentication on a tap is the scanned RFID
+alone.
 
-Normalisation is uppercase with all non-alphanumerics stripped: `04:A7:B8:C9`, `04-a7-b8-c9` and
-`04a7b8c9` are **one card**, stored as `04A7B8C9`. The server normalises inbound, so you may send the
-raw reader format — but normalise before any *local* cache or comparison, or your dedupe will
-disagree with ours.
+> **Corrected 2026-07-30.** An earlier revision of this file said a card UID *was* the student number
+> and that no binding step was needed. That was wrong. If you built anything on REGNO-as-UID, that is
+> the one thing in this document worth re-checking today.
 
-> **Security note, for awareness rather than code.** Student numbers are sequential and printed on the
-> ID, so a UID is guessable. Device auth, the event window, and audit are the mitigations — which is
-> why device keys are not optional.
+The serial is **decimal digits, no separators**, and in the sample data ten characters wide:
+
+```
+0012503326
+```
+
+> **Treat it as a string, never as a number, anywhere in your stack.** `0012503326` parsed as an
+> integer is `12503326`, which is a different card and will never match. Leading zeros are
+> significant. This is the single most likely way for a UID to break silently, and it breaks on your
+> side and ours identically.
+
+Normalisation is uppercase with all non-alphanumerics stripped, so `04:A7:B8:C9`, `04-a7-b8-c9` and
+`04a7b8c9` are **one card**, stored as `04A7B8C9`. An all-digit serial is unchanged by that rule —
+nothing to strip, nothing to uppercase, **leading zeros preserved**. The server normalises inbound, so
+you may send the raw reader format; normalise before any *local* cache or comparison, or your dedupe
+will disagree with ours.
+
+> **⚠ Expect `CardNotFound` during rollout, and design for it.** The roster the school has given us
+> today has **no RFID column** — it is coming in a later export. Until cards are bound, every student
+> exists with no card, and every tap against them is `CardNotFound`. Treat that code as an ordinary
+> operational state your UI explains ("card not registered yet"), **not** as a defect or a reason to
+> drop the tap silently. How cards get bound — bulk from the next roster, or a field binding flow —
+> is still open; see the questions at the end.
+
+> **Security note, for awareness rather than code.** A card serial is not a secret: it is a number on
+> a card that can be read by anything, and serials in a batch tend to run close together, so a
+> plausible neighbouring UID is easy to produce. Device auth, the event window, and audit are the
+> mitigations — which is why device keys are not optional.
 
 ### `deviceTapId`: always send one, keep it stable, keep it under 100 characters
 
@@ -201,12 +235,17 @@ ship.
    after.
 2. **A row-level server-error token** — do you want it, and would your queue treat it as retryable or
    as poison? See the known gap above. Your queue's semantics should decide, not ours.
-3. **Offline queue semantics** — retry/backoff policy, how long a tap may sit queued, what you do with
+3. **Card binding — do you want a flow for it in the app?** Cards are not bound yet and the roster we
+   have carries no RFID column. If binding happens entirely from the next roster export, you need
+   nothing. If the school wants a card registered *in the field* — scan an unknown card, attach it to a
+   student — that is a screen in your app and an endpoint on ours, and neither exists today. **Tell us
+   which, because it is the one open question that could add scope to your side.**
+4. **Offline queue semantics** — retry/backoff policy, how long a tap may sit queued, what you do with
    a permanently rejected row.
-4. **Batch size** — does 200 rows suit your flush strategy? The cap is enforced, not provisional.
-5. **Device enrolment** — is QR-scan-at-issue the UX you want? What should happen on reinstall?
-6. **Clock skew** — how do you correct or flag a drifted device clock?
-7. **Did anything you had already built depend on tap *failures* returning `TapResult` rather than a
+5. **Batch size** — does 200 rows suit your flush strategy? The cap is enforced, not provisional.
+6. **Device enrolment** — is QR-scan-at-issue the UX you want? What should happen on reinstall?
+7. **Clock skew** — how do you correct or flag a drifted device clock?
+8. **Did anything you had already built depend on tap *failures* returning `TapResult` rather than a
    problem body?** That changed in Phase 4c and you were the only consumer we could not check. If it
    broke something, tell us — `success: false` bodies are gone from the `4xx` responses.
 

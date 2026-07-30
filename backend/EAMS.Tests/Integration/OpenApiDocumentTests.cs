@@ -1,5 +1,6 @@
 using System.Net;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using EAMS.Api.OpenApi;
 using EAMS.Application.Abstractions;
 using EAMS.Tests.Integration.Infrastructure;
@@ -474,5 +475,134 @@ public class OpenApiDocumentTests : IntegrationTest
             $"{schemaName} publishes no example.");
 
         Assert.Equal(JsonValueKind.Object, example.ValueKind);
+    }
+
+    // ------------------------------------------------------------------ the checked-in artifact
+
+    /// <summary>
+    /// The environment variable that rewrites the committed document instead of asserting against it:
+    /// <c>EAMS_UPDATE_OPENAPI=1 dotnet test --filter The_committed_contract_is_the_generated_one</c>.
+    /// </summary>
+    private const string UpdateVariable = "EAMS_UPDATE_OPENAPI";
+
+    private const string CommittedContract = "docs/api/openapi.json";
+
+    /// <summary>
+    /// <b><c>docs/api/openapi.json</c> is what the build actually serves.</b>
+    ///
+    /// <para>
+    /// The file exists because the mobile developer cannot be told to run our backend to obtain the
+    /// contract — he generates his client from a file in the repository. But a generated artifact
+    /// checked in beside the code is precisely the drift Phase 4e existed to end: it can go stale
+    /// against the source with nothing failing, which is the failure mode of the hand-written document
+    /// it replaced. Committing it without this test would reintroduce the problem one directory away
+    /// from where it was solved.
+    /// </para>
+    ///
+    /// <para>
+    /// Compared as canonical JSON — object keys sorted recursively — so a reordering by whatever wrote
+    /// the file is not a failure, while any change of substance is. The <c>/test-only/</c> probes are
+    /// stripped first: those controllers live in this test project, so the test host serves them and the
+    /// real application never does.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public async Task The_committed_contract_is_the_generated_one()
+    {
+        using var factory = new DevelopmentApiFactory(Sql.ConnectionString);
+        using var client = factory.CreateClient();
+
+        var served = Published(await client.GetStringAsync(DocumentRoute));
+        var path = RepoPath(CommittedContract);
+
+        if (Environment.GetEnvironmentVariable(UpdateVariable) == "1")
+        {
+            await File.WriteAllTextAsync(
+                path, served.ToJsonString(new JsonSerializerOptions { WriteIndented = true }));
+            return;
+        }
+
+        Assert.True(File.Exists(path), $"{CommittedContract} is missing. Regenerate it: {Refresh}");
+
+        Assert.True(
+            Canonical(served) == Canonical(Published(await File.ReadAllTextAsync(path))),
+            $"{CommittedContract} is not what this build serves — the published contract has drifted " +
+            $"from the code, which is the one thing generating it was supposed to make impossible. " +
+            $"Regenerate it in the same change that moved the contract: {Refresh}");
+    }
+
+    private static string Refresh =>
+        $"{UpdateVariable}=1 dotnet test EAMS.sln --filter The_committed_contract_is_the_generated_one";
+
+    /// <summary>The served document minus the probes this test project contributes to the host.</summary>
+    private static JsonNode Published(string json)
+    {
+        var document = JsonNode.Parse(json)
+            ?? throw new InvalidOperationException("The OpenAPI document is not JSON.");
+
+        if (document["paths"] is JsonObject paths)
+        {
+            foreach (var route in paths.Select(p => p.Key)
+                         .Where(k => k.StartsWith("/test-only/", StringComparison.Ordinal))
+                         .ToList())
+            {
+                paths.Remove(route);
+            }
+        }
+
+        return document;
+    }
+
+    /// <summary>Key-sorted JSON, so only differences of substance compare unequal.</summary>
+    private static string Canonical(JsonNode node) =>
+        // Sorted() returns null only for a null input, and this one cannot be. Stated as a throw rather
+        // than a `!` so an impossible case stays impossible out loud.
+        (Sorted(node) ?? throw new InvalidOperationException("Sorting a non-null document returned null."))
+            .ToJsonString(new JsonSerializerOptions { WriteIndented = true });
+
+    private static JsonNode? Sorted(JsonNode? node)
+    {
+        switch (node)
+        {
+            case JsonObject o:
+                var sorted = new JsonObject();
+                foreach (var (key, value) in o.OrderBy(p => p.Key, StringComparer.Ordinal))
+                {
+                    sorted[key] = Sorted(value?.DeepClone());
+                }
+
+                return sorted;
+
+            case JsonArray a:
+                var items = new JsonArray();
+                foreach (var item in a)
+                {
+                    items.Add(Sorted(item?.DeepClone()));
+                }
+
+                return items;
+
+            default:
+                return node?.DeepClone();
+        }
+    }
+
+    /// <summary>
+    /// A repository-relative path resolved from the test binary, by walking up to the directory holding
+    /// <c>EAMS.sln</c> — the same anchor CI restores from, so this does not depend on the working
+    /// directory a runner happens to choose.
+    /// </summary>
+    private static string RepoPath(string relative)
+    {
+        var directory = new DirectoryInfo(AppContext.BaseDirectory);
+
+        while (directory is not null && !File.Exists(Path.Combine(directory.FullName, "EAMS.sln")))
+        {
+            directory = directory.Parent;
+        }
+
+        Assert.True(directory is not null, "EAMS.sln is not above the test binary; cannot locate the repository.");
+
+        return Path.Combine(directory!.FullName, relative.Replace('/', Path.DirectorySeparatorChar));
     }
 }
