@@ -1,0 +1,38 @@
+{
+  /* The suite, type-checked as its own project.
+   *
+   * Separate from `tsconfig.app.json` so the test-only ambient types — `node`, for `process.env.TZ`
+   * — cannot reach the program that builds the SPA. The app keeps `types: ["vite/client"]` and stays
+   * exactly as strict as it was; a test file cannot widen it.
+   *
+   * `vite/client` is here as well as `node` because the subjects reach into `api.ts`, which reads
+   * `import.meta.env.VITE_API_BASE_URL`.
+   *
+   * Referenced from `tsconfig.json`, so `tsc -b` — which is the first half of `npm run build` —
+   * type-checks the tests too. Test files that are not in any project are test files nobody checks.
+   */
+  "compilerOptions": {
+    "tsBuildInfoFile": "./node_modules/.tmp/tsconfig.test.tsbuildinfo",
+    "target": "es2023",
+    "lib": ["ES2023", "DOM"],
+    "module": "esnext",
+    "types": ["node", "vite/client"],
+    "skipLibCheck": true,
+
+    /* Bundler mode */
+    "moduleResolution": "bundler",
+    "allowImportingTsExtensions": true,
+    "verbatimModuleSyntax": true,
+    "moduleDetection": "force",
+    "noEmit": true,
+    "jsx": "react-jsx",
+
+    /* Linting */
+    "strict": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "erasableSyntaxOnly": true,
+    "noFallthroughCasesInSwitch": true
+  },
+  "include": ["test"]
+}
