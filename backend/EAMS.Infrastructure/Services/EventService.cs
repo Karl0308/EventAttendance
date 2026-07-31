@@ -372,6 +372,99 @@ internal sealed class EventService : IEventService
                       && (includeDeleted || !eg.Student!.IsDeleted))
             .Select(eg => eg.StudentId!.Value);
 
+    // ---------------------------------------------------------------------------- the audience read
+
+    /// <summary>
+    /// <inheritdoc cref="IEventService.GetAudienceAsync" path="/summary/para[1]"/>
+    ///
+    /// <para>
+    /// <b>Three round trips, two of them lists that are bounded by what an organizer attached</b> — a
+    /// handful of groups and, on a live event, a handful of hand-picked students. The unbounded case is
+    /// the one deliberately not served: see <see cref="EventAudienceDto.Students"/>.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>The <c>SchoolId</c> predicates are explicit, exactly as
+    /// <see cref="AttachAudienceAsync"/>'s are and for the same reason.</b> <c>EventGroups</c> carries no
+    /// <c>SchoolId</c> and reaches tenancy through <c>Event</c> (ADR-003 D-12), and the §11 global filter
+    /// is inert whenever no tenant is pinned — design time, most of the test suite, any unseeded start.
+    /// Attaching a cross-school group is already refused, so a row that fails these predicates can only
+    /// be hand-written; the choice here is between disclosing another school's group and student names
+    /// through a route that has no way to know it is doing so, and omitting a row that should not exist.
+    /// The disclosure is the worse failure.
+    /// </para>
+    /// </summary>
+    public async Task<EventAudienceDto?> GetAudienceAsync(Guid id, CancellationToken ct = default)
+    {
+        var ev = await _db.Events.AsNoTracking()
+            .FirstOrDefaultAsync(x => x.Id == id && !x.IsDeleted, ct);
+        if (ev is null) return null;
+
+        var isFrozen = EventStatusTransition.HasFrozenAudience(ev.Status);
+
+        var groups = await _db.EventGroups.AsNoTracking()
+            .Where(eg => eg.EventId == id
+                      && eg.StudentGroupId != null
+                      && eg.StudentGroup!.SchoolId == ev.SchoolId)
+            // Ordered before the projection so the sort is the database's. ThenBy(Id) is the total
+            // order for the reason StudentGroupService records: group names are unique per
+            // (school, source, term) and not globally, and equal sort keys are what a client sees
+            // reorder between two identical requests.
+            .OrderBy(eg => eg.StudentGroup!.Name).ThenBy(eg => eg.StudentGroupId)
+            .Select(eg => new EventAudienceGroupDto(
+                eg.StudentGroupId!.Value,
+                eg.StudentGroup!.Name,
+                eg.StudentGroup.Type,
+                eg.StudentGroup.SourceType,
+                eg.StudentGroup.TermId,
+                // Optional navigation — null on a manual group, which belongs to no term.
+                eg.StudentGroup.Term == null ? null : eg.StudentGroup.Term.Code,
+                // A correlated subquery count with the soft-deleted excluded, which is
+                // StudentGroupService.ListAsync's definition character for character. The picker and
+                // this panel show the same group; if the two counted differently, an organizer would
+                // watch "80 students" become "78 students" on attaching it and have nothing to read
+                // that explains the change.
+                eg.StudentGroup.Members.Count(m => !m.Student!.IsDeleted)))
+            .ToListAsync(ct);
+
+        // Empty by contract once the audience is snapshotted — the whole population would be here
+        // otherwise. EventAudienceDto.Students carries the reasoning; IsFrozen is what tells a reader
+        // which of the two cases this response is.
+        IReadOnlyList<EventAudienceStudentDto> students = [];
+        if (!isFrozen)
+        {
+            var rows = await _db.EventGroups.AsNoTracking()
+                .Where(eg => eg.EventId == id
+                          && eg.StudentId != null
+                          && eg.Student!.SchoolId == ev.SchoolId)
+                .OrderBy(eg => eg.Student!.LastName)
+                    .ThenBy(eg => eg.Student!.FirstName)
+                    .ThenBy(eg => eg.Student!.StudentNumber)
+                .Select(eg => new
+                {
+                    StudentId = eg.StudentId!.Value,
+                    eg.Student!.StudentNumber,
+                    eg.Student.FirstName,
+                    eg.Student.MiddleName,
+                    eg.Student.LastName,
+                    eg.Student.Section,
+                })
+                .ToListAsync(ct);
+
+            students = rows.Select(r => new EventAudienceStudentDto(
+                r.StudentId, r.StudentNumber,
+                string.Join(' ', new[] { r.FirstName, r.MiddleName, r.LastName }
+                    .Where(p => !string.IsNullOrWhiteSpace(p))),
+                r.Section))
+                .ToList();
+        }
+
+        // The one denominator query, not a fourth opinion of it — see IEventService.GetAudienceAsync.
+        var expected = await ExpectedStudentIds(id, ev.Status).CountAsync(ct);
+
+        return new EventAudienceDto(ev.Id, ev.Status, isFrozen, expected, groups, students);
+    }
+
     // ------------------------------------------------------------------------------ the roster
 
     /// <summary>

@@ -35,6 +35,27 @@ import type { Draft, DraftField, ValidatedField } from "../eventDraft";
  */
 const LOCKED_HELP = "Locked — see the note above.";
 
+/**
+ * `RequireRegistration` is stored, round-tripped and **read by nothing** (ADR-003 D-20). JJ's call is
+ * that it stays inert; this line is the honesty that decision needs, and is all it needs.
+ *
+ * It matters more now than it did, and that is why the copy changed rather than the behaviour: the
+ * event screen has a working audience panel, and an unqualified "Require registration" sitting beside
+ * it reads as the switch that makes that audience *restrictive* — as though ticking it would stop an
+ * uninvited student's tap being recorded. It would not. ADR-003 D-20 decides the opposite by default:
+ * the tap is accepted and surfaces on the roster flagged `isExpected: false`, because blocking it
+ * would discard evidence that a person was physically present in order to protect a number that does
+ * not depend on it.
+ *
+ * Says what is true of the flag *today* and points at what actually decides who is expected. It does
+ * not promise the flag will ever do anything — the follow-up is open in ADR-003 and this build does
+ * not know its answer.
+ */
+const REQUIRE_REGISTRATION_HELP =
+  "Recorded on the event, but nothing reads it yet: it does not restrict who can tap in. A student " +
+  "who taps without being in an attached section is still recorded, and is shown on the roster as " +
+  "not expected. Who is expected is set by the event's audience, not by this box.";
+
 interface EventFormFieldsProps {
   draft: Draft;
   /** A partial draft to merge. The owner holds the state; these controls only describe changes. */
@@ -214,13 +235,16 @@ export function EventFormFields({
           }
           label="Require registration"
         />
-        {/* A checkbox has no `helperText` slot, so the lock is said beside it rather than not at
+        {/* A checkbox has no `helperText` slot, so both of these are said beside it rather than not at
             all — the one control where the pattern the other seven use is unavailable. */}
         {locked.has("requireRegistration") && (
           <Typography variant="body2" color="text.secondary">
             {LOCKED_HELP}
           </Typography>
         )}
+        <Typography variant="body2" color="text.secondary" sx={{ maxWidth: "68ch" }}>
+          {REQUIRE_REGISTRATION_HELP}
+        </Typography>
       </Box>
     </Stack>
   );

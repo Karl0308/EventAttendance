@@ -6,16 +6,24 @@
 // this is a system boundary, so a payload that drifts from the contract fails loud here instead of
 // arriving three components deep as `undefined`.
 
+import { GROUP_SOURCE_TYPE, GROUP_TYPE_SECTION } from "./types";
 import type {
   Student,
   StudentCardRequest,
   StudentWriteRequest,
   Card,
+  EventAudience,
+  EventAudienceGroup,
+  EventAudienceRequest,
+  EventAudienceResult,
+  EventAudienceStudent,
   EventItem,
   EventStatusName,
   EventWriteRequest,
   AttendanceRecord,
   EventSummary,
+  StudentGroup,
+  Term,
 } from "./types";
 
 // The URL `dotnet run --project backend/EAMS.Api --urls "http://localhost:5080"` serves. Overridden
@@ -180,6 +188,28 @@ function reqBool(row: Row, key: string, what: string): boolean {
     throw offContract(what, `\`${key}\` should be a boolean, got ${describeType(value)}`);
   }
   return value;
+}
+
+/**
+ * A required array of strings — `EventAudienceResultDto.warnings`, and nothing else so far.
+ *
+ * Required rather than defaulted to `[]` when the key is missing, which is the tempting shortcut and
+ * the wrong one here: an absent `warnings` and an empty one would then be indistinguishable, and the
+ * empty case is the *ordinary* one. A build that silently read a drifted reply as "no warnings" would
+ * swallow exactly the field whose entire purpose is not being swallowed — a group attached from
+ * another term warns rather than refuses, so the warning is the only evidence it happened.
+ */
+function reqStrs(row: Row, key: string, what: string): string[] {
+  const value = row[key];
+  if (!Array.isArray(value)) {
+    throw offContract(what, `\`${key}\` should be an array, got ${describeType(value)}`);
+  }
+  return value.map((item, i) => {
+    if (typeof item !== "string") {
+      throw offContract(what, `\`${key}[${i}]\` should be a string, got ${describeType(item)}`);
+    }
+    return item;
+  });
 }
 
 /** Nullable-in-contract fields: JSON `null` and an absent key both collapse to `undefined`. */
@@ -706,6 +736,89 @@ function toSummary(row: Row, what: string): EventSummary {
   };
 }
 
+function toStudentGroup(row: Row, what: string): StudentGroup {
+  return {
+    id: reqStr(row, "id", what),
+    name: reqStr(row, "name", what),
+    type: reqStr(row, "type", what),
+    sourceType: reqStr(row, "sourceType", what),
+    sourceEntityType: reqStr(row, "sourceEntityType", what),
+    // `optStr` and not `reqStr`, matching the contract exactly: these three are nullable on a
+    // `Manual` group, which spans terms by nature and which the projection never touches. Narrowing
+    // them as required would make the manual half of a perfectly healthy list fail the whole read.
+    termId: optStr(row.termId),
+    termCode: optStr(row.termCode),
+    memberCount: reqNum(row, "memberCount", what),
+    lastSyncedAt: optStr(row.lastSyncedAt),
+  };
+}
+
+function toTerm(row: Row, what: string): Term {
+  return {
+    id: reqStr(row, "id", what),
+    code: reqStr(row, "code", what),
+    schoolYear: reqStr(row, "schoolYear", what),
+    semester: reqStr(row, "semester", what),
+    isCurrent: reqBool(row, "isCurrent", what),
+    // Dates, not instants, and nullable in the contract — the roster source has no term date columns,
+    // so these are absent on most real rows.
+    startsOn: optStr(row.startsOn),
+    endsOn: optStr(row.endsOn),
+  };
+}
+
+function toAudienceGroup(row: Row, what: string): EventAudienceGroup {
+  return {
+    studentGroupId: reqStr(row, "studentGroupId", what),
+    name: reqStr(row, "name", what),
+    type: reqStr(row, "type", what),
+    sourceType: reqStr(row, "sourceType", what),
+    termId: optStr(row.termId),
+    termCode: optStr(row.termCode),
+    memberCount: reqNum(row, "memberCount", what),
+  };
+}
+
+function toAudienceStudent(row: Row, what: string): EventAudienceStudent {
+  return {
+    studentId: reqStr(row, "studentId", what),
+    studentNumber: reqStr(row, "studentNumber", what),
+    fullName: reqStr(row, "fullName", what),
+    section: optStr(row.section),
+  };
+}
+
+function toAudience(row: Row, what: string): EventAudience {
+  return {
+    eventId: reqStr(row, "eventId", what),
+    status: reqStr(row, "status", what),
+    isFrozen: reqBool(row, "isFrozen", what),
+    expected: reqNum(row, "expected", what),
+    groups: asRows(row.groups, `${what}.groups`).map((group, i) =>
+      toAudienceGroup(group, `${what}.groups[${i}]`),
+    ),
+    // Required, and empty is a legitimate answer rather than a missing one — on a terminal event it
+    // is the *expected* answer (ADR-003 D-13; see `EventAudience`). A missing key would still fail
+    // here, which is the distinction worth keeping: "the server said none" is not "the server said
+    // nothing".
+    students: asRows(row.students, `${what}.students`).map((student, i) =>
+      toAudienceStudent(student, `${what}.students[${i}]`),
+    ),
+  };
+}
+
+function toAudienceResult(row: Row, what: string): EventAudienceResult {
+  return {
+    eventId: reqStr(row, "eventId", what),
+    groupsAttached: reqNum(row, "groupsAttached", what),
+    studentsAttached: reqNum(row, "studentsAttached", what),
+    groupsAlreadyAttached: reqNum(row, "groupsAlreadyAttached", what),
+    studentsAlreadyAttached: reqNum(row, "studentsAlreadyAttached", what),
+    expected: reqNum(row, "expected", what),
+    warnings: reqStrs(row, "warnings", what),
+  };
+}
+
 // ---------------------------------------------------------------------------------------------
 // Methods
 // ---------------------------------------------------------------------------------------------
@@ -996,6 +1109,230 @@ async function eventSummary(eventId: string): Promise<EventSummary | undefined> 
   return body === undefined ? undefined : toSummary(asRow(body, what), what);
 }
 
+// ---------------------------------------------------------------------------------------------
+// The audience — who an event expects
+// ---------------------------------------------------------------------------------------------
+
+/**
+ * `GET /events/{id}/attendees` — the sections and the individually-attached students on one event.
+ *
+ * `undefined` for a 404, like the other three lookups: an event that is not there is an answer the
+ * panel renders, not a failure.
+ *
+ * **What an empty `students` means depends on `isFrozen`, and the difference is not cosmetic.** On a
+ * live event it means nobody is individually attached. On a terminal one it is the *expected* answer:
+ * ADR-003 D-13 writes the resolved audience down as individual `EventGroups` student rows and those
+ * rows are the denominator, but this endpoint does not republish them — the per-student frozen set is
+ * `GET /events/{id}/roster`. A panel that read the empty array as "no audience" would say so directly
+ * beneath a non-zero `expected`.
+ */
+async function getEventAudience(eventId: string): Promise<EventAudience | undefined> {
+  const what = "GET /events/{id}/attendees";
+  const body = await getJsonOrMissing(what, `/events/${encodeURIComponent(eventId)}/attendees`);
+  return body === undefined ? undefined : toAudience(asRow(body, what), what);
+}
+
+/**
+ * `POST /events/{id}/attendees` — §6.3, and **idempotent**, which is what makes it the one write on
+ * this screen a user can safely be told to send again.
+ *
+ * Two filtered unique indexes (ADR-003 D-12) make that a property of the schema rather than of the
+ * service remembering to check, so two concurrent posts of the same sections cannot both land. The
+ * reply says which half happened: `groupsAttached` versus `groupsAlreadyAttached`, and
+ * **"already attached" is a success, not a refusal** — see `EventAudienceResult`.
+ *
+ * The refusals: **400** for a malformed or cross-school reference, **404** for an event that is not
+ * there, and **409** when the event's status forbids an audience change. The 409 is the one worth
+ * planning for: `eventAudience.ts` disables the controls on a terminal event, but the event can be
+ * closed in another tab between the read and the press, and that arrival must read as what it is
+ * rather than as a generic write failure.
+ *
+ * A group from a **non-current term warns rather than refuses**, so a 200 can still carry something
+ * the organizer needs to see. `warnings` is required at the seam for that reason.
+ */
+async function attachEventAudience(
+  eventId: string,
+  request: EventAudienceRequest,
+): Promise<EventAudienceResult> {
+  return writeJson(
+    "POST /events/{id}/attendees",
+    `/events/${encodeURIComponent(eventId)}/attendees`,
+    { method: "POST", payload: request },
+    "The audience was changed",
+    toAudienceResult,
+  );
+}
+
+/**
+ * `DELETE /events/{id}/attendees/groups/{studentGroupId}` — detach one section.
+ *
+ * **204 whether or not it was attached**, deliberately: the postcondition holds either way, so a
+ * retry is safe — which is the opposite of `DELETE /students/{id}` and worth not copying the wrong
+ * habit from. A missing *event* is still 404, because that one is named by the URL; a locked event is
+ * 409.
+ *
+ * Sub-resource `DELETE`s rather than a body on `DELETE /attendees`: a body on `DELETE` is legal and
+ * is dropped by enough proxies to be a poor contract. `RequestBody` in this file makes the bodyless
+ * shape the only representable one for the verb, so this cannot drift back.
+ */
+async function detachEventGroup(eventId: string, studentGroupId: string): Promise<void> {
+  return writeNoContent(
+    "DELETE /events/{id}/attendees/groups/{studentGroupId}",
+    `/events/${encodeURIComponent(eventId)}/attendees/groups/${encodeURIComponent(studentGroupId)}`,
+    { method: "DELETE" },
+  );
+}
+
+/** `DELETE /events/{id}/attendees/students/{studentId}` — same semantics as the group detach above. */
+async function detachEventStudent(eventId: string, studentId: string): Promise<void> {
+  return writeNoContent(
+    "DELETE /events/{id}/attendees/students/{studentId}",
+    `/events/${encodeURIComponent(eventId)}/attendees/students/${encodeURIComponent(studentId)}`,
+    { method: "DELETE" },
+  );
+}
+
+/**
+ * `GET /student-groups` — the audiences an event can be attached to. Every filter optional.
+ *
+ * Unwrapped at the seam like every other admin list, and **the paging here is not decoration**. The
+ * contract records the argument it lost: a school's group count looked bounded by its academic
+ * structure, which is true of *one term* — the ADR-001 D-1 projection writes a fresh row per section
+ * and per offering on every term it runs for, so the real bound is per-term multiplied by every term
+ * ever imported. `listAll` walks it and `MAX_LIST_ROWS` refuses loudly rather than silently handing a
+ * picker the first fifty rows of several semesters.
+ *
+ * **`sourceType` outside the set returns an empty list, not every row** — a mistyped filter that
+ * silently stops filtering is how a cohort-only flow ends up offering manual groups. `GROUP_SOURCE_TYPE`
+ * is what the one caller passes, so the value is never hand-typed.
+ *
+ * There is no `type=` filter on the wire; selecting Sections is `sectionChoices`' client-side job.
+ */
+async function listStudentGroups(filter?: {
+  sourceType?: string;
+  termId?: string;
+}): Promise<StudentGroup[]> {
+  const what = "GET /student-groups";
+  return listAll(
+    what,
+    "/student-groups",
+    { sourceType: filter?.sourceType, termId: filter?.termId },
+    toStudentGroup,
+  );
+}
+
+/**
+ * `GET /academic/terms` — every term, **current first and then newest first**, which is the ordering
+ * `sectionChoices` leans on for its fallback rather than sorting on `startsOn`. Those columns are
+ * frequently null (the roster source has no term dates at all), so sorting on them would produce an
+ * arbitrary list on real data.
+ */
+async function listTerms(): Promise<Term[]> {
+  const what = "GET /academic/terms";
+  return listAll(what, "/academic/terms", {}, toTerm);
+}
+
+/**
+ * Which term a section list was read for — and, when it is not the one that was asked for, the fact
+ * that says the rows already fetched have to be thrown away.
+ *
+ * `"requested"` and `"default"` are separate arms rather than one `term` field precisely because the
+ * caller must act differently: rows read for a term that turned out not to exist belong to nothing
+ * the picker can label, and quietly showing them under the fallback's heading is a confident wrong
+ * answer of the kind this whole term-scoping exists to prevent.
+ */
+export type TermResolution =
+  | { kind: "requested"; term: Term }
+  | { kind: "default"; term: Term }
+  | { kind: "none" };
+
+/**
+ * The term a picker should be showing, given every term and whatever it asked for.
+ *
+ * Pure and exported so the rule is testable without a `fetch`: it is the only branching decision in
+ * this module, and every arm of it is reachable in ordinary use (first open, a chosen term, a term
+ * deleted or renamed under an open dialog, a school with no terms at all).
+ *
+ * The fallback order is `isCurrent`, then the first row — **not** a sort on `startsOn`. The contract
+ * orders this list current-first then newest-first for a stated reason: the roster source has no term
+ * date columns, so `startsOn`/`endsOn` are frequently null and sorting on them produces an arbitrary
+ * list on real data. `isCurrent` is carried on the row so a picker need not make a second request to
+ * `GET /academic/terms/current` to find it, and at most one term can hold it — a filtered unique
+ * index, not a convention.
+ */
+export function resolveTerm(
+  terms: readonly Term[],
+  requestedId: string | undefined,
+): TermResolution {
+  if (requestedId !== undefined) {
+    const requested = terms.find((term) => term.id === requestedId);
+    if (requested !== undefined) return { kind: "requested", term: requested };
+  }
+  const fallback = terms.find((term) => term.isCurrent) ?? terms[0];
+  return fallback === undefined ? { kind: "none" } : { kind: "default", term: fallback };
+}
+
+/** What the audience picker chooses from, for one term. */
+export interface SectionChoices {
+  /** Every term, so the picker can offer a different one. Current first, then newest first. */
+  terms: Term[];
+  /** The term `sections` was read for — `undefined` only when the school has no terms at all. */
+  term: Term | undefined;
+  /** That term's derived Section groups, with the member counts the organizer decides on. */
+  sections: StudentGroup[];
+}
+
+/**
+ * The picker's whole source, settled together and **term-scoped by construction**.
+ *
+ * The scoping is the point rather than an optimisation. A section name is reused every semester
+ * against an entirely different cohort, so an unscoped list holds several distinct sets of students
+ * under names differing only by the term suffix the projection composes in — and picking the wrong
+ * one is invisible until the event closes against a denominator of the wrong people. `termId` is the
+ * filter the contract calls the one most worth passing, and this is the only method that reads groups.
+ *
+ * The terms read comes first when no term has been chosen yet, because the default *is* the answer to
+ * that read: `isCurrent` is carried on the row precisely so a picker does not need a second request
+ * to `GET /academic/terms/current` to find it. Once the caller names a term the two reads are
+ * independent and run together, so changing term costs one round of latency rather than two.
+ *
+ * A `termId` that is not in the list falls back to the default rather than being passed through. It
+ * can only happen through version skew or a term deleted under an open dialog, and sending it anyway
+ * would answer with an empty section list that reads as "this term has no sections" — a confident
+ * wrong answer where the fallback is a visibly different term the user can see they are looking at.
+ *
+ * Sections are selected here rather than on the wire because `GET /student-groups` publishes no
+ * `type=` filter. Filtering client-side over one term's rows is bounded by the scoping above, so it
+ * is not the lossy client-side-filter trap `listStudents`' `course` note warns about.
+ */
+async function sectionChoices(termId: string | undefined): Promise<SectionChoices> {
+  if (termId === undefined) {
+    const terms = await listTerms();
+    const resolved = resolveTerm(terms, undefined);
+    if (resolved.kind === "none") return { terms, term: undefined, sections: [] };
+    return { terms, term: resolved.term, sections: await sectionsIn(resolved.term.id) };
+  }
+
+  const [terms, sections] = await Promise.all([listTerms(), sectionsIn(termId)]);
+  const resolved = resolveTerm(terms, termId);
+
+  if (resolved.kind === "none") return { terms, term: undefined, sections: [] };
+  // The requested term does not exist, so the rows just read belong to a term the picker cannot name.
+  // They are **dropped and re-read** under the fallback rather than relabelled: a list of sections
+  // under the wrong term heading is the exact confusion the scoping exists to prevent, and it is the
+  // confusion that does not announce itself.
+  if (resolved.kind === "default") {
+    return { terms, term: resolved.term, sections: await sectionsIn(resolved.term.id) };
+  }
+  return { terms, term: resolved.term, sections };
+}
+
+/** One term's derived Section groups. Split out only so `sectionChoices` reads as its own decision. */
+async function sectionsIn(termId: string): Promise<StudentGroup[]> {
+  const groups = await listStudentGroups({ sourceType: GROUP_SOURCE_TYPE.Derived, termId });
+  return groups.filter((group) => group.type === GROUP_TYPE_SECTION);
+}
+
 /**
  * Explanation of why an admin-browser tap is refused. One string, one place — the message the
  * Snackbar shows and the reason in the report are the same text.
@@ -1128,6 +1465,13 @@ export const api = {
   getEvent,
   listAttendance,
   eventSummary,
+  getEventAudience,
+  attachEventAudience,
+  detachEventGroup,
+  detachEventStudent,
+  listStudentGroups,
+  listTerms,
+  sectionChoices,
   tap,
   eventDetail,
 };

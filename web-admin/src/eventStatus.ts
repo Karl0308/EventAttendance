@@ -64,8 +64,15 @@ export interface StatusChange {
   readonly finality: string;
 }
 
-/** Said the same way wherever an audience is written down, because it is the same write. */
-const AUDIENCE_FROZEN =
+/**
+ * Said the same way wherever an audience is written down, because it is the same write.
+ *
+ * Exported since the audience panel landed: `eventAudience.ts` tells a terminal event's organizer why
+ * the sections can no longer be changed, and that is the same fact this sentence states before the
+ * press. Two sentences for one write is how the confirmation and the panel come to disagree about
+ * what closing an event did.
+ */
+export const AUDIENCE_FROZEN =
   "Everyone currently expected is written down as this event's audience, and that list stops moving: " +
   "a student enrolled into an attached section afterwards is no longer counted.";
 

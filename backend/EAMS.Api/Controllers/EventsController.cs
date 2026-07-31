@@ -206,6 +206,49 @@ public class EventsController : ControllerBase
     // ------------------------------------------------------------------------------- audience
 
     /// <summary>
+    /// <c>GET /events/{id}/attendees</c> — what is currently attached to this event's audience.
+    /// <c>events.read</c>, matching the sibling reads.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The read half of <c>POST /events/{id}/attendees</c> and the two <c>DELETE</c> sub-resources:
+    /// every id returned here is one those routes accept. It reports the §4.8 rows — which groups and
+    /// which individually-named students — not the population they resolve to. <c>expected</c> is the
+    /// resolved size, and it is the same number <c>GET /events/{id}/summary</c> and
+    /// <c>GET /events/{id}/roster</c> report.
+    /// </para>
+    ///
+    /// <para>
+    /// <b><c>isFrozen</c> is the discriminator and <c>students</c> means two different things on either
+    /// side of it.</b> On a live event (<c>Draft</c>/<c>Open</c>) it lists the individually-attached
+    /// students. On a terminal event (<c>Closed</c> or <c>Cancelled</c> — <c>isFrozen: true</c>) it is
+    /// <b>empty by contract</b>: the freeze wrote the entire resolved audience down as individual rows,
+    /// so returning them here would duplicate the roster in an unbounded response. Empty there does not
+    /// mean nobody was attached. <b>The per-student frozen set is <c>GET /events/{id}/roster</c></b>;
+    /// <c>expected</c> and <c>groups</c> carry the size and the cohort.
+    /// </para>
+    ///
+    /// <para>
+    /// <c>groups</c> is returned whatever the status. On a terminal event those rows are the historical
+    /// record of which cohort was invited — nothing resolves them any more, and keeping them is the
+    /// reason the freeze does not delete them.
+    /// </para>
+    /// </remarks>
+    /// <param name="id">The event.</param>
+    /// <param name="ct">Cancellation token.</param>
+    /// <response code="200">The attached audience.</response>
+    /// <response code="404">No such event, or it is soft-deleted.</response>
+    [HttpGet("{id:guid}/attendees")]
+    [HasPermissionNotEnforced(EamsPermissions.EventsRead)]
+    [ProducesResponseType(typeof(EventAudienceDto), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status404NotFound)]
+    public async Task<ActionResult<EventAudienceDto>> Audience(Guid id, CancellationToken ct)
+    {
+        var audience = await _events.GetAudienceAsync(id, ct);
+        return audience is null ? NotFound() : Ok(audience);
+    }
+
+    /// <summary>
     /// §6.3 <c>POST /events/{id}/attendees</c> — associate <c>{studentGroupIds[], studentIds[]}</c>.
     /// Idempotent; the response reports what was attached versus what already was.
     /// </summary>

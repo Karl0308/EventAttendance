@@ -83,6 +83,102 @@ public record EventAudienceResultDto(
     IReadOnlyList<string> Warnings);
 
 /// <summary>
+/// <c>GET /events/{id}/attendees</c> — what is currently attached to an event's audience, as the
+/// §4.8 <c>EventGroups</c> rows themselves rather than as the population they resolve to.
+///
+/// <para>
+/// <b><see cref="IsFrozen"/> is the discriminator, and reading this object without it is a mistake.</b>
+/// It is the same predicate <see cref="EventRosterDto.IsFrozen"/> publishes — terminal, so both
+/// <c>Closed</c> and <c>Cancelled</c>, not <c>Closed</c> alone — and it changes what
+/// <see cref="Students"/> means, as that field's own documentation sets out.
+/// </para>
+///
+/// <para>
+/// This is the read half of <c>POST /events/{id}/attendees</c> and the two <c>DELETE</c>
+/// sub-resources: every id it returns is one those routes accept. It is deliberately <em>not</em> a
+/// roster — it says who was invited, not who came. <c>GET /events/{id}/roster</c> is the other
+/// question and lists people; this lists the invitation.
+/// </para>
+/// </summary>
+/// <param name="Status">The event's §4.5 status, so a caller need not fetch the event to know it.</param>
+/// <param name="IsFrozen">
+/// True once this event's audience has been snapshotted — both terminal statuses (ADR-003 D-16). The
+/// same flag, computed the same way, as <see cref="EventRosterDto.IsFrozen"/>: the two cannot disagree
+/// about one event.
+/// </param>
+/// <param name="Expected">
+/// The invited population — <b>the same number <c>GET /events/{id}/summary</c> and
+/// <c>GET /events/{id}/roster</c> report for this event</b>, from the same query. It is deliberately
+/// not derivable from the lists below: on a live event the group members are not enumerated here, and
+/// on a terminal event <see cref="Students"/> is empty by contract. A caller wanting the denominator
+/// reads this field; a caller wanting the people reads the roster.
+/// </param>
+/// <param name="Groups">
+/// Every attached §4.7 group, whatever the event's status. <b>On a terminal event these are the
+/// historical record of which cohort was invited</b> (ADR-003 D-13) — no query resolves them any more,
+/// and they are returned precisely because that record is the thing the freeze keeps.
+/// </param>
+/// <param name="Students">
+/// <b>Its meaning depends on <see cref="IsFrozen"/>, which is why that flag is published beside it.</b>
+///
+/// <para>
+/// While the event is live (<c>Draft</c>/<c>Open</c>) these are the individually-attached students —
+/// the handful an organizer named by hand on top of the sections, and the exact set the
+/// <c>DELETE .../attendees/students/{studentId}</c> sub-resource addresses.
+/// </para>
+///
+/// <para>
+/// Once <see cref="IsFrozen"/>, <b>this list is empty by contract</b>, and the emptiness does not mean
+/// "no students were attached" — it means "ask elsewhere". The freeze writes the whole resolved
+/// audience down as individual rows (ADR-003 D-13), so the same query that returns three students on a
+/// live event returns the entire population, unbounded, on a terminal one. That is
+/// <c>GET /events/{id}/roster</c>'s job, and duplicating it here would add a second unbounded response
+/// where ADR-003 already carries one as an open follow-up. <b>The per-student frozen set is
+/// <c>GET /events/{id}/roster</c>.</b> <see cref="Expected"/> and <see cref="Groups"/> carry the answer
+/// for anyone who only needs the size and the cohort.
+/// </para>
+///
+/// <para>
+/// Soft-deleted students are listed on a live event rather than hidden. Their §4.8 row exists and is
+/// detachable, so hiding it would leave a row no client could see and no organizer could remove, while
+/// a re-post naming that student would report it as already attached against a panel showing nothing.
+/// They are excluded from <see cref="Expected"/> while the event is live regardless (ADR-003 D-15), so
+/// the two figures legitimately differ — this list is the attachment, not the denominator.
+/// </para>
+/// </param>
+public record EventAudienceDto(
+    Guid EventId,
+    string Status,
+    bool IsFrozen,
+    int Expected,
+    IReadOnlyList<EventAudienceGroupDto> Groups,
+    IReadOnlyList<EventAudienceStudentDto> Students);
+
+/// <summary>One attached §4.7 group.</summary>
+/// <param name="MemberCount">
+/// Members excluding the soft-deleted — <b>the same definition <c>GET /student-groups</c> uses</b>, so
+/// the number in a picker and the number in the attached panel agree about one group. It is current
+/// membership even on a terminal event: the group row is a historical record of what was invited, but
+/// this count describes the group as it is now, and the frozen population is
+/// <see cref="EventAudienceDto.Expected"/>.
+/// </param>
+public record EventAudienceGroupDto(
+    Guid StudentGroupId,
+    string Name,
+    string Type,
+    string SourceType,
+    Guid? TermId,
+    string? TermCode,
+    int MemberCount);
+
+/// <summary>One individually-attached student. See <see cref="EventAudienceDto.Students"/>.</summary>
+public record EventAudienceStudentDto(
+    Guid StudentId,
+    string StudentNumber,
+    string FullName,
+    string? Section);
+
+/// <summary>
 /// <c>GET /events/{id}/roster</c> — §6.3's "expected vs present roster" and the source of §12's
 /// Absentee Report.
 ///

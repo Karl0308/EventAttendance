@@ -2107,6 +2107,67 @@
       }
     },
     "/api/v1/events/{id}/attendees": {
+      "get": {
+        "tags": [
+          "Events"
+        ],
+        "summary": "`GET /events/{id}/attendees` — what is currently attached to this event's audience.\r\n             `events.read`, matching the sibling reads.",
+        "description": "\r\n\r\n             The read half of `POST /events/{id}/attendees` and the two `DELETE` sub-resources:\r\n             every id returned here is one those routes accept. It reports the §4.8 rows — which groups and\r\n             which individually-named students — not the population they resolve to. `expected` is the\r\n             resolved size, and it is the same number `GET /events/{id}/summary` and\r\n             `GET /events/{id}/roster` report.\r\n             \r\n\r\n\r\n  <b>\r\n    `isFrozen` is the discriminator and `students` means two different things on either\r\n             side of it.</b> On a live event (`Draft`/`Open`) it lists the individually-attached\r\n             students. On a terminal event (`Closed` or `Cancelled` — `isFrozen: true`) it is\r\n             <b>empty by contract</b>: the freeze wrote the entire resolved audience down as individual rows,\r\n             so returning them here would duplicate the roster in an unbounded response. Empty there does not\r\n             mean nobody was attached. <b>The per-student frozen set is `GET /events/{id}/roster`</b>;\r\n             `expected` and `groups` carry the size and the cohort.\r\n             \r\n\r\n\r\n  `groups` is returned whatever the status. On a terminal event those rows are the historical\r\n             record of which cohort was invited — nothing resolves them any more, and keeping them is the\r\n             reason the freeze does not delete them.\r\n             ",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The event.",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The attached audience.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/EventAudienceDto"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EventAudienceDto"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EventAudienceDto"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such event, or it is soft-deleted.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        }
+      },
       "post": {
         "tags": [
           "Events"
@@ -4011,6 +4072,78 @@
         "additionalProperties": false,
         "description": "The body of `POST /devices` and `PUT /devices/{id}`.\r\n            \r\n\r\n<b>`SchoolId` is deliberately absent</b>, exactly as it is on `EventWriteRequest`: the\r\ntenant comes from EAMS.Application.Abstractions.ISchoolContext, never from the\r\nrequest. A caller-supplied tenant on a write is the hole Phase 4b closed on the tap path\r\n(D-27); this surface does not open a second one.\r\n\r\n<b>No key field either.</b> A key is minted by the server or it is not minted — see\r\n`DeviceKey.Issue` for why an operator-chosen key would invalidate the hashing decision.\r\n"
       },
+      "EventAudienceDto": {
+        "type": "object",
+        "properties": {
+          "eventId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "status": {
+            "type": "string",
+            "description": "The event's §4.5 status, so a caller need not fetch the event to know it."
+          },
+          "isFrozen": {
+            "type": "boolean",
+            "description": "True once this event's audience has been snapshotted — both terminal statuses (ADR-003 D-16). The\r\nsame flag, computed the same way, as EAMS.Application.Dtos.EventRosterDto.IsFrozen: the two cannot disagree\r\nabout one event."
+          },
+          "expected": {
+            "type": "integer",
+            "description": "The invited population — <b>the same number `GET /events/{id}/summary` and\r\n`GET /events/{id}/roster` report for this event</b>, from the same query. It is deliberately\r\nnot derivable from the lists below: on a live event the group members are not enumerated here, and\r\non a terminal event EAMS.Application.Dtos.EventAudienceDto.Students is empty by contract. A caller wanting the denominator\r\nreads this field; a caller wanting the people reads the roster.",
+            "format": "int32"
+          },
+          "groups": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/EventAudienceGroupDto"
+            },
+            "description": "Every attached §4.7 group, whatever the event's status. <b>On a terminal event these are the\r\nhistorical record of which cohort was invited</b> (ADR-003 D-13) — no query resolves them any more,\r\nand they are returned precisely because that record is the thing the freeze keeps."
+          },
+          "students": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/EventAudienceStudentDto"
+            },
+            "description": "<b>Its meaning depends on EAMS.Application.Dtos.EventAudienceDto.IsFrozen, which is why that flag is published beside it.</b>\r\n\r\n\r\n             While the event is live (`Draft`/`Open`) these are the individually-attached students —\r\n             the handful an organizer named by hand on top of the sections, and the exact set the\r\n             `DELETE .../attendees/students/{studentId}` sub-resource addresses.\r\n             \r\n\r\n\r\n             Once EAMS.Application.Dtos.EventAudienceDto.IsFrozen, <b>this list is empty by contract</b>, and the emptiness does not mean\r\n             \"no students were attached\" — it means \"ask elsewhere\". The freeze writes the whole resolved\r\n             audience down as individual rows (ADR-003 D-13), so the same query that returns three students on a\r\n             live event returns the entire population, unbounded, on a terminal one. That is\r\n             `GET /events/{id}/roster`'s job, and duplicating it here would add a second unbounded response\r\n             where ADR-003 already carries one as an open follow-up. <b>The per-student frozen set is\r\n             `GET /events/{id}/roster`.</b>EAMS.Application.Dtos.EventAudienceDto.Expected and EAMS.Application.Dtos.EventAudienceDto.Groups carry the answer\r\n             for anyone who only needs the size and the cohort.\r\n             \r\n\r\n\r\n             Soft-deleted students are listed on a live event rather than hidden. Their §4.8 row exists and is\r\n             detachable, so hiding it would leave a row no client could see and no organizer could remove, while\r\n             a re-post naming that student would report it as already attached against a panel showing nothing.\r\n             They are excluded from EAMS.Application.Dtos.EventAudienceDto.Expected while the event is live regardless (ADR-003 D-15), so\r\n             the two figures legitimately differ — this list is the attachment, not the denominator.\r\n             "
+          }
+        },
+        "additionalProperties": false,
+        "description": "`GET /events/{id}/attendees` — what is currently attached to an event's audience, as the\r\n             §4.8 `EventGroups` rows themselves rather than as the population they resolve to.\r\n            \r\n             \r\n<b>EAMS.Application.Dtos.EventAudienceDto.IsFrozen is the discriminator, and reading this object without it is a mistake.</b>\r\n             It is the same predicate EAMS.Application.Dtos.EventRosterDto.IsFrozen publishes — terminal, so both\r\n             `Closed` and `Cancelled`, not `Closed` alone — and it changes what\r\n             EAMS.Application.Dtos.EventAudienceDto.Students means, as that field's own documentation sets out.\r\n             \r\n\r\n             This is the read half of `POST /events/{id}/attendees` and the two `DELETE`\r\n             sub-resources: every id it returns is one those routes accept. It is deliberately <em>not</em> a\r\n             roster — it says who was invited, not who came. `GET /events/{id}/roster` is the other\r\n             question and lists people; this lists the invitation.\r\n             "
+      },
+      "EventAudienceGroupDto": {
+        "type": "object",
+        "properties": {
+          "studentGroupId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "name": {
+            "type": "string"
+          },
+          "type": {
+            "type": "string"
+          },
+          "sourceType": {
+            "type": "string"
+          },
+          "termId": {
+            "type": "string",
+            "format": "uuid",
+            "nullable": true
+          },
+          "termCode": {
+            "type": "string",
+            "nullable": true
+          },
+          "memberCount": {
+            "type": "integer",
+            "description": "Members excluding the soft-deleted — <b>the same definition `GET /student-groups` uses</b>, so\r\nthe number in a picker and the number in the attached panel agree about one group. It is current\r\nmembership even on a terminal event: the group row is a historical record of what was invited, but\r\nthis count describes the group as it is now, and the frozen population is\r\nEAMS.Application.Dtos.EventAudienceDto.Expected.",
+            "format": "int32"
+          }
+        },
+        "additionalProperties": false,
+        "description": "One attached §4.7 group."
+      },
       "EventAudienceRequest": {
         "type": "object",
         "properties": {
@@ -4072,6 +4205,27 @@
         },
         "additionalProperties": false,
         "description": "What one call to `POST /events/{id}/attendees` did.\r\n            \r\n\r\n\r\nThe `Already` counters exist so idempotency is <em>observable</em> rather than merely true. A\r\nre-post returning `{attached: 0, alreadyAttached: 3}` tells a caller its earlier request landed;\r\na bare 200 would leave \"did that save?\" unanswerable without a second round trip.\r\n"
+      },
+      "EventAudienceStudentDto": {
+        "type": "object",
+        "properties": {
+          "studentId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "studentNumber": {
+            "type": "string"
+          },
+          "fullName": {
+            "type": "string"
+          },
+          "section": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "additionalProperties": false,
+        "description": "One individually-attached student. See EAMS.Application.Dtos.EventAudienceDto.Students."
       },
       "EventDto": {
         "type": "object",

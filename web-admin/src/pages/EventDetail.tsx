@@ -30,13 +30,20 @@ import { EmptyState, ErrorState, LoadingState } from "../components/ResourceStat
 import EditEventDialog from "../components/EditEventDialog";
 import DeleteEventDialog from "../components/DeleteEventDialog";
 import ChangeEventStatusDialog from "../components/ChangeEventStatusDialog";
+import EventAudiencePanel from "../components/EventAudiencePanel";
+import type { AudienceRead, DetachTarget } from "../components/EventAudiencePanel";
+import AudiencePickerDialog from "../components/AudiencePickerDialog";
 import { knownMode, localFrom } from "../eventDraft";
 import type { EditScope } from "../eventDraft";
+import { attachSettledText } from "../eventAudience";
 import { statusActionsFor, statusSettledText } from "../eventStatus";
 import type { StatusChange } from "../eventStatus";
 import { EVENT_STATUS } from "../types";
 import type {
   AttendanceRecord,
+  EventAudienceGroup,
+  EventAudienceRequest,
+  EventAudienceStudent,
   EventItem,
   EventStatusName,
   EventWriteRequest,
@@ -252,6 +259,23 @@ export default function EventDetail() {
   const detail = useApiResource(() => api.eventDetail(id), [id]);
 
   /**
+   * The audience, read **beside** `eventDetail` rather than inside it, and the separation is
+   * deliberate on two counts.
+   *
+   * It must not be able to take the screen down. `eventDetail` composes the three reads that are three
+   * views of one fact and fails them together, precisely so the page cannot render half a truth; the
+   * audience is not one of those views, any more than the tap roster is. An event whose attendance
+   * grid is perfectly healthy must not become unviewable because this endpoint is unavailable — and it
+   * is the newest surface in the API, so "unavailable" is the case to design for rather than the
+   * exotic one.
+   *
+   * And it re-reads on its own. Attaching or removing a section changes the audience and nothing else
+   * on this page except the denominator; re-walking the whole attendance list after every removal
+   * would cost pages of rows to refresh two lines.
+   */
+  const audience = useApiResource(() => api.getEventAudience(id), [id]);
+
+  /**
    * Both writes live here rather than inside the dialogs that start them, which is D1a's shape and
    * the reason for it: a dialog that owns its own write ends that write when it unmounts, so Cancel,
    * Escape and the backdrop all have to be blocked for up to `REQUEST_TIMEOUT_MS` — fifteen seconds
@@ -264,6 +288,23 @@ export default function EventDetail() {
   const edit = useApiMutation((request: EventWriteRequest) => api.updateEvent(id, request));
   const remove = useApiMutation(() => api.deleteEvent(id));
   const move = useApiMutation((target: EventStatusName) => api.setEventStatus(id, target));
+
+  const attach = useApiMutation((request: EventAudienceRequest) =>
+    api.attachEventAudience(id, request),
+  );
+  /**
+   * One mutation for both detaches, keyed by the target's `kind`.
+   *
+   * Two hooks would be the other shape and would be worse here: the panel disables exactly one row's
+   * button while a removal runs, so it needs a single "which row is running" answer, and two
+   * independent `running` flags would let a section and a student be removed at once with the second
+   * failure overwriting the first's alert.
+   */
+  const detach = useApiMutation((target: DetachTarget) =>
+    target.kind === "group"
+      ? api.detachEventGroup(id, target.id)
+      : api.detachEventStudent(id, target.id),
+  );
 
   /**
    * The event each dialog is about, held rather than read from `detail` while it is open.
@@ -291,6 +332,27 @@ export default function EventDetail() {
   /** Survives a successful delete, which is the one outcome that leaves no event to render. */
   const [deleted, setDeleted] = useState<string | undefined>(undefined);
 
+  /** Whether the audience picker is on screen. It is about the event as a whole, so it holds nothing. */
+  const [picking, setPicking] = useState(false);
+
+  /**
+   * What the last successful attach warned about — held **here**, above the dialog that produced it.
+   *
+   * The dialog closes on success, so a warning left inside it would be rendered for the length of one
+   * commit and then thrown away. A group from a non-current term warns rather than refuses, and the
+   * warning is the only evidence that happened: a 200 with an unread `warnings` array is
+   * indistinguishable from an ordinary attach, which is the exact failure the field exists to prevent.
+   * It is dismissed by the user rather than by a timer, for the same reason.
+   */
+  const [warnings, setWarnings] = useState<readonly string[]>([]);
+
+  /**
+   * Which row a removal is running against. Held beside the mutation rather than derived from it,
+   * because `useApiMutation` knows that something is running and not what it is about — and the panel
+   * disables one row's button, not all of them.
+   */
+  const [detaching, setDetaching] = useState<DetachTarget | undefined>(undefined);
+
   /**
    * Whether each dialog is on screen, read at the moment a write *settles* rather than from the
    * closure that started it. The state captured there is a render old, and the interesting case is
@@ -300,10 +362,20 @@ export default function EventDetail() {
   const editOpen = useRef(editing !== undefined);
   const deleteOpen = useRef(deleting !== undefined);
   const changeOpen = useRef(changing !== undefined);
+  /**
+   * Whether the audience panel is on screen — the same question the three refs above ask about their
+   * dialogs, asked about a panel that lives inside the `ready` branch. A removal that fails while a
+   * background re-read has replaced that branch with the error state has nowhere to be rendered, and
+   * the Snackbar is the only place left for it.
+   */
+  const panelMounted = useRef(false);
+  const pickerOpen = useRef(picking);
   useLayoutEffect(() => {
     editOpen.current = editing !== undefined;
     deleteOpen.current = deleting !== undefined;
     changeOpen.current = changing !== undefined;
+    pickerOpen.current = picking;
+    panelMounted.current = detail.status === "ready" && detail.data.event !== undefined;
   });
 
   const [pickUid, setPickUid] = useState("");
@@ -462,6 +534,89 @@ export default function EventDetail() {
     });
   };
 
+  const openPicker = () => {
+    // A failure from an attempt the user walked away from is still in the mutation, and without this
+    // it would greet them as though it were about the sections they have not chosen yet.
+    attach.reset();
+    setPicking(true);
+  };
+
+  const submitAttach = (request: EventAudienceRequest) => {
+    void attach.run(request).then((settled) => {
+      if (settled.outcome === "ignored") return;
+
+      // Either way. A failed attach may still have been applied — the post is idempotent, so a
+      // re-read is both the cheapest and the only honest way to find out what actually landed.
+      audience.reload();
+      // The stat cards are the other half of the same fact: `expected` is the denominator of the
+      // attendance rate printed there (ADR-003 D-19), so attaching a section moves a number on the
+      // summary as well as a row on the panel.
+      detail.reload();
+
+      if (settled.outcome === "succeeded") {
+        setPicking(false);
+        // Held rather than announced: a Snackbar times out, and a warning about which cohort was
+        // attached is the kind of thing an organizer reads after they have looked at the list.
+        setWarnings(settled.data.warnings);
+        announce({ severity: "success", text: attachSettledText(settled.data) });
+        return;
+      }
+
+      if (!pickerOpen.current) {
+        announce({ severity: "error", text: describeApiError(settled.error) });
+      }
+    });
+  };
+
+  const removeFromAudience = (target: DetachTarget, subject: string) => {
+    setDetaching(target);
+    void detach.run(target).then((settled) => {
+      setDetaching(undefined);
+      if (settled.outcome === "ignored") return;
+
+      audience.reload();
+      detail.reload();
+
+      if (settled.outcome === "succeeded") {
+        announce({
+          severity: "success",
+          text: `${subject} is no longer part of this event's audience.`,
+        });
+        return;
+      }
+
+      // The panel renders the failure in place, beside the row it is about. When a re-read has taken
+      // the panel off the screen, this is the only place left for it.
+      if (!panelMounted.current) {
+        announce({ severity: "error", text: describeApiError(settled.error) });
+      }
+    });
+  };
+
+  const removeGroup = (group: EventAudienceGroup) =>
+    removeFromAudience({ kind: "group", id: group.studentGroupId }, `Section ${group.name}`);
+
+  const removeStudent = (student: EventAudienceStudent) =>
+    removeFromAudience({ kind: "student", id: student.studentId }, student.fullName);
+
+  /** The audience read, mapped into the three states the panel renders. */
+  const audienceRead: AudienceRead =
+    audience.status === "ready"
+      ? { status: "ready", audience: audience.data }
+      : audience.status === "error"
+        ? { status: "error", error: audience.error }
+        : { status: "loading" };
+
+  /**
+   * What the picker must not offer again — read from the audience rather than remembered across the
+   * dialog's life, so a section attached in another tab shows as attached here too.
+   */
+  const attachedGroupIds = new Set(
+    (audience.status === "ready" ? audience.data?.groups ?? [] : []).map(
+      (group) => group.studentGroupId,
+    ),
+  );
+
   const cols: GridColDef<AttendanceRecord>[] = [
     { field: "studentNumber", headerName: "Student No.", width: 130 },
     { field: "studentName", headerName: "Name", flex: 1, minWidth: 180 },
@@ -617,6 +772,27 @@ export default function EventDetail() {
               </Grid>
             </Grid>
 
+            {/* Above the tap simulator and the grid, because it is the question they both depend on:
+                who this event expects is what the denominator, the absentee list and every "did they
+                turn up" reading below are computed against. */}
+            <EventAudiencePanel
+              eventStatus={event.status}
+              read={audienceRead}
+              refreshing={audience.refreshing}
+              onRetry={audience.reload}
+              attach={{
+                open: openPicker,
+                warnings,
+                dismissWarnings: () => setWarnings([]),
+              }}
+              detach={{
+                running: detaching,
+                failure: detach.status === "failed" ? { error: detach.error } : undefined,
+                group: removeGroup,
+                student: removeStudent,
+              }}
+            />
+
             {event.status === EVENT_STATUS.Open && (
               <Card sx={{ mb: 3, bgcolor: "#fff8e1" }}>
                 <CardContent>
@@ -713,6 +889,16 @@ export default function EventDetail() {
           onConfirm={() => confirmStatusChange(changing.event.name, changing.change.target)}
           running={move.status === "running"}
           failure={move.status === "failed" ? { error: move.error } : undefined}
+        />
+      )}
+
+      {picking && (
+        <AudiencePickerDialog
+          attachedGroupIds={attachedGroupIds}
+          onClose={() => setPicking(false)}
+          onSubmit={submitAttach}
+          running={attach.status === "running"}
+          failure={attach.status === "failed" ? { error: attach.error } : undefined}
         />
       )}
 

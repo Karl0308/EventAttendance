@@ -201,6 +201,27 @@ public interface IEventService
         Guid id, Guid studentId, CancellationToken ct = default);
 
     /// <summary>
+    /// <c>GET /events/{id}/attendees</c> — the read half of the audience write surface above. Null when
+    /// there is no such event.
+    ///
+    /// <para>
+    /// <b>It returns the §4.8 rows, not the population they resolve to.</b> Attached groups come back as
+    /// groups — including on a terminal event, where they are ADR-003 D-13's record of which cohort was
+    /// invited and nothing resolves them any more. Individually-attached students come back as students
+    /// while the event is live; once it is terminal that same set is the whole frozen audience, and
+    /// <see cref="EventAudienceDto.Students"/> is empty by contract with the roster named as the place
+    /// to enumerate it. See that DTO for the full reasoning.
+    /// </para>
+    ///
+    /// <para>
+    /// <c>Expected</c> comes from the one denominator query <see cref="GetSummaryAsync"/> and
+    /// <see cref="GetRosterAsync"/> already use — deliberately not recomputed here. ADR-003 D-19 records
+    /// what a second implementation of that number costs: every copy stays plausible while they drift.
+    /// </para>
+    /// </summary>
+    Task<EventAudienceDto?> GetAudienceAsync(Guid id, CancellationToken ct = default);
+
+    /// <summary>
     /// §6.3 <c>GET /events/{id}/roster</c> — expected versus actual, de-duplicated across attached
     /// groups. Null when there is no such event.
     /// </summary>

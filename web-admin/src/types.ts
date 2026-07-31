@@ -254,6 +254,158 @@ export interface EventWriteRequest {
   requireRegistration: boolean;
 }
 
+// ---------------------------------------------------------------------------------------------
+// The audience — who an event expects
+// ---------------------------------------------------------------------------------------------
+
+/**
+ * §4.7 `StudentGroups`, as `GET /student-groups` publishes it — **the thing an event's audience is
+ * attached to**. `POST /events/{id}/attendees` takes ids from this list.
+ *
+ * `type` and `sourceType` stay `string` for the reason `EventItem.status` does: a response cannot
+ * prove a union, and a group kind this build has never heard of must render as itself rather than be
+ * coerced into one of the six. Compare against `GROUP_TYPE` / `GROUP_SOURCE_TYPE` below; never type a
+ * received value with them.
+ *
+ * `termId`/`termCode`/`lastSyncedAt` are nullable **in the contract, on purpose**: a `Manual` group
+ * spans terms by nature and the projection never touches it. So a null there is "this is a hand-made
+ * group", not a drift — which is why they are `optStr` at the seam rather than required.
+ */
+export interface StudentGroup {
+  id: string;
+  name: string;
+  /** `Course` / `Section` / `Org` / `Custom` / `College` / `Program`. */
+  type: string;
+  /** `Manual` (a person made it) or `Derived` (the ADR-001 D-1 projection owns it). */
+  sourceType: string;
+  /** Which academic concept a derived group projects, or `None` on a manual one. */
+  sourceEntityType: string;
+  termId?: string;
+  termCode?: string;
+  /**
+   * Members excluding the soft-deleted, counted in the database. **The number an organizer is really
+   * deciding on** — "invite BSCRIM 2-A" is a different decision at 8 students than at 80 — and a
+   * derived group showing zero is the visible signal that the projection has not run for its term.
+   */
+  memberCount: number;
+  lastSyncedAt?: string;
+}
+
+/** Read these to compare a received `StudentGroup.sourceType`, never to type one. */
+export const GROUP_SOURCE_TYPE = {
+  Manual: "Manual",
+  Derived: "Derived",
+} as const;
+
+export type GroupSourceTypeName = (typeof GROUP_SOURCE_TYPE)[keyof typeof GROUP_SOURCE_TYPE];
+
+/**
+ * The one `StudentGroup.type` the audience picker offers, named rather than written as a literal at
+ * the three places that test for it. JJ's flow is *"on that event we can select which Section"* — the
+ * other five kinds are real groups this build simply does not put in this picker yet.
+ */
+export const GROUP_TYPE_SECTION = "Section";
+
+/**
+ * §4 `Terms`, as `GET /academic/terms` publishes it.
+ *
+ * `startsOn`/`endsOn` are **calendar dates, not instants** (`YYYY-MM-DD`) and both are frequently
+ * null — the roster source has no term date columns — which is why nothing here sorts on them.
+ * `isCurrent` is carried on the row precisely so a term picker does not need a second request to
+ * `GET /academic/terms/current` to mark it.
+ */
+export interface Term {
+  id: string;
+  code: string;
+  schoolYear: string;
+  semester: string;
+  /** At most one per school, enforced by a filtered unique index rather than by convention. */
+  isCurrent: boolean;
+  startsOn?: string;
+  endsOn?: string;
+}
+
+/** One section on an event's audience, as `GET /events/{id}/attendees` lists it. */
+export interface EventAudienceGroup {
+  studentGroupId: string;
+  name: string;
+  type: string;
+  sourceType: string;
+  termId?: string;
+  termCode?: string;
+  memberCount: number;
+}
+
+/** One individually-attached student on an event's audience. */
+export interface EventAudienceStudent {
+  studentId: string;
+  studentNumber: string;
+  fullName: string;
+  /** ADR-002 D-9's display cache. Display only — not a join key, not a filter, not a grouping. */
+  section?: string;
+}
+
+/**
+ * Who an event expects — `GET /events/{id}/attendees`.
+ *
+ * **`students` being empty on a frozen event is not "nobody was attached".** ADR-003 D-13: reaching a
+ * terminal status resolves the live audience once and writes it down as individual `EventGroups`
+ * student rows, and those rows are the event's denominator. This endpoint does not republish them —
+ * the per-student frozen set is `GET /events/{id}/roster`. So on a terminal event `groups` is the
+ * historical record of *which cohort was invited* and `students` comes back empty, and any UI reading
+ * that emptiness as "no audience" would contradict the non-zero `expected` printed beside it.
+ */
+export interface EventAudience {
+  eventId: string;
+  /** The event's status as the server holds it. `string` for the usual reason. */
+  status: string;
+  /**
+   * ADR-003 D-16: **"this event's audience is snapshotted"**, true for both terminal statuses. It is
+   * deliberately *not* a synonym for `Closed` — a cancelled event's numbers are equally fixed.
+   */
+  isFrozen: boolean;
+  /** The invited population (ADR-003 D-19), the same number `GET /events/{id}/summary` reports. */
+  expected: number;
+  groups: EventAudienceGroup[];
+  students: EventAudienceStudent[];
+}
+
+/**
+ * The body of `POST /events/{id}/attendees`.
+ *
+ * Both lists are optional and both may be sent at once. Sending neither is a **no-op rather than an
+ * error** — it is what "the organizer cleared the form and saved" looks like — so this client never
+ * has to defend against an empty submit producing a 400.
+ */
+export interface EventAudienceRequest {
+  studentGroupIds?: string[];
+  studentIds?: string[];
+}
+
+/**
+ * What one attach did — and the `Already` counters are the load-bearing part.
+ *
+ * They exist so idempotency is **observable** rather than merely true: a re-post answering
+ * `{ groupsAttached: 0, groupsAlreadyAttached: 3 }` tells the organizer their earlier request landed.
+ * A UI that rendered that as a failure — or as nothing — would leave "did that save?" unanswered,
+ * which is exactly what the counters were added to answer without a second round trip.
+ */
+export interface EventAudienceResult {
+  eventId: string;
+  groupsAttached: number;
+  studentsAttached: number;
+  groupsAlreadyAttached: number;
+  studentsAlreadyAttached: number;
+  /** The expected count *after* this call, so the denominator can move on screen without a re-read. */
+  expected: number;
+  /**
+   * Non-fatal observations, empty on the ordinary case. A group from a non-current term **warns
+   * rather than refuses** (ADR-003, Accepted Context), and this array is the only place that says so
+   * — swallowing it is the whole failure the field exists to prevent.
+   */
+  warnings: string[];
+}
+
 /**
  * The canonical set, verified against the backend's `AttendanceStatus.All` in
  * `EAMS.Domain/DomainValues.cs`. It is documentation, not the wire type: the column is a `string`
