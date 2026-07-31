@@ -10,6 +10,7 @@ import type {
   Student,
   Card,
   EventItem,
+  EventStatusName,
   EventWriteRequest,
   AttendanceRecord,
   EventSummary,
@@ -305,12 +306,12 @@ const JSON_MEDIA_TYPE = "application/json";
  * forever — one careless `signal:` away from being overwritten.
  *
  * A union rather than one shape with an optional `payload`, so **`DELETE` cannot carry a body and
- * `POST`/`PUT` cannot omit one**. `DELETE /events/{id}` has nothing to send, and a request that sets
- * `Content-Type: application/json` with no body is a shape some proxies and gateways treat as
- * malformed — worth making unrepresentable rather than remembering not to write.
+ * `POST`/`PUT`/`PATCH` cannot omit one**. `DELETE /events/{id}` has nothing to send, and a request
+ * that sets `Content-Type: application/json` with no body is a shape some proxies and gateways treat
+ * as malformed — worth making unrepresentable rather than remembering not to write.
  */
 type RequestBody =
-  | { method: "POST" | "PUT"; payload: unknown }
+  | { method: "POST" | "PUT" | "PATCH"; payload: unknown }
   | { method: "DELETE" };
 
 /** The serialised body, or nothing — the one place that decides whether this request has one. */
@@ -793,6 +794,43 @@ async function updateEvent(id: string, request: EventWriteRequest): Promise<Even
 }
 
 /**
+ * `PATCH /events/{id}/status` — §6.3, and the **only** door into the status column. That is what makes
+ * the roster freeze on close impossible to bypass: an event cannot reach `Closed` without passing
+ * through the one server path that materialises its absentees.
+ *
+ * Which moves are legal is `eventStatus.ts`, mirrored from `EventStatusTransition`; this seam sends
+ * whatever it is given and lets the server refuse. The refusals split deliberately:
+ * **400** for a target not reachable from this status under any circumstances — the request is wrong
+ * and re-sending it unchanged is always wrong, and the `detail` names what *is* reachable, or for a
+ * terminal event points at `POST /attendance/manual` as the audited way to correct one student — and
+ * **404** for an event that is not there or is soft-deleted.
+ *
+ * No 409, unlike `PUT /events/{id}` above. That code belongs to `EventLocked`, which only an *edit*
+ * can raise; a status change has no well-formed-but-refused case, because the graph decides
+ * reachability and an unreachable target is a wrong request rather than a conflicting one.
+ *
+ * **This is the one write in the app that is genuinely safe to re-send.** The server has an explicit
+ * no-op arm: a request naming the status the event already holds succeeds without re-running the
+ * freeze, which exists precisely so a `PATCH` retried after a timeout cannot mark a second cohort
+ * Absent. `advise()` still classifies a network failure here as `may-duplicate`, because `shape` is a
+ * proxy for idempotency and is exact only for POST — it errs safe. The confirmation's withheld-resend
+ * sentence is where that is kept honest, and it is worded for this endpoint rather than in general.
+ *
+ * The reply is an `EventDto`. It is **not** the whole of what the server said: `ChangeStatusAsync`
+ * composes a message carrying how many students were marked Absent, and `EventsController.ChangeStatus`
+ * answers `Ok(response.Event)`, so that count never reaches this client. See `statusSettledText`.
+ */
+async function setEventStatus(id: string, status: EventStatusName): Promise<EventItem> {
+  return writeJson(
+    "PATCH /events/{id}/status",
+    `/events/${encodeURIComponent(id)}/status`,
+    { method: "PATCH", payload: { status } },
+    "The status was changed",
+    toEvent,
+  );
+}
+
+/**
  * `DELETE /events/{id}` — §6.3, and **soft** (§4.5 `IsDeleted`).
  *
  * Allowed from any status including `Closed`: the attendance rows survive untouched, so nothing is
@@ -954,6 +992,7 @@ export const api = {
   listEvents,
   createEvent,
   updateEvent,
+  setEventStatus,
   deleteEvent,
   getEvent,
   listAttendance,

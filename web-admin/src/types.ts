@@ -92,6 +92,16 @@ export const EVENT_STATUS = {
 } as const;
 
 /**
+ * The four statuses as a union — for values travelling *out*, which is the same distinction
+ * `AttendanceMode` draws above.
+ *
+ * `PATCH /events/{id}/status` takes one of these and refuses anything else with a 400, so the
+ * compiler can hold the set for a value this client chooses. It stays separate from
+ * `EventItem.status`, which is `string` because a response cannot prove a union.
+ */
+export type EventStatusName = (typeof EVENT_STATUS)[keyof typeof EVENT_STATUS];
+
+/**
  * The body of `POST /events` and of `PUT /events/{id}` — one type, because the server takes one type.
  *
  * The update is a **full replacement**, not a patch: every field is written from this body, so an

@@ -29,10 +29,18 @@ import { useApiMutation } from "../useApiMutation";
 import { EmptyState, ErrorState, LoadingState } from "../components/ResourceStates";
 import EditEventDialog from "../components/EditEventDialog";
 import DeleteEventDialog from "../components/DeleteEventDialog";
+import ChangeEventStatusDialog from "../components/ChangeEventStatusDialog";
 import { knownMode, localFrom } from "../eventDraft";
 import type { EditScope } from "../eventDraft";
+import { statusActionsFor, statusSettledText } from "../eventStatus";
+import type { StatusChange } from "../eventStatus";
 import { EVENT_STATUS } from "../types";
-import type { AttendanceRecord, EventItem, EventWriteRequest } from "../types";
+import type {
+  AttendanceRecord,
+  EventItem,
+  EventStatusName,
+  EventWriteRequest,
+} from "../types";
 
 // A deep link to a deleted or mistyped event is an answer, not a failure: `api.eventDetail` maps that
 // 404 to `event: undefined`, and this says so plainly instead of leaving the screen loading.
@@ -255,6 +263,7 @@ export default function EventDetail() {
    */
   const edit = useApiMutation((request: EventWriteRequest) => api.updateEvent(id, request));
   const remove = useApiMutation(() => api.deleteEvent(id));
+  const move = useApiMutation((target: EventStatusName) => api.setEventStatus(id, target));
 
   /**
    * The event each dialog is about, held rather than read from `detail` while it is open.
@@ -269,6 +278,16 @@ export default function EventDetail() {
   );
   const [deleting, setDeleting] = useState<EventItem | undefined>(undefined);
 
+  /**
+   * The move being confirmed, captured when the dialog opens rather than re-derived from `detail`
+   * while it is on screen — the same reason `editing` holds its event. A re-read that lands mid-write
+   * must not be able to change which transition the open confirmation is about: the sentence the user
+   * read before pressing has to be the sentence describing what gets sent.
+   */
+  const [changing, setChanging] = useState<{ event: EventItem; change: StatusChange } | undefined>(
+    undefined,
+  );
+
   /** Survives a successful delete, which is the one outcome that leaves no event to render. */
   const [deleted, setDeleted] = useState<string | undefined>(undefined);
 
@@ -280,9 +299,11 @@ export default function EventDetail() {
    */
   const editOpen = useRef(editing !== undefined);
   const deleteOpen = useRef(deleting !== undefined);
+  const changeOpen = useRef(changing !== undefined);
   useLayoutEffect(() => {
     editOpen.current = editing !== undefined;
     deleteOpen.current = deleting !== undefined;
+    changeOpen.current = changing !== undefined;
   });
 
   const [pickUid, setPickUid] = useState("");
@@ -357,6 +378,11 @@ export default function EventDetail() {
     setDeleting(event);
   };
 
+  const openStatusChange = (event: EventItem, change: StatusChange) => {
+    move.reset();
+    setChanging({ event, change });
+  };
+
   const submitEdit = (request: EventWriteRequest) => {
     // `run` never rejects; it answers with an outcome. The floating promise is deliberate and marked.
     void edit.run(request).then((settled) => {
@@ -381,6 +407,32 @@ export default function EventDetail() {
       // well would double it, and a Snackbar sits above the modal. When the dialog is gone, this is
       // the only place left for it.
       if (!editOpen.current) {
+        announce({ severity: "error", text: describeApiError(settled.error) });
+      }
+    });
+  };
+
+  const confirmStatusChange = (name: string, target: EventStatusName) => {
+    void move.run(target).then((settled) => {
+      if (settled.outcome === "ignored") return;
+
+      // Either way. On success the whole screen changes meaning — the tap simulator appears or
+      // disappears, the summary is recomputed against a frozen denominator, and a close has just
+      // written attendance rows the grid below is showing a stale version of. On a failure the change
+      // may still have been applied, and a screen that goes on asserting the previous status is how
+      // someone presses it a second time.
+      detail.reload();
+
+      if (settled.outcome === "succeeded") {
+        setChanging(undefined);
+        // From the status the server came back with, not the one that was asked for. They differ
+        // exactly once — the no-op arm answering a retried request — and that is the case where
+        // narrating the freeze would describe something that did not run.
+        announce({ severity: "success", text: statusSettledText(name, settled.data.status) });
+        return;
+      }
+
+      if (!changeOpen.current) {
         announce({ severity: "error", text: describeApiError(settled.error) });
       }
     });
@@ -440,6 +492,12 @@ export default function EventDetail() {
 
   const editability = event === undefined ? undefined : editabilityOf(event);
 
+  // Only the moves the graph actually has, mirrored from `EventStatusTransition` — a button for a
+  // transition the server does not have is a control whose only possible outcome is a 400. When there
+  // are none, `noneBecause` says why: a status action that is simply absent is as silent as one that
+  // greys out, and this codebase's standing rule is that neither may be.
+  const statusActions = event === undefined ? undefined : statusActionsFor(event.status);
+
   return (
     <Box>
       {detail.status === "loading" && <LoadingState label="Loading the event…" />}
@@ -488,6 +546,19 @@ export default function EventDetail() {
                   label={event.status}
                   color={event.status === EVENT_STATUS.Open ? "success" : "default"}
                 />
+                {/* One button per reachable target, never a menu of all four. Two at most, and each
+                    opens its own confirmation: which transition is being made is the whole content of
+                    that confirmation, so it cannot be a shared "Are you sure?" over a dropdown. */}
+                {statusActions?.changes.map((change) => (
+                  <Button
+                    key={change.target}
+                    size="small"
+                    variant="outlined"
+                    onClick={() => openStatusChange(event, change)}
+                  >
+                    {change.verb} event
+                  </Button>
+                ))}
                 {/* Rendered whether or not it can be pressed, so the action is discoverable and its
                     absence is never silent. When it cannot, the sentence below says why — a control
                     that greys out without saying why leaves the user hunting for a permission they
@@ -513,14 +584,16 @@ export default function EventDetail() {
               </Stack>
             </Stack>
 
+            {/* Measured in characters, because the limit being avoided is a line too long to track
+                back to its start rather than a number of pixels. */}
+            {statusActions?.noneBecause !== undefined && (
+              <Typography variant="body2" color="text.secondary" sx={{ mb: 2, maxWidth: "68ch" }}>
+                {statusActions.noneBecause}
+              </Typography>
+            )}
+
             {editability?.can === false && (
-              <Typography
-                variant="body2"
-                color="text.secondary"
-                // Measured in characters, because the limit being avoided is a line too long to
-                // track back to its start rather than a number of pixels.
-                sx={{ mb: 2, maxWidth: "68ch" }}
-              >
+              <Typography variant="body2" color="text.secondary" sx={{ mb: 2, maxWidth: "68ch" }}>
                 {editability.reason}
               </Typography>
             )}
@@ -629,6 +702,17 @@ export default function EventDetail() {
           onSubmit={submitEdit}
           running={edit.status === "running"}
           failure={edit.status === "failed" ? { error: edit.error } : undefined}
+        />
+      )}
+
+      {changing !== undefined && (
+        <ChangeEventStatusDialog
+          name={changing.event.name}
+          change={changing.change}
+          onClose={() => setChanging(undefined)}
+          onConfirm={() => confirmStatusChange(changing.event.name, changing.change.target)}
+          running={move.status === "running"}
+          failure={move.status === "failed" ? { error: move.error } : undefined}
         />
       )}
 

@@ -128,13 +128,16 @@ export const fieldIdsFor = (prefix: string): Record<DraftField, string> => ({
 // ---------------------------------------------------------------------------------------------
 
 /**
- * A `datetime-local` reading as the instant it names **in this browser's zone**.
+ * A date-time string as the instant it names — a `datetime-local` reading **in this browser's zone**,
+ * or an offset-bearing instant as itself.
  *
  * The conversion has to happen here. `"2026-08-01T09:00"` carries no offset, so sending it raw would
  * leave the zone to the server's parser, and the server runs in UTC while this school is UTC+8 —
  * the same eight-hour misjudgement `UtcTime` records on the backend, except silent, because an event
  * eight hours out is still a perfectly valid event. `new Date(local)` reads a bare date-time as
- * local time, which is what the user typed; `toISOString()` then names the instant unambiguously.
+ * local time, which is what the user typed; `toISOString()` then names the instant unambiguously. The
+ * same call reads `"2026-08-01T01:00:00Z"` as the instant it already is, which is what lets `resolve`
+ * below measure a verbatim server string on the same scale as a typed one.
  *
  * Epoch milliseconds rather than a `Date`, so the start/end comparison below is `<=` on two numbers
  * instead of a wrong-looking comparison of two objects.
@@ -299,13 +302,14 @@ export function validate(draft: Draft, origin?: DraftOrigin): Validated {
     errors.location = `${LOCATION_MAX_LENGTH} characters at most; this is ${location.length}.`;
   }
 
-  const startAt = instantFrom(draft.startAt);
+  // Resolved before they are compared, and that is the fix rather than the tidy-up. See `resolve`.
+  const startAt = resolve(draft.startAt, origin?.startAt);
   if (startAt === undefined) errors.startAt = "A start date and time is required.";
 
-  const endAt = instantFrom(draft.endAt);
+  const endAt = resolve(draft.endAt, origin?.endAt);
   if (endAt === undefined) {
     errors.endAt = "An end date and time is required.";
-  } else if (startAt !== undefined && endAt <= startAt) {
+  } else if (startAt !== undefined && endAt.at <= startAt.at) {
     // The server's rule verbatim, and it is `<=` there too: an event whose window is empty or
     // inverted can never be attended, because the tap path decides Present versus Late from the
     // start and the grace period.
@@ -317,7 +321,7 @@ export function validate(draft: Draft, origin?: DraftOrigin): Validated {
     errors.graceMinutes = `A whole number of minutes from ${MIN_GRACE_MINUTES} to ${MAX_GRACE_MINUTES}.`;
   }
 
-  // The three `=== undefined` arms are what narrow the parsed values for the request below; they
+  // The three `=== undefined` arms are what narrow the resolved values for the request below; they
   // cannot fire on their own, because each of them set an error above. The `errors` check is the
   // real condition and it is first.
   if (
@@ -338,8 +342,8 @@ export function validate(draft: Draft, origin?: DraftOrigin): Validated {
       // for an event that has none.
       description: description === "" ? null : description,
       location: location === "" ? null : location,
-      startAt: unmoved(draft.startAt, origin?.startAt) ?? new Date(startAt).toISOString(),
-      endAt: unmoved(draft.endAt, origin?.endAt) ?? new Date(endAt).toISOString(),
+      startAt: startAt.send,
+      endAt: endAt.send,
       attendanceMode: draft.attendanceMode,
       graceMinutes,
       requireRegistration: draft.requireRegistration,
@@ -355,4 +359,43 @@ export function validate(draft: Draft, origin?: DraftOrigin): Validated {
 function unmoved(box: string, original: string | undefined): string | undefined {
   if (original === undefined) return undefined;
   return box === localFrom(original) ? original : undefined;
+}
+
+/** One end of the window: the string that will be sent, and the instant that string names. */
+interface Resolved {
+  /** Verbatim from the server when the box has not moved, otherwise this browser's reading of it. */
+  send: string;
+  /** Epoch milliseconds, for the comparison. */
+  at: number;
+}
+
+/**
+ * The value that will actually be **sent**, resolved once, so the rule the form applies is applied to
+ * the request rather than to something adjacent to it.
+ *
+ * `validate` used to compare `instantFrom(box)` for both ends while the request could carry `unmoved`
+ * originals for either — two different pairs, checked and sent. They agree whenever a wall-clock
+ * reading names exactly one instant, which is every hour of the year in `Asia/Manila` (no DST since
+ * 1978) and all but one in a zone that has it. In that hour they disagree, and both directions are
+ * live: at the `America/New_York` fall-back fold a form can pass a pair whose *sent* values are
+ * inverted — start verbatim at 01:30 EST, end typed as 01:45 and read as EDT, fifteen minutes
+ * earlier — and the server refuses the save with a 400 about a window the user cannot see anything
+ * wrong with. This code is zone-generic, so "unreachable at this school" is a fact about the
+ * deployment and not about the rule.
+ *
+ * It also settles a smaller thing that was never DST's fault: `datetime-local` has minute resolution,
+ * so an event running 09:00:30Z → 09:00:50Z filled two boxes that both read `09:00` and was refused
+ * client-side as "the end must be after the start" — on a save the user made to its *name*. Measuring
+ * what is sent measures the seconds the server actually holds.
+ *
+ * The verbatim string is passed through untouched rather than round-tripped through `toISOString()`.
+ * SQL Server's `datetime2` keeps more precision than a JavaScript `Date` does, so normalising it here
+ * would shave sub-millisecond digits off a value the user never touched — which is exactly the silent
+ * movement `unmoved` exists to prevent, arriving through the function meant to preserve it.
+ */
+function resolve(box: string, original: string | undefined): Resolved | undefined {
+  const verbatim = unmoved(box, original);
+  const at = instantFrom(verbatim ?? box);
+  if (at === undefined) return undefined;
+  return { send: verbatim ?? new Date(at).toISOString(), at };
 }
