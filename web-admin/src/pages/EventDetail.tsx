@@ -82,12 +82,16 @@ function StatCard({ label, value, color }: { label: string; value: number; color
  */
 function RosterUnavailable({ error, onRetry }: { error: unknown; onRetry: () => void }) {
   const { message, retryable } = advise(error);
+  // `=== "safe"` rather than truthiness, for the reason `ErrorState` records: `"may-duplicate"` is
+  // truthy and must never be offered a one-click retry. The roster is a list read, so it cannot
+  // produce that arm and this renders exactly as it did; the strict test is what keeps that true.
+  const offerRetry = retryable === "safe";
   return (
     <Alert
       severity="warning"
       role="status"
       action={
-        retryable ? (
+        offerRetry ? (
           <Button color="inherit" size="small" onClick={onRetry}>
             Retry
           </Button>
@@ -100,7 +104,7 @@ function RosterUnavailable({ error, onRetry }: { error: unknown; onRetry: () => 
         {describeApiError(error)}
       </Typography>
       <Typography variant="body2" sx={{ mt: 1 }}>
-        {retryable ? message : `${message} ${ROSTER_UNRECOVERABLE}`}
+        {offerRetry ? message : `${message} ${ROSTER_UNRECOVERABLE}`}
       </Typography>
     </Alert>
   );

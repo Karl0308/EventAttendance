@@ -1,4 +1,6 @@
-// API-shaped types — a consumed subset of the backend DTOs in `docs/api/openapi.json`.
+// API-shaped types — a consumed subset of the backend DTOs in `docs/api/openapi.json`, plus the
+// request bodies the SPA sends back and the one value set those constrain (`ATTENDANCE_MODES`, the
+// single runtime export here: a union that must also be enumerable to build a picker from).
 //
 // Deliberately a subset: `StudentDto` also carries firstName/middleName/lastName/gender/photoUrl and
 // `EventDto` carries description/requireRegistration, none of which the SPA reads. `api.ts` drops
@@ -37,6 +39,43 @@ export interface EventItem {
   attendanceMode: string; // Single / TimeInOut
   graceMinutes: number;
   status: string; // Draft/Open/Closed/Cancelled
+}
+
+/**
+ * §4.5's two capture shapes, verified against `AttendanceMode.All` in `EAMS.Domain/DomainValues.cs`.
+ *
+ * A union here where `EventItem.attendanceMode` above stays `string`, and the difference is which
+ * way the value is travelling. A *received* value is whatever the wire carried and a response cannot
+ * prove a union — that is the same reasoning `AttendanceStatus` records below. A *sent* value is
+ * chosen at the call site, and the server refuses anything outside this set with a 400, so the
+ * compiler can hold the set and the picker can be built from it instead of from two hand-typed
+ * `MenuItem`s that drift.
+ */
+export const ATTENDANCE_MODES = ["Single", "TimeInOut"] as const;
+export type AttendanceMode = (typeof ATTENDANCE_MODES)[number];
+
+/**
+ * The body of `POST /events` (and of `PUT /events/{id}`, which is not wired yet).
+ *
+ * **`status` is deliberately absent**, mirroring `EventWriteRequest` on the server. A new event is
+ * always created `Draft` and `PATCH /events/{id}/status` is the only door into that column, which is
+ * what makes the roster freeze on close impossible to bypass. A `status` field here would be a
+ * second door, and a form offering it would be a control that silently does nothing.
+ *
+ * The nullable strings are `string | null` rather than optional: an omitted key and an explicit
+ * `null` mean the same thing to the server, but making the decision explicit at every construction
+ * site is what stops an empty text box being sent as `""` — which is a location, and stores as one.
+ */
+export interface EventWriteRequest {
+  name: string;
+  description: string | null;
+  location: string | null;
+  /** An instant, not a wall-clock reading. The server normalizes to UTC and compares after. */
+  startAt: string;
+  endAt: string;
+  attendanceMode: AttendanceMode;
+  graceMinutes: number;
+  requireRegistration: boolean;
 }
 
 /**

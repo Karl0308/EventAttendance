@@ -73,7 +73,13 @@ export function ErrorState({
       role="alert"
       sx={{ my: 2 }}
       action={
-        retryable ? (
+        // `=== "safe"`, not truthiness. `retryable` is three-valued and `"may-duplicate"` is truthy,
+        // so `retryable ? …` would put a Retry button on a request that may already have been
+        // applied. Nothing this component renders for is a write — every caller passes a
+        // `useApiResource` failure — so the rendered behaviour is unchanged; the strict test is what
+        // keeps it unchanged if a write error is ever handed here by mistake, instead of the button
+        // reappearing silently.
+        retryable === "safe" ? (
           <Button color="inherit" size="small" onClick={onRetry}>
             Retry
           </Button>

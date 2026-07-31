@@ -10,6 +10,7 @@ import type {
   Student,
   Card,
   EventItem,
+  EventWriteRequest,
   AttendanceRecord,
   EventSummary,
 } from "./types";
@@ -31,6 +32,23 @@ const baseUrl = (import.meta.env.VITE_API_BASE_URL ?? DEFAULT_BASE_URL).replace(
  */
 export type ApiErrorKind = "network" | "http" | "malformed" | "too-large";
 
+/**
+ * Which half of the API a failed request came from — and the fact that lets `advise()` tell "press it
+ * again" apart from "pressing it again may create a second one".
+ *
+ * A read that failed changed nothing, so retrying it is free. A write that failed **may already have
+ * been applied**: a connection reset after the request bytes went out, a 500 raised after the row
+ * committed, a gateway 429 in front of an origin that handled it. `POST /events` carries no
+ * client-supplied idempotency key the way the tap flow does with `deviceTapId`, so sending it again
+ * is how a user ends up with two events.
+ *
+ * It is recorded here, where `send` and `postJson` already know it, rather than supplied by whoever
+ * renders the error. A fact the call site must remember is the same defect class `useApiResource`'s
+ * `deps` argument exists to close, and this one is worse: forgetting it produces a UI that
+ * confidently invites the duplicate.
+ */
+export type ApiRequestShape = "read" | "write";
+
 /** RFC 7807 body as this API emits it. `title`/`detail` are prose and are reworded freely. */
 export interface ApiProblem {
   status: number;
@@ -50,28 +68,39 @@ export interface ApiProblem {
   serverTime?: string;
 }
 
+/**
+ * The tail of `ApiError`'s constructor, as a named bag rather than four positional arguments nobody
+ * can read at the call site.
+ *
+ * `shape` is **required and never defaulted**. A default would be the quiet failure: a throw site
+ * added later would inherit "read", and the first thing anyone would notice is a Retry button on a
+ * write that had already been applied.
+ */
+export interface ApiErrorInit {
+  shape: ApiRequestShape;
+  problem?: ApiProblem;
+  cause?: unknown;
+}
+
 export class ApiError extends Error {
   readonly kind: ApiErrorKind;
   /** HTTP status, or 0 when the failure happened before/outside a response. */
   readonly status: number;
+  /** Whether the request that failed could have changed server state. See `ApiRequestShape`. */
+  readonly shape: ApiRequestShape;
   readonly code: string | undefined;
   readonly traceId: string | undefined;
   readonly problem: ApiProblem | undefined;
 
-  constructor(
-    kind: ApiErrorKind,
-    status: number,
-    message: string,
-    problem?: ApiProblem,
-    cause?: unknown,
-  ) {
-    super(message, { cause });
+  constructor(kind: ApiErrorKind, status: number, message: string, init: ApiErrorInit) {
+    super(message, { cause: init.cause });
     this.name = "ApiError";
     this.kind = kind;
     this.status = status;
-    this.code = problem?.code;
-    this.traceId = problem?.traceId;
-    this.problem = problem;
+    this.shape = init.shape;
+    this.code = init.problem?.code;
+    this.traceId = init.problem?.traceId;
+    this.problem = init.problem;
   }
 }
 
@@ -93,8 +122,15 @@ type Row = Record<string, unknown>;
 const isRow = (value: unknown): value is Row =>
   typeof value === "object" && value !== null && !Array.isArray(value);
 
+/**
+ * `shape: "read"` because the narrowing helpers below run over a *reply body* and know nothing about
+ * the request that fetched it — and every caller of them today is a read. The one write that maps its
+ * own reply, `createEvent`, catches these and re-raises with `shape: "write"`, which is where the fact
+ * actually lives. Any future write that maps a reply must do the same: a mapper cannot know whether
+ * the server acted, and guessing "read" here would be the one guess that produces a duplicate.
+ */
 const offContract = (what: string, detail: string) =>
-  new ApiError("malformed", 0, `${what} is off-contract: ${detail}.`);
+  new ApiError("malformed", 0, `${what} is off-contract: ${detail}.`, { shape: "read" });
 
 function asRow(value: unknown, what: string): Row {
   if (!isRow(value)) throw offContract(what, `expected an object, got ${describeType(value)}`);
@@ -172,9 +208,34 @@ async function readProblem(res: Response): Promise<ApiProblem> {
   };
 }
 
-function httpError(what: string, problem: ApiProblem): ApiError {
-  const reason = problem.code ?? problem.title ?? problem.detail ?? "no detail supplied";
-  return new ApiError("http", problem.status, `${what} failed (${problem.status}: ${reason}).`, problem);
+/**
+ * The sentence a user reads — which is not the token a program branches on, and the two stop
+ * competing for this one slot.
+ *
+ * `detail`, then `title`, then `code`. They are not three spellings of one thing. `code` is the
+ * stable machine outcome token and it is already carried separately on `ApiError.code`, where
+ * `advise()` and any future branch can reach it without going through prose; putting it first here as
+ * well meant that on every surface that emits one, the token won and the sentence was thrown away.
+ * `StudentsController.Problem` sets `Extensions["code"]` on *every* failure including validation
+ * ones, and `/devices` does the same, so that was not an edge case — it was the students write
+ * surface's ordinary 400, reaching the screen as `PUT /students/{id} failed (400: ValidationFailed).`
+ * while the sentence naming the field and the limit sat unused in `detail`.
+ *
+ * `title` stays second: the events write surface emits no `code` at all and titles every §4.5 refusal
+ * "The request could not be processed.", so `detail` has to outrank `title` there too.
+ *
+ * `code` last rather than dropped: where a server sends neither `detail` nor `title` the token still
+ * beats a shrug.
+ *
+ * This string is display-only. Nothing in `src/` branches on it — `advise()` reads `kind`/`status`,
+ * and the token stays on `ApiError.code` — so re-ordering it changes what is read, not what is done.
+ */
+function httpError(what: string, problem: ApiProblem, shape: ApiRequestShape): ApiError {
+  const reason = problem.detail ?? problem.title ?? problem.code ?? "no detail supplied";
+  return new ApiError("http", problem.status, `${what} failed (${problem.status}: ${reason}).`, {
+    shape,
+    problem,
+  });
 }
 
 /**
@@ -203,38 +264,86 @@ const isTimeout = (cause: unknown): boolean =>
   cause instanceof Error && cause.name === TIMEOUT_ERROR_NAME;
 
 /**
- * `network` rather than a kind of its own: `advise()` in `apiGuidance` reads that kind as
- * retryable, and a timeout is precisely the case where offering Retry is honest — the request may
- * well succeed on the next try, and nothing about the client needs to change first.
+ * `network` rather than a kind of its own: `advise()` in `apiGuidance` reads that kind together with
+ * `shape`, and on a read a timeout is precisely the case where offering Retry is honest — the request
+ * may well succeed on the next try, and nothing about the client needs to change first. On a write it
+ * is the case where offering Retry is a duplicate, and `shape` is what carries that through.
  */
-const timedOut = (what: string, cause: unknown) =>
+const timedOut = (what: string, cause: unknown, shape: ApiRequestShape) =>
   new ApiError(
     "network",
     0,
-    `The EAMS API at ${baseUrl} did not finish answering ${what} within ${REQUEST_TIMEOUT_MS} ms.`,
-    undefined,
-    cause,
+    `The EAMS API at ${baseUrl} did not finish answering ${what} within ${REQUEST_TIMEOUT_MS} ms.` +
+      // Giving up waiting says nothing about what the server did with the request it already has. On
+      // a read that is immaterial; on a write it is the only thing the user needs to know.
+      (shape === "write"
+        ? " It may still have been carried out — check the list before sending it again."
+        : ""),
+    { shape, cause },
   );
 
-async function send(what: string, path: string, query?: Record<string, string | undefined>) {
+/** What this seam sends and accepts. RFC 7807 error bodies arrive as `application/problem+json`. */
+const JSON_MEDIA_TYPE = "application/json";
+
+/**
+ * The body-bearing half of a request, absent on every read.
+ *
+ * A discrete argument rather than a spread `RequestInit`: the two headers and the serialisation are
+ * the whole difference between a read and a write here, and letting callers hand `fetch` arbitrary
+ * options would put the timeout signal — the thing that stops a stalled server hanging a screen
+ * forever — one careless `signal:` away from being overwritten.
+ */
+interface RequestBody {
+  method: "POST";
+  payload: unknown;
+}
+
+async function send(
+  what: string,
+  path: string,
+  query?: Record<string, string | undefined>,
+  write?: RequestBody,
+) {
+  // Derived once, here, from the method — which is what actually decides it. Every `ApiError` this
+  // request can produce carries the answer, so no error-rendering surface has to work it out again.
+  //
+  // From the *method* and not from `write === undefined`, which is the same answer today and the
+  // wrong rule. Body-presence is a proxy: it holds only while every write carries a payload, and
+  // `DELETE /events/{id}` — the next verb this seam gains — carries none. A body-less write derived
+  // that way would be labelled `"read"`, and a connection reset on it would tell the user it "was not
+  // sent" over a row that may well be gone, with a live Retry beside it. That is exactly the defect
+  // this field was added to close, so the rule has to be exact rather than currently-true.
+  const method = write?.method ?? "GET";
+  const shape: ApiRequestShape = method === "GET" ? "read" : "write";
   try {
     return await fetch(buildUrl(path, query), {
-      headers: { Accept: "application/json" },
+      method,
+      headers: write
+        ? { Accept: JSON_MEDIA_TYPE, "Content-Type": JSON_MEDIA_TYPE }
+        : { Accept: JSON_MEDIA_TYPE },
+      body: write ? JSON.stringify(write.payload) : undefined,
       signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
     });
   } catch (cause) {
-    if (isTimeout(cause)) throw timedOut(what, cause);
+    if (isTimeout(cause)) throw timedOut(what, cause, shape);
     throw new ApiError(
       "network",
       0,
-      `Cannot reach the EAMS API at ${baseUrl} — ${what} was not sent.`,
-      undefined,
-      cause,
+      // "Was not sent" is a claim this seam can make about a read and cannot make about a write. A
+      // `fetch` rejection covers a connection that never opened *and* one reset after the request
+      // bytes went out, and for a non-idempotent POST those two are opposite facts: the second one
+      // may have created the event. Saying so is the difference between a user pressing Create again
+      // and a user checking the list first.
+      shape === "read"
+        ? `Cannot reach the EAMS API at ${baseUrl} — ${what} was not sent.`
+        : `Cannot reach the EAMS API at ${baseUrl} — ${what} may or may not have been carried out. ` +
+          `Check the list before sending it again.`,
+      { shape, cause },
     );
   }
 }
 
-async function parseBody(res: Response, what: string): Promise<unknown> {
+async function parseBody(res: Response, what: string, shape: ApiRequestShape): Promise<unknown> {
   try {
     return await res.json();
   } catch (cause) {
@@ -242,15 +351,20 @@ async function parseBody(res: Response, what: string): Promise<unknown> {
     // then stalls mid-stream lands here rather than in `send`. It is still a timeout, and calling it
     // `malformed` would tell the user their build and the API are on different versions and that
     // retrying will not help — both false, and the second one strands them.
-    if (isTimeout(cause)) throw timedOut(what, cause);
-    throw new ApiError("malformed", res.status, `${what} returned a body that is not JSON.`, undefined, cause);
+    if (isTimeout(cause)) throw timedOut(what, cause, shape);
+    // `shape` travels with it: on a write, a 2xx whose body will not parse is the server having
+    // already acted and this build being unable to read what it did.
+    throw new ApiError("malformed", res.status, `${what} returned a body that is not JSON.`, {
+      shape,
+      cause,
+    });
   }
 }
 
 async function getJson(what: string, path: string, query?: Record<string, string | undefined>) {
   const res = await send(what, path, query);
-  if (!res.ok) throw httpError(what, await readProblem(res));
-  return parseBody(res, what);
+  if (!res.ok) throw httpError(what, await readProblem(res), "read");
+  return parseBody(res, what, "read");
 }
 
 /**
@@ -264,8 +378,23 @@ async function getJsonOrMissing(
 ): Promise<unknown | undefined> {
   const res = await send(what, path);
   if (res.status === 404) return undefined;
-  if (!res.ok) throw httpError(what, await readProblem(res));
-  return parseBody(res, what);
+  if (!res.ok) throw httpError(what, await readProblem(res), "read");
+  return parseBody(res, what, "read");
+}
+
+/**
+ * A write, and its reply.
+ *
+ * Every non-2xx becomes an `ApiError` through the same `readProblem`/`httpError` pair the reads use,
+ * so the write surface's 400 and 409 land in the taxonomy `advise()` already reasons about rather
+ * than in a parallel one of their own. The contract answers 201 specifically; any 2xx carrying a
+ * well-formed body is accepted, because refusing a 200 that contained exactly the right DTO would
+ * fail the user over a number that changes nothing they can see or act on.
+ */
+async function postJson(what: string, path: string, payload: unknown): Promise<unknown> {
+  const res = await send(what, path, undefined, { method: "POST", payload });
+  if (!res.ok) throw httpError(what, await readProblem(res), "write");
+  return parseBody(res, what, "write");
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -333,11 +462,13 @@ const FIRST_PAGE = 1;
  */
 const COUNT_ONLY_PAGE_SIZE = 1;
 
+/** `shape: "read"` and provably so: this is only ever raised while walking a list. */
 const tooLarge = (what: string, why: string) =>
   new ApiError(
     "too-large",
     0,
     `${what} is too large to show in full: ${why}. The list needs server-side paging.`,
+    { shape: "read" },
   );
 
 function asPage<T>(
@@ -529,6 +660,40 @@ async function listEvents(status?: string): Promise<EventItem[]> {
   return events.sort((a, b) => b.startAt.localeCompare(a.startAt));
 }
 
+/**
+ * `POST /events` — §6.3. The first write this seam makes.
+ *
+ * The event is always created `Draft`; `EventWriteRequest` carries no `status` because
+ * `PATCH /events/{id}/status` is the only door into that column. See the type's own note.
+ *
+ * The reply is narrowed with the same `toEvent` the list read uses, so a create cannot be the one
+ * place a drifting contract slips through. What that costs is a failure mode a read does not have —
+ * the event exists and this build cannot read it back — so it is caught and renamed rather than
+ * being reported as "the event was not created", which is the one reading that would have the user
+ * press Create a second time.
+ *
+ * `malformed` is the honest kind for it, and it is also the useful one: `advise()` reads that kind as
+ * not retryable, so the UI will not offer a Retry that would duplicate the event. `shape: "write"` is
+ * the other half — it is what makes `advise()` report the server's effect as *unknown*, which is what
+ * the dialog's heading is derived from. Without it this would inherit the mappers' `"read"` and the
+ * alert would go back to announcing "the event was not created" above a sentence saying it was.
+ */
+async function createEvent(request: EventWriteRequest): Promise<EventItem> {
+  const what = "POST /events";
+  const body = await postJson(what, "/events", request);
+  try {
+    return toEvent(asRow(body, what), what);
+  } catch (cause) {
+    throw new ApiError(
+      "malformed",
+      0,
+      `The event was created, but ${what} answered off-contract and this build cannot read it back: ` +
+        `${describeApiError(cause)} Reload the list to confirm it is there; do not send it again.`,
+      { shape: "write", cause },
+    );
+  }
+}
+
 async function getEvent(id: string): Promise<EventItem | undefined> {
   const what = "GET /events/{id}";
   const body = await getJsonOrMissing(what, `/events/${encodeURIComponent(id)}`);
@@ -668,6 +833,7 @@ export const api = {
   countStudents,
   getStudent,
   listEvents,
+  createEvent,
   getEvent,
   listAttendance,
   eventSummary,
