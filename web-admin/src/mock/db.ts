@@ -38,6 +38,7 @@ export const events: EventItem[] = [
     endAt: iso(2 * 60 * 60 * 1000),
     attendanceMode: "Single",
     graceMinutes: 15,
+    requireRegistration: false,
     status: "Open",
   },
   {
@@ -48,6 +49,7 @@ export const events: EventItem[] = [
     endAt: iso(-3 * 24 * 60 * 60 * 1000 + 3 * 60 * 60 * 1000),
     attendanceMode: "Single",
     graceMinutes: 10,
+    requireRegistration: false,
     status: "Closed",
   },
   {
@@ -58,6 +60,7 @@ export const events: EventItem[] = [
     endAt: iso(2 * 24 * 60 * 60 * 1000 + 5 * 60 * 60 * 1000),
     attendanceMode: "TimeInOut",
     graceMinutes: 0,
+    requireRegistration: true,
     status: "Draft",
   },
 ];

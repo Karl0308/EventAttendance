@@ -2,9 +2,15 @@
 // request bodies the SPA sends back and the one value set those constrain (`ATTENDANCE_MODES`, the
 // single runtime export here: a union that must also be enumerable to build a picker from).
 //
-// Deliberately a subset: `StudentDto` also carries firstName/middleName/lastName/gender/photoUrl and
-// `EventDto` carries description/requireRegistration, none of which the SPA reads. `api.ts` drops
-// them at the boundary rather than widening these types with fields nothing renders.
+// Deliberately a subset: `StudentDto` also carries firstName/middleName/lastName/gender/photoUrl,
+// none of which the SPA reads, and `api.ts` drops them at the boundary rather than widening these
+// types with fields nothing renders.
+//
+// `EventItem` is the exception, and "nothing renders it" is NOT the test for removing a field from it.
+// `description` and `requireRegistration` are read because `PUT /events/{id}` is a full replacement:
+// a field this client cannot read is a field it cannot send back, so dropping them blanks the
+// description and resets the flag on every event edited through the UI, silently. See their
+// field-level comments — and the contract's own note on `EventDto`, which says the same thing.
 //
 // The `<Dto>PagedResult` envelope the admin lists now return is deliberately NOT here. No component
 // consumes it: `api.ts` walks the pages and hands back rows, so paging stays a fact about the wire
@@ -33,11 +39,23 @@ export interface Student {
 export interface EventItem {
   id: string;
   name: string;
+  /**
+   * Read even though no screen displays it, and `requireRegistration` below with it.
+   *
+   * `PUT /events/{id}` is a **full replacement**, so the edit form has to send back every field it is
+   * not changing. A field this client cannot read is a field it cannot preserve: dropping these two
+   * at the seam would blank the description of every event edited through the UI and reset its
+   * registration flag, silently, on a save the user made for an unrelated reason. `EventDto`'s own
+   * description in `docs/api/openapi.json` says the same thing — they were added to the contract for
+   * exactly this.
+   */
+  description?: string;
   location?: string;
   startAt: string; // ISO
   endAt: string;
   attendanceMode: string; // Single / TimeInOut
   graceMinutes: number;
+  requireRegistration: boolean;
   status: string; // Draft/Open/Closed/Cancelled
 }
 
@@ -55,7 +73,30 @@ export const ATTENDANCE_MODES = ["Single", "TimeInOut"] as const;
 export type AttendanceMode = (typeof ATTENDANCE_MODES)[number];
 
 /**
- * The body of `POST /events` (and of `PUT /events/{id}`, which is not wired yet).
+ * §4.5's four event statuses, verified against `EventStatus` in `EAMS.Domain/DomainValues.cs`.
+ *
+ * Named constants rather than string literals scattered through the screens, because three separate
+ * decisions now turn on them — whether taps can be simulated, whether the event may be edited, and
+ * how much of it may be edited — and a typo in any one of those is a silent wrong answer rather than
+ * a compile error.
+ *
+ * `EventItem.status` stays `string` for the reason `AttendanceStatus` records: a response cannot
+ * prove a union, and a status this build has never heard of must render as itself rather than crash
+ * or be coerced into one of these. **Read these to compare, never to type a received value.**
+ */
+export const EVENT_STATUS = {
+  Draft: "Draft",
+  Open: "Open",
+  Closed: "Closed",
+  Cancelled: "Cancelled",
+} as const;
+
+/**
+ * The body of `POST /events` and of `PUT /events/{id}` — one type, because the server takes one type.
+ *
+ * The update is a **full replacement**, not a patch: every field is written from this body, so an
+ * edit form must fill it from the event it is editing rather than from an empty draft. `EventItem`
+ * above carries `description` and `requireRegistration` for that reason.
  *
  * **`status` is deliberately absent**, mirroring `EventWriteRequest` on the server. A new event is
  * always created `Draft` and `PATCH /events/{id}/status` is the only door into that column, which is

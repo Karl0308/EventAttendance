@@ -42,7 +42,7 @@ export type ApiErrorKind = "network" | "http" | "malformed" | "too-large";
  * client-supplied idempotency key the way the tap flow does with `deviceTapId`, so sending it again
  * is how a user ends up with two events.
  *
- * It is recorded here, where `send` and `postJson` already know it, rather than supplied by whoever
+ * It is recorded here, where `send` and `writeJson` already know it, rather than supplied by whoever
  * renders the error. A fact the call site must remember is the same defect class `useApiResource`'s
  * `deps` argument exists to close, and this one is worse: forgetting it produces a UI that
  * confidently invites the duplicate.
@@ -124,10 +124,21 @@ const isRow = (value: unknown): value is Row =>
 
 /**
  * `shape: "read"` because the narrowing helpers below run over a *reply body* and know nothing about
- * the request that fetched it — and every caller of them today is a read. The one write that maps its
- * own reply, `createEvent`, catches these and re-raises with `shape: "write"`, which is where the fact
- * actually lives. Any future write that maps a reply must do the same: a mapper cannot know whether
- * the server acted, and guessing "read" here would be the one guess that produces a duplicate.
+ * the request that fetched it. A mapper cannot know whether the server acted, and guessing "read"
+ * here would be the one guess that produces a duplicate — so on a write it must never be the answer
+ * that escapes.
+ *
+ * It cannot be, and that is now structural rather than remembered. **A write's reply is only ever
+ * mapped inside `writeJson`**, which takes the mapper as a required parameter and runs it inside its
+ * own catch, re-raising as `shape: "write"`. `writeJson` never hands a caller an unmapped body, so no
+ * route this module offers reaches these helpers from a write except through that catch — the
+ * guarantee is a signature rather than a convention, which is what a `PUT` added a slice later needs
+ * it to be.
+ *
+ * Not unforgeable, and worth saying so rather than over-claiming: `send` is still callable directly
+ * from inside this file with a body, and a future write that narrowed its own response by hand would
+ * re-open the hole. The signature removes the way anyone would reach for by default; it does not
+ * remove every way.
  */
 const offContract = (what: string, detail: string) =>
   new ApiError("malformed", 0, `${what} is off-contract: ${detail}.`, { shape: "read" });
@@ -286,17 +297,25 @@ const timedOut = (what: string, cause: unknown, shape: ApiRequestShape) =>
 const JSON_MEDIA_TYPE = "application/json";
 
 /**
- * The body-bearing half of a request, absent on every read.
+ * The write half of a request, absent on every read.
  *
  * A discrete argument rather than a spread `RequestInit`: the two headers and the serialisation are
  * the whole difference between a read and a write here, and letting callers hand `fetch` arbitrary
  * options would put the timeout signal — the thing that stops a stalled server hanging a screen
  * forever — one careless `signal:` away from being overwritten.
+ *
+ * A union rather than one shape with an optional `payload`, so **`DELETE` cannot carry a body and
+ * `POST`/`PUT` cannot omit one**. `DELETE /events/{id}` has nothing to send, and a request that sets
+ * `Content-Type: application/json` with no body is a shape some proxies and gateways treat as
+ * malformed — worth making unrepresentable rather than remembering not to write.
  */
-interface RequestBody {
-  method: "POST";
-  payload: unknown;
-}
+type RequestBody =
+  | { method: "POST" | "PUT"; payload: unknown }
+  | { method: "DELETE" };
+
+/** The serialised body, or nothing — the one place that decides whether this request has one. */
+const payloadOf = (write: RequestBody | undefined): string | undefined =>
+  write === undefined || write.method === "DELETE" ? undefined : JSON.stringify(write.payload);
 
 async function send(
   what: string,
@@ -315,13 +334,18 @@ async function send(
   // this field was added to close, so the rule has to be exact rather than currently-true.
   const method = write?.method ?? "GET";
   const shape: ApiRequestShape = method === "GET" ? "read" : "write";
+  // From the body, because `Content-Type` describes a body — a bodyless `DELETE` declaring a JSON
+  // content type is describing something it did not send. `shape` above is deliberately NOT derived
+  // this way; see the comment there.
+  const body = payloadOf(write);
   try {
     return await fetch(buildUrl(path, query), {
       method,
-      headers: write
-        ? { Accept: JSON_MEDIA_TYPE, "Content-Type": JSON_MEDIA_TYPE }
-        : { Accept: JSON_MEDIA_TYPE },
-      body: write ? JSON.stringify(write.payload) : undefined,
+      headers:
+        body === undefined
+          ? { Accept: JSON_MEDIA_TYPE }
+          : { Accept: JSON_MEDIA_TYPE, "Content-Type": JSON_MEDIA_TYPE },
+      body,
       signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
     });
   } catch (cause) {
@@ -383,18 +407,77 @@ async function getJsonOrMissing(
 }
 
 /**
- * A write, and its reply.
+ * A write, and its reply, **narrowed here rather than by the caller**.
  *
  * Every non-2xx becomes an `ApiError` through the same `readProblem`/`httpError` pair the reads use,
  * so the write surface's 400 and 409 land in the taxonomy `advise()` already reasons about rather
- * than in a parallel one of their own. The contract answers 201 specifically; any 2xx carrying a
- * well-formed body is accepted, because refusing a 200 that contained exactly the right DTO would
- * fail the user over a number that changes nothing they can see or act on.
+ * than in a parallel one of their own. The contract answers 201 for a create and 200 for an update;
+ * any 2xx carrying a well-formed body is accepted, because refusing a 200 that contained exactly the
+ * right DTO would fail the user over a number that changes nothing they can see or act on.
+ *
+ * **`map` is a required parameter, and that is the whole design.** It used to be the caller's job:
+ * `postJson` returned `unknown`, `createEvent` narrowed it and caught the mapper's `offContract`
+ * error to re-raise it with `shape: "write"`. That worked, and it worked by the author of the next
+ * write remembering to do the same — with nothing to fail if they did not. The failure it invites is
+ * specific: a `PUT` whose reply will not narrow raises `shape: "read"`, so `advise()` reports the
+ * server as having changed nothing, the form heads its alert "was not saved" over a row that was, and
+ * offers a live Retry beside it. Taking the mapper here means a write's reply is mapped inside this
+ * function's catch or not at all, because this function is the only way to reach a write's body and
+ * it never returns one unmapped.
+ *
+ * @param applied what the server did, in the user's words ("The event was created") — used only for
+ *   the reply-unreadable message, where naming it is the difference between the user checking the
+ *   list and the user sending it again.
  */
-async function postJson(what: string, path: string, payload: unknown): Promise<unknown> {
-  const res = await send(what, path, undefined, { method: "POST", payload });
+async function writeJson<T>(
+  what: string,
+  path: string,
+  write: RequestBody,
+  applied: string,
+  map: (row: Row, what: string) => T,
+): Promise<T> {
+  const res = await send(what, path, undefined, write);
   if (!res.ok) throw httpError(what, await readProblem(res), "write");
-  return parseBody(res, what, "write");
+  const body = await parseBody(res, what, "write");
+  try {
+    return map(asRow(body, what), what);
+  } catch (cause) {
+    // The reply is narrowed with the same mapper the list read uses, so a write cannot be the one
+    // place a drifting contract slips through. What that costs is a failure mode a read does not
+    // have — the server acted and this build cannot read back what it did — so it is caught and
+    // renamed rather than reported as "it was not saved", which is the one reading that would have
+    // the user send it a second time.
+    //
+    // `malformed` is the honest kind and also the useful one: `advise()` reads it as not retryable,
+    // so no UI offers a Retry that could duplicate. `shape: "write"` is the other half — it is what
+    // makes `advise()` report the server's effect as *unknown*, which is what a form's heading is
+    // derived from.
+    throw new ApiError(
+      "malformed",
+      0,
+      `${applied}, but ${what} answered off-contract and this build cannot read it back: ` +
+        `${describeApiError(cause)} Reload to confirm, and do not send it again.`,
+      { shape: "write", cause },
+    );
+  }
+}
+
+/**
+ * A write with nothing to read back — `DELETE /events/{id}`, which answers **204 No Content**.
+ *
+ * It deliberately never calls `parseBody`. A 204 has an empty body, `res.json()` on one rejects, and
+ * routing that through the shared parser would report a perfectly successful delete as "returned a
+ * body that is not JSON": a `malformed` failure invented out of the contract being honoured. Any 2xx
+ * is accepted and whatever it carried is ignored, for the same reason `writeJson` accepts any 2xx —
+ * the status number is not something the user can see or act on.
+ *
+ * Failures still go through `httpError` with `shape: "write"`, which is exactly why `send` derives
+ * that from the method: a `DELETE` carries no body, so a body-presence rule would have labelled this
+ * a read and told the user their delete "was not sent" over a row that may well be gone.
+ */
+async function writeNoContent(what: string, path: string, write: RequestBody): Promise<void> {
+  const res = await send(what, path, undefined, write);
+  if (!res.ok) throw httpError(what, await readProblem(res), "write");
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -559,11 +642,17 @@ function toStudent(row: Row, what: string): Student {
 }
 
 function toEvent(row: Row, what: string): EventItem {
-  // EventDto also carries description / requireRegistration — unused by the SPA today.
   return {
     id: reqStr(row, "id", what),
     name: reqStr(row, "name", what),
+    // Read, not dropped, since the edit form landed — and the contract says why in `EventDto`'s own
+    // description: `PUT /events/{id}` is a full replacement, so a field this client cannot read back
+    // is a field it cannot preserve. Dropping `description` here would have every event edited
+    // through the UI come back with its description blanked, and every `requireRegistration` reset to
+    // false, with nothing on screen having said so.
+    description: optStr(row.description),
     location: optStr(row.location),
+    requireRegistration: reqBool(row, "requireRegistration", what),
     startAt: reqStr(row, "startAt", what),
     endAt: reqStr(row, "endAt", what),
     attendanceMode: reqStr(row, "attendanceMode", what),
@@ -661,37 +750,67 @@ async function listEvents(status?: string): Promise<EventItem[]> {
 }
 
 /**
- * `POST /events` — §6.3. The first write this seam makes.
+ * `POST /events` — §6.3. The first write this seam made.
  *
  * The event is always created `Draft`; `EventWriteRequest` carries no `status` because
  * `PATCH /events/{id}/status` is the only door into that column. See the type's own note.
  *
- * The reply is narrowed with the same `toEvent` the list read uses, so a create cannot be the one
- * place a drifting contract slips through. What that costs is a failure mode a read does not have —
- * the event exists and this build cannot read it back — so it is caught and renamed rather than
- * being reported as "the event was not created", which is the one reading that would have the user
- * press Create a second time.
- *
- * `malformed` is the honest kind for it, and it is also the useful one: `advise()` reads that kind as
- * not retryable, so the UI will not offer a Retry that would duplicate the event. `shape: "write"` is
- * the other half — it is what makes `advise()` report the server's effect as *unknown*, which is what
- * the dialog's heading is derived from. Without it this would inherit the mappers' `"read"` and the
- * alert would go back to announcing "the event was not created" above a sentence saying it was.
+ * The open-coded narrow-and-re-raise this used to carry is gone: `writeJson` takes the mapper and
+ * owns that catch, so every write gets it — including the ones written after this comment.
  */
 async function createEvent(request: EventWriteRequest): Promise<EventItem> {
-  const what = "POST /events";
-  const body = await postJson(what, "/events", request);
-  try {
-    return toEvent(asRow(body, what), what);
-  } catch (cause) {
-    throw new ApiError(
-      "malformed",
-      0,
-      `The event was created, but ${what} answered off-contract and this build cannot read it back: ` +
-        `${describeApiError(cause)} Reload the list to confirm it is there; do not send it again.`,
-      { shape: "write", cause },
-    );
-  }
+  return writeJson(
+    "POST /events",
+    "/events",
+    { method: "POST", payload: request },
+    "The event was created",
+    toEvent,
+  );
+}
+
+/**
+ * `PUT /events/{id}` — §6.3. A **full replacement** of the event's own fields, which is why
+ * `EventItem` reads `description` and `requireRegistration`: a field the caller cannot read back is a
+ * field it cannot send back unchanged.
+ *
+ * The body is the same `EventWriteRequest` as create and carries no `status` for the same reason.
+ * What is different is the refusals: `404` for an event that is not there or is soft-deleted, and
+ * `409` — not 400 — when the event's status forbids the change. `Closed` refuses every edit, and
+ * `Cancelled` refuses the five fields that decide what an attendance row *means*
+ * (`startAt`, `endAt`, `graceMinutes`, `attendanceMode`, `requireRegistration`) while still allowing
+ * name, description and location. The server's `detail` names which of them were moved and says to
+ * re-send with the scheduling left alone; `httpError` ranks `detail` first, so that sentence is what
+ * reaches the user rather than the fixed title.
+ */
+async function updateEvent(id: string, request: EventWriteRequest): Promise<EventItem> {
+  return writeJson(
+    "PUT /events/{id}",
+    `/events/${encodeURIComponent(id)}`,
+    { method: "PUT", payload: request },
+    "The change was saved",
+    toEvent,
+  );
+}
+
+/**
+ * `DELETE /events/{id}` — §6.3, and **soft** (§4.5 `IsDeleted`).
+ *
+ * Allowed from any status including `Closed`: the attendance rows survive untouched, so nothing is
+ * lost and the event is restorable by clearing one flag — though nothing in this SPA can clear it,
+ * which is why the confirmation says so out loud.
+ *
+ * A second delete is `404`, deliberately: by then the event is invisible to every read, and reporting
+ * success for a row the caller cannot see would be the misleading answer. Nothing here softens that
+ * into a success — the screen re-reads afterwards and settles on "no event with this id", which is
+ * both true and the same thing the user would see if someone else had deleted it first.
+ *
+ * Returns `void`. The server answers 204 with no body, and inventing an `EventItem` for a row that no
+ * longer exists would be a value with nothing behind it.
+ */
+async function deleteEvent(id: string): Promise<void> {
+  return writeNoContent("DELETE /events/{id}", `/events/${encodeURIComponent(id)}`, {
+    method: "DELETE",
+  });
 }
 
 async function getEvent(id: string): Promise<EventItem | undefined> {
@@ -834,6 +953,8 @@ export const api = {
   getStudent,
   listEvents,
   createEvent,
+  updateEvent,
+  deleteEvent,
   getEvent,
   listAttendance,
   eventSummary,

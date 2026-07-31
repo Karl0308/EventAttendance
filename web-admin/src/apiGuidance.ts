@@ -76,7 +76,7 @@ const CHECK_FIRST = "Check the list before sending it again.";
  * `shape` is read from the error rather than passed in by the caller. The taxonomy used to be
  * read-shaped throughout — `network` meant "retry, it may work next time", which is true of a GET and
  * is how a connection reset on a POST came to say "the event was not created" and hand the user the
- * Create button. The fact that settles it is known in `send`/`postJson` and travels on the error; a
+ * Create button. The fact that settles it is known in `send`/`writeJson` and travels on the error; a
  * flag the renderer had to remember to set would be the same defect one level up.
  *
  * The `default` branch is a guard, not a fallback. Assigning `error.kind` to `never` is what makes an
@@ -189,3 +189,17 @@ export function advise(error: unknown): Guidance {
     }
   }
 }
+
+/**
+ * Whether a form should refuse to send the same thing again after this failure.
+ *
+ * `!== "safe"` and never `!retryable`, which is the trap `Retryable`'s own note describes:
+ * `"may-duplicate"` is truthy, so a negation goes on offering the button that duplicates the row. It
+ * is a named function rather than that expression written out at each submit button because it is the
+ * same question every write form asks, and the one form that gets the polarity wrong is the one that
+ * creates the second event.
+ *
+ * Here rather than beside the alert component that also asks it: `react/only-export-components`
+ * forbids a component module exporting a non-component, which is why this module exists at all.
+ */
+export const isResendUnsafe = (error: unknown): boolean => advise(error).retryable !== "safe";

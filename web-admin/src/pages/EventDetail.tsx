@@ -1,5 +1,5 @@
-import { useState } from "react";
-import { useParams, Link } from "react-router-dom";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useNavigate, useParams, Link } from "react-router-dom";
 import {
   Box,
   Typography,
@@ -20,18 +20,23 @@ import {
 import { DataGrid, type GridColDef } from "@mui/x-data-grid";
 import Grid from "@mui/material/Grid2";
 import SensorsIcon from "@mui/icons-material/Sensors";
+import EditIcon from "@mui/icons-material/Edit";
+import DeleteOutlineIcon from "@mui/icons-material/DeleteOutline";
 import { api, describeApiError } from "../api";
 import { advise } from "../apiGuidance";
 import { useApiResource } from "../useApiResource";
+import { useApiMutation } from "../useApiMutation";
 import { EmptyState, ErrorState, LoadingState } from "../components/ResourceStates";
-import type { AttendanceRecord } from "../types";
+import EditEventDialog from "../components/EditEventDialog";
+import DeleteEventDialog from "../components/DeleteEventDialog";
+import { knownMode, localFrom } from "../eventDraft";
+import type { EditScope } from "../eventDraft";
+import { EVENT_STATUS } from "../types";
+import type { AttendanceRecord, EventItem, EventWriteRequest } from "../types";
 
 // A deep link to a deleted or mistyped event is an answer, not a failure: `api.eventDetail` maps that
 // 404 to `event: undefined`, and this says so plainly instead of leaving the screen loading.
 const NO_SUCH_EVENT = "No event with this id. It may have been deleted, or the link may be wrong.";
-
-// Drives a decision — whether taps can still be recorded — rather than picking a colour.
-const EVENT_STATUS_OPEN = "Open";
 
 // The two things an empty picker can mean, kept apart in words as well as in the type. Everyone
 // having tapped in is good news; a roster that would not load is not, and must never be read as it.
@@ -55,6 +60,81 @@ const ROSTER_UNRECOVERABLE =
   "Real card taps do not go through this screen — only the simulator is affected. Nothing here will " +
   "bring the picker back; report this to whoever maintains EAMS.";
 
+// ---------------------------------------------------------------------------------------------
+// Who may edit this event, and how much of it
+// ---------------------------------------------------------------------------------------------
+//
+// `PUT /events/{id}` has three modes, and a form that knew about two of them would produce 409s the
+// user cannot act on. Two of the three are the server's (`EventStatusTransition.AcceptsEdits` and
+// `AcceptsAttendanceRuleEdits`); the third refusal below is this build's own, and is the more
+// interesting one.
+//
+// A `PUT` is a **full replacement**. Every field goes back, including the ones the user did not
+// touch, so this client can only offer the form for an event it can reproduce exactly. Two things
+// stop it: an `attendanceMode` outside the two `EventWriteRequest` can carry — the form would send
+// `Single` and silently rewrite it — and a `startAt`/`endAt` this build cannot parse, which would go
+// into an empty datetime box and come back out as a validation error on a field the user never went
+// near. Both are refusals rather than fallbacks, because both fallbacks change data on a save the
+// user made for an unrelated reason.
+
+type Editability =
+  | { can: true; scope: EditScope }
+  | { can: false; reason: string };
+
+const CLOSED_NO_EDITS =
+  "This event is Closed, so nothing about it can be edited. Its recorded attendance is final, and " +
+  "the start time and grace period that decided Present versus Late for each row cannot be moved out " +
+  "from under them. It can still be deleted.";
+
+function editabilityOf(event: EventItem): Editability {
+  if (event.status === EVENT_STATUS.Closed) return { can: false, reason: CLOSED_NO_EDITS };
+
+  if (knownMode(event.attendanceMode) === undefined) {
+    return {
+      can: false,
+      reason:
+        `This event's attendance mode (“${event.attendanceMode}”) is not one this admin build ` +
+        "recognises, so the edit form cannot send it back unchanged — saving would rewrite it. This " +
+        "build and the API are probably different versions.",
+    };
+  }
+
+  if (localFrom(event.startAt) === "" || localFrom(event.endAt) === "") {
+    return {
+      can: false,
+      reason:
+        "This event's start or end date is not one this admin build can read, so the edit form " +
+        "cannot send it back unchanged. This build and the API are probably different versions.",
+    };
+  }
+
+  // Draft and Open take every field; everything else takes the descriptive ones only. Written as
+  // "these two, else descriptive" rather than "Cancelled, else everything" so that a fifth status the
+  // server adds tomorrow lands on the cautious side — which is also the side the server itself lands
+  // on, since `AcceptsAttendanceRuleEdits` is a two-value allow-list rather than a Cancelled check.
+  const everything =
+    event.status === EVENT_STATUS.Draft || event.status === EVENT_STATUS.Open;
+  return { can: true, scope: everything ? "everything" : "descriptive" };
+}
+
+// ---------------------------------------------------------------------------------------------
+
+/** What the Snackbar is currently saying, and how loudly. As `Events.tsx`, for the same reasons. */
+interface Notice {
+  severity: "success" | "error";
+  text: string;
+}
+
+/** How long a confirmation stays up. Long enough to be read, not long enough to nag. */
+const NOTICE_MS = 6000;
+
+/**
+ * A failure does not time out. It is only ever announced here when the dialog that would have carried
+ * it is gone, so it is the only copy the user gets. MUI reads `null` as "stay until dismissed"; the
+ * Alert has its own close button.
+ */
+const NO_AUTO_HIDE = null;
+
 function StatCard({ label, value, color }: { label: string; value: number; color: string }) {
   return (
     <Card sx={{ borderTop: `4px solid ${color}` }}>
@@ -65,6 +145,46 @@ function StatCard({ label, value, color }: { label: string; value: number; color
         <Typography color="text.secondary">{label}</Typography>
       </CardContent>
     </Card>
+  );
+}
+
+/**
+ * What is left of the screen after a successful delete.
+ *
+ * Not a redirect to `/events`. The list would show the event's absence, which is evidence rather than
+ * confirmation, and the one thing an admin most needs to hear at this moment — that the attendance
+ * was kept — would have nowhere to appear. This says it, then offers the way back.
+ *
+ * It takes focus on mount, because the button that raised it and the dialog that held that button are
+ * both gone: focus has fallen to `document.body`, so a keyboard user is at the top of a document
+ * whose content just changed completely and a screen-reader user has lost their place (WCAG 2.4.3).
+ */
+function EventDeleted({ name, onBack }: { name: string; onBack: () => void }) {
+  const panel = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    panel.current?.focus();
+  }, []);
+
+  return (
+    <Alert
+      ref={panel}
+      // -1 keeps it out of the Tab order — it is a focus *destination*, not a stop on the way.
+      tabIndex={-1}
+      severity="success"
+      role="status"
+      sx={{ my: 2 }}
+      action={
+        <Button color="inherit" size="small" onClick={onBack}>
+          Back to events
+        </Button>
+      }
+    >
+      <AlertTitle>“{name}” was deleted</AlertTitle>
+      <Typography variant="body2">
+        It is gone from every list, summary and report. The attendance recorded against it is kept.
+      </Typography>
+    </Alert>
   );
 }
 
@@ -115,6 +235,7 @@ const statusChipColor = (s: string) =>
 
 export default function EventDetail() {
   const { id = "" } = useParams();
+  const nav = useNavigate();
 
   // One read for the whole screen, parameterised by the route id: the load is an inline arrow and
   // `[id]` is what re-runs it. Its failure becomes the rendered error state below. This used to be a
@@ -122,11 +243,72 @@ export default function EventDetail() {
   // saying "Loading…" for as long as anyone was willing to wait for it.
   const detail = useApiResource(() => api.eventDetail(id), [id]);
 
+  /**
+   * Both writes live here rather than inside the dialogs that start them, which is D1a's shape and
+   * the reason for it: a dialog that owns its own write ends that write when it unmounts, so Cancel,
+   * Escape and the backdrop all have to be blocked for up to `REQUEST_TIMEOUT_MS` — fifteen seconds
+   * of a keyboard user trapped in a modal — and even then browser Back unmounts it anyway.
+   *
+   * Not a complete cure, and worth being precise about: navigating away from this route unmounts the
+   * page too, and that outcome is still lost to `console.debug`. Closing that would take state above
+   * the router, which is a design decision rather than a fix — carried, not smuggled in.
+   */
+  const edit = useApiMutation((request: EventWriteRequest) => api.updateEvent(id, request));
+  const remove = useApiMutation(() => api.deleteEvent(id));
+
+  /**
+   * The event each dialog is about, held rather than read from `detail` while it is open.
+   *
+   * `undefined` doubles as "closed", which is the same collapse the hooks forbid — except that here
+   * the two really are one state: there is no dialog without an event for it to be about. Holding the
+   * event also means the dialogs render outside the `ready` branch below, so a re-read that turns the
+   * event into a 404 mid-save cannot pull the failure alert off the screen with it.
+   */
+  const [editing, setEditing] = useState<{ event: EventItem; scope: EditScope } | undefined>(
+    undefined,
+  );
+  const [deleting, setDeleting] = useState<EventItem | undefined>(undefined);
+
+  /** Survives a successful delete, which is the one outcome that leaves no event to render. */
+  const [deleted, setDeleted] = useState<string | undefined>(undefined);
+
+  /**
+   * Whether each dialog is on screen, read at the moment a write *settles* rather than from the
+   * closure that started it. The state captured there is a render old, and the interesting case is
+   * exactly the one where it changed in between — the user dismissed the dialog while the write was
+   * in flight, so there is no longer an alert for the failure to appear in.
+   */
+  const editOpen = useRef(editing !== undefined);
+  const deleteOpen = useRef(deleting !== undefined);
+  useLayoutEffect(() => {
+    editOpen.current = editing !== undefined;
+    deleteOpen.current = deleting !== undefined;
+  });
+
   const [pickUid, setPickUid] = useState("");
-  const [toast, setToast] = useState<{ msg: string; ok: boolean } | null>(null);
+
+  // Two pieces rather than one `Notice | undefined` driving both, as `Events.tsx` records: MUI keeps
+  // a Snackbar's children mounted through its closing fade, so clearing the notice to close it would
+  // blank the text mid-fade and leave an empty bar on screen for the length of the transition.
+  const [notice, setNotice] = useState<Notice | undefined>(undefined);
+  const [announcing, setAnnouncing] = useState(false);
+
+  const announce = (next: Notice) => {
+    setNotice(next);
+    setAnnouncing(true);
+  };
 
   // Defined only once the read has settled, which is what the render branches on below.
   const data = detail.status === "ready" ? detail.data : undefined;
+  /**
+   * The event itself, bound to a `const` rather than reached as `data.event` at each use.
+   *
+   * Not a tidy-up: TypeScript discards a narrowing of `data.event` inside every callback below,
+   * because a property could in principle change before the handler runs, while a narrowing of a
+   * `const` binding survives into them. Without this the Edit and Delete handlers each need a
+   * re-check that can never fail, which reads as defensiveness against a case that does not exist.
+   */
+  const event = data?.event;
   // An empty list here means "the roster loaded and nobody is left"; `roster.status` carries the other
   // reading, and the picker below renders the two differently.
   const cards = data?.roster.status === "ready" ? data.roster.cards : [];
@@ -144,14 +326,88 @@ export default function EventDetail() {
     if (!pick) return;
     try {
       const res = await api.tap(id, pick);
-      setToast({ msg: res.message, ok: res.ok });
+      announce({ severity: res.ok ? "success" : "error", text: res.message });
     } catch (cause) {
-      setToast({ msg: describeApiError(cause), ok: false });
+      announce({ severity: "error", text: describeApiError(cause) });
     }
     // Re-read either way. A tap that failed on the way back may still have been recorded, so the
     // screen should not be left asserting the state from before it. Since `reload` now keeps the
     // rendered data in place while it runs, this costs a refresh rather than the whole screen.
     detail.reload();
+  };
+
+  const openEdit = (event: EventItem) => {
+    // The scope is settled here, at the one moment it is known to be a scope at all, and carried with
+    // the event. Re-deriving it in the render below would mean calling `editabilityOf` twice on a
+    // value the compiler cannot narrow across the two calls — and writing a fallback for the arm that
+    // has no scope, which would hand a Closed event a form it can only get a 409 from.
+    const editable = editabilityOf(event);
+    if (!editable.can) return;
+
+    // A failure from an attempt the user walked away from is still in the mutation, and without this
+    // it would greet them as though it were about the edit they have not made yet. Refused while a
+    // write is in flight — see `useApiMutation.reset` — in which case the reopened form correctly
+    // shows that one still running.
+    edit.reset();
+    setEditing({ event, scope: editable.scope });
+  };
+
+  const openDelete = (event: EventItem) => {
+    remove.reset();
+    setDeleting(event);
+  };
+
+  const submitEdit = (request: EventWriteRequest) => {
+    // `run` never rejects; it answers with an outcome. The floating promise is deliberate and marked.
+    void edit.run(request).then((settled) => {
+      // `ignored` — a save was already in flight and this submit sent nothing. Nothing settled, so
+      // there is nothing to report and no reason to re-read: the first one is still coming.
+      if (settled.outcome === "ignored") return;
+
+      // Either way, and the failure case is the one that matters: a `PUT` that failed on the way back
+      // may still have been applied, and a screen that goes on asserting the state from before it is
+      // how someone comes to believe an edit was lost. `reload` keeps the rows already rendered and
+      // raises `refreshing` rather than dropping back to `loading`.
+      detail.reload();
+
+      if (settled.outcome === "succeeded") {
+        setEditing(undefined);
+        announce({ severity: "success", text: `Saved changes to “${settled.data.name}”.` });
+        return;
+      }
+
+      // The dialog renders the failure in context when it is still open — beside the draft that
+      // caused it, with the heading derived from what the server may have done. Announcing it here as
+      // well would double it, and a Snackbar sits above the modal. When the dialog is gone, this is
+      // the only place left for it.
+      if (!editOpen.current) {
+        announce({ severity: "error", text: describeApiError(settled.error) });
+      }
+    });
+  };
+
+  const confirmDelete = (name: string) => {
+    void remove.run().then((settled) => {
+      if (settled.outcome === "ignored") return;
+
+      if (settled.outcome === "succeeded") {
+        setDeleting(undefined);
+        // No re-read. The event is gone, so re-reading it would answer "no such event" — true, and
+        // the same sentence a mistyped URL produces. What actually happened deserves to be said in
+        // its own words, including what survived it.
+        setDeleted(name);
+        return;
+      }
+
+      // A failed delete may still have been applied. The re-read settles it: the screen either comes
+      // back with the event or with "no event with this id", which is the honest answer either way —
+      // and the same one someone else deleting it first would produce.
+      detail.reload();
+
+      if (!deleteOpen.current) {
+        announce({ severity: "error", text: describeApiError(settled.error) });
+      }
+    });
   };
 
   const cols: GridColDef<AttendanceRecord>[] = [
@@ -172,6 +428,18 @@ export default function EventDetail() {
     { field: "captureMethod", headerName: "Method", width: 100 },
   ];
 
+  // The delete confirmation replaces the screen it was about, so nothing below renders once it has
+  // succeeded — a stat grid for an event that no longer exists is a screen contradicting itself.
+  if (deleted !== undefined) {
+    return (
+      <Box>
+        <EventDeleted name={deleted} onBack={() => nav("/events")} />
+      </Box>
+    );
+  }
+
+  const editability = event === undefined ? undefined : editabilityOf(event);
+
   return (
     <Box>
       {detail.status === "loading" && <LoadingState label="Loading the event…" />}
@@ -183,7 +451,7 @@ export default function EventDetail() {
       )}
 
       {data !== undefined &&
-        (data.event === undefined ? (
+        (event === undefined ? (
           <EmptyState message={NO_SUCH_EVENT} />
         ) : (
           <>
@@ -191,29 +459,71 @@ export default function EventDetail() {
               <MuiLink component={Link} to="/events" underline="hover">
                 Events
               </MuiLink>
-              <Typography color="text.primary">{data.event.name}</Typography>
+              <Typography color="text.primary">{event.name}</Typography>
             </Breadcrumbs>
 
+            {/* `flexWrap` and a gap rather than a fixed row: the title, the status chip and two
+                buttons do not fit on one line at 320px, and a header that overflows horizontally
+                takes the whole page's scrollbar with it. */}
             <Stack
               direction="row"
               justifyContent="space-between"
-              alignItems="center"
+              alignItems="flex-start"
+              flexWrap="wrap"
+              gap={2}
               sx={{ mb: 2 }}
             >
               <Box>
                 <Typography variant="h5" fontWeight={700}>
-                  {data.event.name}
+                  {event.name}
                 </Typography>
                 <Typography color="text.secondary">
-                  {data.event.location} · {new Date(data.event.startAt).toLocaleString()} · grace{" "}
-                  {data.event.graceMinutes}m
+                  {event.location} · {new Date(event.startAt).toLocaleString()} · grace{" "}
+                  {event.graceMinutes}m
                 </Typography>
               </Box>
-              <Chip
-                label={data.event.status}
-                color={data.event.status === EVENT_STATUS_OPEN ? "success" : "default"}
-              />
+
+              <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap">
+                <Chip
+                  label={event.status}
+                  color={event.status === EVENT_STATUS.Open ? "success" : "default"}
+                />
+                {/* Rendered whether or not it can be pressed, so the action is discoverable and its
+                    absence is never silent. When it cannot, the sentence below says why — a control
+                    that greys out without saying why leaves the user hunting for a permission they
+                    do not lack. */}
+                <Button
+                  size="small"
+                  startIcon={<EditIcon />}
+                  onClick={() => openEdit(event)}
+                  disabled={editability?.can !== true}
+                >
+                  Edit
+                </Button>
+                {/* Never disabled by status: a soft delete is allowed from every one of them,
+                    including Closed, because the attendance rows survive it untouched. */}
+                <Button
+                  size="small"
+                  color="error"
+                  startIcon={<DeleteOutlineIcon />}
+                  onClick={() => openDelete(event)}
+                >
+                  Delete
+                </Button>
+              </Stack>
             </Stack>
+
+            {editability?.can === false && (
+              <Typography
+                variant="body2"
+                color="text.secondary"
+                // Measured in characters, because the limit being avoided is a line too long to
+                // track back to its start rather than a number of pixels.
+                sx={{ mb: 2, maxWidth: "68ch" }}
+              >
+                {editability.reason}
+              </Typography>
+            )}
 
             <Grid container spacing={2} sx={{ mb: 3 }}>
               <Grid size={{ xs: 6, md: 3 }}>
@@ -234,7 +544,7 @@ export default function EventDetail() {
               </Grid>
             </Grid>
 
-            {data.event.status === EVENT_STATUS_OPEN && (
+            {event.status === EVENT_STATUS.Open && (
               <Card sx={{ mb: 3, bgcolor: "#fff8e1" }}>
                 <CardContent>
                   {data.roster.status === "unavailable" ? (
@@ -307,19 +617,53 @@ export default function EventDetail() {
           </>
         ))}
 
+      {/* Outside the branches above, and deliberately: a re-read that fails — or that comes back
+          without the event — replaces the ready branch, and a dialog living inside it would be torn
+          down mid-write, taking the failure alert it was about to render with it. Each holds its own
+          copy of the event for the same reason. */}
+      {editing !== undefined && (
+        <EditEventDialog
+          event={editing.event}
+          scope={editing.scope}
+          onClose={() => setEditing(undefined)}
+          onSubmit={submitEdit}
+          running={edit.status === "running"}
+          failure={edit.status === "failed" ? { error: edit.error } : undefined}
+        />
+      )}
+
+      {deleting !== undefined && (
+        <DeleteEventDialog
+          name={deleting.name}
+          onClose={() => setDeleting(undefined)}
+          onConfirm={() => confirmDelete(deleting.name)}
+          running={remove.status === "running"}
+          failure={remove.status === "failed" ? { error: remove.error } : undefined}
+        />
+      )}
+
       {/* Outside the branches on purpose: a re-read after a tap keeps the ready branch mounted, but a
           re-read that *fails* replaces it with the error state, and a Snackbar living inside that
           branch would take the message it was just given down with it — at exactly the moment the
           message is a failure the user needs to read. */}
       <Snackbar
-        open={!!toast}
-        autoHideDuration={2500}
-        onClose={() => setToast(null)}
+        open={announcing}
+        autoHideDuration={notice?.severity === "error" ? NO_AUTO_HIDE : NOTICE_MS}
+        onClose={() => setAnnouncing(false)}
         anchorOrigin={{ vertical: "bottom", horizontal: "center" }}
       >
-        {toast ? (
-          <Alert severity={toast.ok ? "success" : "error"} onClose={() => setToast(null)}>
-            {toast.msg}
+        {/* Rendered from the notice rather than defaulted from it: a fallback severity would paint a
+            failure green for one render if the two ever came apart. `status` for a confirmation —
+            something the user caused is not an interruption — and `alert` for a failure, which is the
+            one case where interrupting is the point, because the dialog that would have shown it is
+            gone. */}
+        {notice ? (
+          <Alert
+            severity={notice.severity}
+            role={notice.severity === "error" ? "alert" : "status"}
+            onClose={() => setAnnouncing(false)}
+          >
+            {notice.text}
           </Alert>
         ) : undefined}
       </Snackbar>
