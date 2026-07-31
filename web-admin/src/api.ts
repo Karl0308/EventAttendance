@@ -8,6 +8,8 @@
 
 import type {
   Student,
+  StudentCardRequest,
+  StudentWriteRequest,
   Card,
   EventItem,
   EventStatusName,
@@ -627,13 +629,27 @@ function toCard(row: Row, what: string): Card {
 }
 
 function toStudent(row: Row, what: string): Student {
-  // StudentDto also carries firstName / middleName / lastName / gender / photoUrl. Nothing in the
-  // SPA reads them, so they are dropped here rather than widened into `Student`.
   return {
     id: reqStr(row, "id", what),
     studentNumber: reqStr(row, "studentNumber", what),
     fullName: reqStr(row, "fullName", what),
+    // Read, not dropped, since the student edit form landed — and for the reason `toEvent` records
+    // below, which the contract states for this DTO too: `PUT /students/{id}` is a full replacement,
+    // so a field this client cannot read back is a field it cannot preserve. `fullName` above is
+    // composed by the server and cannot be split into these three, so without them the edit form had
+    // no way to fill itself at all. Dropping `middleName`, `gender` or `photoUrl` here would blank
+    // that column on every student edited through the UI, with nothing on screen having said so.
+    //
+    // `firstName` and `lastName` are `reqStr` and `middleName` is not, matching the contract exactly:
+    // `StudentDto` declares the first two non-nullable (they are NOT NULL columns) and the third
+    // nullable. Narrowing them as required is what makes a drift here fail loud rather than arrive in
+    // the form as `undefined`.
+    firstName: reqStr(row, "firstName", what),
+    middleName: optStr(row.middleName),
+    lastName: reqStr(row, "lastName", what),
     email: optStr(row.email),
+    gender: optStr(row.gender),
+    photoUrl: optStr(row.photoUrl),
     course: optStr(row.course),
     yearLevel: optStr(row.yearLevel),
     section: optStr(row.section),
@@ -738,6 +754,116 @@ async function getStudent(id: string): Promise<Student | undefined> {
   const what = "GET /students/{id}";
   const body = await getJsonOrMissing(what, `/students/${encodeURIComponent(id)}`);
   return body === undefined ? undefined : toStudent(asRow(body, what), what);
+}
+
+/**
+ * `POST /students` — §6.2. Manual roster entry, alongside the §10 bulk import.
+ *
+ * The refusals worth knowing: **400** for a §4.3 field rule, and **409** for a student number already
+ * in use in this school. The 409 is not a validation failure and the split is deliberate — the request
+ * is entirely well formed and would be accepted a moment after the conflicting row is renamed or
+ * deleted, which is what 409 is for. The server's `detail` says which number and, when the holder is
+ * soft-deleted, that the index is not filtered on `IsDeleted` so the number is still taken.
+ *
+ * A **400 with `code: "FieldIsDerived"`** is the one this client should never be able to earn:
+ * `course`, `yearLevel` and `section` are the ADR-001 D-2 cache and the contract captures unknown
+ * members specifically so a supplied one is refused by name rather than dropped. `StudentWriteRequest`
+ * types those three `never`, so a body carrying one does not compile — see the type's own note.
+ */
+async function createStudent(request: StudentWriteRequest): Promise<Student> {
+  return writeJson(
+    "POST /students",
+    "/students",
+    { method: "POST", payload: request },
+    "The student was created",
+    toStudent,
+  );
+}
+
+/**
+ * `PUT /students/{id}` — §6.2, and a **full replacement** of the student's own editable fields. That
+ * is why `Student` reads the name parts, `gender` and `photoUrl`: a field the caller cannot read back
+ * is a field it cannot send back unchanged, and here two of them are NOT NULL columns.
+ *
+ * Same body as create and the same refusals, plus **404** for a student that is not there or is
+ * soft-deleted. Unlike `PUT /events/{id}` there is no status-lock 409: a student has no state that
+ * forbids an edit.
+ */
+async function updateStudent(id: string, request: StudentWriteRequest): Promise<Student> {
+  return writeJson(
+    "PUT /students/{id}",
+    `/students/${encodeURIComponent(id)}`,
+    { method: "PUT", payload: request },
+    "The change was saved",
+    toStudent,
+  );
+}
+
+/**
+ * `DELETE /students/{id}` — §6.2, and **soft** (§4.3 `IsDeleted`).
+ *
+ * Two consequences the confirmation has to say out loud, because neither is guessable and both are
+ * recorded on `StudentService.DeleteAsync`:
+ *
+ *   - **the student's cards are left active on purpose.** Deactivating them here would rewrite the
+ *     issuance history ADR-001 D-3 exists to preserve, on an operation nobody asked for. They cannot
+ *     record attendance — the tap path resolves through `!Student.IsDeleted` — but the UID keeps its
+ *     slot in the active-card unique index, so re-issuing that physical card to someone else needs an
+ *     explicit detach first.
+ *   - **the student number stays taken.** The uniqueness index is not filtered on `IsDeleted`, and
+ *     §6.2 defines no endpoint that restores a student.
+ *
+ * Returns `void`: the server answers 204 with no body.
+ */
+async function deleteStudent(id: string): Promise<void> {
+  return writeNoContent("DELETE /students/{id}", `/students/${encodeURIComponent(id)}`, {
+    method: "DELETE",
+  });
+}
+
+/**
+ * `POST /students/{id}/cards` — §6.2, assigning an RFID card.
+ *
+ * The UID is normalised **before it gets here** (`normalizeCardUid`), so that what the form previewed,
+ * what this compares against the student's existing cards and what the index defends are one value.
+ * The server normalises again; that is a guarantee, not a reason to send the raw reading.
+ *
+ * **409 `CardUidInUse`** when the UID is already active on another student in this school — one UID
+ * identifies one student at a time, and the server's `detail` says to deactivate the existing card
+ * first. Re-attaching a card the *same* student already holds is not a conflict: the server answers
+ * 201 with the card it already had, which is why the form says so before the press rather than leaving
+ * a success that appears to have done nothing.
+ *
+ * The reply is the `CardDto`, narrowed with the same `toCard` the student read uses.
+ */
+async function addStudentCard(id: string, request: StudentCardRequest): Promise<Card> {
+  return writeJson(
+    "POST /students/{id}/cards",
+    `/students/${encodeURIComponent(id)}/cards`,
+    { method: "POST", payload: request },
+    "The card was assigned",
+    toCard,
+  );
+}
+
+/**
+ * `DELETE /students/{id}/cards/{cardId}` — §6.2, and it **deactivates rather than deletes**.
+ *
+ * The row survives with `isActive: false`, because ADR-001 D-3's whole point is that a past tap keeps
+ * resolving to the physical card that produced it. So this is not the mirror image of attaching: the
+ * card stays in `Student.cards` afterwards, and a screen asking "what does this student tap with" has
+ * to filter on `isActive` rather than take the first row.
+ *
+ * 204 whether or not the card was still active — the postcondition holds either way, so a repeat is
+ * safe. A card that belongs to another student is a **404**, deliberately: this URL claims it belongs
+ * to this one, and deactivating somebody else's through it would be a silent cross-roster edit.
+ */
+async function removeStudentCard(id: string, cardId: string): Promise<void> {
+  return writeNoContent(
+    "DELETE /students/{id}/cards/{cardId}",
+    `/students/${encodeURIComponent(id)}/cards/${encodeURIComponent(cardId)}`,
+    { method: "DELETE" },
+  );
 }
 
 async function listEvents(status?: string): Promise<EventItem[]> {
@@ -989,6 +1115,11 @@ export const api = {
   listStudents,
   countStudents,
   getStudent,
+  createStudent,
+  updateStudent,
+  deleteStudent,
+  addStudentCard,
+  removeStudentCard,
   listEvents,
   createEvent,
   updateEvent,
