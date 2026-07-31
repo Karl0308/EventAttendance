@@ -177,12 +177,53 @@ function httpError(what: string, problem: ApiProblem): ApiError {
   return new ApiError("http", problem.status, `${what} failed (${problem.status}: ${reason}).`, problem);
 }
 
+/**
+ * How long one request may go unanswered before this seam calls it a failure.
+ *
+ * `fetch` has none of its own. A server that accepts the connection and then never answers — a
+ * deadlocked connection pool is the realistic way that happens — leaves a promise that neither
+ * resolves nor rejects, so `useApiResource` stays in `loading` for as long as the tab is open: the
+ * page says "Loading the event…" forever, with no error state and no Retry. An unbounded wait is not
+ * a safer default than a wrong one; it is the one failure the user cannot act on.
+ *
+ * Sized for the slowest read this SPA makes rather than for a single hop: `listAll` walks pages
+ * sequentially and each page gets its own budget, so this bounds one request, not the whole walk.
+ */
+const REQUEST_TIMEOUT_MS = 15_000;
+
+/**
+ * `AbortSignal.timeout` rejects with `TimeoutError`; a caller-supplied `AbortController` rejects with
+ * `AbortError`. Matching the name rather than abort-ness keeps those two apart — nothing in this SPA
+ * cancels a request today, and if something ever does, "we gave up waiting" must not be the sentence
+ * a user is shown for "you navigated away".
+ */
+const TIMEOUT_ERROR_NAME = "TimeoutError";
+
+const isTimeout = (cause: unknown): boolean =>
+  cause instanceof Error && cause.name === TIMEOUT_ERROR_NAME;
+
+/**
+ * `network` rather than a kind of its own: `advise()` in `ResourceStates` reads that kind as
+ * retryable, and a timeout is precisely the case where offering Retry is honest — the request may
+ * well succeed on the next try, and nothing about the client needs to change first.
+ */
+const timedOut = (what: string, cause: unknown) =>
+  new ApiError(
+    "network",
+    0,
+    `The EAMS API at ${baseUrl} did not finish answering ${what} within ${REQUEST_TIMEOUT_MS} ms.`,
+    undefined,
+    cause,
+  );
+
 async function send(what: string, path: string, query?: Record<string, string | undefined>) {
   try {
     return await fetch(buildUrl(path, query), {
       headers: { Accept: "application/json" },
+      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
     });
   } catch (cause) {
+    if (isTimeout(cause)) throw timedOut(what, cause);
     throw new ApiError(
       "network",
       0,
@@ -197,6 +238,11 @@ async function parseBody(res: Response, what: string): Promise<unknown> {
   try {
     return await res.json();
   } catch (cause) {
+    // The timeout signal stays attached to the response body, so a server that writes its headers and
+    // then stalls mid-stream lands here rather than in `send`. It is still a timeout, and calling it
+    // `malformed` would tell the user their build and the API are on different versions and that
+    // retrying will not help — both false, and the second one strands them.
+    if (isTimeout(cause)) throw timedOut(what, cause);
     throw new ApiError("malformed", res.status, `${what} returned a body that is not JSON.`, undefined, cause);
   }
 }
@@ -529,13 +575,41 @@ async function tap(_eventId: string, _cardUid: string): Promise<{ ok: boolean; m
   return { ok: false, message: TAP_UNAVAILABLE };
 }
 
+/** One choice in the tap picker: a card that can still be tapped, and whose it is. */
+export interface UntappedCard {
+  uid: string;
+  name: string;
+}
+
 /**
- * No single endpoint answers this, so it is composed from two real ones rather than an invented
+ * What the tap picker can offer, or why it can offer nothing.
+ *
+ * A bare `UntappedCard[]` cannot carry this: an empty array is read as "everyone has tapped in", so a
+ * roster that failed to load would congratulate the user on a full house. That is the same collapse
+ * of "failed" into "returned nothing" that `useApiResource` exists to prevent, reappearing one level
+ * down inside the payload — where the hook cannot see it, because the read as a whole succeeded.
+ */
+export type TapRoster =
+  | { status: "ready"; cards: UntappedCard[] }
+  | { status: "unavailable"; error: unknown };
+
+/** Everything the event screen renders, settled together. */
+export interface EventDetailData {
+  /** `undefined` when no event has that id — "no such event", which is an answer, not a failure. */
+  event: EventItem | undefined;
+  summary: EventSummary | undefined;
+  records: AttendanceRecord[];
+  roster: TapRoster;
+}
+
+/**
+ * Who has not tapped yet, derived from rows the caller already holds rather than fetched again.
+ *
+ * No single endpoint answers this, so it is composed from reads that exist rather than an invented
  * third. `GET /events/{id}/roster` knows who is *expected*, which would be the better source, but
  * `EventRosterEntryDto` carries no card UID at all — it cannot drive a UID picker.
  */
-async function untappedCards(eventId: string): Promise<{ uid: string; name: string }[]> {
-  const [students, recorded] = await Promise.all([listStudents(), listAttendance(eventId)]);
+function untappedFrom(students: Student[], recorded: AttendanceRecord[]): UntappedCard[] {
   const tapped = new Set(recorded.map((record) => record.studentId));
   return students.flatMap((student) => {
     if (tapped.has(student.id)) return [];
@@ -544,6 +618,50 @@ async function untappedCards(eventId: string): Promise<{ uid: string; name: stri
     const card = student.cards.find((c) => c.isActive);
     return card ? [{ uid: card.cardUid, name: student.fullName }] : [];
   });
+}
+
+/**
+ * The whole event screen as one read.
+ *
+ * It replaces four separate calls from the component, one of which — `untappedCards(id)` — walked
+ * the attendance list a *second* time to work out who was missing from it, while the component was
+ * already fetching that same list beside it. Every mount and every refresh paged through attendance
+ * twice to render one grid. Deriving the picker from `records` here settles it: attendance is walked
+ * once, and the composition stays behind this seam instead of leaking into the page.
+ *
+ * The four reads run concurrently, so the screen still costs one round of latency rather than four.
+ *
+ * Three of them fail together, which is the point — `event`, `summary` and `records` are three views
+ * of one fact, and a screen assembled from parts that settle independently can render half a truth
+ * whose halves contradict each other on the same page. The roster is not one of those views. It is an
+ * input aid for the picker: it does not appear anywhere in what the screen asserts about the event,
+ * and on a Closed event the picker it feeds is never rendered at all. Letting it take the page down
+ * means a roster past `MAX_LIST_ROWS` — reachable at this school's scale — makes a perfectly healthy
+ * attendance grid unviewable. So it is caught into a value and reported as `TapRoster`, which the
+ * picker must then say out loud; what it must never become is an empty picker.
+ */
+async function eventDetail(eventId: string): Promise<EventDetailData> {
+  const [event, summary, records, roster] = await Promise.all([
+    getEvent(eventId),
+    eventSummary(eventId),
+    listAttendance(eventId),
+    // Settled, not swallowed: the rejection is captured here so it can be rendered as a reason, and
+    // handling it inline is also what keeps `Promise.all` from leaving it unhandled when one of the
+    // three reads above rejects first.
+    listStudents().then(
+      (students) => ({ ok: true, students }) as const,
+      (cause: unknown) => ({ ok: false, cause }) as const,
+    ),
+  ]);
+
+  return {
+    event,
+    summary,
+    records,
+    roster: roster.ok
+      ? { status: "ready", cards: untappedFrom(roster.students, records) }
+      : { status: "unavailable", error: roster.cause },
+  };
 }
 
 export const api = {
@@ -555,5 +673,5 @@ export const api = {
   listAttendance,
   eventSummary,
   tap,
-  untappedCards,
+  eventDetail,
 };

@@ -6,14 +6,15 @@ import { useApiResource } from "../useApiResource";
 import { EmptyState, ErrorState, LoadingState } from "../components/ResourceStates";
 import type { Student } from "../types";
 
-// Module scope, so its identity is stable and the hook's effect runs once rather than every render.
 const loadStudents = () => api.listStudents();
 
 const NO_STUDENTS = "No students are on file yet.";
 const NO_MATCH = "No student matches that search.";
 
 export default function Students() {
-  const students = useApiResource(loadStudents);
+  // No deps: the read takes nothing, so nothing can change it. It runs once per mount, and again
+  // only when the error state's Retry asks for it.
+  const students = useApiResource(loadStudents, []);
   const [search, setSearch] = useState("");
 
   const rows = students.data;

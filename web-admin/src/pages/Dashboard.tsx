@@ -32,8 +32,6 @@ interface DashboardData {
  * The whole dashboard as one read, so its three tiles cannot disagree: previously the KPI counters
  * and the event list settled independently, and a failure in the middle of the summary loop left the
  * earlier tiles showing numbers while the rest silently stayed at zero.
- *
- * Module scope keeps its identity stable for the hook's effect dependency.
  */
 async function loadDashboard(): Promise<DashboardData> {
   // `countStudents()` rather than `listStudents().length`: the tile needs one integer, and the
@@ -70,7 +68,8 @@ const statusColor = (s: string) =>
   s === "Open" ? "success" : s === "Closed" ? "default" : s === "Cancelled" ? "error" : "warning";
 
 export default function Dashboard() {
-  const dashboard = useApiResource(loadDashboard);
+  // No deps: the read takes nothing, so it runs once per mount and again only on Retry.
+  const dashboard = useApiResource(loadDashboard, []);
 
   return (
     <Box>

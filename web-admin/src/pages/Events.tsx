@@ -6,7 +6,6 @@ import { api } from "../api";
 import { useApiResource } from "../useApiResource";
 import { EmptyState, ErrorState, LoadingState } from "../components/ResourceStates";
 
-// Module scope, so its identity is stable and the hook's effect runs once rather than every render.
 const loadEvents = () => api.listEvents();
 
 const NO_EVENTS = "No events have been created yet.";
@@ -15,7 +14,8 @@ const statusColor = (s: string) =>
   s === "Open" ? "success" : s === "Closed" ? "default" : s === "Cancelled" ? "error" : "warning";
 
 export default function Events() {
-  const events = useApiResource(loadEvents);
+  // No deps: the read takes nothing, so it runs once per mount and again only on Retry.
+  const events = useApiResource(loadEvents, []);
   const nav = useNavigate();
 
   return (
