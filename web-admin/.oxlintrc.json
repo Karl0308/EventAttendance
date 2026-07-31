@@ -4,6 +4,6 @@
   "rules": {
     "react/rules-of-hooks": "error",
     "react/only-export-components": ["warn", { "allowConstantExport": true }],
-    "react-hooks/exhaustive-deps": ["error", { "additionalHooks": "useApiResource" }]
+    "react-hooks/exhaustive-deps": ["error", { "additionalHooks": "^useApiResource$" }]
   }
 }

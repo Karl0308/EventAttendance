@@ -21,6 +21,7 @@ import { DataGrid, type GridColDef } from "@mui/x-data-grid";
 import Grid from "@mui/material/Grid2";
 import SensorsIcon from "@mui/icons-material/Sensors";
 import { api, describeApiError } from "../api";
+import { advise } from "../apiGuidance";
 import { useApiResource } from "../useApiResource";
 import { EmptyState, ErrorState, LoadingState } from "../components/ResourceStates";
 import type { AttendanceRecord } from "../types";
@@ -39,6 +40,21 @@ const ROSTER_UNAVAILABLE =
   "The student roster did not load, so there is nobody to pick from. This is not the same as everyone " +
   "having tapped in — attendance below is unaffected.";
 
+// What is left to do when the failure is one Retry cannot clear, so no button is offered. A warning
+// with no action reads as a dead end unless it says where the action actually is.
+//
+// It says what this screen *is* rather than what the reader is doing. The tempting sentence — "real
+// taps still record normally" — is one this bundle has no evidence for: it never calls the capture
+// endpoint, and the reader is a separately-versioned client it cannot see. Worse, one of the two kinds
+// that reach this copy is `malformed`, which means the admin build and the API disagree on shapes —
+// precisely when the capture contract may have moved too. An admin who reads "capture is fine" during
+// a version skew stops escalating an outage. Topology is safe to assert because it is true by
+// construction: this picker is a simulation aid, and real taps go to `POST /attendance/tap` with a
+// DeviceKey this SPA deliberately does not hold.
+const ROSTER_UNRECOVERABLE =
+  "Real card taps do not go through this screen — only the simulator is affected. Nothing here will " +
+  "bring the picker back; report this to whoever maintains EAMS.";
+
 function StatCard({ label, value, color }: { label: string; value: number; color: string }) {
   return (
     <Card sx={{ borderTop: `4px solid ${color}` }}>
@@ -49,6 +65,44 @@ function StatCard({ label, value, color }: { label: string; value: number; color
         <Typography color="text.secondary">{label}</Typography>
       </CardContent>
     </Card>
+  );
+}
+
+/**
+ * The picker's input list did not load. Polite rather than `role="alert"`: the event, its summary and
+ * its attendance all loaded and only the picker is missing, so interrupting a user who is reading a
+ * healthy screen overstates what went wrong.
+ *
+ * Retry is offered on exactly the terms `ErrorState` offers it, decided by the same `advise()`, since
+ * it is the same question. It used to be offered unconditionally here, which put a button on
+ * `too-large` that provably could not succeed: `MAX_LIST_ROWS` is a client-side ceiling, so the row
+ * count that refused the read is the row count the retry reads again. Where Retry *can* help it is
+ * still worth pressing even though it re-reads the whole screen — a picker dead until a full page
+ * refresh is a dead end with nothing to press.
+ */
+function RosterUnavailable({ error, onRetry }: { error: unknown; onRetry: () => void }) {
+  const { message, retryable } = advise(error);
+  return (
+    <Alert
+      severity="warning"
+      role="status"
+      action={
+        retryable ? (
+          <Button color="inherit" size="small" onClick={onRetry}>
+            Retry
+          </Button>
+        ) : undefined
+      }
+    >
+      <AlertTitle>Simulate RFID tap is unavailable</AlertTitle>
+      <Typography variant="body2">{ROSTER_UNAVAILABLE}</Typography>
+      <Typography variant="body2" sx={{ mt: 1 }}>
+        {describeApiError(error)}
+      </Typography>
+      <Typography variant="body2" sx={{ mt: 1 }}>
+        {retryable ? message : `${message} ${ROSTER_UNRECOVERABLE}`}
+      </Typography>
+    </Alert>
   );
 }
 
@@ -180,35 +234,7 @@ export default function EventDetail() {
               <Card sx={{ mb: 3, bgcolor: "#fff8e1" }}>
                 <CardContent>
                   {data.roster.status === "unavailable" ? (
-                    // Polite rather than `role="alert"`: the event, its summary and its attendance all
-                    // loaded, and only the picker's input list is missing. Interrupting a user who is
-                    // reading a healthy screen overstates what went wrong. Retry re-reads the whole
-                    // screen, which is what `detail.reload` is; it is offered because a picker that is
-                    // dead until a full page refresh is a dead end with nothing to press.
-                    //
-                    // Offered unconditionally, unlike `ErrorState`'s, which asks `advise()` whether
-                    // retrying can help. Asking here would mean reading that taxonomy in a second
-                    // place — the duplication `advise()`'s own comment argues against — and `advise`
-                    // cannot be exported from a component module without tripping
-                    // `react/only-export-components`. The cost is a wasted round trip on the one kind
-                    // that is hopeless (`too-large`), and for that kind `describeApiError` below
-                    // already says server-side paging is what is needed. Lifting `advise` into a
-                    // module of its own would settle it properly; that is JJ's call, not this fix's.
-                    <Alert
-                      severity="warning"
-                      role="status"
-                      action={
-                        <Button color="inherit" size="small" onClick={detail.reload}>
-                          Retry
-                        </Button>
-                      }
-                    >
-                      <AlertTitle>Simulate RFID tap is unavailable</AlertTitle>
-                      <Typography variant="body2">{ROSTER_UNAVAILABLE}</Typography>
-                      <Typography variant="body2" sx={{ mt: 1 }}>
-                        {describeApiError(data.roster.error)}
-                      </Typography>
-                    </Alert>
+                    <RosterUnavailable error={data.roster.error} onRetry={detail.reload} />
                   ) : (
                     <Stack direction="row" spacing={2} alignItems="center" flexWrap="wrap">
                       <SensorsIcon color="primary" />

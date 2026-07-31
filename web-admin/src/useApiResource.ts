@@ -101,7 +101,24 @@ export function useApiResource<T>(
         : { ...LOADING, refreshing: false },
     );
 
-    latestLoad.current().then(
+    // `load` is *called* inside the try, so a caller that throws synchronously — an arrow that is not
+    // `async` and blows up before it ever returns a promise — lands in the same rendered error state
+    // as a rejection. Left to propagate, it would escape this effect callback rather than reach the
+    // handler below, stranding the state at whatever the line above just set: `loading`, or `ready`
+    // with `refreshing` raised, with nothing left running to clear it. There is no error boundary
+    // anywhere in `src/`, so React 19 unmounts the tree to a blank page instead of showing what failed.
+    //
+    // No caller does this today; every one of them is an arrow returning an `async` call. But the
+    // contract this hook publishes is `() => Promise<T>`, and a contract the caller must remember to
+    // honour is the same defect class the `deps` argument above exists to close.
+    let read: Promise<T>;
+    try {
+      read = latestLoad.current();
+    } catch (cause: unknown) {
+      read = Promise.reject(cause);
+    }
+
+    read.then(
       (data) => {
         if (live) setState({ status: "ready", data, error: undefined, refreshing: false });
       },

@@ -203,7 +203,7 @@ const isTimeout = (cause: unknown): boolean =>
   cause instanceof Error && cause.name === TIMEOUT_ERROR_NAME;
 
 /**
- * `network` rather than a kind of its own: `advise()` in `ResourceStates` reads that kind as
+ * `network` rather than a kind of its own: `advise()` in `apiGuidance` reads that kind as
  * retryable, and a timeout is precisely the case where offering Retry is honest — the request may
  * well succeed on the next try, and nothing about the client needs to change first.
  */
@@ -645,9 +645,8 @@ async function eventDetail(eventId: string): Promise<EventDetailData> {
     getEvent(eventId),
     eventSummary(eventId),
     listAttendance(eventId),
-    // Settled, not swallowed: the rejection is captured here so it can be rendered as a reason, and
-    // handling it inline is also what keeps `Promise.all` from leaving it unhandled when one of the
-    // three reads above rejects first.
+    // Settled, not swallowed: the rejection is captured into a value here so the picker can render it
+    // as a reason instead of it taking the whole page down with the three reads above.
     listStudents().then(
       (students) => ({ ok: true, students }) as const,
       (cause: unknown) => ({ ok: false, cause }) as const,
