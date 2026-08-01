@@ -427,6 +427,128 @@ export interface AttendanceRecord {
   captureMethod: string; // Rfid/Manual/Import
 }
 
+// ---------------------------------------------------------------------------------------------
+// Devices — §4.10 / §6.6, and the one DTO in this file that carries a credential
+// ---------------------------------------------------------------------------------------------
+
+/**
+ * A registered RFID reader / kiosk, as `GET /devices` publishes it.
+ *
+ * **There is deliberately no key-shaped field here, and adding one would be the bug.** `DeviceDto` on
+ * the server has none either: the plaintext token exists in exactly two responses (the 201 from
+ * `POST /devices` and the 200 from `POST /devices/{id}/regenerate-key`) and is carried only by
+ * `DeviceKeyIssued` below. The server stores `SHA-256(secret)` and nothing else, so "show it again"
+ * has no implementation rather than a refused one, and a field here would turn every list read into a
+ * credential dump — which `DeviceLifecycleTests.No_read_response_ever_carries_the_key` asserts on the
+ * serialized bytes.
+ *
+ * `deviceType` stays `string` for the reason `EventItem.status` records: a response cannot prove a
+ * union, and a type this build has never heard of must render as itself. Compare against
+ * `DEVICE_TYPES`; never type a received value with it.
+ */
+export interface Device {
+  id: string;
+  name: string;
+  deviceType: string; // one of DEVICE_TYPES below; `string` on the wire
+  readerModel?: string;
+  isActive: boolean;
+  /**
+   * The **public** half of the key — the twelve characters between `eams_dk_` and the secret. Safe to
+   * show and to log: it identifies the credential without being one, which is what makes "this
+   * kiosk's key id is `a91f…`, and the 401 in the log says `a91f…`" a sentence an operator can say.
+   * Absent when the device has never been issued a key.
+   */
+  apiKeyId?: string;
+  /**
+   * Whether this device could authenticate **right now**: it holds a key, the key is not revoked, and
+   * the device is active. One boolean rather than three, because "why can this kiosk not tap?" is one
+   * question. The three columns below say *which* of the three is the answer.
+   */
+  hasActiveKey: boolean;
+  apiKeyIssuedAt?: string;
+  /**
+   * When the key was last accepted. Written opportunistically and **throttled** server-side, so it is
+   * a coarse signal — the column an operator reads to decide whether a credential is still in use and
+   * therefore whether revoking it will break something.
+   */
+  apiKeyLastUsedAt?: string;
+  apiKeyRevokedAt?: string;
+  lastSeenAt?: string;
+}
+
+/**
+ * §4.10's three device types, verified against `DeviceTypes.All` in `EAMS.Domain/DeviceEntities.cs`.
+ *
+ * A union for values travelling *out*, the same distinction `ATTENDANCE_MODES` draws. The server
+ * normalises case and takes `Kiosk` for a null or blank one, but this client always chooses one
+ * explicitly rather than relying on that default — a picker built from this list cannot drift from the
+ * set the server accepts, where two hand-typed `MenuItem`s can.
+ */
+export const DEVICE_TYPES = ["Kiosk", "Mobile", "Handheld"] as const;
+export type DeviceTypeName = (typeof DEVICE_TYPES)[number];
+
+/**
+ * The body of `POST /devices` and of `PUT /devices/{id}` — one type, because the server takes one type
+ * and checks it with one `DeviceService.Validate`.
+ *
+ * The update is a **full replacement** of the device's own fields, so an edit form must fill it from
+ * the device it is editing. It is *not* a replacement of the key: `UpdateAsync` deliberately touches
+ * no `ApiKey*` column, because retiring a device and burning its credential are two different
+ * statements. Setting `isActive: false` stops the device authenticating (that is what `hasActiveKey`
+ * folds in) without revoking anything, so turning it back on restores the same key.
+ *
+ * **No key field, and there is no version of this request that could have one.** `DeviceKey.Issue`
+ * takes no input specifically so an operator-chosen key cannot exist — the SHA-256-rather-than-Argon2
+ * decision is only correct while the secret is 256 bits of server-generated entropy.
+ *
+ * `readerModel` is `string | null` rather than optional, as the other write requests are: an omitted
+ * key and an explicit `null` mean the same thing to the server, but deciding at every construction
+ * site is what stops an empty text box being sent as `""`.
+ */
+export interface DeviceWriteRequest {
+  name: string;
+  deviceType: DeviceTypeName;
+  readerModel: string | null;
+  isActive: boolean;
+}
+
+/**
+ * Just enough of the device to say *which* device the token in front of you belongs to.
+ *
+ * **Not a `Device`, and deliberately all-optional.** The nested object on `DeviceKeyIssuedDto` is a
+ * full `DeviceDto`, but narrowing it as one would make five display fields able to veto the delivery
+ * of a credential that has already been minted — see `toDeviceKeyIssued`. The reveal needs a title and
+ * a key id; the row itself is re-read from `GET /devices` moments later, which is where anything
+ * stricter belongs.
+ */
+export interface IssuedKeyDevice {
+  id?: string;
+  name?: string;
+  /** The public half — see `Device.apiKeyId`. Safe to show; not a credential. */
+  apiKeyId?: string;
+}
+
+/**
+ * The one and only carrier of a plaintext device key — `DeviceKeyIssuedDto`.
+ *
+ * **`apiKey` is the only time this value ever exists outside the device that will hold it.** It is
+ * returned at issue and at rotation and never afterwards; there is no endpoint that shows it again and
+ * there never will be. Anything that receives one of these owes the operator a one-shot reveal they
+ * cannot dismiss by accident — see `DeviceKeyDialog`. Do not log it, do not put it in a Snackbar, do
+ * not keep it in a list.
+ */
+export interface DeviceKeyIssued {
+  device: IssuedKeyDevice;
+  /** The complete `eams_dk_<keyId>_<secret>` token. 85 characters, lower-case, case-significant. */
+  apiKey: string;
+  /**
+   * Why the device beside the token is thinner than it should be, when it is. Present only on drift,
+   * and never a reason to withhold the reveal: it is shown *inside* the dialog as a caveat on the
+   * identity, because the token is the part that cannot be fetched again.
+   */
+  deviceDrift?: string;
+}
+
 export interface EventSummary {
   eventId: string;
   eventName: string;

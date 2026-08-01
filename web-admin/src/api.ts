@@ -12,6 +12,10 @@ import type {
   StudentCardRequest,
   StudentWriteRequest,
   Card,
+  Device,
+  DeviceKeyIssued,
+  IssuedKeyDevice,
+  DeviceWriteRequest,
   EventAudience,
   EventAudienceGroup,
   EventAudienceRequest,
@@ -736,6 +740,105 @@ function toSummary(row: Row, what: string): EventSummary {
   };
 }
 
+/**
+ * `DeviceDto` — and **the absence of a key field here is load-bearing.**
+ *
+ * The server's own `DeviceDto` has none: the plaintext token is carried by `DeviceKeyIssuedDto` alone,
+ * and `DeviceLifecycleTests.No_read_response_ever_carries_the_key` asserts that on the serialized
+ * bytes. So if a `key`/`apiKey`/`secret` ever appears on a read reply, this mapper dropping it on the
+ * floor is the correct behaviour and not an oversight — a line reading it here would put a credential
+ * into every row of a grid.
+ *
+ * `apiKeyId` is the *public* twelve characters and is `optStr` because the contract makes it null
+ * until a key has been issued. The four timestamps are nullable for the same contract reasons: never
+ * issued, never used (the column is written throttled, so a device can tap before it is set), never
+ * revoked, never seen.
+ */
+function toDevice(row: Row, what: string): Device {
+  return {
+    id: reqStr(row, "id", what),
+    name: reqStr(row, "name", what),
+    // `reqStr`: the column is NOT NULL and the server substitutes `Kiosk` for a blank on the way in,
+    // so an absent one is drift rather than an ordinary empty.
+    deviceType: reqStr(row, "deviceType", what),
+    readerModel: optStr(row.readerModel),
+    isActive: reqBool(row, "isActive", what),
+    apiKeyId: optStr(row.apiKeyId),
+    // Required, and narrowed as such deliberately: this is the single boolean the whole page leads
+    // with, and a missing one arriving as `undefined` would render every device as unable to tap —
+    // a screenful of confident wrong answers. Failing loud at the seam is the alternative.
+    hasActiveKey: reqBool(row, "hasActiveKey", what),
+    apiKeyIssuedAt: optStr(row.apiKeyIssuedAt),
+    apiKeyLastUsedAt: optStr(row.apiKeyLastUsedAt),
+    apiKeyRevokedAt: optStr(row.apiKeyRevokedAt),
+    lastSeenAt: optStr(row.lastSeenAt),
+  };
+}
+
+/**
+ * `DeviceKeyIssuedDto` — the only reply in this module that carries a credential, and therefore the one
+ * mapper in this file where fail-loud is the *wrong* default.
+ *
+ * `apiKey` is `reqStr` rather than `optStr`, and that is the important choice. An absent token would
+ * otherwise arrive as `undefined` and be rendered as an empty reveal panel: the operator would be told
+ * their device was registered, shown nothing, and close the one dialog that would ever have held the
+ * key — after which the only remedy is rotating a device they just created. Failing here instead
+ * routes it through `writeJson`'s catch, which says the device *was* created and that this build could
+ * not read the reply back, which is the sentence that gets them to check the list rather than press
+ * again.
+ *
+ * **The nested device is read best-effort, and that asymmetry is the whole point.** It used to go
+ * through `toDevice`, which narrows five fields as required — so a server that dropped, say,
+ * `hasActiveKey` from this one nested object would throw *after* the key had been minted, `writeJson`
+ * would turn it into `malformed`, and the token sitting in `body` would be discarded with it: a
+ * credential that exists on the server, has no plaintext copy anywhere, and was never shown to anyone.
+ * Narrowing a display field must not be able to do that. So `apiKey` is narrowed first and hard, the
+ * device is reduced to the two fields the reveal titles itself with plus the public key id, and
+ * whatever could not be read becomes `deviceDrift` — a caveat rendered beside the token rather than
+ * instead of it. The authoritative row arrives from `listDevices` a moment later regardless.
+ */
+function toDeviceKeyIssued(row: Row, what: string): DeviceKeyIssued {
+  // First, and outside every best-effort branch below: this is the field the reply exists for.
+  const apiKey = reqStr(row, "apiKey", what);
+  // `reqStr` narrows the type and not the value, and `""` is a string. This server cannot send it —
+  // `DeviceKey.Issue()` always builds an 85-character token and `DeviceKeyIssuedDto.ApiKey` is
+  // non-nullable — so this is a guard against a proxy or a future non-EAMS server, not against today's
+  // backend. It is here rather than in a `reqNonEmptyStr` helper because an empty string is a perfectly
+  // good value for every other field in this file; it is only the *credential* that must not be blank.
+  if (apiKey === "") throw offContract(what, "`apiKey` should be a token, got an empty string");
+
+  const nested: unknown = row.device;
+  if (!isRow(nested)) {
+    return {
+      apiKey,
+      device: {},
+      deviceDrift:
+        `The key below is valid, but this build could not read the device details that came with ` +
+        `it (\`device\` was ${describeType(nested)}). Find the device by its key id in the list.`,
+    };
+  }
+
+  const device: IssuedKeyDevice = {
+    id: optStr(nested.id),
+    name: optStr(nested.name),
+    apiKeyId: optStr(nested.apiKeyId),
+  };
+
+  // `apiKeyId` is absent from this list on purpose: the contract already allows it to be null, and the
+  // dialog says "not reported" for it without that being drift.
+  const missing = (["id", "name"] as const).filter((field) => device[field] === undefined);
+
+  return {
+    apiKey,
+    device,
+    deviceDrift:
+      missing.length === 0
+        ? undefined
+        : `The key below is valid, but this build could not read every detail of the device it was ` +
+          `issued for (missing: ${missing.join(", ")}). Find the device by its key id in the list.`,
+  };
+}
+
 function toStudentGroup(row: Row, what: string): StudentGroup {
   return {
     id: reqStr(row, "id", what),
@@ -1110,6 +1213,138 @@ async function eventSummary(eventId: string): Promise<EventSummary | undefined> 
 }
 
 // ---------------------------------------------------------------------------------------------
+// Devices — §6.6, and the two replies in this file that carry a credential
+// ---------------------------------------------------------------------------------------------
+//
+// `POST /devices/{id}/heartbeat` is deliberately NOT here, for the same reason `tap` is not wired: it
+// is authenticated by the `DeviceKey` scheme, which is a credential the admin SPA does not hold and
+// must not be given. It is a device saying "I am alive", not an administrator's action, and there is
+// nothing on this surface that could sensibly call it.
+
+/**
+ * `GET /devices` — every registered device in this school.
+ *
+ * **Not routed through `listAll`, and that is a fact about the endpoint rather than an omission.**
+ * `DevicesController.List` answers a bare `DeviceDto[]`, not the `<Dto>PagedResult` envelope the
+ * §6.2/§6.3 admin lists now use, so asking it for `?page=` would send parameters it ignores and then
+ * fail to find `items` on the reply. Devices are counted in tens — one per door — so there is nothing
+ * here for `MAX_LIST_ROWS` to protect against; if that ever stops being true it is the *server* that
+ * needs the envelope first.
+ *
+ * The reply carries no key material. See `toDevice`.
+ */
+async function listDevices(): Promise<Device[]> {
+  const what = "GET /devices";
+  const body = await getJson(what, "/devices");
+  // Sorted by name server-side (`OrderBy(d => d.Name)`) and taken as it comes: unlike the events list
+  // there is no client ordering to impose, so re-sorting here would only be a second opinion.
+  return asRows(body, what).map((row, i) => toDevice(row, `${what}[${i}]`));
+}
+
+// `GET /devices/{id}` is deliberately NOT wrapped here. It exists on the server, but nothing in this
+// SPA reads one device: the grid is fed by `listDevices` and every write answers with the row it
+// changed. A second read path over `DeviceDto` would be a second place for a future `key` field on a
+// read reply to be picked up — and this slice's whole credential story rests on there being exactly
+// two mappers that touch device JSON. Add it back when a screen needs it, not before.
+
+/**
+ * `POST /devices` — §6.6. Registers the device **and mints its first key in the same call**; there is
+ * no separate "issue a key" endpoint, because a device with no credential is not yet a device that can
+ * do anything.
+ *
+ * **The 201 body is the only time that key is ever readable.** The server keeps `SHA-256(secret)` and
+ * nothing else, so there is no "show it again" endpoint to write and none to forget to protect. Every
+ * caller of this method owes the operator a one-shot reveal they cannot dismiss by accident, and must
+ * not log, cache or re-render the token anywhere else. An operator who loses it rotates.
+ *
+ * The refusals: **400** for a §4.10 field rule (name required and ≤ 100, `deviceType` outside the
+ * three, reader model too long) and **409** for either no resolvable school or — vanishingly unlikely,
+ * and reported rather than retried precisely so someone sees it — a collision on the generated key id.
+ */
+async function registerDevice(request: DeviceWriteRequest): Promise<DeviceKeyIssued> {
+  return writeJson(
+    "POST /devices",
+    "/devices",
+    { method: "POST", payload: request },
+    "The device was registered and a key was issued",
+    toDeviceKeyIssued,
+  );
+}
+
+/**
+ * `PUT /devices/{id}` — §6.6, and a **full replacement** of the device's own fields, which is why
+ * `Device` reads all four: a field this client cannot read back is a field it cannot send back
+ * unchanged.
+ *
+ * **It never touches the key.** `DeviceService.UpdateAsync` leaves every `ApiKey*` column alone, so
+ * clearing `isActive` stops the device authenticating without revoking anything — ticking it again
+ * restores the same key. That is the difference between "this kiosk is out of service" and "this
+ * credential is burned", and the two are deliberately not collapsed.
+ *
+ * Refusals: **400** for the same field rules as register, and **404** for a device that is not there.
+ */
+async function updateDevice(id: string, request: DeviceWriteRequest): Promise<Device> {
+  return writeJson(
+    "PUT /devices/{id}",
+    `/devices/${encodeURIComponent(id)}`,
+    { method: "PUT", payload: request },
+    "The change was saved",
+    toDevice,
+  );
+}
+
+/**
+ * `POST /devices/{id}/regenerate-key` — §6.6, and a **hard cut with no overlap window**. The previous
+ * token stops working the instant this returns: the new key overwrites the old one in the same row,
+ * and there is no second key column for a grace period to live in.
+ *
+ * So the device is offline from this moment until someone types the new token into it. A caller must
+ * say that *before* the press, not after.
+ *
+ * It also clears `ApiKeyRevokedAt`, which makes rotation the only way back for a device whose key was
+ * revoked.
+ *
+ * Same one-shot rule as register: the 200 body is the only time this token is readable.
+ *
+ * Refusals: **404** for a device that is not there, **409** on a key-id collision.
+ */
+async function regenerateDeviceKey(id: string): Promise<DeviceKeyIssued> {
+  return writeJson(
+    "POST /devices/{id}/regenerate-key",
+    `/devices/${encodeURIComponent(id)}/regenerate-key`,
+    { method: "POST", payload: {} },
+    "A new key was issued and the previous one stopped working",
+    toDeviceKeyIssued,
+  );
+}
+
+/**
+ * `POST /devices/{id}/revoke-key` — burn the credential **without** issuing a replacement.
+ *
+ * Not defined by §6.6 and added deliberately (recorded as drift): regeneration alone conflates "this
+ * key is compromised" with "give me a working one", while the published mobile contract already tells
+ * the two apart on the wire — `401` for a bad key, `403` for a revoked one. Without this route that
+ * 403 is unreachable.
+ *
+ * **Idempotent**, which is unusual on this surface and is the point: revoking twice, or revoking a
+ * device that never held a key, is a 200. The postcondition — this device cannot authenticate — holds
+ * either way, so a retry after a timeout is safe on the one operation an operator runs when something
+ * has already gone wrong. `advise()` still withholds the one-click resend, because `shape` is a proxy
+ * for idempotency and is exact only for POST; it errs safe.
+ *
+ * The reply is the `DeviceDto`, so the row's standing updates without a re-read. Refusals: **404**.
+ */
+async function revokeDeviceKey(id: string): Promise<Device> {
+  return writeJson(
+    "POST /devices/{id}/revoke-key",
+    `/devices/${encodeURIComponent(id)}/revoke-key`,
+    { method: "POST", payload: {} },
+    "The key was revoked",
+    toDevice,
+  );
+}
+
+// ---------------------------------------------------------------------------------------------
 // The audience — who an event expects
 // ---------------------------------------------------------------------------------------------
 
@@ -1469,6 +1704,11 @@ export const api = {
   attachEventAudience,
   detachEventGroup,
   detachEventStudent,
+  listDevices,
+  registerDevice,
+  updateDevice,
+  regenerateDeviceKey,
+  revokeDeviceKey,
   listStudentGroups,
   listTerms,
   sectionChoices,

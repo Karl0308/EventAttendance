@@ -15,6 +15,7 @@ import {
 import DashboardIcon from "@mui/icons-material/Dashboard";
 import PeopleIcon from "@mui/icons-material/People";
 import EventIcon from "@mui/icons-material/Event";
+import RouterIcon from "@mui/icons-material/Router";
 
 const DRAWER_WIDTH = 240;
 
@@ -22,6 +23,7 @@ const nav = [
   { to: "/", label: "Dashboard", icon: <DashboardIcon /> },
   { to: "/students", label: "Students", icon: <PeopleIcon /> },
   { to: "/events", label: "Events", icon: <EventIcon /> },
+  { to: "/devices", label: "Devices", icon: <RouterIcon /> },
 ];
 
 export default function Layout({ children }: { children: ReactNode }) {

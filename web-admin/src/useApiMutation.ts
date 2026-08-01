@@ -123,7 +123,15 @@ export function useApiMutation<A extends readonly unknown[], T>(
       if (mounted.current) setState({ status: "succeeded", data, error: undefined });
       // The outcome is still returned to the caller: `run` answers the invocation, and whether the
       // form that made it is still on screen is the caller's business, not this hook's.
-      else console.debug("EAMS: a write succeeded after the form that sent it was gone", data);
+      //
+      // **`data` is deliberately not logged, and that omission is the point rather than an oversight.**
+      // This hook is generic over every write in the app, and one of them — `registerDevice` /
+      // `regenerateDeviceKey` — answers with the only plaintext copy of a device credential
+      // (`DeviceKeyIssued.apiKey`). Unmounted is exactly the case where that copy is gone from the UI,
+      // so a console line carrying it would make devtools history the sole holder of a live key. The
+      // fact worth recording here is *that* a write landed with nobody watching; the payload adds no
+      // diagnosis the status does not already give, and no future caller can opt out of this line.
+      else console.debug("EAMS: a write succeeded after the form that sent it was gone");
       return { outcome: "succeeded", data };
     } catch (error: unknown) {
       // Not a swallow. The failure becomes the rendered `failed` state *and* the returned outcome,

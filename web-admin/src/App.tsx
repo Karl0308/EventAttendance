@@ -4,6 +4,7 @@ import Dashboard from "./pages/Dashboard";
 import Students from "./pages/Students";
 import Events from "./pages/Events";
 import EventDetail from "./pages/EventDetail";
+import Devices from "./pages/Devices";
 
 export default function App() {
   return (
@@ -13,6 +14,7 @@ export default function App() {
         <Route path="/students" element={<Students />} />
         <Route path="/events" element={<Events />} />
         <Route path="/events/:id" element={<EventDetail />} />
+        <Route path="/devices" element={<Devices />} />
       </Routes>
     </Layout>
   );
