@@ -20,6 +20,12 @@ Thumbs.db
 .idea/
 .qodo/
 
+# --- Claude Code ---
+# Scoped rather than a blanket `.claude/`, so shared agent or skill config can still be committed
+# deliberately. Worktrees are whole checkouts of this repo; machine-local settings are per-developer.
+.claude/worktrees/
+.claude/settings.local.json
+
 # --- Env ---
 .env
 .env.*
