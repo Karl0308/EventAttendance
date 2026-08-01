@@ -549,6 +549,189 @@ export interface DeviceKeyIssued {
   deviceDrift?: string;
 }
 
+// ---------------------------------------------------------------------------------------------
+// The SIS roster import — §10, and the surface that reads and writes every student in the school
+// ---------------------------------------------------------------------------------------------
+//
+// **`SisImportRowDto.rawData` is deliberately absent from `SisImportRow` below, and that omission is
+// the point rather than an oversight.** It is the source row as the workbook held it — names,
+// institutional e-mail addresses, enrolment — for every student in the file. This surface is open
+// (ADR-001 D-6: `sis.import` is declared and not enforced), so the rule the controller states applies
+// here too: nothing echoes row contents beyond what the results table needs.
+//
+// **What the omission buys is retention and reachability, not secrecy.** `res.json()` materialises the
+// whole reply — `rawData` included — before the mapper runs, and the raw bytes are in the devtools
+// Network panel either way; dropping the field cannot and does not stop that. What it does is end the
+// value's life at the mapper: nothing holds it, nothing renders it, and no later code path can reach
+// it, so it is not in component state, not in a log line, not in a console dump of a row, and not
+// something a future edit can start displaying by adding a column.
+//
+// It is safe to drop where `EventItem.description` was not, and the difference is the write shape:
+// there is no full-replacement PUT anywhere on this surface. The only body this client sends back is
+// `SisImportRunRequest`, which carries one term id.
+
+/**
+ * §4.12 `SisImportBatches`, as the four §10 endpoints publish it.
+ *
+ * The five counters are the reconciliation ADR-001 D-5 exists to make possible —
+ * `inserted + updated + failed + skipped === total`, always — with `warningRows` orthogonal to the
+ * four (a warned row is already counted in one of them).
+ */
+export interface SisImportBatch {
+  id: string;
+  termId: string;
+  termCode: string;
+  /** Where the batch came from. `string` on the wire, for the reason `EventItem.status` records. */
+  source: string;
+  fileName?: string;
+  sourceSheetName?: string;
+  /**
+   * The fingerprint of the uploaded bytes. Shown truncated, and never used by this client to decide
+   * whether two uploads are "the same file" — that is the server's judgement and it makes it during
+   * the run, where `Skipped` is the answer.
+   */
+  fileHash?: string;
+  /** One of `SIS_IMPORT_STATUS`; `string` on the wire. */
+  status: string;
+  totalRows: number;
+  insertedRows: number;
+  updatedRows: number;
+  failedRows: number;
+  skippedRows: number;
+  warningRows: number;
+  startedAt?: string;
+  finishedAt?: string;
+  /**
+   * Whether the counters add up, **as the server computed it**. Read rather than derived here for the
+   * reason the DTO gives for exposing it at all: it is the one check an operator runs, and a UI that
+   * re-derives it will eventually derive it against a different set of fields than the server did and
+   * report a disagreement that does not exist.
+   */
+  countersReconcile: boolean;
+}
+
+/**
+ * §4.12 `SisImportBatches.Status`, verified against `SisImportStatus.All` in
+ * `EAMS.Domain/SisImportValues.cs`.
+ *
+ * The three "Completed…" values are three different answers to "do I need to go and look at the
+ * rows?", and collapsing them is what this set exists to stop. `Failed` is not one of them: it means
+ * the run itself stopped, which is a different problem with a different fix.
+ *
+ * **Read these to compare, never to type a received value** — the usual rule in this file.
+ */
+export const SIS_IMPORT_STATUS = {
+  Pending: "Pending",
+  Running: "Running",
+  Completed: "Completed",
+  CompletedWithWarnings: "CompletedWithWarnings",
+  CompletedWithErrors: "CompletedWithErrors",
+  Failed: "Failed",
+} as const;
+
+export type SisImportStatusName = (typeof SIS_IMPORT_STATUS)[keyof typeof SIS_IMPORT_STATUS];
+
+/**
+ * §4.12 `SisImportRows.Result`, verified against `SisImportRowResult.All`.
+ *
+ * **`Skipped` means "this row asked for nothing that was not already true", not "this row was
+ * ignored"** — it is the expected outcome of *every* row of a re-import, which is what makes running
+ * the same roster twice a no-op the operator can see rather than merely be promised.
+ *
+ * `Pending` is what a staged row carries between upload and run, so it is the result every row of a
+ * preview has and no row of a finished batch does.
+ */
+export const SIS_IMPORT_ROW_RESULT = {
+  Pending: "Pending",
+  Inserted: "Inserted",
+  Updated: "Updated",
+  Failed: "Failed",
+  Skipped: "Skipped",
+} as const;
+
+export type SisImportRowResultName =
+  (typeof SIS_IMPORT_ROW_RESULT)[keyof typeof SIS_IMPORT_ROW_RESULT];
+
+/**
+ * One entity a staged row touched — the answer to "row 214 says Skipped, against what?", which §4.12's
+ * single nullable `StudentId` could not give for a source whose grain spans six entities.
+ */
+export interface SisImportRowEntity {
+  /** `Student`, `Section`, `Course`… `string` on the wire. */
+  entityType: string;
+  entityId: string;
+  /** `Inserted` / `Updated` / `Unchanged`. */
+  action: string;
+}
+
+/**
+ * One staged source row and what became of it — as `GET /sis/import/{batchId}/rows` lists it.
+ *
+ * `rawData` is not read. See the section header above: this is the whole roster's PII and nothing on
+ * this screen needs it. `errorMessage`, `skipReason` and `warningMessage` are the server's own
+ * sentences about *why*, which is what a failed-row list is for, and they are the reason a row number
+ * is enough to find the line in the workbook without this client holding its contents.
+ */
+export interface SisImportRow {
+  id: string;
+  /** 1-based row in the source sheet — what an operator opens the workbook and jumps to. */
+  rowNumber: number;
+  /** One of `SIS_IMPORT_ROW_RESULT`; `string` on the wire. */
+  result: string;
+  skipReason?: string;
+  warningCode?: string;
+  warningMessage?: string;
+  errorMessage?: string;
+  studentId?: string;
+  entities: SisImportRowEntity[];
+}
+
+/**
+ * What an upload found, **before anything is written to the academic tables** — the 201 body of
+ * `POST /sis/import/upload`.
+ *
+ * The distinct counts are the preview's whole purpose: they are what an operator compares against what
+ * they expect the file to hold, and a file with one course in it is a wrong file that is visible here
+ * rather than after the run. `blankSectionRows` and `placeholderInstructorRows` are the two known
+ * shapes of "the registrar's export has gaps in it", counted so they are a stated fact rather than a
+ * surprise in the warning column afterwards.
+ */
+export interface SisImportPreview {
+  batch: SisImportBatch;
+  /** The header row as parsed. The check that answers "is this even the roster workbook?". */
+  columns: string[];
+  distinctStudents: number;
+  distinctColleges: number;
+  distinctPrograms: number;
+  distinctCourses: number;
+  distinctSections: number;
+  distinctInstructors: number;
+  blankSectionRows: number;
+  placeholderInstructorRows: number;
+  /**
+   * A handful of staged rows. Every one of them is `Pending` — nothing has run — so they carry no
+   * outcome, and this client renders their row numbers and entity counts rather than their contents.
+   */
+  sampleRows: SisImportRow[];
+}
+
+/**
+ * The body of `POST /sis/import/{batchId}/run`.
+ *
+ * **The term is required here even though the batch already carries one, and it is a confirmation
+ * rather than a parameter.** It must match or the run is refused with a 409. ADR-001 D-5 names the
+ * failure that guards: a wrong term selection misfiles an entire batch, is invisible afterwards
+ * (every downstream query is term-scoped, so the data looks fine — it is simply in the wrong year),
+ * and is only recoverable by hand.
+ *
+ * So this client sends the term the *operator chose at upload*, carried forward through the preview,
+ * and never a term re-derived from anything else. Deriving it from the batch would make the
+ * confirmation ask the same source twice and answer itself.
+ */
+export interface SisImportRunRequest {
+  termId: string;
+}
+
 export interface EventSummary {
   eventId: string;
   eventName: string;

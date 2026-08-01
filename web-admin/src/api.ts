@@ -26,9 +26,20 @@ import type {
   EventWriteRequest,
   AttendanceRecord,
   EventSummary,
+  SisImportBatch,
+  SisImportPreview,
+  SisImportRow,
+  SisImportRowEntity,
+  SisImportRunRequest,
   StudentGroup,
   Term,
 } from "./types";
+
+// The one security-relevant dependency this module has, and the reason it is in the import block
+// rather than tucked in beside the code that uses it: a reader scanning these lines has to be able to
+// learn that `api.ts` holds the only caller of `getDeviceKey()`. Everything it provides is inert
+// outside `import.meta.env.DEV`, so nothing it names survives a production build.
+import { DEVICE_KEY_SCHEME, deviceKeyStatus, getDeviceKey } from "./deviceKey";
 
 // The URL `dotnet run --project backend/EAMS.Api --urls "http://localhost:5080"` serves. Overridden
 // per-machine by VITE_API_BASE_URL (see `.env.example`) — the capture device's host is DHCP.
@@ -297,8 +308,28 @@ function httpError(what: string, problem: ApiProblem, shape: ApiRequestShape): A
  *
  * Sized for the slowest read this SPA makes rather than for a single hop: `listAll` walks pages
  * sequentially and each page gets its own budget, so this bounds one request, not the whole walk.
+ *
+ * It is the *default*, not the only budget — `send` takes a per-request override, because a read's
+ * budget is the wrong shape for a request whose duration is dominated by bytes going out. See
+ * `UPLOAD_TIMEOUT_MS`.
  */
 const REQUEST_TIMEOUT_MS = 15_000;
+
+/**
+ * The budget for the one request on this seam that uploads a file.
+ *
+ * A read's 15 s is a statement about how long a server may think. An upload's duration is mostly the
+ * client's own upstream link: `MAX_UPLOAD_BYTES` is 10 MB (the server's `RequestSizeLimit`, which the
+ * screen shows the operator as the permitted size), and 10 MB over the ~1 Mbps upstream of a school
+ * connection is around 80 seconds of sending before the server has seen the whole request. Under the
+ * read budget the client would accept a file it then aborts mid-send — and that abort is the expensive
+ * failure, not a harmless one: a timed-out **write** is `may-duplicate`, so Upload is withheld and the
+ * operator is told to reload having uploaded nothing.
+ *
+ * So the ceiling stays where the server put it and the clock is widened to match it. Generous rather
+ * than exact, because the point is to bound a hung request, not to police a slow one.
+ */
+const UPLOAD_TIMEOUT_MS = 180_000;
 
 /**
  * `AbortSignal.timeout` rejects with `TimeoutError`; a caller-supplied `AbortController` rejects with
@@ -317,11 +348,14 @@ const isTimeout = (cause: unknown): boolean =>
  * may well succeed on the next try, and nothing about the client needs to change first. On a write it
  * is the case where offering Retry is a duplicate, and `shape` is what carries that through.
  */
-const timedOut = (what: string, cause: unknown, shape: ApiRequestShape) =>
+const timedOut = (what: string, cause: unknown, shape: ApiRequestShape, budgetMs: number) =>
   new ApiError(
     "network",
     0,
-    `The EAMS API at ${baseUrl} did not finish answering ${what} within ${REQUEST_TIMEOUT_MS} ms.` +
+    // The budget is passed in rather than read from `REQUEST_TIMEOUT_MS`: an upload runs on its own,
+    // and a message naming a number the request was not actually held to is a false statement in the
+    // one place someone is trying to work out what happened.
+    `The EAMS API at ${baseUrl} did not finish answering ${what} within ${budgetMs} ms.` +
       // Giving up waiting says nothing about what the server did with the request it already has. On
       // a read that is immaterial; on a write it is the only thing the user needs to know.
       (shape === "write"
@@ -346,19 +380,58 @@ const JSON_MEDIA_TYPE = "application/json";
  * that sets `Content-Type: application/json` with no body is a shape some proxies and gateways treat
  * as malformed — worth making unrepresentable rather than remembering not to write.
  */
+/**
+ * `form` is the multipart arm, and it exists because one endpoint on this API does not take JSON:
+ * `POST /sis/import/upload` is `multipart/form-data` with a `file` part and a `termId` part. Widening
+ * the union was the honest way to express that — the alternative was a second `fetch` call site beside
+ * `send`, which would have had its own timeout signal, its own error taxonomy and its own answer to
+ * `shape`, i.e. the seam this file exists to be, with a hole in it.
+ *
+ * It is a distinct member rather than an optional field on the JSON arm so that **a request cannot
+ * carry both**, and the two are discriminated by `"form" in write` rather than by `method`: both are
+ * `POST`, so the method no longer discriminates and pretending it does would narrow wrongly.
+ *
+ * The `never` fields are what make "cannot carry both" hold for values as well as for literals. Excess
+ * property checking catches `{ method: "POST", payload, form }` written out at a call site and catches
+ * nothing at all when the same object arrives in a variable; typing each arm's missing field as
+ * optional-`never` makes the *type* incompatible either way. Same idiom as `StudentWriteRequest`.
+ */
 type RequestBody =
-  | { method: "POST" | "PUT" | "PATCH"; payload: unknown }
+  | { method: "POST" | "PUT" | "PATCH"; payload: unknown; form?: never }
+  | { method: "POST"; form: FormData; payload?: never }
   | { method: "DELETE" };
 
-/** The serialised body, or nothing — the one place that decides whether this request has one. */
-const payloadOf = (write: RequestBody | undefined): string | undefined =>
-  write === undefined || write.method === "DELETE" ? undefined : JSON.stringify(write.payload);
+/**
+ * What actually goes on the wire: the body, and the `Content-Type` that describes it — decided
+ * together, in the one place, because they are one decision.
+ *
+ * **The multipart arm returns no content type on purpose, and that is load-bearing.** A
+ * `multipart/form-data` header is incomplete without the `boundary=` parameter, which is generated
+ * per-request; setting the header by hand means sending a boundary the body does not use, and the
+ * server's multipart reader then finds no parts at all — a `400 "No file was uploaded."` for a request
+ * that carried the file. Left unset, `fetch` writes the header itself from the `FormData` and the two
+ * agree by construction.
+ */
+interface WireBody {
+  body: BodyInit | undefined;
+  contentType: string | undefined;
+}
+
+const NO_BODY: WireBody = { body: undefined, contentType: undefined };
+
+const wireBodyOf = (write: RequestBody | undefined): WireBody => {
+  if (write === undefined || write.method === "DELETE") return NO_BODY;
+  if ("form" in write) return { body: write.form, contentType: undefined };
+  return { body: JSON.stringify(write.payload), contentType: JSON_MEDIA_TYPE };
+};
 
 async function send(
   what: string,
   path: string,
   query?: Record<string, string | undefined>,
   write?: RequestBody,
+  /** Overridden only where the default is the wrong shape of budget — see `UPLOAD_TIMEOUT_MS`. */
+  timeoutMs: number = REQUEST_TIMEOUT_MS,
 ) {
   // Derived once, here, from the method — which is what actually decides it. Every `ApiError` this
   // request can produce carries the answer, so no error-rendering surface has to work it out again.
@@ -372,21 +445,22 @@ async function send(
   const method = write?.method ?? "GET";
   const shape: ApiRequestShape = method === "GET" ? "read" : "write";
   // From the body, because `Content-Type` describes a body — a bodyless `DELETE` declaring a JSON
-  // content type is describing something it did not send. `shape` above is deliberately NOT derived
-  // this way; see the comment there.
-  const body = payloadOf(write);
+  // content type is describing something it did not send, and a multipart body declaring one written
+  // here would declare the wrong boundary. `shape` above is deliberately NOT derived this way; see the
+  // comment there.
+  const { body, contentType } = wireBodyOf(write);
   try {
     return await fetch(buildUrl(path, query), {
       method,
       headers:
-        body === undefined
+        contentType === undefined
           ? { Accept: JSON_MEDIA_TYPE }
-          : { Accept: JSON_MEDIA_TYPE, "Content-Type": JSON_MEDIA_TYPE },
+          : { Accept: JSON_MEDIA_TYPE, "Content-Type": contentType },
       body,
-      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+      signal: AbortSignal.timeout(timeoutMs),
     });
   } catch (cause) {
-    if (isTimeout(cause)) throw timedOut(what, cause, shape);
+    if (isTimeout(cause)) throw timedOut(what, cause, shape, timeoutMs);
     throw new ApiError(
       "network",
       0,
@@ -404,7 +478,13 @@ async function send(
   }
 }
 
-async function parseBody(res: Response, what: string, shape: ApiRequestShape): Promise<unknown> {
+async function parseBody(
+  res: Response,
+  what: string,
+  shape: ApiRequestShape,
+  /** The budget the request was actually held to — the same signal is still on the body stream. */
+  timeoutMs: number = REQUEST_TIMEOUT_MS,
+): Promise<unknown> {
   try {
     return await res.json();
   } catch (cause) {
@@ -412,7 +492,7 @@ async function parseBody(res: Response, what: string, shape: ApiRequestShape): P
     // then stalls mid-stream lands here rather than in `send`. It is still a timeout, and calling it
     // `malformed` would tell the user their build and the API are on different versions and that
     // retrying will not help — both false, and the second one strands them.
-    if (isTimeout(cause)) throw timedOut(what, cause, shape);
+    if (isTimeout(cause)) throw timedOut(what, cause, shape, timeoutMs);
     // `shape` travels with it: on a write, a 2xx whose body will not parse is the server having
     // already acted and this build being unable to read what it did.
     throw new ApiError("malformed", res.status, `${what} returned a body that is not JSON.`, {
@@ -465,6 +545,8 @@ async function getJsonOrMissing(
  * @param applied what the server did, in the user's words ("The event was created") — used only for
  *   the reply-unreadable message, where naming it is the difference between the user checking the
  *   list and the user sending it again.
+ * @param timeoutMs the budget for this one request. Defaulted, and overridden only by the upload,
+ *   whose duration is dominated by the bytes going out rather than by the server thinking.
  */
 async function writeJson<T>(
   what: string,
@@ -472,10 +554,11 @@ async function writeJson<T>(
   write: RequestBody,
   applied: string,
   map: (row: Row, what: string) => T,
+  timeoutMs: number = REQUEST_TIMEOUT_MS,
 ): Promise<T> {
-  const res = await send(what, path, undefined, write);
+  const res = await send(what, path, undefined, write, timeoutMs);
   if (!res.ok) throw httpError(what, await readProblem(res), "write");
-  const body = await parseBody(res, what, "write");
+  const body = await parseBody(res, what, "write", timeoutMs);
   try {
     return map(asRow(body, what), what);
   } catch (cause) {
@@ -582,7 +665,11 @@ const FIRST_PAGE = 1;
  */
 const COUNT_ONLY_PAGE_SIZE = 1;
 
-/** `shape: "read"` and provably so: this is only ever raised while walking a list. */
+/**
+ * `shape: "read"` and provably so: every caller is a list read — `listAll`'s page walk, and
+ * `getImportRows`, which is a bare array rather than a paged envelope and so applies the ceiling
+ * itself.
+ */
 const tooLarge = (what: string, why: string) =>
   new ApiError(
     "too-large",
@@ -919,6 +1006,95 @@ function toAudienceResult(row: Row, what: string): EventAudienceResult {
     studentsAlreadyAttached: reqNum(row, "studentsAlreadyAttached", what),
     expected: reqNum(row, "expected", what),
     warnings: reqStrs(row, "warnings", what),
+  };
+}
+
+/**
+ * `SisImportBatchDto`. Every counter is `reqNum` and `countersReconcile` is `reqBool`, deliberately.
+ *
+ * They are what the results screen *is*: an import that reported "37 succeeded, 3 failed" with an
+ * undefined somewhere in it would render "NaN" or a blank beside a roster that has just been rewritten,
+ * and the operator's only way to check the write is the numbers. Failing loud at the seam is the
+ * alternative to a screenful of confident nonsense.
+ *
+ * `countersReconcile` is read rather than computed here — see the field's own note in `types.ts`.
+ */
+function toImportBatch(row: Row, what: string): SisImportBatch {
+  return {
+    id: reqStr(row, "id", what),
+    termId: reqStr(row, "termId", what),
+    termCode: reqStr(row, "termCode", what),
+    source: reqStr(row, "source", what),
+    // Nullable in the contract: a batch can be created by a path that had no file (§10 leaves the
+    // source open), so an absent name is an ordinary value rather than drift.
+    fileName: optStr(row.fileName),
+    sourceSheetName: optStr(row.sourceSheetName),
+    fileHash: optStr(row.fileHash),
+    status: reqStr(row, "status", what),
+    totalRows: reqNum(row, "totalRows", what),
+    insertedRows: reqNum(row, "insertedRows", what),
+    updatedRows: reqNum(row, "updatedRows", what),
+    failedRows: reqNum(row, "failedRows", what),
+    skippedRows: reqNum(row, "skippedRows", what),
+    warningRows: reqNum(row, "warningRows", what),
+    // Null until the run starts and until it finishes — which is exactly the state a staged batch is
+    // in, so this is the ordinary case rather than the exception.
+    startedAt: optStr(row.startedAt),
+    finishedAt: optStr(row.finishedAt),
+    countersReconcile: reqBool(row, "countersReconcile", what),
+  };
+}
+
+function toImportRowEntity(row: Row, what: string): SisImportRowEntity {
+  return {
+    entityType: reqStr(row, "entityType", what),
+    entityId: reqStr(row, "entityId", what),
+    action: reqStr(row, "action", what),
+  };
+}
+
+/**
+ * `SisImportRowDto` — **minus `rawData`, which is not read**.
+ *
+ * That is a decision about this surface rather than about this mapper: `rawData` is the source line as
+ * the workbook held it, for every student in the institution, and §10 is open (ADR-001 D-6). Not
+ * reading it means it cannot be rendered, cannot reach a console line, and is not sitting in a heap
+ * snapshot of the tab. The row number is what an operator actually needs — it is the line they open the
+ * workbook and jump to — and the server's own `errorMessage` / `skipReason` is the *why*.
+ */
+function toImportRow(row: Row, what: string): SisImportRow {
+  return {
+    id: reqStr(row, "id", what),
+    rowNumber: reqNum(row, "rowNumber", what),
+    result: reqStr(row, "result", what),
+    skipReason: optStr(row.skipReason),
+    warningCode: optStr(row.warningCode),
+    warningMessage: optStr(row.warningMessage),
+    errorMessage: optStr(row.errorMessage),
+    studentId: optStr(row.studentId),
+    entities: asRows(row.entities, `${what}.entities`).map((entity, i) =>
+      toImportRowEntity(entity, `${what}.entities[${i}]`),
+    ),
+  };
+}
+
+function toImportPreview(row: Row, what: string): SisImportPreview {
+  return {
+    batch: toImportBatch(asRow(row.batch, `${what}.batch`), `${what}.batch`),
+    // Required, and an empty array is a legitimate answer that this client says something about: a
+    // workbook whose header row did not parse is the first thing the preview exists to show.
+    columns: reqStrs(row, "columns", what),
+    distinctStudents: reqNum(row, "distinctStudents", what),
+    distinctColleges: reqNum(row, "distinctColleges", what),
+    distinctPrograms: reqNum(row, "distinctPrograms", what),
+    distinctCourses: reqNum(row, "distinctCourses", what),
+    distinctSections: reqNum(row, "distinctSections", what),
+    distinctInstructors: reqNum(row, "distinctInstructors", what),
+    blankSectionRows: reqNum(row, "blankSectionRows", what),
+    placeholderInstructorRows: reqNum(row, "placeholderInstructorRows", what),
+    sampleRows: asRows(row.sampleRows, `${what}.sampleRows`).map((sample, i) =>
+      toImportRow(sample, `${what}.sampleRows[${i}]`),
+    ),
   };
 }
 
@@ -1568,6 +1744,135 @@ async function sectionsIn(termId: string): Promise<StudentGroup[]> {
   return groups.filter((group) => group.type === GROUP_TYPE_SECTION);
 }
 
+// ---------------------------------------------------------------------------------------------
+// The SIS roster import — §10, and the only multipart request this seam makes
+// ---------------------------------------------------------------------------------------------
+//
+// Two steps, on purpose and irreducibly: `upload` stages the workbook and writes **nothing** to the
+// academic tables, `run` applies it. The preview between them is the point — it is where an operator
+// sees what is in the file before it touches the roster of every student in the school — so nothing in
+// this seam offers a combined call, and a caller that wants one would be removing the review, not
+// saving a round trip.
+
+/** The multipart part names `SisImportController.Upload` reads. Wrong names are a 400, not a 422. */
+const UPLOAD_FILE_PART = "file";
+const UPLOAD_TERM_PART = "termId";
+
+/**
+ * `POST /sis/import/upload` — stages a workbook and answers what is in it. **Writes nothing.**
+ *
+ * `multipart/form-data`, which is why `RequestBody` has a `form` arm; the `Content-Type` is left for
+ * `fetch` to write, because the boundary is generated with the body. See `wireBodyOf`.
+ *
+ * **`termId` is operator input and is never inferred** (ADR-001 D-5). It is a required parameter here
+ * rather than an optional one with a fallback for the reason the controller states: guessing it from
+ * the filename or the upload date misfiles an entire batch in a way nothing downstream can detect,
+ * because every downstream query is term-scoped and the data therefore looks perfectly fine.
+ *
+ * The two refusals are **different problems with different fixes**, and both reach the caller as an
+ * `ApiError` carrying the status, so a screen can tell them apart (`sisImport.uploadRefusalOf`):
+ *
+ *   - **400** — the *request* is malformed: no file part, or no term. Something about how this build
+ *     sent it, or a term that was never chosen.
+ *   - **422** — the request is well-formed multipart and the *content* cannot be read: not a workbook,
+ *     wrong columns, a `.csv` renamed. Re-sending the identical bytes gets the identical answer, which
+ *     is exactly what separates it from the 400.
+ *
+ * The 201 body is a `SisImportPreviewDto`, narrowed by `writeJson` like every other write's reply.
+ */
+async function uploadRoster(file: File, termId: string): Promise<SisImportPreview> {
+  const form = new FormData();
+  form.append(UPLOAD_FILE_PART, file);
+  form.append(UPLOAD_TERM_PART, termId);
+
+  return writeJson(
+    "POST /sis/import/upload",
+    "/sis/import/upload",
+    { method: "POST", form },
+    // Staged, not imported — and the distinction is the whole design of this endpoint. The sentence
+    // only ever surfaces on an unreadable 2xx reply, which is precisely the moment somebody needs to
+    // know that whatever happened, the roster has not been touched.
+    "The workbook was staged (nothing was written to the roster)",
+    toImportPreview,
+    // The one request on this seam that does not run on the read budget. See `UPLOAD_TIMEOUT_MS`.
+    UPLOAD_TIMEOUT_MS,
+  );
+}
+
+/**
+ * `POST /sis/import/{batchId}/run` — applies a staged batch. This is the write.
+ *
+ * **Idempotent with respect to the database**: running the same roster twice leaves it identical and
+ * reports every row `Skipped`. That is worth saying on screen, because the operator who does not know
+ * it is the operator who will not re-run after a partial failure — which is the one time they should.
+ *
+ * `termId` is a **confirmation, and must match the batch's own or the run is refused with a 409**. It
+ * is the caller's job to pass the term the operator chose at upload, carried forward, rather than one
+ * re-read from the batch: a confirmation that asks the same source twice answers itself.
+ *
+ * The refusals: **400** for a missing term, **404** for a batch id that never existed — caught before
+ * the general case on the server specifically so it is not confused with the next one — and **409**
+ * for a batch whose state forbids the run, which is a term mismatch or a batch that has already run.
+ */
+async function runImport(batchId: string, request: SisImportRunRequest): Promise<SisImportBatch> {
+  return writeJson(
+    "POST /sis/import/{batchId}/run",
+    `/sis/import/${encodeURIComponent(batchId)}/run`,
+    { method: "POST", payload: request },
+    "The import was run",
+    toImportBatch,
+  );
+}
+
+/**
+ * `GET /sis/import/{batchId}` — one batch and its counters, without its rows.
+ *
+ * `undefined` for a 404, like the other lookups in this file: a batch id that is not there is an
+ * answer a screen renders rather than a failure.
+ */
+async function getImportBatch(batchId: string): Promise<SisImportBatch | undefined> {
+  const what = "GET /sis/import/{batchId}";
+  const body = await getJsonOrMissing(what, `/sis/import/${encodeURIComponent(batchId)}`);
+  return body === undefined ? undefined : toImportBatch(asRow(body, what), what);
+}
+
+/**
+ * `GET /sis/import/{batchId}/rows` — a batch's staged rows, narrowed to one outcome.
+ *
+ * **`result: "Failed"` is the query this endpoint exists for**: an import reporting "37 succeeded, 3
+ * failed" with no way to see which 3 is not something an operator can act on.
+ *
+ * **Not routed through `listAll`**, and that is a fact about the endpoint rather than an omission:
+ * `SisImportController.Rows` answers a bare `SisImportRowDto[]`, not the `<Dto>PagedResult` envelope
+ * the §6.2/§6.3 admin lists use, so asking it for `?page=` would send parameters it ignores and then
+ * fail to find `items` on the reply.
+ *
+ * **`MAX_LIST_ROWS` still applies, and is enforced here rather than by the walk.** The reply is a whole
+ * batch's rows in one array — a `Skipped` filter on a re-import matches *every* row by design, which is
+ * the ordinary case rather than the pathological one — and the ceiling's own rule is that crossing it
+ * is a design signal that fails loud. Truncating for display instead would be a second, quieter policy
+ * for the same fact, applied after the whole array was already in memory and in React state: the
+ * expensive half of loading everything, with the honesty of refusing removed.
+ *
+ * A `result` outside `SisImportRowResult.All` is the server's business, not this seam's; it passes
+ * through and the reply is whatever the server decides that means.
+ */
+async function getImportRows(batchId: string, result?: string): Promise<SisImportRow[]> {
+  const what = "GET /sis/import/{batchId}/rows";
+  const body = await getJson(what, `/sis/import/${encodeURIComponent(batchId)}/rows`, { result });
+  const rows = asRows(body, what);
+  // Counted before the rows are narrowed: the refusal is about how many there are, and mapping them
+  // first would spend the work this check exists to decline.
+  if (rows.length > MAX_LIST_ROWS) {
+    throw tooLarge(
+      what,
+      `this batch has ${rows.length} rows matching that filter and this screen shows at most ` +
+        `${MAX_LIST_ROWS}`,
+    );
+  }
+  return rows.map((row, i) => toImportRow(row, `${what}[${i}]`));
+}
+
 /**
  * Explanation of why an admin-browser tap is refused. One string, one place — the message the
  * Snackbar shows and the reason in the report are the same text.
@@ -1577,22 +1882,246 @@ const TAP_UNAVAILABLE =
   "and requires a DeviceKey, which the admin SPA deliberately does not hold.";
 
 /**
- * NOT WIRED — deliberately, and this is a finding rather than an oversight.
+ * What is said in a development build when nobody has pasted a key yet. Distinct from
+ * `TAP_UNAVAILABLE` on purpose: that one describes a refusal with no remedy, this one is a refusal
+ * whose remedy is a box on the screen the reader is already looking at.
+ */
+const TAP_NEEDS_DEVICE_KEY =
+  "Simulated taps need a device key: set one on this page first. Register a device at /devices and " +
+  "paste the token it shows once — the admin SPA holds no capture credential of its own.";
+
+/** How the tap request names itself in a failure sentence. */
+const TAP_WHAT = "The simulated tap";
+
+/**
+ * The idempotency key for a tap that has not yet been definitively answered, per event and card.
+ *
+ * **`deviceTapId` is the whole basis of §8.2's offline sync, and a retry must reuse it.** A fresh id
+ * on the second press is what turns "the reply was lost" into a second attendance row; sending the
+ * same one comes back `DuplicateIgnored` instead. That is what a real device does, and it is the
+ * behaviour the endpoint exists to support — so the simulator has to do it too, or it simulates
+ * something the mobile client will never send.
+ *
+ * `tappedAt` is minted with it and reused with it, for the reason the endpoint's own remarks give:
+ * with a null `tappedAt` the instant is re-derived on every attempt, so a tap retried after the
+ * event's window closed comes back `TappedAtOutsideEventWindow` rather than `DuplicateIgnored`.
+ *
+ * Entries are dropped once the server has answered in a way that settles this attempt: a 2xx this
+ * build could read, or a refusal the contract calls final (see `tapIsAnsweredForGood`). Every other
+ * ending — a network failure, a 5xx, a 401/403/408/429, a reply that will not parse — is precisely
+ * the case where the id must survive into the retry.
+ */
+const pendingTaps = new Map<string, { deviceTapId: string; tappedAt: string }>();
+
+/** A `|` cannot occur in a UUID or a normalized card UID, so the two halves cannot run together. */
+const tapAttemptKey = (eventId: string, cardUid: string) => `${eventId}|${cardUid}`;
+
+/** The 4xx statuses that mean "try again with the same bytes", per `AttendanceController.Tap`. */
+const RETRYABLE_CLIENT_STATUSES = new Set([401, 403, 408, 429]);
+
+/**
+ * Whether the server answered in a way that ends *this* attempt for good — so the held `deviceTapId`
+ * and `tappedAt` must be dropped rather than resent.
+ *
+ * `AttendanceController.Tap` documents its 400s and 404s as definitively answered: "the same request
+ * will be refused forever". Keeping the attempt across one of those is not caution, it is a bug with
+ * two faces. A 404 `CardNotFound`, once the card is registered and the button pressed again ten
+ * minutes later, resends the ten-minute-old `tappedAt` — and `graceMinutes` decides Present versus
+ * Late from `tappedAt`, so near the boundary that is a wrong status that looks right. A 400
+ * `TappedAtOutOfRange` is worse: every retry resends the very timestamp that was just refused, and
+ * the only escape is reloading the tab, which nothing on the screen says.
+ *
+ * The exceptions are the four 4xx the contract does *not* call final. 401/403 are credential states
+ * that a paste on this page can change with the request otherwise unaltered; 408 and 429 are
+ * explicitly "send it again" — and there, reusing the id is what stops a retry becoming a second row.
+ * 5xx, a network failure and an unreadable 2xx are all "the server may have acted", which is the case
+ * the held id exists for; none of them reach here.
+ */
+const tapIsAnsweredForGood = (status: number) =>
+  status >= 400 && status < 500 && !RETRYABLE_CLIENT_STATUSES.has(status);
+
+/**
+ * `POST /attendance/tap`, in a **development build only**, using a key the developer pasted at
+ * runtime — and the reason that is not the thing the note above refuses.
+ *
+ * The refusal stands for production and is what `tap()` still returns there. What it rules out is a
+ * key that ships *in the bundle*: `import.meta.env.VITE_…` is inlined at build time, so the GitHub
+ * Pages artefact would publish a write credential as a static asset. A runtime paste never reaches
+ * the build, so it is never in the artefact — and this function, along with `deviceKey.ts` and the
+ * panel that feeds it, is eliminated from the production build entirely, because
+ * `import.meta.env.DEV` is a compile-time literal. That is verified against `dist/assets/*.js` rather
+ * than assumed.
+ */
+async function simulateTapWithDeviceKey(
+  eventId: string,
+  cardUid: string,
+): Promise<{ ok: boolean; message: string }> {
+  const status = deviceKeyStatus();
+  if (status.kind === "unreadable") return { ok: false, message: status.reason };
+  if (status.kind !== "set") return { ok: false, message: TAP_NEEDS_DEVICE_KEY };
+
+  const token = getDeviceKey();
+  if (token === undefined) return { ok: false, message: TAP_NEEDS_DEVICE_KEY };
+
+  // Typed as always present, and not always present: `crypto.randomUUID` is a secure-context API, so
+  // a dev server reached over plain http on a LAN address has none. Said out loud rather than
+  // silently substituting a weaker id — an idempotency key that can collide is worse than no tap.
+  if (typeof crypto.randomUUID !== "function") {
+    return {
+      ok: false,
+      message:
+        "This browser exposes no `crypto.randomUUID`, so no idempotency key can be minted for the " +
+        "tap. Open the dev server on localhost or over https.",
+    };
+  }
+
+  const key = tapAttemptKey(eventId, cardUid);
+  const attempt = pendingTaps.get(key) ?? {
+    deviceTapId: crypto.randomUUID(),
+    tappedAt: new Date().toISOString(),
+  };
+  pendingTaps.set(key, attempt);
+
+  let res: Response;
+  try {
+    res = await fetch(buildUrl("/attendance/tap"), {
+      method: "POST",
+      headers: {
+        Accept: JSON_MEDIA_TYPE,
+        "Content-Type": JSON_MEDIA_TYPE,
+        // The one Authorization header this SPA ever sends. Composed here, in the seam, from the
+        // scheme `deviceKey.ts` owns — no component builds a request.
+        Authorization: `${DEVICE_KEY_SCHEME} ${token}`,
+      },
+      // No `deviceId`: this build cannot know the device's id from the token (the key carries the
+      // public key *id*, which is a different thing), and a wrong one is a 400 `DeviceMismatch`. The
+      // server resolves the device from the key.
+      body: JSON.stringify({
+        eventId,
+        cardUid,
+        deviceTapId: attempt.deviceTapId,
+        tappedAt: attempt.tappedAt,
+      }),
+      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+    });
+  } catch (cause) {
+    // A write, so "it was not sent" is a claim this cannot make — and the retry is safe *because* the
+    // attempt above is kept, which is the sentence worth giving the reader.
+    return {
+      ok: false,
+      message: isTimeout(cause)
+        ? `${TAP_WHAT} went unanswered for ${REQUEST_TIMEOUT_MS} ms. It may still have been ` +
+          "recorded; pressing Tap again sends the same deviceTapId, so it cannot double-record."
+        : `Cannot reach the EAMS API at ${baseUrl} — ${TAP_WHAT.toLowerCase()} may or may not have ` +
+          "been recorded. Pressing Tap again sends the same deviceTapId, so it cannot double-record.",
+    };
+  }
+
+  if (res.ok) {
+    try {
+      const row = asRow(await res.json(), TAP_WHAT);
+      const success = reqBool(row, "success", TAP_WHAT);
+      const message = reqStr(row, "message", TAP_WHAT);
+      // Branching happens on `code`, never on `message` — and the code is shown because on this
+      // surface it is the interesting half: `Recorded` and `DuplicateIgnored` are both a 200 with
+      // cheerful prose, and telling them apart is the entire reason to press the button twice.
+      const code = reqStr(row, "code", TAP_WHAT);
+      // The server decided and this build read the decision, so the next press is a new tap rather
+      // than a retry of this one.
+      pendingTaps.delete(key);
+      return { ok: success, message: `${message} (${code})` };
+    } catch (cause) {
+      return {
+        ok: false,
+        message:
+          `${TAP_WHAT} was accepted, but the reply is off-contract and this build cannot read it ` +
+          `back: ${describeApiError(cause)} The tap is recorded — check the grid rather than ` +
+          "pressing again.",
+      };
+    }
+  }
+
+  const problem = await readProblem(res);
+  // Answered, and answered the same way forever: the next press is a new tap, so it needs a new
+  // `deviceTapId` and — the half that actually changes a record — a fresh `tappedAt`.
+  if (tapIsAnsweredForGood(res.status)) pendingTaps.delete(key);
+  return { ok: false, message: withTrace(tapRefusal(res, problem), problem) };
+}
+
+/** The correlation handle, appended where the server sent one. `describeApiError`'s convention. */
+const withTrace = (message: string, problem: ApiProblem) =>
+  problem.traceId === undefined ? message : `${message} (traceId ${problem.traceId})`;
+
+/**
+ * Why the capture endpoint refused, in the reader's terms.
+ *
+ * **401 and 403 are kept apart because the server went out of its way to keep them apart.** 401 is a
+ * key that is malformed or unknown — a bad copy, or a token from another server — and the fix is in
+ * the box on this page. 403 is a key that *authenticated* and was then found to be revoked, or whose
+ * device was retired: nothing about the paste is wrong, and re-pasting it is the one action
+ * guaranteed not to help. Collapsing the two into "the key was refused" would hand the reader the
+ * wrong next step half the time, and would throw away a distinction the handler was built to draw.
+ */
+function tapRefusal(res: Response, problem: ApiProblem): string {
+  if (res.status === 401) {
+    return (
+      `${TAP_WHAT} was refused (401): the device key is malformed, or unknown to the API at ` +
+      `${baseUrl}. Re-copy the whole token from /devices — a partial copy and a token issued by a ` +
+      "different server both land here."
+    );
+  }
+
+  if (res.status === 403) {
+    return (
+      `${TAP_WHAT} was refused (403): this key was recognised and then rejected — it has been ` +
+      "revoked, or its device is retired. Pasting it again cannot help; issue a new key from " +
+      "/devices, or use a device that is still active."
+    );
+  }
+
+  if (res.status === 429) {
+    const retryAfter = res.headers.get("Retry-After");
+    return (
+      `${TAP_WHAT} hit the capture rate limit (429).` +
+      (retryAfter === null ? " Wait a moment and press Tap again." : ` Wait ${retryAfter}s and press Tap again.`) +
+      " The same deviceTapId is resent, so nothing can double-record."
+    );
+  }
+
+  // `.message`, not `describeApiError(…)`. `httpError` puts the problem's `traceId` on the ApiError,
+  // and `describeApiError` appends it — so routing through it here would produce the handle twice,
+  // once from there and once from `withTrace` at the only call site. Every arm of this function
+  // returns a bare sentence and `withTrace` is the single place a trace handle is added; this arm is
+  // the one that has to be spelt this way to keep that true, and it is also the arm every ordinary
+  // refusal lands in (`EventNotOpen` 400, `CardNotFound` 404).
+  return httpError(TAP_WHAT, problem, "write").message;
+}
+
+/**
+ * A tap, refused in production and wired in development — and the difference is a runtime paste, not
+ * a build-time secret.
  *
  * `POST /api/v1/attendance/tap` is secured by the `DeviceKey` scheme
  * (`Authorization: DeviceKey eams_dk_<keyId>_<secret>`), a credential the plan's §11 scopes to
  * `attendance.capture` and nothing else. Putting one in this bundle would hand a page that can only
  * *display* attendance a key that can *write* it — the precise inversion the contract rejects in its
  * own note on `GET /attendance/live/{eventId}` — and a Vite env var is inlined at build time, so the
- * GitHub Pages artefact would publish a write credential as a static asset.
+ * GitHub Pages artefact would publish a write credential as a static asset. **That refusal is
+ * unchanged and still exactly true of every production build**: the first line below is the only
+ * thing a production bundle contains of this function, because `import.meta.env.DEV` is a
+ * compile-time literal and everything past it is eliminated along with `deviceKey.ts`.
+ *
+ * What development gets instead is a key the developer pastes into the page at runtime. It is never
+ * in the bundle, because it never goes near the build.
  *
  * Returns a truthful refusal rather than throwing, so `EventDetail`'s existing Snackbar says
  * something honest instead of the button appearing to do nothing. `POST /attendance/manual` is the
  * admin-scoped alternative (open, no device key) but records `captureMethod: Manual` and skips the
  * grace-period logic, so substituting it silently would change behaviour — that needs JJ's call.
  */
-async function tap(_eventId: string, _cardUid: string): Promise<{ ok: boolean; message: string }> {
-  return { ok: false, message: TAP_UNAVAILABLE };
+async function tap(eventId: string, cardUid: string): Promise<{ ok: boolean; message: string }> {
+  if (!import.meta.env.DEV) return { ok: false, message: TAP_UNAVAILABLE };
+  return simulateTapWithDeviceKey(eventId, cardUid);
 }
 
 /** One choice in the tap picker: a card that can still be tapped, and whose it is. */
@@ -1712,6 +2241,10 @@ export const api = {
   listStudentGroups,
   listTerms,
   sectionChoices,
+  uploadRoster,
+  runImport,
+  getImportBatch,
+  getImportRows,
   tap,
   eventDetail,
 };

@@ -33,6 +33,10 @@ import ChangeEventStatusDialog from "../components/ChangeEventStatusDialog";
 import EventAudiencePanel from "../components/EventAudiencePanel";
 import type { AudienceRead, DetachTarget } from "../components/EventAudiencePanel";
 import AudiencePickerDialog from "../components/AudiencePickerDialog";
+// Rendered only behind `import.meta.env.DEV` below. That flag is a compile-time literal, so the
+// production build drops the element, this import, the panel and `deviceKey.ts` along with it — which
+// is what keeps a capture credential out of the published artefact.
+import DevDeviceKeyPanel from "../components/DevDeviceKeyPanel";
 import { knownMode, localFrom } from "../eventDraft";
 import type { EditScope } from "../eventDraft";
 import { attachSettledText } from "../eventAudience";
@@ -70,7 +74,9 @@ const ROSTER_UNAVAILABLE =
 // precisely when the capture contract may have moved too. An admin who reads "capture is fine" during
 // a version skew stops escalating an outage. Topology is safe to assert because it is true by
 // construction: this picker is a simulation aid, and real taps go to `POST /attendance/tap` with a
-// DeviceKey this SPA deliberately does not hold.
+// DeviceKey this SPA deliberately does not hold — in a *development* build it may hold one the
+// developer pasted, which changes who the simulator can tap as and changes nothing about this
+// sentence, since a published build has neither the key nor the code that could hold one.
 const ROSTER_UNRECOVERABLE =
   "Real card taps do not go through this screen — only the simulator is affected. Nothing here will " +
   "bring the picker back; report this to whoever maintains EAMS.";
@@ -829,6 +835,14 @@ export default function EventDetail() {
                       )}
                     </Stack>
                   )}
+
+                  {/* Outside the roster branch: the key is worth setting (and clearing) whether or
+                      not the picker has anything to offer, and a roster that failed to load says
+                      nothing about the credential. `import.meta.env.DEV` is a compile-time literal —
+                      in a production build this whole subtree, its import and `deviceKey.ts` are
+                      eliminated, so the artefact carries no capture credential and no way to hold
+                      one. Verified with a grep over `dist/assets/*.js`, not assumed. */}
+                  {import.meta.env.DEV && <DevDeviceKeyPanel />}
                 </CardContent>
               </Card>
             )}

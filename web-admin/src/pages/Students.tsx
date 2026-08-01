@@ -11,7 +11,9 @@ import {
   Typography,
 } from "@mui/material";
 import { DataGrid, type GridColDef } from "@mui/x-data-grid";
+import { Link as RouterLink } from "react-router-dom";
 import AddIcon from "@mui/icons-material/Add";
+import UploadFileIcon from "@mui/icons-material/UploadFile";
 import EditIcon from "@mui/icons-material/Edit";
 import CreditCardIcon from "@mui/icons-material/CreditCard";
 import DeleteOutlineIcon from "@mui/icons-material/DeleteOutline";
@@ -422,9 +424,21 @@ export default function Students() {
         <Typography variant="h5" fontWeight={700}>
           Students
         </Typography>
-        <Button variant="contained" startIcon={<AddIcon />} onClick={openCreate}>
-          New student
-        </Button>
+        <Stack direction="row" spacing={1}>
+          {/* The entry point to §10. A link rather than a button that navigates: it is a destination
+              with its own URL, so it must open in a new tab, be copied, and be announced as a link. */}
+          <Button
+            component={RouterLink}
+            to="/students/import"
+            variant="outlined"
+            startIcon={<UploadFileIcon />}
+          >
+            Import roster
+          </Button>
+          <Button variant="contained" startIcon={<AddIcon />} onClick={openCreate}>
+            New student
+          </Button>
+        </Stack>
       </Stack>
 
       {students.status === "loading" && <LoadingState label="Loading students…" />}
