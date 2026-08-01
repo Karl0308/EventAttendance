@@ -3,6 +3,11 @@
 **Status: the contract now lives in the generated OpenAPI document, not in this file (Phase 4e,
 2026-07-30).**
 
+> **New 2026-08-01 — `GET /events/{id}/manifest`, the offline capture cache.** A new endpoint, not a
+> change to an existing one: nothing you have already built is affected, and you can adopt it whenever
+> suits you. Its shape is in the generated document; the behaviour your client has to implement is in
+> [The event manifest](#the-event-manifest-your-offline-cache) below.
+
 > **⚠ If you have been building from an earlier revision of this file, read this section.**
 >
 > Everything that describes a *shape* — endpoints, payload fields, outcome tokens, status codes, the
@@ -260,6 +265,132 @@ tap and keep it stable across retries of *that* tap.
 
 ---
 
+## The event manifest: your offline cache
+
+**`GET /events/{id}/manifest`** — who is expected at an event and which card resolves to whom. Pull it
+before you start scanning. The shape is in the generated document; everything below is behaviour it
+cannot state.
+
+**It is the invitation, not the roster.** It carries nothing about who has already tapped — that is
+`GET /attendance/live/{eventId}`. A manifest carrying attendance state would read as authoritative on
+the device, and the one thing this object must never be is authoritative.
+
+### The rule that matters most
+
+**Offline validation against the manifest is display-only and never gating.** A tap whose card UID is
+absent from your cached manifest **must still be queued and flushed.** The server rules on it and it
+lands as a walk-in (`isExpected: false`).
+
+A client that refuses to capture an unknown card turns "my cache is stale" into "that attendance never
+happened", and afterwards the two are indistinguishable. Use the manifest to put a name on screen;
+never to decide whether a tap counts.
+
+> **Expect a cardless manifest today.** The roster the school has given us carries no RFID column, so
+> `cardUids` is empty for every student right now. A manifest that is entirely cardless should tell the
+> operator the offline cache is unusable — not silently offer an index that can never hit.
+
+### Revalidate with `If-None-Match`
+
+Store `version` from the body and send it back as `If-None-Match` on the next pull. Unchanged is a
+**304 with no body** — keep what you have.
+
+- **`version` is opaque. Never parse it, never order it, compare it for equality only.**
+- The comparison is weak (`W/`) and lenient about quoting, so sending the value back verbatim always
+  works.
+- A 304 carries the `ETag` too, so a client that lost its stored version can recover it rather than
+  re-downloading a body it already holds.
+- A 200 is a **wholesale replacement** of your cached copy. This is not a delta and there is no merge
+  that is correct.
+
+> **A 304 carries no `serverTime`.** Take your clock offset from the HTTP `Date` header instead.
+> Assuming the previous offset still holds because the manifest did not change is wrong — the manifest
+> not changing says nothing about the clock.
+
+### Check the clock before you enable scan mode
+
+Compare `serverTime` against the device clock. **More than five minutes apart, do not scan.** Every tap
+captured past that threshold arrives as `TappedAtOutOfRange` — poison, dropped by your own queue,
+attendance gone. It is the one clock rule that prevents loss rather than reporting it.
+
+Send `?clientClockAt=<your clock, ISO 8601>` on the pull. It is **measured, logged, and can never cause
+a refusal** — a value we cannot parse is simply not measured rather than a `400`. Its worth is that it
+is the same quantity as flush-time skew, measured hours earlier: a device that pulls at 08:00 and
+flushes at 15:00 gives us no drift signal for seven hours, during which every tap it captured is
+already unrecoverable.
+
+### What each refusal means
+
+**Two obligations hold across every response here, including the failures.**
+
+- **Never clear the cached manifest on a failure.** A client that wipes on error degrades from
+  slightly-stale names to no names, and does it exactly when the network is worst. The only sanctioned
+  discard is after the queue drains on a terminal event.
+- **No refusal here ever stops tap capture.** Capture and queueing continue whatever this endpoint
+  returns. Only the *flush* pauses, and only on the device-key codes below.
+
+| `code` | Your client should |
+|---|---|
+| `EventNotFound` | **Stop and tell the operator.** Also what you get for an event belonging to another school — we never confirm one exists elsewhere. |
+| `EventNotOpen` | **Stop and tell the operator** it has not been opened yet. The event is still `Draft`. |
+| `EventFrozen` | **Flush the queue first, then stop.** The event is `Closed` or `Cancelled`. Do not discard the cached manifest until that queue is empty. |
+| `ManifestTooLarge` | **Stop, tell the operator, and report it to us.** Deliberately loud rather than truncated — and unlike `BatchTooLarge` there is nothing for you to halve. |
+| `RateLimited` | **Retry, honouring `Retry-After`.** Not an error. Keep capturing meanwhile. |
+| `DeviceKeyMissing` / `DeviceKeyMalformed` / `DeviceKeyInvalid` | **Stop.** Re-check the stored credential, then re-enrol. Keep the manifest and the queue; pause the flush. |
+| `DeviceKeyRevoked` / `DeviceInactive` | **Stop and re-enrol.** Keep the manifest and keep capturing; pause the flush. |
+
+**`EventFrozen` and `ManifestTooLarge` are the only new tokens** — the rest are the ones the capture
+path already uses, with the same meanings. As everywhere else: read the HTTP status first and `code`
+second, and never branch on `title` or `detail`.
+
+A malformed `{id}` is the ordinary model-validation **400** and carries no `code`. That is a bug on
+your side — stop, and do not retry: the same URL is refused forever.
+
+### Never truncated, never paged
+
+Over **20,000 attendees** the endpoint refuses with `ManifestTooLarge` rather than returning a partial
+body. A short list is indistinguishable from a small event, and its consequence is legitimately-invited
+students showing up on the device as unknown cards — the exact failure this endpoint exists to prevent.
+The ceiling sits about two orders of magnitude above the largest event anyone has described; if you
+ever see it, something is wrong on our side.
+
+### Budget: 30 pulls per minute, per device
+
+Partitioned by device id and **separate from your tap budget**, so refreshing a cache can never
+throttle capture. A device pulls once before a session and then revalidates, so thirty a minute is far
+past any honest client and still leaves room for a retry after a network wobble. A refusal costs you
+nothing — you keep the manifest you have.
+
+> Note what a 304 does **not** save. It saves your radio, battery and parse; we compose the content
+> either way, because the version cannot be known without it. The budget is over pulls, not over bodies.
+
+### Five things about the body that will bite otherwise
+
+- **`attendees` is de-duplicated to exactly one row per student**, however many attached groups reach
+  them — key your offline index by `studentId`. Twelve of the fifty-two students in the real roster sit
+  in more than one section, so a doubled list would either lose a student's second group or double the
+  denominator you show on screen. Both look plausible.
+- **`groups` is not `sections`.** A college, a programme and a hand-made "SSC Officers" list are all
+  groups. An unrecognised `type` must render as a plain group and **must never be dropped** — otherwise
+  a future group kind silently removes students from your filter while they are fully expected on the
+  server. An empty `groupIds` is likewise common and not an anomaly: it is the student an organizer
+  named by hand. A group filter needs an "all" or "ungrouped" view or those students are invisible on
+  the device.
+- **`event.endAt` is not the capture window**, and treating it as one loses taps. What we actually
+  accept is `startAt`/`endAt` widened by a per-school margin that is deliberately not published —
+  publishing it invites you to enforce the window locally and refuse taps we would have accepted. Queue
+  everything; let the server rule.
+- **An unrecognised `attendanceMode` must be treated as `Single`.** A device that refuses to scan
+  because a future mode was added is worse than one that captures single taps.
+- **`studentNumber` is not a tap identity** and must never be matched against a scanned serial. It and
+  the card UID come from different source columns with no relationship between them; a device that
+  falls back to matching the number when a UID misses will attribute a tap to a stranger.
+
+**Event-scoped, not occurrence-scoped.** One manifest serves every occurrence of a recurring event, and
+`startAt`/`endAt` are the template's. Recurrence is unbuilt; an `occurrenceId` parameter is additive
+when it lands.
+
+---
+
 ## Live attendance: polling, not SignalR
 
 **Decision taken 2026-07-29.** The plan named a SignalR hub; we ship a cursor-delta polling endpoint
@@ -312,7 +443,11 @@ ship.
 5. **Batch size** — does 200 rows suit your flush strategy? The cap is enforced, not provisional.
 6. **Device enrolment** — is QR-scan-at-issue the UX you want? What should happen on reinstall?
 7. **Clock skew** — how do you correct or flag a drifted device clock?
-8. **Did anything you had already built depend on tap *failures* returning `TapResult` rather than a
+8. **Manifest refresh cadence** — when do you re-pull, and does 30 per minute per device leave you
+   enough headroom? We sized it for "once before a session, then revalidate". If your design refreshes
+   on a timer while scanning, or re-pulls on every reconnect, say so — the budget is a constant we can
+   raise, and finding out from a `RateLimited` in the field is the expensive way.
+9. **Did anything you had already built depend on tap *failures* returning `TapResult` rather than a
    problem body?** That changed in Phase 4c and you were the only consumer we could not check. If it
    broke something, tell us — `success: false` bodies are gone from the `4xx` responses.
 
@@ -327,10 +462,14 @@ ship.
 | Item | Status |
 |---|---|
 | Authentication for human users (JWT + RBAC) | Phase 6 — every non-capture endpoint is open until then |
-| Admin SPA | Phase 3b |
 | Reports | Phase 5 |
+| Card binding — bulk or in-the-field | Undecided; see question 3. No endpoint exists either way |
 
 Until Phase 6 lands, this API must stay on a local or trusted network.
+
+> **The admin SPA has since been built** and is wired to this API rather than to mock data — students,
+> events and their audiences, devices, and the SIS roster import. It is listed here only because an
+> earlier revision of this file said it was not: nothing about it changes anything on your side.
 
 ---
 

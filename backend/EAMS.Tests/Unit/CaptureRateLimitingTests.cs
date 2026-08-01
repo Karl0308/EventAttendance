@@ -93,9 +93,15 @@ public class CaptureRateLimitingTests
 
         foreach (var action in limited)
         {
-            var expected = LimitedButNotGated.Contains(action.Name)
-                ? CaptureRateLimiting.LivePolicyName
-                : CaptureRateLimiting.PolicyName;
+            // Three policies, three partitions. The manifest pull is gated like the capture endpoints
+            // and partitioned by device like them, but it must not share their bucket: a device
+            // refreshing its offline cache would otherwise spend the tap budget its kiosk needs.
+            var expected = action.Name switch
+            {
+                _ when LimitedButNotGated.Contains(action.Name) => CaptureRateLimiting.LivePolicyName,
+                "EventManifestController.Manifest" => CaptureRateLimiting.ManifestPolicyName,
+                _ => CaptureRateLimiting.PolicyName,
+            };
 
             Assert.All(action.Policies, policy => Assert.Equal(expected, policy));
         }
@@ -107,8 +113,17 @@ public class CaptureRateLimitingTests
     /// and the names are what make the buckets distinct.
     /// </summary>
     [Fact]
-    public void The_two_policies_are_distinct() =>
-        Assert.NotEqual(CaptureRateLimiting.PolicyName, CaptureRateLimiting.LivePolicyName);
+    public void The_policies_are_distinct()
+    {
+        string[] policies =
+        [
+            CaptureRateLimiting.PolicyName,
+            CaptureRateLimiting.LivePolicyName,
+            CaptureRateLimiting.ManifestPolicyName,
+        ];
+
+        Assert.Equal(policies.Length, policies.Distinct(StringComparer.Ordinal).Count());
+    }
 
     private static List<string> Named(IEnumerable<MethodInfo> methods) =>
         methods.Select(m => $"{m.DeclaringType?.Name}.{m.Name}")

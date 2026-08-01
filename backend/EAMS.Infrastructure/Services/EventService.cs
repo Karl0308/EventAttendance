@@ -746,6 +746,277 @@ internal sealed class EventService : IEventService
             .SqlQuery<long>($"SELECT CONVERT(bigint, MIN_ACTIVE_ROWVERSION()) - 1 AS Value")
             .FirstAsync(ct);
 
+    // --------------------------------------------------------------------- the device manifest (D-46)
+
+    /// <summary>
+    /// <inheritdoc cref="IEventService.GetManifestAsync" path="/summary/para[1]"/>
+    ///
+    /// <para>
+    /// <b>Two round trips, and the second one produces every published byte.</b> The first reads the
+    /// event's status alone so a refusal costs an index seek rather than a resolved audience — this
+    /// endpoint is polled by devices, and composing a five-thousand-attendee body for a closed event
+    /// only to throw it away is the kind of cost that is invisible until it is not. The second is the
+    /// manifest itself, and it is a <em>single</em> statement: <see cref="Microsoft.EntityFrameworkCore.EntityFrameworkQueryableExtensions.AsSingleQuery{TEntity}"/>
+    /// collapses what would otherwise be three unsynchronized round trips into one, so the window in
+    /// which the underlying rows can move is a statement rather than a conversation.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>That is a narrowing, not a guarantee, and the distinction is worth stating plainly.</b> Under
+    /// SQL Server's default <c>READ COMMITTED</c> with locking — and nothing in this application
+    /// configures otherwise — a single <c>SELECT</c> does not promise a point-in-time view across the
+    /// whole statement: a row already read can be updated by another transaction while the scan is still
+    /// running further along. What would make the snapshot absolute is row-versioning
+    /// (<c>READ_COMMITTED_SNAPSHOT</c>, or <c>ALLOW_SNAPSHOT_ISOLATION</c> with an explicit snapshot
+    /// transaction), and both are database-level settings rather than something a feature switches on —
+    /// see "why a composed query rather than a transaction" below. One statement is the largest reduction
+    /// of the window available to this code, and the residual race is orders of magnitude narrower than
+    /// the three-round-trip one it replaces.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>Why one snapshot is a correctness requirement and not tidiness.</b> The version is a hash over
+    /// the published content. Read the groups, then the attendees, then their cards as three statements
+    /// against a moving database, and the composed body can describe a state that never existed at any
+    /// instant — a student detached between statement one and statement two appears in neither list, or
+    /// in exactly one. The hash then names that impossible state, and two successive pulls can flip
+    /// between two such states forever: a device oscillating between versions, each response a
+    /// perfectly valid 200, nothing anywhere reporting an error.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>Why a composed query rather than a transaction.</b> A transaction would need
+    /// <c>Snapshot</c> isolation to give the same guarantee without holding read locks across an
+    /// endpoint devices poll — and that is a database-level setting
+    /// (<c>ALLOW_SNAPSHOT_ISOLATION</c>), not something a feature gets to switch on. It would also have
+    /// to be threaded through <c>CreateExecutionStrategy</c>, because the production registration
+    /// enables retry-on-failure and EF refuses user-initiated transactions under a retrying strategy.
+    /// The single statement needs neither and works on any server.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>The cost being accepted, stated rather than discovered later — and it is larger than the
+    /// obvious estimate.</b> Sibling collections under one root row are a cartesian product in
+    /// single-query mode, and this query nests two levels: <c>Attendees</c> carries two sibling
+    /// collections of its own (<c>GroupIds</c> and <c>CardUids</c>), which multiply against each other
+    /// before the whole attendee set multiplies against <c>Groups</c>. The row count is therefore
+    /// <c>|groups| × Σᵢ(|groupIdsᵢ| × |cardUidsᵢ|)</c>, not <c>|groups| × |attendees|</c> — at the
+    /// <c>EventManifestLimits.MaxAttendees</c> ceiling with five attached groups and students in two
+    /// sections holding two cards each, that is roughly 400,000 rows returned to produce a
+    /// 20,000-row answer. Today's real numbers are nowhere near it: attached groups are a handful by
+    /// construction, most students sit in one section, and every card set is currently empty (D-43), so
+    /// both inner factors are 1 or 0 and EF de-duplicates on materialization. This is the number to
+    /// reach for when it stops being cheap. When it does, the correct fix is caching the <em>hash</em>
+    /// against a real invalidation signal, never splitting the read: split reads are the failure above.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>Every ordering happens in memory, deliberately.</b> SQL Server sorts <c>uniqueidentifier</c>
+    /// by a byte order that is not <see cref="Guid.CompareTo(Guid)"/>'s, so an <c>ORDER BY</c> would
+    /// make the canonical form — and therefore the version — a property of the database engine. Sorting
+    /// here makes it a property of the contract, which is what lets two hosts agree.
+    /// </para>
+    /// </summary>
+    public async Task<EventManifestResponse> GetManifestAsync(
+        Guid id, CancellationToken ct = default)
+    {
+        // Status alone: the whole of what decides whether there is anything to compose. Null is "no
+        // such event" — including an event in another school, which the device's own school_id claim
+        // filters out before this query runs, so D-27's no-existence-disclosure rule holds without this
+        // method having to know it is enforcing it.
+        var currentStatus = await _db.Events.AsNoTracking()
+            .Where(e => e.Id == id && !e.IsDeleted)
+            .Select(e => e.Status)
+            .FirstOrDefaultAsync(ct);
+
+        if (RefusalFor(currentStatus) is { } refused) return refused;
+
+        var attachedGroupIds = _db.EventGroups
+            .Where(eg => eg.EventId == id && eg.StudentGroupId != null)
+            .Select(eg => eg.StudentGroupId!.Value);
+
+        // THE denominator query — the same IQueryable GetSummaryAsync, GetRosterAsync and
+        // GetAudienceAsync count, not a fourth opinion of it. That is what makes attendees.Count equal
+        // the `expected` those three publish for this event, including the ADR-003 D-15 exclusion of
+        // soft-deleted students, and ADR-003 D-19 records what a second implementation of it costs.
+        // Passed EventStatus.Open rather than the value read above because the refusal check has
+        // already established which one this is, and the live branch is the only one reachable here.
+        var expectedStudentIds = ExpectedStudentIds(id, EventStatus.Open);
+
+        var composed = await _db.Events.AsNoTracking()
+            .Where(e => e.Id == id && !e.IsDeleted)
+            .Select(e => new
+            {
+                e.Name,
+                e.StartAt,
+                e.EndAt,
+                e.GraceMinutes,
+                e.AttendanceMode,
+                e.Status,
+                Groups = _db.EventGroups
+                    // The SchoolId predicate is explicit for the reason GetAudienceAsync's is:
+                    // EventGroups carries no SchoolId and reaches tenancy through Event (ADR-003 D-12),
+                    // and the §11 global filter is inert whenever no tenant is pinned. A row that fails
+                    // this can only be hand-written, and publishing another school's group names to a
+                    // device is the worse of the two failures.
+                    .Where(eg => eg.EventId == e.Id
+                              && eg.StudentGroupId != null
+                              && eg.StudentGroup!.SchoolId == e.SchoolId)
+                    .Select(eg => new
+                    {
+                        StudentGroupId = eg.StudentGroupId!.Value,
+                        eg.StudentGroup!.Name,
+                        eg.StudentGroup.Type,
+                    })
+                    .ToList(),
+                Attendees = _db.Students
+                    .Where(s => expectedStudentIds.Contains(s.Id))
+                    .Select(s => new
+                    {
+                        s.Id,
+                        s.StudentNumber,
+                        s.FirstName,
+                        s.MiddleName,
+                        s.LastName,
+                        // Which of the attached groups reach this student. Read from the membership
+                        // side so the row set is one index seek per student on
+                        // UX_StudentGroupMembers_Group_Student's leading column, and — the part that
+                        // matters to the contract — collected onto this student's single row rather
+                        // than duplicating the student per group. Twelve of the fifty-two real students
+                        // sit in more than one section (ADR-001 D-2); a join-shaped manifest would list
+                        // a quarter of them twice.
+                        GroupIds = _db.StudentGroupMembers
+                            .Where(m => m.StudentId == s.Id
+                                     && attachedGroupIds.Contains(m.StudentGroupId))
+                            .Select(m => m.StudentGroupId)
+                            .ToList(),
+                        // Active only: a deactivated card must stop resolving on the device the moment
+                        // it stops resolving on the server, and it is a card *set* rather than a card
+                        // because a reissue leaves the old row active (ADR-001 D-3).
+                        CardUids = s.Cards.Where(c => c.IsActive).Select(c => c.CardUid).ToList(),
+                    })
+                    .ToList(),
+            })
+            .AsSingleQuery()
+            .FirstOrDefaultAsync(ct);
+
+        // Re-checked against the snapshot the body was actually composed from, not against the status
+        // read a moment ago. An event closed between the two reads must not be published as Open, and
+        // the honest answer is the refusal the second read supports.
+        if (RefusalFor(composed?.Status) is { } refusedOnSnapshot) return refusedOnSnapshot;
+
+        var groups = composed!.Groups
+            .Select(g => new EventManifestGroupDto(g.StudentGroupId, g.Name, g.Type))
+            .OrderBy(g => g.StudentGroupId)
+            .ToList();
+
+        var attendees = composed.Attendees
+            .Select(a => new EventManifestAttendeeDto(
+                a.Id,
+                a.StudentNumber,
+                string.Join(' ', new[] { a.FirstName, a.MiddleName, a.LastName }
+                    .Where(part => !string.IsNullOrWhiteSpace(part))),
+                [.. a.GroupIds.Distinct().Order()],
+                // Normalized again on the way out even though every persisted UID is already
+                // normalized. Normalize is idempotent, so this costs nothing and makes the published
+                // guarantee true of the response rather than true of the write path that produced it —
+                // which is the CLAUDE.md rule (normalize first, compare second) applied to the one
+                // place a client is told it may compare.
+                [.. a.CardUids.Select(CardUid.Normalize).Distinct(StringComparer.Ordinal)
+                    .Order(StringComparer.Ordinal)]))
+            .OrderBy(a => a.StudentId)
+            .ToList();
+
+        if (attendees.Count > EventManifestLimits.MaxAttendees)
+        {
+            // Checked over the list that was actually composed rather than over a cheaper COUNT run
+            // first. A separate count is a second definition of this population — the exact drift
+            // ADR-003 D-19 records — and it could disagree with the body by the width of one write.
+            return new EventManifestResponse(
+                ManifestOutcome.ManifestTooLarge,
+                $"This event expects {attendees.Count} attendees; a manifest carries at most " +
+                $"{EventManifestLimits.MaxAttendees}. Nothing was truncated and nothing partial was " +
+                "sent — a short manifest is indistinguishable from a small event, and its consequence " +
+                "is invited students showing on the device as unknown cards. Keep the manifest you " +
+                "have, tell the operator, and report this event to us.",
+                null,
+                attendees.Count);
+        }
+
+        var @event = new EventManifestEventDto(
+            id, composed.Name, composed.StartAt, composed.EndAt,
+            composed.GraceMinutes, composed.AttendanceMode, composed.Status);
+
+        // Assembled once, hashed, then given its own version back. The version is a function of the
+        // object that carries it, so something has to occupy the field in between; both it and
+        // serverTime are dropped structurally before a byte is hashed — see EventManifestVersion. A
+        // serverTime inside the hash would make every pull a new version and the conditional GET would
+        // never once return 304.
+        //
+        // Hashing the assembled DTO rather than its parts is what keeps a field added to
+        // EventManifestDto inside the version automatically: there is one construction site, and it is
+        // this one, so there is nowhere for a new field to be published and not hashed.
+        var content = new EventManifestDto(
+            @event, groups, attendees,
+            ServerTime: DateTime.UtcNow,
+            Version: EventManifestVersion.PendingVersion);
+
+        var manifest = content with { Version = EventManifestVersion.Compute(content) };
+
+        return new EventManifestResponse(
+            ManifestOutcome.Ok, "Manifest.", manifest, attendees.Count);
+    }
+
+    /// <summary>
+    /// The status gate, as one total function: <c>null</c> means "serve it".
+    ///
+    /// <para>
+    /// <b>Only <c>Open</c> is served, and <c>Draft</c> is refused as firmly as the terminal statuses.</b>
+    /// Serving a draft would hand a device a manifest for an event whose taps
+    /// <c>POST /attendance/tap</c> refuses anyway; the guarantee that a device only holds a manifest it
+    /// can capture against belongs on our side rather than in an external client.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>A status outside §4.5's set falls to <see cref="ManifestOutcome.EventNotOpen"/>, not to
+    /// <see cref="ManifestOutcome.EventFrozen"/>, and the normalization is what makes that true.</b>
+    /// <c>EventStatusTransition.IsTerminal</c> answers "no status is reachable from here", which is
+    /// <c>true</c> for an unrecognised value as well as for the two real terminal ones — so asking it
+    /// directly would tell a device that a corrupt row means "the event is over, flush and stop". The
+    /// canonical-value guard is what keeps the terminal arm about <c>Closed</c> and <c>Cancelled</c>.
+    /// </para>
+    /// </summary>
+    private static EventManifestResponse? RefusalFor(string? status)
+    {
+        if (status is null)
+        {
+            return new EventManifestResponse(
+                ManifestOutcome.EventNotFound, "Event not found.", null, 0);
+        }
+
+        if (string.Equals(status, EventStatus.Open, StringComparison.Ordinal)) return null;
+
+        if (EventStatus.TryNormalize(status, out var canonical)
+            && EventStatusTransition.IsTerminal(canonical))
+        {
+            return new EventManifestResponse(
+                ManifestOutcome.EventFrozen,
+                $"Event is {canonical}, and no further attendance can be captured against it. Flush " +
+                "any taps still queued before you stop — they are still recorded — and keep the " +
+                "cached manifest until that queue is empty. Then tell the operator the event is over.",
+                null,
+                0);
+        }
+
+        return new EventManifestResponse(
+            ManifestOutcome.EventNotOpen,
+            $"Event is {status}, not {EventStatus.Open}. A manifest is served only for an event that " +
+            "has been opened for capture; a tap against any other status is refused as well. Ask the " +
+            "organizer to open the event, then pull again.",
+            null,
+            0);
+    }
+
     // ------------------------------------------------------------------------------- create/edit
 
     public async Task<EventWriteResponse> CreateAsync(

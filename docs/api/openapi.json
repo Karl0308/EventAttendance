@@ -1511,6 +1511,255 @@
         ]
       }
     },
+    "/api/v1/events/{id}/manifest": {
+      "get": {
+        "tags": [
+          "EventManifest"
+        ],
+        "summary": "`GET /events/{id}/manifest` — the offline capture cache: who is expected at this event and\r\n             which card resolves to whom.",
+        "description": "\r\n\r\n  <b>This is the invitation, not the roster.</b> It carries nothing about who has already tapped —\r\n             that is `GET /attendance/live/{eventId}` — because a manifest carrying attendance state\r\n             would read as authoritative on the device, and the one thing this object must never be is\r\n             authoritative.\r\n             \r\n\r\n\r\n  <b>Offline validation against it is display-only and never gating.</b> A tap whose card UID is\r\n             absent from the manifest <b>must still be queued and flushed</b>. The server rules on it and it\r\n             lands as a walk-in (`isExpected: false`). A client that refuses to capture an unknown card\r\n             turns \"my cache is stale\" into \"that attendance never happened\", and afterwards the two are\r\n             indistinguishable.\r\n             \r\n\r\n\r\n  <b>Send the previous `version` back as `If-None-Match` on every pull.</b> Unchanged is\r\n             a `304` with no body — keep what you have. The comparison is weak (`W/`) and lenient\r\n             about quoting, so sending the header back verbatim always works. <b>Never parse the version and\r\n             never order it</b>; compare it for equality only.\r\n             \r\n\r\n\r\n  <b>Check `serverTime` against the device clock before enabling scan mode</b>: more than five\r\n             minutes apart, do not scan. Every tap captured past that threshold arrives as\r\n             `TappedAtOutOfRange` — poison, dropped by your own queue, attendance gone. A `304`\r\n             carries no `serverTime`; take the offset from the HTTP `Date` header instead, because\r\n             the manifest not changing says nothing about the clock.\r\n             \r\n\r\n\r\n  <b>Two obligations that hold across every response, including the failures.</b>\r\n  <b>Never clear\r\n             the cached manifest on a failure</b> — a client that wipes on error degrades from slightly-stale\r\n             names to no names, and does it exactly when the network is worst; the only sanctioned discard is\r\n             after the queue drains on a terminal event. And <b>no refusal here ever stops tap capture</b>:\r\n             capture and queueing continue whatever this endpoint returns. Only the <em>flush</em> pauses, and\r\n             only on `401` or `403`.\r\n             \r\n\r\n\r\n  <b>Read the HTTP status first and `code` second; never branch on `title` or\r\n             `detail`.</b> Only `EventFrozen` and `ManifestTooLarge` are new tokens — the rest\r\n             are the ones the capture path already uses, with the same meanings.\r\n             \r\n\r\n\r\n  <b>Event-scoped, not occurrence-scoped.</b> §4.8 `EventGroups` carries no\r\n             `OccurrenceId`, so one manifest serves every occurrence of a recurring event and\r\n             `startAt`/`endAt` are the template's. Recurrence is unbuilt; an `occurrenceId`\r\n             parameter is additive when it lands.\r\n             ",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The event. Must be `Open` — see the 409s.",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "clientClockAt",
+            "in": "query",
+            "description": "Optional. Your own clock, ISO 8601, when you made this request.\r\n            \r\n\r\n<b>Measured, logged, and never validated — it can never cause a refusal</b>, and a value we\r\ncannot parse is simply not measured rather than a `400`. It mirrors\r\n`TapBatchRequest.clientClockAt` exactly, and its value is that it is the same quantity as\r\nflush-time skew measured hours earlier: a device that pulls at 08:00 and flushes at 15:00 gives\r\nus no drift signal for seven hours, during which every tap it captured is already unrecoverable.\r\n",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "If-None-Match",
+            "in": "header",
+            "description": "The `version` (or the `ETag`) from your cached copy. **Send it on every pull.**\n\nUnchanged is a `304` with no body — keep what you have. Omit it and you get the whole\nmanifest back, which is a correct response and a wasted download.\n\nThe comparison is weak (`W/`) and lenient about spelling: `W/\"m1.abc\"`, `\"m1.abc\"`,\na bare `m1.abc`, and a comma-separated list matching any member are all accepted, as is\n`*`. Echoing the `ETag` header back verbatim always works.\n\n**Never parse the value and never order it** — it is opaque, and equality is the only\ncomparison defined on it.",
+            "schema": {
+              "type": "string"
+            },
+            "example": "W/\"m1.kQ9x2Vb7Lm4nP0sT6yZ1cW\""
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The manifest. <b>Replace your cached copy wholesale</b> — this is not a delta and there is no\r\nmerge that is correct. Store `version`, then check `serverTime` against your clock\r\nbefore you enable scanning.",
+            "headers": {
+              "ETag": {
+                "description": "The weak validator for this manifest — the body's `version` with `W/` and the quotes\naround it. Store it and send it back as `If-None-Match` on the next pull.\n\nIt is a hash of the published content, so it moves when and only when the manifest\nchanges. It is **not** ordered and carries no time: compare it for equality only.",
+                "schema": {
+                  "type": "string"
+                },
+                "example": "W/\"m1.kQ9x2Vb7Lm4nP0sT6yZ1cW\""
+              },
+              "Cache-Control": {
+                "description": "`private, no-cache` — **may store, must revalidate.** Caching the body on the device is\nthe entire feature; what is forbidden is serving it again without asking us first.\n\n`private` keeps a shared intermediary out of it: the manifest is a function of the\ncredential, not of the URL.",
+                "schema": {
+                  "type": "string"
+                },
+                "example": "private, no-cache"
+              }
+            },
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/EventManifestDto"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EventManifestDto"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EventManifestDto"
+                }
+              }
+            }
+          },
+          "304": {
+            "description": "Unchanged since the `version` you sent. Keep the cached copy; take your clock offset from\r\nthe `Date` header, since there is no body.",
+            "headers": {
+              "ETag": {
+                "description": "The weak validator for this manifest — the body's `version` with `W/` and the quotes\naround it. Store it and send it back as `If-None-Match` on the next pull.\n\nIt is a hash of the published content, so it moves when and only when the manifest\nchanges. It is **not** ordered and carries no time: compare it for equality only.",
+                "schema": {
+                  "type": "string"
+                },
+                "example": "W/\"m1.kQ9x2Vb7Lm4nP0sT6yZ1cW\""
+              },
+              "Cache-Control": {
+                "description": "`private, no-cache` — **may store, must revalidate.** Caching the body on the device is\nthe entire feature; what is forbidden is serving it again without asking us first.\n\n`private` keeps a shared intermediary out of it: the manifest is a function of the\ncredential, not of the URL.",
+                "schema": {
+                  "type": "string"
+                },
+                "example": "private, no-cache"
+              }
+            }
+          },
+          "400": {
+            "description": "`{id}` is not a GUID. A bug on your side — stop, and do not retry: the same URL is refused\r\n             forever. This is the ordinary model-validation body and carries no `code`.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "`DeviceKeyMissing` / `DeviceKeyMalformed` / `DeviceKeyInvalid`. Stop and do not\r\n             retry: re-check the stored credential, then re-enrol. Keep the cached manifest and the queue, and\r\n             pause the flush until it is fixed.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`DeviceKeyRevoked` / `DeviceInactive`. Stop and re-enrol. Taps fail identically, so\r\n             pause the flush too — but keep the cached manifest and keep capturing.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`RateLimited`. Not an error — retry, honouring `Retry-After`. Keep capturing meanwhile.",
+            "headers": {
+              "Retry-After": {
+                "description": "How long to wait before pulling again — seconds, per RFC 9110 (an HTTP-date is also a\nlegal form of this header and is not currently sent).\n\n**Honour it.** A `429` is not an error and nothing about it stops tap capture: keep\ncapturing and queueing, and retry the pull when the window has passed.",
+                "schema": {
+                  "type": "string"
+                },
+                "example": "60"
+              }
+            },
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`EventNotFound` — no such event, <b>or</b> one belonging to another school, which is\r\n             deliberately indistinguishable (D-27: no cross-tenant existence disclosure). Stop and tell the\r\n             operator.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`EventNotOpen` — the event is still `Draft`. Stop and tell the operator it has not been\r\n             opened yet.\r\n            \r\n             \r\n\r\n             Or `EventFrozen` — the event is `Closed` or `Cancelled`. <b>Flush the queue\r\n             first, then stop</b> and tell the operator the event is over. Do not discard the cached manifest\r\n             until that queue is empty.\r\n             ",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "`ManifestTooLarge` — the event expects more attendees than a manifest carries. Stop, tell\r\n             the operator, and report it to us. Deliberately loud rather than truncated, and unlike\r\n             `BatchTooLarge` there is nothing for you to halve.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "DeviceKey": []
+          }
+        ]
+      }
+    },
     "/api/v1/events": {
       "get": {
         "tags": [
@@ -4304,6 +4553,133 @@
         "additionalProperties": false,
         "description": "One page of an admin list read, plus what the caller needs to ask for the next one.\r\n            \r\n\r\n<b>Every §6.2/§6.3 admin list returns this; `GET /attendance/live/{eventId}` deliberately does\r\nnot.</b> That endpoint pages by cursor (`since`/`cursor`/`hasMore`) because it is a\r\npolling delta rather than a list — a client asks \"what changed after this point\", not \"give me rows\r\n40 to 60\" — and its shape is frozen published contract under D-29/D-30/D-42. Offset paging over a\r\nlive feed also drops rows: an insert below the cursor shifts every subsequent row up by one and the\r\nnext page skips it. The two mechanisms coexisting is correct, not an inconsistency to tidy.\r\n"
       },
+      "EventManifestAttendeeDto": {
+        "type": "object",
+        "properties": {
+          "studentId": {
+            "type": "string",
+            "description": "The identity to key the offline index by. Stable.",
+            "format": "uuid"
+          },
+          "studentNumber": {
+            "type": "string",
+            "description": "The institutional student number.\r\n            \r\n\r\n<b>It is not a tap identity and must never be matched against a scanned serial</b> (D-43). The card\r\nUID and the student number come from different source columns and have no relationship; a device\r\nthat falls back to matching the number when a UID misses will attribute a tap to a stranger.\r\n"
+          },
+          "fullName": {
+            "type": "string",
+            "description": "Prose. Display only."
+          },
+          "groupIds": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "description": "Which of EAMS.Application.Dtos.EventManifestDto.Groups reach this student, ordinal-ordered.\r\n            \r\n\r\n<b>Empty is common and is not an anomaly</b> — it is the individually-attached student, the handful\r\nan organizer named by hand on top of the sections. A client that filters by group must keep an\r\n\"all\" or \"ungrouped\" view, or those students are invisible on the device while being fully expected\r\non the server.\r\n"
+          },
+          "cardUids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The student's <em>active</em> card serials, normalized (`CardUid.Normalize` — uppercased,\r\nnon-alphanumerics stripped) and ordinal-ordered. Normalize a scanned serial the same way before\r\ncomparing: normalize first, compare second.\r\n            \r\n\r\n<b>Strings, never numbers, at every layer.</b> Real serials from the CICSS export are ten decimal\r\ndigits with significant leading zeros: `0012503301` through a numeric type is\r\n`12503301` — a different card that will never match anything — and it breaks identically on\r\nboth sides of the wire, so nothing anywhere reports an error.\r\n\r\n<b>Plural, because a reissue leaves the old row active</b> (ADR-001 D-3). A student can legitimately\r\npresent either card.\r\n\r\n<b>Empty is today's ordinary case, not an error.</b> The supplied roster carries no RFID column\r\n(D-43), so every student currently imports with no card at all. A client whose manifest is entirely\r\ncardless must tell the operator the offline cache is unusable rather than silently offering an\r\nindex that can never hit.\r\n"
+          }
+        },
+        "additionalProperties": false,
+        "description": "One expected student. Exactly one row per student, however many attached groups reach them."
+      },
+      "EventManifestDto": {
+        "type": "object",
+        "properties": {
+          "event": {
+            "$ref": "#/components/schemas/EventManifestEventDto"
+          },
+          "groups": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/EventManifestGroupDto"
+            },
+            "description": "Every §4.7 group attached to this event's audience, ordered by `studentGroupId`.\r\n            \r\n\r\n<b>Called `groups` rather than `sections`, matching EAMS.Application.Dtos.EventAudienceDto.</b>`StudentGroups.Type` is wider than \"Section\" — a college, a programme and a hand-made \"SSC\r\nOfficers\" list are all groups — so a field named `sections` would be a lie on three of the\r\nvalues it can carry, and a client that filtered on the name would drop them.\r\n"
+          },
+          "attendees": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/EventManifestAttendeeDto"
+            },
+            "description": "Who is expected, <b>de-duplicated to exactly one row per student</b>, ordered by `studentId`.\r\n            \r\n\r\n<b>The de-duplication is the contract, not an implementation detail.</b> Twelve of the fifty-two\r\nstudents in the real roster sit in more than one section (ADR-001 D-1/D-2), so an event that\r\ninvites two sections of one programme reaches a quarter of them twice. A client keying its offline\r\nindex by `studentId` against a doubled list either overwrites a row's `groupIds` — losing\r\nthe second section — or double-counts the denominator it shows on screen. Both look plausible.\r\n\r\n<b>`attendees.length` equals the `expected` that `GET /events/{id}/summary`,\r\n`GET /events/{id}/roster` and `GET /events/{id}/attendees` report for the same event</b>\r\n— the same population from the same query, with the soft-deleted excluded the same way (ADR-003\r\nD-15). It is not \"approximately the same\": a device showing a different denominator from the\r\ndashboard beside it is what an operator files as \"the system is wrong\", and neither number looks\r\nwrong on its own. ADR-003 D-19 records what a second implementation of that count costs.\r\n"
+          },
+          "serverTime": {
+            "type": "string",
+            "description": "Our clock when this body was composed. <b>Check it against the device clock before enabling scan\r\nmode</b>: if the two differ by more than five minutes, do not scan. Every tap captured past that\r\nthreshold arrives as `TappedAtOutOfRange` — poison, dropped by the client's own queue,\r\nattendance gone. It is the one clock rule that prevents loss rather than reporting it.\r\n            \r\n\r\n<b>A 304 carries no body and therefore no `serverTime`; take the offset from the HTTP\r\n`Date` header instead.</b> Assuming the previous offset is still valid because the manifest\r\ndid not change is wrong — the manifest not changing says nothing about the clock.\r\n\r\n<b>There is deliberately no separate `generatedAt`.</b> The two would be identical today, and\r\na client that treated them as interchangeable would compute its clock offset from a cache-fill\r\ntime the day a server-side cache lands.\r\n",
+            "format": "date-time"
+          },
+          "version": {
+            "type": "string",
+            "description": "The `ETag` with the `W/` prefix and the quotes stripped. <b>Opaque: never parse it,\r\nnever order it, compare it for equality only.</b>\r\n\r\nIt is duplicated into the body because an offline client persists a parsed object and very often\r\nnot the headers that came with it — and the value it has to send back in `If-None-Match` on\r\nthe next pull is exactly this one.\r\n"
+          }
+        },
+        "additionalProperties": false,
+        "description": "The body of `GET /api/v1/events/{id}/manifest` (D-46) — the offline capture cache a device\r\npulls before it starts scanning, published as the `EventManifest*` schemas in the generated\r\nOpenAPI document and frozen with the external mobile developer.\r\n            \r\n\r\n<b>This is the invitation, not the roster.</b> It says who is expected and which card resolves to\r\nwhom; it says nothing about who has already tapped. That is\r\n`GET /attendance/live/{eventId}`. A manifest carrying attendance state would read as\r\nauthoritative on the device, and the one thing this object must never be is authoritative — the\r\nserver rules on every tap, always.\r\n\r\n<b>Offline validation against it is display-only and never gating.</b> A tap whose UID is absent\r\nfrom this manifest MUST still be queued and flushed. The server decides; it lands as a walk-in\r\n(`isExpected: false`, already modelled by EAMS.Application.Dtos.EventRosterDto, D-20). A client that\r\nrefuses to capture an unknown card converts \"the cache is stale\" into \"the attendance never\r\nexisted\", and the two are indistinguishable afterwards.\r\n\r\n<b>Never truncated and never paged.</b> Over\r\n`EventManifestLimits.MaxAttendees` this endpoint is a loud `413`, never a partial body.\r\n"
+      },
+      "EventManifestEventDto": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "The event id every queued tap must carry.",
+            "format": "uuid"
+          },
+          "name": {
+            "type": "string",
+            "description": "Prose. Display only — never parsed, and reworded freely."
+          },
+          "startAt": {
+            "type": "string",
+            "description": "UTC, and the same field EAMS.Application.Dtos.EventDto publishes — `startAt`, not `startsAt`.",
+            "format": "date-time"
+          },
+          "endAt": {
+            "type": "string",
+            "description": "UTC.\r\n            \r\n\r\n<b>This is not the capture window, and treating it as one loses taps.</b> The range D-36 actually\r\naccepts is EAMS.Application.Dtos.EventManifestEventDto.StartAt/EAMS.Application.Dtos.EventManifestEventDto.EndAt widened by a per-school margin, and that\r\nmargin is deliberately not published: publishing it invites the client to enforce the window\r\nlocally and refuse taps the server would have accepted. Queue everything; let the server rule.\r\n",
+            "format": "date-time"
+          },
+          "graceMinutes": {
+            "type": "integer",
+            "description": "§4.5's Present-versus-Late boundary, published so a device can label its own screen. The server\r\ndecides the stored status regardless.",
+            "format": "int32"
+          },
+          "attendanceMode": {
+            "type": "string",
+            "description": "`Single` or `TimeInOut`. <b>An unrecognised value must be treated as `Single`</b>\r\n            (§4.5's default) — a device that refuses to scan because a future mode was added is worse than one\r\n            that captures single taps."
+          },
+          "status": {
+            "type": "string",
+            "description": "Always `Open` on a 200: this endpoint serves no other status (see the 409s). Published anyway\r\nso a persisted manifest carries what it was captured against."
+          }
+        },
+        "additionalProperties": false,
+        "description": "The event this manifest is for, in the fields a capture client actually branches on."
+      },
+      "EventManifestGroupDto": {
+        "type": "object",
+        "properties": {
+          "studentGroupId": {
+            "type": "string",
+            "description": "The id EAMS.Application.Dtos.EventManifestAttendeeDto.GroupIds refers to. Stable across pulls.",
+            "format": "uuid"
+          },
+          "name": {
+            "type": "string",
+            "description": "Prose. Display only. A derived group's name carries its term — `\"BSFS 2-A (2025-2026-1)\"` —\r\nwhich is presentation, not structure; do not parse it back out."
+          },
+          "type": {
+            "type": "string",
+            "description": "§4.7's set plus `College`/`Program` (ADR-001 D-1). <b>An unrecognised value must render\r\nas a plain group and must never be dropped</b> — otherwise a future group kind silently removes\r\nstudents from the device's filter, and they are fully expected on the server the whole time."
+          }
+        },
+        "additionalProperties": false,
+        "description": "One §4.7 group attached to the event's audience."
+      },
       "EventRosterDto": {
         "type": "object",
         "properties": {
@@ -5334,6 +5710,10 @@
     {
       "name": "Devices",
       "description": "Technical Plan §6.6 — devices (Phase 4a design, D-25).\r\n            \r\n\r\n<b>Only one action on this controller is gated: `heartbeat`.</b> It is the one a device calls\r\nabout itself. Everything else here is an administrator's surface and stays open under ADR-001 D-6\r\nwith a declared-but-inert `devices.*` permission, exactly like students and events — Phase 4b\r\nnarrowed the open surface to four endpoints, it did not roll authorization out.\r\n"
+    },
+    {
+      "name": "EventManifest",
+      "description": "The device-facing half of the events resource: `GET /events/{id}/manifest`, the offline capture\r\ncache a kiosk or handset pulls before it starts scanning (D-46).\r\n            \r\n\r\n<b>Its own controller rather than one more action on `EventsController`, and that is a\r\ndeliberate split.</b> Every action there is `events.read` or `events.write` and is open\r\nunder ADR-001 D-6; this one authenticates a <em>device</em> and carries\r\n`attendance.capture`. One action with a different principal type in the middle of an\r\nadministrative controller is a review hazard in both directions — a reader skimming\r\n`EventsController` would read the whole file as open, and an action added later to a\r\ncapture-only controller inherits capture auth rather than landing open by accident. The route is\r\nidentical either way; only the file is different.\r\n\r\n<b>`events.read` is rejected outright as the permission for this.</b> A device holding it could\r\nread every event and every roster in the school, which is exactly the blast radius a stolen kiosk\r\nkey must not have. §11 scopes device keys to `attendance.capture` and nothing else, so this\r\nendpoint is already pre-authorized by the credential a capture device holds — and minting an\r\n`events.manifest` code would repeat D-45, forcing Phase 6 to grant two codes for one capability.\r\n"
     },
     {
       "name": "SisImport",

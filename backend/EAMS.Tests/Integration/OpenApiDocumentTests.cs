@@ -44,9 +44,11 @@ public class OpenApiDocumentTests : IntegrationTest
     private const string ByCard = "/api/v1/students/by-card/{cardUid}";
     private const string Heartbeat = "/api/v1/devices/{id}/heartbeat";
     private const string Summary = "/api/v1/events/{id}/summary";
+    private const string Manifest = "/api/v1/events/{id}/manifest";
 
     /// <summary>
-    /// The four endpoints D-28 gates behind a device key, and the whole of that list. Transcribed
+    /// The endpoints gated behind a device key — D-28's four plus D-46's manifest pull — and the whole
+    /// of that list. Transcribed
     /// rather than derived from the attributes, for the reason the outcome-token tests record: deriving
     /// it would assert that the pipeline equals itself.
     /// </summary>
@@ -56,6 +58,7 @@ public class OpenApiDocumentTests : IntegrationTest
         (TapBatch, "post"),
         (ByCard, "get"),
         (Heartbeat, "post"),
+        (Manifest, "get"),
     ];
 
     /// <summary>Fetches and parses the served document. Fails loudly if it is not 200 JSON.</summary>

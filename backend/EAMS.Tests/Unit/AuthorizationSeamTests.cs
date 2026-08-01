@@ -134,6 +134,7 @@ public class AuthorizationSeamTests
             "AttendanceController.Tap",
             "AttendanceController.TapBatch",
             "DevicesController.Heartbeat",
+            "EventManifestController.Manifest",
             "StudentsController.ByCard",
         ];
 

@@ -71,6 +71,11 @@ public static class EamsOpenApi
             // rather than to every operation via AddSecurityRequirement — see the filter.
             options.OperationFilter<DeviceKeySecurityOperationFilter>();
 
+            // The If-None-Match / ETag exchange, as parameters and response headers rather than as a
+            // paragraph. A code generator reads the first two and not the third, and the endpoint whose
+            // entire value is the 304 was published with no machine-readable trace of it.
+            options.OperationFilter<ConditionalGetOperationFilter>();
+
             // §6's declared error shape, with the `code`/`serverTime` extensions that are folklore
             // until something writes them into the schema.
             options.SchemaFilter<ProblemDetailsSchemaFilter>();

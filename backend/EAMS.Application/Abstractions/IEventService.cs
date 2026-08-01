@@ -106,6 +106,78 @@ public enum LiveOutcome
 /// <summary><paramref name="Live"/> is null unless <paramref name="Outcome"/> is <see cref="LiveOutcome.Ok"/>.</summary>
 public record LiveAttendanceResponse(LiveOutcome Outcome, string Message, AttendanceLiveDto? Live);
 
+/// <summary>
+/// What <c>GET /events/{id}/manifest</c> decided (D-46). Its own enum rather than a member of
+/// <see cref="TapOutcome"/> for the reason <see cref="LiveOutcome"/> records: that table is frozen
+/// published contract for the capture path, and a manifest pull is not a tap.
+///
+/// <para>
+/// Only <see cref="EventFrozen"/> and <see cref="ManifestTooLarge"/> are new tokens on the wire;
+/// <see cref="EventNotFound"/> and <see cref="EventNotOpen"/> are the ones a capture client already
+/// branches on, deliberately reused so the device has one meaning per token across both endpoints.
+/// </para>
+/// </summary>
+public enum ManifestOutcome
+{
+    /// <summary>A manifest was composed. 200 — or 304, which the controller decides from the ETag.</summary>
+    Ok,
+
+    /// <summary>
+    /// No such event, it is soft-deleted, <b>or it belongs to another school</b>. 404, and the three
+    /// are deliberately indistinguishable — D-27, no cross-tenant existence disclosure. The device's
+    /// own <c>school_id</c> claim scopes the read, so the last case never reaches a branch here at all.
+    /// </summary>
+    EventNotFound,
+
+    /// <summary>
+    /// The event is <c>Draft</c> — it has not been opened yet. 409.
+    ///
+    /// <para>
+    /// <b>Refused rather than served, and that is a decision.</b> Serving a draft manifest would let a
+    /// device scan against an event whose audience is still being assembled and whose taps
+    /// <c>POST /attendance/tap</c> would refuse anyway. The guarantee that a device only ever holds a
+    /// manifest it can capture against belongs on our side, not in an external client.
+    /// </para>
+    /// </summary>
+    EventNotOpen,
+
+    /// <summary>
+    /// The event is <c>Closed</c> or <c>Cancelled</c>. 409.
+    ///
+    /// <para>
+    /// Split from <see cref="EventNotOpen"/> because the client instruction is the opposite way round:
+    /// on this one it must <b>flush its queue first</b> and only then stop and tell the operator the
+    /// event is over — the cached manifest is what its queued taps still need, so discarding it before
+    /// the queue drains loses the names. The predicate is <c>EventStatusTransition.IsTerminal</c>, the
+    /// same one <see cref="EventRosterDto.IsFrozen"/> publishes: both terminal statuses, not
+    /// <c>Closed</c> alone.
+    /// </para>
+    /// </summary>
+    EventFrozen,
+
+    /// <summary>
+    /// The expected population exceeds <c>EventManifestLimits.MaxAttendees</c>. 413.
+    ///
+    /// <para>
+    /// Deliberately loud rather than truncated, and unlike <see cref="TapOutcome.BatchTooLarge"/> there
+    /// is nothing for the client to halve — see <c>EventManifestLimits.MaxAttendees</c>.
+    /// </para>
+    /// </summary>
+    ManifestTooLarge,
+}
+
+/// <summary>
+/// <paramref name="Manifest"/> is null unless <paramref name="Outcome"/> is
+/// <see cref="ManifestOutcome.Ok"/>.
+/// </summary>
+/// <param name="Attendees">
+/// How many attendees the manifest carries, or would have carried. Populated on
+/// <see cref="ManifestOutcome.ManifestTooLarge"/> as well as on success, so the refusal can say how far
+/// over the ceiling the event is — "too large" with no number gives an operator nothing to report.
+/// </param>
+public record EventManifestResponse(
+    ManifestOutcome Outcome, string Message, EventManifestDto? Manifest, int Attendees);
+
 /// <summary>Technical Plan §6.3 and the §6.7/§12 event summary and roster.</summary>
 public interface IEventService
 {
@@ -247,4 +319,39 @@ public interface IEventService
     /// </param>
     Task<LiveAttendanceResponse> GetLiveAttendanceAsync(
         Guid id, string? since, CancellationToken ct = default);
+
+    /// <summary>
+    /// <c>GET /events/{id}/manifest</c> — the offline capture cache a device pulls before it scans
+    /// (D-46). Only an <c>Open</c> event is served; every other status is a refusal.
+    ///
+    /// <para>
+    /// <b>It lives on the event service, and on this one in particular, because of
+    /// <see cref="EventManifestDto.Attendees"/>.</b> That list must be exactly the population
+    /// <see cref="GetSummaryAsync"/>, <see cref="GetRosterAsync"/> and <see cref="GetAudienceAsync"/>
+    /// count as <c>expected</c> — same query, same exclusion of the soft-deleted (ADR-003 D-15) — and
+    /// ADR-003 D-19 records what a second implementation of that population costs: every copy stays
+    /// plausible while they drift, and the symptom is a device showing a different denominator from the
+    /// dashboard beside it. A separate manifest service would have had to re-derive it.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>The whole published body is composed inside one read snapshot</b> — see the implementation.
+    /// Across several unsynchronized reads the version could name a state that never existed, and two
+    /// successive pulls could flip between them: a device oscillating between two versions, each a
+    /// perfectly valid 200.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>The optional <c>?clientClockAt=</c> is deliberately not a parameter here.</b> It is measured
+    /// against our clock <em>on arrival</em>, logged, and never validated — exactly as
+    /// <see cref="TapBatchRequest.ClientClockAt"/> is, and never a refusal. "On arrival" is a property
+    /// of the request rather than of the manifest, so the measurement belongs at the HTTP boundary; and
+    /// threading a value through this method that no part of the answer depends on would suggest it
+    /// could one day change the answer, which is the one thing the frozen contract says it must never
+    /// do.
+    /// </para>
+    /// </summary>
+    /// <param name="id">The event.</param>
+    /// <param name="ct">Cancellation token.</param>
+    Task<EventManifestResponse> GetManifestAsync(Guid id, CancellationToken ct = default);
 }

@@ -100,6 +100,46 @@ public static class CaptureRateLimiting
     public const int LivePermitsPerWindow = 240;
 
     /// <summary>
+    /// The policy on <c>GET /events/{id}/manifest</c> (D-46).
+    ///
+    /// <para>
+    /// <b>A third policy rather than a reuse of either existing one, and both alternatives are wrong
+    /// in a way worth naming.</b> Reusing <see cref="PolicyName"/> would let a manifest pull spend a
+    /// kiosk's <em>tap</em> budget — a device that refreshes its cache aggressively would throttle the
+    /// capture path, which is the one thing on this API that must not be throttled by anything a client
+    /// does for its own convenience. Reusing <see cref="LivePolicyName"/> would partition by IP, and a
+    /// campus NAT puts every handset in one bucket: the failure mode is a gym full of devices where the
+    /// first two can pull and the rest cannot.
+    /// </para>
+    ///
+    /// <para>
+    /// Partitioned by <c>device_id</c>, like the capture policy, and for the same reason — which is
+    /// available here precisely because this endpoint is device-gated.
+    /// </para>
+    /// </summary>
+    public const string ManifestPolicyName = "device-manifest";
+
+    /// <summary>
+    /// Manifest pulls per <see cref="Window"/> per device.
+    ///
+    /// <para>
+    /// <b>Two orders of magnitude below <see cref="PermitsPerWindow"/>, because this is a different
+    /// shape of request.</b> A device pulls once before a session and then revalidates — the whole
+    /// point of the ETag is that it should almost never need a body. Thirty a minute is a pull every
+    /// two seconds, which is far past any honest client and still leaves room for one that retries
+    /// after a network wobble. The refusal costs the device nothing: it keeps the manifest it has, and
+    /// no refusal from this endpoint ever stops tap capture.
+    /// </para>
+    ///
+    /// <para>
+    /// Note what a 304 does <em>not</em> save. It saves the device's radio, battery and parse; the
+    /// server does the same work either way, because the version cannot be known without composing the
+    /// content it hashes. So the budget is over pulls, not over bodies.
+    /// </para>
+    /// </summary>
+    public const int ManifestPermitsPerWindow = 30;
+
+    /// <summary>
     /// The partition key prefix for an unauthenticated caller. Prefixed rather than bare so an IP
     /// address can never collide with a device id in the partition table.
     /// </summary>
@@ -114,6 +154,7 @@ public static class CaptureRateLimiting
 
             options.AddPolicy(PolicyName, PartitionFor);
             options.AddPolicy(LivePolicyName, LivePartitionFor);
+            options.AddPolicy(ManifestPolicyName, ManifestPartitionFor);
 
             options.OnRejected = WriteRejectionAsync;
         });
@@ -158,25 +199,39 @@ public static class CaptureRateLimiting
         // ships as a 200 with an error payload.
         http.Response.StatusCode = StatusCodes.Status429TooManyRequests;
 
-        // Which policy rejected decides the prose. Both bodies carry the same `code`, so a client
+        // Which policy rejected decides the prose. Every body carries the same `code`, so a client
         // branching on RateLimited is unaffected either way — but telling a dashboard that "this device
         // is limited to 600 capture requests" would send its reader looking for a kiosk.
-        var isLive = http.GetEndpoint()?.Metadata
-            .GetMetadata<EnableRateLimitingAttribute>()?.PolicyName == LivePolicyName;
+        var policy = http.GetEndpoint()?.Metadata
+            .GetMetadata<EnableRateLimitingAttribute>()?.PolicyName;
 
         var factory = http.RequestServices.GetRequiredService<ProblemDetailsFactory>();
         var problem = factory.CreateProblemDetails(
             http,
             statusCode: StatusCodes.Status429TooManyRequests,
-            title: isLive ? "Too many live-attendance polls." : "Too many capture requests.",
-            detail: isLive
-                ? $"This client address is limited to {LivePermitsPerWindow} live-attendance polls " +
-                  $"per {Window.TotalMinutes:0} minute(s). Wait for the period named by Retry-After " +
-                  "and poll again; honour the pollAfterSeconds in each response rather than polling " +
-                  "as fast as the endpoint answers."
-                : $"This device is limited to {PermitsPerWindow} capture requests per " +
-                  $"{Window.TotalMinutes:0} minute(s). Wait for the period named by Retry-After and " +
-                  "resend; nothing was recorded.",
+            title: policy switch
+            {
+                LivePolicyName => "Too many live-attendance polls.",
+                ManifestPolicyName => "Too many manifest pulls.",
+                _ => "Too many capture requests.",
+            },
+            detail: policy switch
+            {
+                LivePolicyName =>
+                    $"This client address is limited to {LivePermitsPerWindow} live-attendance polls " +
+                    $"per {Window.TotalMinutes:0} minute(s). Wait for the period named by Retry-After " +
+                    "and poll again; honour the pollAfterSeconds in each response rather than polling " +
+                    "as fast as the endpoint answers.",
+                ManifestPolicyName =>
+                    $"This device is limited to {ManifestPermitsPerWindow} manifest pulls per " +
+                    $"{Window.TotalMinutes:0} minute(s). Wait for the period named by Retry-After and " +
+                    "pull again. Keep the manifest you already have, and keep capturing — no refusal " +
+                    "from that endpoint ever stops tap capture.",
+                _ =>
+                    $"This device is limited to {PermitsPerWindow} capture requests per " +
+                    $"{Window.TotalMinutes:0} minute(s). Wait for the period named by Retry-After and " +
+                    "resend; nothing was recorded.",
+            },
             instance: http.Request.GetEncodedPathAndQuery());
 
         problem.Extensions["code"] = RateLimitedCode;
@@ -215,6 +270,39 @@ public static class CaptureRateLimiting
 
     /// <inheritdoc cref="LivePartitionFor"/>
     private const string LivePartitionPrefix = "live:";
+
+    /// <summary>
+    /// <inheritdoc cref="ManifestPolicyName" path="/summary/para[1]"/>
+    ///
+    /// <para>
+    /// The <c>manifest:</c> prefix is what actually keeps the budgets separate — three policies sharing
+    /// one partition table would mean a device's cache refreshes and its taps drawing on the same
+    /// bucket, which is the thing this policy exists so as not to do. The unauthenticated fallback
+    /// mirrors the capture policy's: this endpoint is gated, so an anonymous request is refused a
+    /// moment later anyway, and the fallback exists so it is not unlimited on the way there.
+    /// </para>
+    /// </summary>
+    private static RateLimitPartition<string> ManifestPartitionFor(HttpContext context)
+    {
+        var deviceId = context.User.FindFirst(EamsClaimTypes.DeviceId)?.Value;
+
+        var key = ManifestPartitionPrefix + (deviceId is not null
+            ? DevicePartitionPrefix + deviceId
+            : AnonymousPartitionPrefix + (context.Connection.RemoteIpAddress?.ToString() ?? "unknown"));
+
+        return RateLimitPartition.GetFixedWindowLimiter(key, _ => new FixedWindowRateLimiterOptions
+        {
+            PermitLimit = ManifestPermitsPerWindow,
+            Window = Window,
+            // Reject rather than queue, matching both other policies: a queued pull is a pull whose
+            // answer is stale by the time it is served, and the client already holds a usable manifest.
+            QueueLimit = 0,
+            AutoReplenishment = true,
+        });
+    }
+
+    /// <inheritdoc cref="ManifestPartitionFor"/>
+    private const string ManifestPartitionPrefix = "manifest:";
 
     private static RateLimitPartition<string> PartitionFor(HttpContext context)
     {
