@@ -49,7 +49,19 @@ Checks CI runs (run these before declaring work done):
   data-loss SQL (global hard rule). Scaffold from Infrastructure alone (a design-time factory lives
   there): `dotnet ef migrations add <Name> --project backend/EAMS.Infrastructure`.
 - **The app migrates and seeds on startup**, both idempotent; seeding is skipped in Production.
-  Data now survives restarts — no more clean slate every run.
+  Data now survives restarts — no more clean slate every run. The seed is **all-or-nothing**: it
+  returns early if a `School` row exists, so a database created before a given seed row was added
+  never gains it. A dev carrying over an older `EAMS` database therefore has no `Term` — and with no
+  term the roster-import page has an empty picker and refuses to stage a batch, since nothing in the
+  product creates one (`AcademicController` is read-only, the importer takes `TermId` as input).
+  Either drop the database and let it re-seed, or insert one by hand:
+  ```sql
+  INSERT INTO dbo.Terms (Id, SchoolId, Code, SchoolYear, Semester, IsCurrent, CreatedAt, UpdatedAt)
+  SELECT NEWID(), s.Id, '2025-2026-1', '2025-2026', '1st Semester', 1,
+         SYSUTCDATETIME(), SYSUTCDATETIME()
+  FROM dbo.Schools s
+  WHERE s.Code = 'USA' AND NOT EXISTS (SELECT 1 FROM dbo.Terms t WHERE t.SchoolId = s.Id);
+  ```
 - **Nothing outside `EAMS.Infrastructure` can see `EamsDbContext`.** Every type in that assembly is
   `internal` except `AddEamsInfrastructure`. Controllers talk to `IStudentService` /
   `IEventService` / `IAttendanceService` from `EAMS.Application.Abstractions` and speak DTOs only.

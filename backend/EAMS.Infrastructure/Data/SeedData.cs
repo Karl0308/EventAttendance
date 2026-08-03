@@ -77,6 +77,15 @@ internal static class SeedData
     /// </summary>
     public const string DevelopmentCardUid = "0012503303";
 
+    /// <summary>
+    /// The seeded term's <see cref="Term.Code"/>, named for the same reason as
+    /// <see cref="DevelopmentCardUid"/>: a test that locates the seeded term will otherwise re-type the
+    /// literal, and a later edit to the seed would leave that copy silently orphaned. The value matches
+    /// the term already present on the existing dev database, so a freshly seeded machine and one
+    /// carried over agree on it.
+    /// </summary>
+    public const string DevelopmentTermCode = "2025-2026-1";
+
     public static async Task InitializeAsync(EamsDbContext db, CancellationToken ct = default)
     {
         if (await db.Schools.AnyAsync(ct)) return;
@@ -90,6 +99,26 @@ internal static class SeedData
             TimeZone = "Asia/Manila",
         };
         db.Schools.Add(school);
+
+        // A term, because nothing in the product can create one: AcademicController is read-only by
+        // design and the importer takes a TermId as an *input* (ADR-001 D-5). Without this row the
+        // roster-import page's term picker is empty on every freshly migrated database and the page
+        // correctly refuses to stage a batch — i.e. the first thing a new developer tries is dead.
+        //
+        // StartsOn/EndsOn stay null: the SIS export has no term-date columns at all, so a real term
+        // does not have them either (AcademicReferenceService.ListTermsAsync orders on Code precisely
+        // because those dates are usually absent). Inventing dates here would make the seed the only
+        // term in the system that carries them, which is a worse fixture than one that matches.
+        db.Terms.Add(new Term
+        {
+            SchoolId = school.Id,
+            Code = DevelopmentTermCode,
+            SchoolYear = "2025-2026",
+            Semester = "1st Semester",
+            // At most one current term per school (UX_Terms_SchoolId_Current). This is the only term
+            // seeded, so a second one must not arrive here carrying IsCurrent as well.
+            IsCurrent = true,
+        });
 
         // `No` is the REGNO — Students.StudentNumber. `Uid` is the RFID card serial — RfidCards.CardUid.
         // They are DIFFERENT VALUES for different things (client correction, 2026-07-30, register D-43):
