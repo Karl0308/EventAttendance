@@ -1,0 +1,974 @@
+<title>EAMS — Events Attendance Monitoring System</title>
+<style>
+  :root {
+    --ink:        #141B2E;
+    --ink-2:      #1E2740;
+    --ink-soft:   #2A3552;
+    --paper:      #F6F3EC;
+    --paper-2:    #FFFFFF;
+    --gold:       #C79A3B;
+    --gold-soft:  #E4CE93;
+    --teal:       #2FA6A0;
+    --teal-soft:  #7CCDC8;
+    --green:      #3E9C6B;
+    --amber:      #D9A441;
+    --rose:       #C7614E;
+
+    --bg:         var(--paper);
+    --surface:    var(--paper-2);
+    --surface-2:  #EFEBE0;
+    --text:       #1B2233;
+    --text-soft:  #55607A;
+    --line:       #DBD5C6;
+    --accent:     var(--gold);
+    --signal:     var(--teal);
+
+    --serif: Georgia, "Iowan Old Style", "Palatino Linotype", "Times New Roman", serif;
+    --sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    --mono: ui-monospace, "SFMono-Regular", "Cascadia Code", "Consolas", monospace;
+
+    --maxw: 1120px;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg:        #0E1424;
+      --surface:   #172038;
+      --surface-2: #1E2740;
+      --text:      #EDEBE3;
+      --text-soft: #9BA6C0;
+      --line:      #2C3654;
+      --accent:    #D9B058;
+      --gold-soft: #6B5A2E;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg:        #0E1424;
+    --surface:   #172038;
+    --surface-2: #1E2740;
+    --text:      #EDEBE3;
+    --text-soft: #9BA6C0;
+    --line:      #2C3654;
+    --accent:    #D9B058;
+    --gold-soft: #6B5A2E;
+  }
+  :root[data-theme="light"] {
+    --bg:        var(--paper);
+    --surface:   var(--paper-2);
+    --surface-2: #EFEBE0;
+    --text:      #1B2233;
+    --text-soft: #55607A;
+    --line:      #DBD5C6;
+    --accent:    var(--gold);
+    --gold-soft: #E4CE93;
+  }
+
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  @media (prefers-reduced-motion: reduce) {
+    html { scroll-behavior: auto; }
+    * { animation: none !important; transition: none !important; }
+  }
+
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--sans);
+    font-size: 16px;
+    line-height: 1.55;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  /* ---------- Deck scaffolding ---------- */
+  .deck {
+    scroll-snap-type: y proximity;
+  }
+  .slide {
+    min-height: 100vh;
+    scroll-snap-align: start;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    padding: 92px 40px 80px;
+    position: relative;
+    border-bottom: 1px solid var(--line);
+  }
+  .slide__inner {
+    width: 100%;
+    max-width: var(--maxw);
+    margin: 0 auto;
+  }
+
+  .eyebrow {
+    font-family: var(--mono);
+    font-size: 12px;
+    letter-spacing: 0.22em;
+    text-transform: uppercase;
+    color: var(--signal);
+    margin: 0 0 18px;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+  .eyebrow::before {
+    content: "";
+    width: 26px; height: 1px;
+    background: var(--signal);
+    display: inline-block;
+  }
+
+  h1, h2, h3 { font-family: var(--serif); font-weight: 600; text-wrap: balance; margin: 0; }
+  h1 { font-size: clamp(2.6rem, 6vw, 4.4rem); line-height: 1.03; letter-spacing: -0.01em; }
+  h2 { font-size: clamp(1.9rem, 3.6vw, 2.9rem); line-height: 1.08; letter-spacing: -0.01em; }
+  h3 { font-size: 1.15rem; line-height: 1.25; }
+  p  { margin: 0 0 1em; }
+  .lead { font-size: clamp(1.05rem, 1.6vw, 1.3rem); color: var(--text-soft); max-width: 60ch; }
+
+  .accent { color: var(--accent); }
+  .signal { color: var(--signal); }
+
+  /* ---------- Cover ---------- */
+  .cover { background:
+      radial-gradient(120% 90% at 85% 10%, rgba(47,166,160,0.10), transparent 55%),
+      radial-gradient(90% 70% at 5% 95%, rgba(199,154,59,0.12), transparent 50%),
+      var(--ink);
+    color: #F4F1E8;
+    border-bottom: none;
+  }
+  .cover .eyebrow { color: var(--gold-soft); }
+  .cover .eyebrow::before { background: var(--gold-soft); }
+  .cover h1 { color: #F7F4EC; }
+  .cover .lead { color: #C6CBD9; }
+  .cover__meta {
+    display: flex; flex-wrap: wrap; gap: 10px 26px;
+    margin-top: 40px; padding-top: 26px;
+    border-top: 1px solid rgba(255,255,255,0.14);
+    font-family: var(--mono); font-size: 12.5px; letter-spacing: 0.04em;
+    color: #9AA3B8;
+  }
+  .cover__meta b { color: #E7E3D6; font-weight: 600; }
+  .stack-chips { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 26px; }
+  .stack-chips span {
+    font-family: var(--mono); font-size: 11.5px; letter-spacing: 0.05em;
+    padding: 6px 12px; border-radius: 100px;
+    border: 1px solid rgba(255,255,255,0.16);
+    color: #D8DCE6; background: rgba(255,255,255,0.04);
+  }
+
+  /* ---------- Grids & cards ---------- */
+  .grid { display: grid; gap: 18px; }
+  .grid-2 { grid-template-columns: repeat(2, 1fr); }
+  .grid-3 { grid-template-columns: repeat(3, 1fr); }
+  .grid-4 { grid-template-columns: repeat(4, 1fr); }
+
+  .card {
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 14px;
+    padding: 22px 22px 20px;
+    position: relative;
+  }
+  .card__num {
+    font-family: var(--mono); font-size: 12px; color: var(--accent);
+    letter-spacing: 0.08em; margin-bottom: 12px;
+  }
+  .card h3 { margin-bottom: 8px; }
+  .card p { color: var(--text-soft); font-size: 0.94rem; margin: 0; }
+  .card--signal { border-top: 3px solid var(--signal); }
+  .card--gold   { border-top: 3px solid var(--accent); }
+
+  /* KPI tiles */
+  .kpi { text-align: left; }
+  .kpi .big {
+    font-family: var(--serif); font-weight: 600;
+    font-size: clamp(2.2rem, 4.5vw, 3rem); line-height: 1;
+    color: var(--accent); font-variant-numeric: tabular-nums;
+  }
+  .kpi .lbl { display: block; margin-top: 10px; color: var(--text-soft); font-size: 0.9rem; }
+
+  /* Pills */
+  .pill {
+    display: inline-flex; align-items: center; gap: 7px;
+    font-family: var(--mono); font-size: 11.5px; letter-spacing: 0.04em;
+    padding: 5px 11px; border-radius: 100px;
+    border: 1px solid var(--line); color: var(--text-soft);
+  }
+  .dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
+  .dot.g { background: var(--green); }
+  .dot.a { background: var(--amber); }
+  .dot.r { background: var(--rose); }
+  .dot.t { background: var(--signal); }
+
+  /* ---------- Architecture diagram ---------- */
+  .arch {
+    display: grid; gap: 14px;
+    grid-template-columns: 1fr; justify-items: center;
+    font-family: var(--sans);
+  }
+  .node {
+    background: var(--surface); border: 1px solid var(--line);
+    border-radius: 12px; padding: 16px 20px; text-align: center;
+    width: 100%; max-width: 460px;
+  }
+  .node .t { font-weight: 700; font-size: 0.98rem; }
+  .node .s { font-family: var(--mono); font-size: 11px; color: var(--text-soft); letter-spacing: 0.03em; margin-top: 4px; }
+  .node--api { border: 1.5px solid var(--signal); background: color-mix(in srgb, var(--signal) 8%, var(--surface)); }
+  .node--db  { border-color: var(--accent); }
+  .node-row { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; width: 100%; max-width: 700px; }
+  .arch__link { font-family: var(--mono); font-size: 11px; color: var(--signal); letter-spacing: 0.06em; }
+  .arch__link::before { content: "▼"; display:block; opacity: 0.5; margin-bottom: 2px; }
+
+  /* ---------- Flow strip ---------- */
+  .flow { display: grid; grid-template-columns: repeat(5, 1fr); gap: 0; margin-top: 10px; }
+  .flow__step { padding: 18px 16px; position: relative; }
+  .flow__step:not(:last-child)::after {
+    content: "→"; position: absolute; right: -8px; top: 22px;
+    color: var(--accent); font-size: 1.1rem;
+  }
+  .flow__n { font-family: var(--mono); font-size: 11px; color: var(--signal); letter-spacing: 0.1em; }
+  .flow__t { font-weight: 700; font-size: 0.95rem; margin: 6px 0 4px; }
+  .flow__d { font-size: 0.83rem; color: var(--text-soft); }
+
+  /* ---------- Roadmap ---------- */
+  .road { display: flex; flex-direction: column; gap: 0; margin-top: 8px; }
+  .road__row {
+    display: grid; grid-template-columns: 42px 150px 1fr 96px; gap: 18px; align-items: start;
+    padding: 16px 0; border-top: 1px solid var(--line);
+  }
+  .road__row:last-child { border-bottom: 1px solid var(--line); }
+  .road__ph { font-family: var(--serif); font-size: 1.5rem; color: var(--accent); font-weight: 600; line-height: 1; }
+  .road__name { font-weight: 700; font-size: 0.98rem; }
+  .road__name span { display: block; font-family: var(--mono); font-size: 11px; color: var(--signal); font-weight: 400; letter-spacing: 0.05em; margin-top: 3px; }
+  .road__desc { color: var(--text-soft); font-size: 0.9rem; }
+  .road__dur { font-family: var(--mono); font-size: 12px; color: var(--text); text-align: right; white-space: nowrap; }
+
+  /* ---------- Compare table ---------- */
+  .compare { width: 100%; border-collapse: collapse; font-size: 0.94rem; }
+  .compare th, .compare td { text-align: left; padding: 14px 16px; border-bottom: 1px solid var(--line); }
+  .compare thead th { font-family: var(--mono); font-size: 11.5px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--text-soft); }
+  .compare tbody th { font-weight: 700; color: var(--text); font-family: var(--sans); }
+  .compare td { color: var(--text-soft); }
+  .compare .col-a { background: color-mix(in srgb, var(--signal) 6%, transparent); }
+  .compare .col-b { background: color-mix(in srgb, var(--accent) 7%, transparent); }
+  .tablewrap { overflow-x: auto; border: 1px solid var(--line); border-radius: 12px; }
+
+  /* ---------- Feature list ---------- */
+  .feat { display: grid; gap: 14px; }
+  .feat__item { display: grid; grid-template-columns: 28px 1fr; gap: 14px; align-items: start; }
+  .feat__mark { color: var(--signal); font-family: var(--serif); font-size: 1.3rem; line-height: 1; }
+  .feat__item b { display: block; margin-bottom: 2px; }
+  .feat__item p { color: var(--text-soft); font-size: 0.92rem; margin: 0; }
+
+  /* ---------- Nav / chrome ---------- */
+  .rail {
+    position: fixed; top: 0; left: 0; height: 3px; z-index: 40;
+    background: linear-gradient(90deg, var(--gold), var(--teal));
+    width: 0%;
+  }
+  .counter {
+    position: fixed; bottom: 20px; right: 22px; z-index: 40;
+    font-family: var(--mono); font-size: 12px; letter-spacing: 0.08em;
+    color: var(--text-soft); background: var(--surface);
+    border: 1px solid var(--line); border-radius: 100px; padding: 6px 13px;
+    font-variant-numeric: tabular-nums;
+  }
+  .themebtn {
+    position: fixed; top: 16px; right: 22px; z-index: 40;
+    font-family: var(--mono); font-size: 11px; letter-spacing: 0.06em;
+    background: var(--surface); color: var(--text-soft);
+    border: 1px solid var(--line); border-radius: 100px; padding: 7px 13px;
+    cursor: pointer;
+  }
+  .themebtn:hover { color: var(--text); border-color: var(--accent); }
+  .themebtn:focus-visible, a:focus-visible { outline: 2px solid var(--signal); outline-offset: 3px; }
+  .slidetag {
+    position: absolute; top: 34px; left: 40px;
+    font-family: var(--mono); font-size: 11px; letter-spacing: 0.14em;
+    text-transform: uppercase; color: var(--text-soft);
+  }
+  .cover .slidetag { color: #8791A6; }
+
+  .hint {
+    margin-top: 34px; font-family: var(--mono); font-size: 11.5px;
+    letter-spacing: 0.05em; color: #7C879E; display: flex; align-items: center; gap: 8px;
+  }
+  .kbd {
+    border: 1px solid rgba(255,255,255,0.22); border-radius: 5px;
+    padding: 2px 7px; font-size: 11px; color: #C6CBD9;
+  }
+
+  .split { display: grid; grid-template-columns: 1.05fr 0.95fr; gap: 48px; align-items: center; }
+  .muted { color: var(--text-soft); }
+  .small { font-size: 0.9rem; }
+
+  /* ---------- Arrow nav buttons ---------- */
+  .navbtn {
+    position: fixed; bottom: 18px; z-index: 40;
+    width: 42px; height: 42px; border-radius: 50%;
+    display: inline-flex; align-items: center; justify-content: center;
+    font-size: 1.15rem; line-height: 1; cursor: pointer;
+    background: var(--surface); color: var(--text);
+    border: 1px solid var(--line);
+    transition: transform 0.18s ease, border-color 0.18s ease, color 0.18s ease, opacity 0.18s ease;
+  }
+  .navbtn:hover { border-color: var(--accent); color: var(--accent); transform: translateY(-2px); }
+  .navbtn:active { transform: translateY(0) scale(0.94); }
+  .navbtn:focus-visible { outline: 2px solid var(--signal); outline-offset: 3px; }
+  .navbtn:disabled { opacity: 0.32; cursor: default; transform: none; border-color: var(--line); color: var(--text); }
+  .navbtn--prev { right: 130px; }
+  .navbtn--next { right: 80px; }
+
+  /* ---------- Slide reveal transitions ---------- */
+  :root { --ease-out: cubic-bezier(0.16, 1, 0.3, 1); --stagger: 70ms; }
+
+  /* The per-element .reveal rules carry all entrance motion; the container
+     stays visible so each child's staggered fade reads cleanly. */
+  .slide__inner { opacity: 1; }
+
+  /* Per-element staggered entrances (index carried in --i) */
+  .reveal {
+    opacity: 0;
+    transform: translateY(26px);
+    transition:
+      opacity 0.6s var(--ease-out),
+      transform 0.6s var(--ease-out),
+      box-shadow 0.25s var(--ease-out),
+      border-color 0.25s var(--ease-out),
+      filter 0.6s var(--ease-out);
+    will-change: opacity, transform;
+  }
+  /* Element-type flavors: each enters from its own direction */
+  .reveal.rv-eyebrow { transform: translateX(-24px); }
+  .reveal.rv-heading { transform: translateY(30px); filter: blur(6px); transition-property: opacity, transform, filter; }
+  .reveal.rv-card    { transform: translateY(30px) scale(0.97); }
+  .reveal.rv-mock    { transform: translateY(24px) scale(0.94); }
+  .reveal.rv-step    { transform: translateY(18px) scale(0.96); }
+  .reveal.rv-chip    { transform: translateY(10px) scale(0.9); }
+  .reveal.rv-row     { transform: translateX(-20px); }
+
+  /* Stagger delay lives on the ACTIVE state, so it governs the armed→active
+     entrance only. Once active, hover transitions run with no delay. */
+  .slide.is-active .reveal {
+    opacity: 1;
+    transform: none;
+    filter: none;
+    transition-delay: calc(var(--i, 0) * var(--stagger));
+  }
+
+  /* Card hover lift (subtle, interactive-feeling).
+     Transition lives on .reveal (which every card carries) so hover + reveal
+     share one declaration and don't override each other. A plain fallback
+     covers any card that isn't a reveal target. */
+  .card:not(.reveal) {
+    transition: transform 0.25s var(--ease-out), box-shadow 0.25s var(--ease-out), border-color 0.25s var(--ease-out);
+  }
+  .slide.is-active .card:hover {
+    transform: translateY(-4px);
+    box-shadow: 0 14px 34px -18px rgba(20, 27, 46, 0.45);
+    border-color: color-mix(in srgb, var(--accent) 55%, var(--line));
+  }
+
+  /* Animated progress rail shimmer */
+  .rail { transition: width 0.15s linear; }
+
+  /* Cover intro: title clip-reveal + chips cascade on load */
+  @keyframes coverRise {
+    from { opacity: 0; transform: translateY(34px); }
+    to   { opacity: 1; transform: none; }
+  }
+  .cover.play .eyebrow    { animation: coverRise 0.7s var(--ease-out) both; animation-delay: 0.05s; }
+  .cover.play h1          { animation: coverRise 0.9s var(--ease-out) both; animation-delay: 0.15s; }
+  .cover.play .lead       { animation: coverRise 0.8s var(--ease-out) both; animation-delay: 0.40s; }
+  .cover.play .stack-chips span { animation: coverRise 0.6s var(--ease-out) both; }
+  .cover.play .cover__meta { animation: coverRise 0.7s var(--ease-out) both; animation-delay: 0.95s; }
+  .cover.play .hint        { animation: coverRise 0.7s var(--ease-out) both; animation-delay: 1.15s; }
+
+  @media (prefers-reduced-motion: reduce) {
+    .navbtn { transition: none; }
+    .slide__inner, .slide.is-armed .slide__inner, .slide.is-active .slide__inner,
+    .reveal, .slide.is-active .reveal {
+      opacity: 1 !important; transform: none !important; filter: none !important; transition: none !important;
+    }
+    .cover.play .eyebrow, .cover.play h1, .cover.play .lead,
+    .cover.play .stack-chips span, .cover.play .cover__meta, .cover.play .hint {
+      animation: none !important;
+    }
+    .slide.is-active .card:hover { transform: none; }
+  }
+
+  @media (max-width: 860px) {
+    .slide { padding: 84px 22px 64px; }
+    .slidetag { left: 22px; }
+    .grid-2, .grid-3, .grid-4, .node-row, .split { grid-template-columns: 1fr; }
+    .flow { grid-template-columns: 1fr 1fr; }
+    .flow__step::after { display: none; }
+    .road__row { grid-template-columns: 34px 1fr; grid-template-areas: "ph name" ". desc" ". dur"; }
+    .road__ph { grid-area: ph; } .road__name { grid-area: name; }
+    .road__desc { grid-area: desc; } .road__dur { grid-area: dur; text-align: left; }
+    .themebtn { top: 12px; right: 14px; }
+  }
+</style>
+
+<div class="rail" id="rail"></div>
+<button class="themebtn" id="themebtn" type="button">◐ Theme</button>
+<div class="counter" id="counter">01 / 14</div>
+<button class="navbtn navbtn--prev" id="prevbtn" type="button" aria-label="Previous slide">‹</button>
+<button class="navbtn navbtn--next" id="nextbtn" type="button" aria-label="Next slide">›</button>
+
+<main class="deck" id="deck">
+
+  <!-- 01 — COVER -->
+  <section class="slide cover" id="s1">
+    <span class="slidetag">University of San Agustin · CICSS</span>
+    <div class="slide__inner">
+      <p class="eyebrow">Proposal Walkthrough · 2026</p>
+      <h1>Events Attendance<br>Monitoring System</h1>
+      <p class="lead">Tap-and-go student attendance for campus events — powered by RFID, verified in real time, and reported at a glance.</p>
+      <div class="stack-chips">
+        <span>React Web Admin</span>
+        <span>React Native · RFID Capture</span>
+        <span>.NET 8 API</span>
+        <span>SQL Server / PostgreSQL</span>
+        <span>Real-time · SignalR</span>
+      </div>
+      <div class="cover__meta">
+        <span>Prepared for&nbsp; <b>Center for Information &amp; Communications Support Service</b></span>
+        <span>Hardware&nbsp; <b>Phone-connected RFID reader</b></span>
+        <span>Delivery&nbsp; <b>SaaS or On-Premise</b></span>
+      </div>
+      <div class="hint">
+        <span class="kbd">→</span> <span class="kbd">Space</span> to advance &nbsp;·&nbsp; scroll to browse
+      </div>
+    </div>
+  </section>
+
+  <!-- 02 — THE PROBLEM / PROMISE -->
+  <section class="slide" id="s2">
+    <span class="slidetag">02 — The Opportunity</span>
+    <div class="slide__inner">
+      <p class="eyebrow">Why this, why now</p>
+      <div class="split">
+        <div>
+          <h2>Manual sign-in sheets don't scale to a full campus of events.</h2>
+          <p class="lead" style="margin-top:18px">Paper lists are slow, easy to fake, and impossible to report on. Students already carry an RFID ID — we turn that card into an instant, tamper-resistant check-in.</p>
+        </div>
+        <div class="grid" style="gap:14px">
+          <div class="card card--signal">
+            <div class="card__num">FROM</div>
+            <h3>Sign, count, re-type</h3>
+            <p>Hand-written sheets, manual tallying, hours of encoding after every event — with no live picture of who's in the room.</p>
+          </div>
+          <div class="card card--gold">
+            <div class="card__num">TO</div>
+            <h3>Tap, verify, done</h3>
+            <p>One tap resolves the student, checks the event window, and updates the dashboard live. Reports export the moment the event closes.</p>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- WHY US — VALUE -->
+  <section class="slide" id="s-value">
+    <span class="slidetag">03 — Why This Works for You</span>
+    <div class="slide__inner">
+      <p class="eyebrow">The promise, in plain terms</p>
+      <h2 style="margin-bottom:10px">Attendance that's fast to run and easy to read.</h2>
+      <p class="lead" style="margin-bottom:28px">Our software turns the phones and scanners you already have into a powerful, reliable attendance station — with a big, clear display anyone can read at a glance.</p>
+      <div class="grid grid-3">
+        <div class="card card--gold">
+          <div class="card__num">USE WHAT YOU HAVE</div>
+          <h3>No new equipment to buy</h3>
+          <p>The app runs on the phones, tablets, and scanners already in your school. Nothing to procure, nothing to wait for.</p>
+        </div>
+        <div class="card card--signal">
+          <div class="card__num">WORKS WITHOUT WI-FI</div>
+          <h3>Keeps going when the internet doesn't</h3>
+          <p>If the connection drops, the app keeps recording. It saves every tap on the device and syncs the moment you reconnect.</p>
+        </div>
+        <div class="card card--gold">
+          <div class="card__num">PLUG-IN RFID READER</div>
+          <h3>A phone becomes the scanner</h3>
+          <p>We supply a compact RFID reader that connects straight to a phone — tap a student ID and it's counted. No dedicated handheld needed.</p>
+        </div>
+      </div>
+      <div style="display:flex;gap:14px;flex-wrap:wrap;margin-top:22px">
+        <span class="pill"><span class="dot g"></span> Big, readable status display</span>
+        <span class="pill"><span class="dot t"></span> Offline-first — never loses a tap</span>
+        <span class="pill"><span class="dot" style="background:var(--accent)"></span> Reader connects to your phone</span>
+      </div>
+    </div>
+  </section>
+
+  <!-- WHAT IT DOES (features) -->
+  <section class="slide" id="s3">
+    <span class="slidetag">04 — Capabilities</span>
+    <div class="slide__inner">
+      <p class="eyebrow">What the system does</p>
+      <h2 style="margin-bottom:28px">Everything from the card tap to the signed report.</h2>
+      <div class="grid grid-3">
+        <div class="card"><div class="card__num">01</div><h3>RFID Check-in</h3><p>Tap a student ID on a handheld, phone, or fixed kiosk. Present / Late is decided automatically from the event's grace window.</p></div>
+        <div class="card"><div class="card__num">02</div><h3>Live Dashboard</h3><p>Present and expected counts update in real time as taps come in — organizers see the room fill without refreshing.</p></div>
+        <div class="card"><div class="card__num">03</div><h3>Works Offline</h3><p>Weak signal in the gym? Taps queue on the device and sync automatically — every tap counted exactly once, never twice.</p></div>
+        <div class="card"><div class="card__num">04</div><h3>Events &amp; Recurrence</h3><p>One-off or recurring events, invited groups or the whole school, single-tap or time-in / time-out modes.</p></div>
+        <div class="card"><div class="card__num">05</div><h3>Reports &amp; Exports</h3><p>Attendance summaries, absentee lists, per-student history, and group analytics — branded PDF or CSV in one click.</p></div>
+        <div class="card"><div class="card__num">06</div><h3>Roles &amp; Access</h3><p>Fine-grained permissions: super admin, school admin, organizer, viewer. People see exactly what their role allows.</p></div>
+        <div class="card"><div class="card__num">07</div><h3>Kiosk Mode</h3><p>Turn any tablet into an unattended check-in station — locked to one event, authenticated by its own device key.</p></div>
+        <div class="card"><div class="card__num">08</div><h3>Card-Only Entry</h3><p>The RFID card is the ID — no card, no entry. Every check-in is a genuine tap, so counts can't be padded by hand.</p></div>
+        <div class="card"><div class="card__num">09</div><h3>SIS Sync &amp; Audit</h3><p>Students flow in from your Student Information System, and every change is logged with who, what, and when.</p></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 04 — HOW A TAP FLOWS -->
+  <section class="slide" id="s4">
+    <span class="slidetag">05 — The Core Flow</span>
+    <div class="slide__inner">
+      <p class="eyebrow">One tap, start to finish</p>
+      <h2 style="margin-bottom:6px">A card tap becomes a verified record in under a second.</h2>
+      <p class="lead" style="margin-bottom:26px">Capture happens on the device; validation and truth live on the server.</p>
+      <div class="card" style="padding:8px 14px">
+        <div class="flow">
+          <div class="flow__step"><div class="flow__n">STEP 1</div><div class="flow__t">Read card</div><div class="flow__d">Reader emits the card's UID to the scan screen.</div></div>
+          <div class="flow__step"><div class="flow__n">STEP 2</div><div class="flow__t">Resolve student</div><div class="flow__d">UID maps to a student — instantly, even offline.</div></div>
+          <div class="flow__step"><div class="flow__n">STEP 3</div><div class="flow__t">Validate window</div><div class="flow__d">Server checks the event time &amp; grace period.</div></div>
+          <div class="flow__step"><div class="flow__n">STEP 4</div><div class="flow__t">Record status</div><div class="flow__d">Present or Late is written — deduplicated on arrival.</div></div>
+          <div class="flow__step"><div class="flow__n">STEP 5</div><div class="flow__t">Broadcast live</div><div class="flow__d">Dashboards update in real time via SignalR.</div></div>
+        </div>
+      </div>
+      <div style="display:flex;gap:22px;flex-wrap:wrap;margin-top:22px">
+        <span class="pill"><span class="dot g"></span> Present — within grace</span>
+        <span class="pill"><span class="dot a"></span> Late — after grace</span>
+        <span class="pill"><span class="dot r"></span> Absent — no tap by close</span>
+        <span class="pill"><span class="dot t"></span> Excused — set by organizer</span>
+      </div>
+    </div>
+  </section>
+
+  <!-- 05 — MORE FLOWS -->
+  <section class="slide" id="s5">
+    <span class="slidetag">06 — Behind the Scenes</span>
+    <div class="slide__inner">
+      <p class="eyebrow">Two flows that keep data honest</p>
+      <h2 style="margin-bottom:28px">Nothing gets lost — and nothing gets counted twice.</h2>
+
+      <div style="margin-bottom:10px;display:flex;align-items:center;gap:12px">
+        <span class="pill"><span class="dot t"></span> OFFLINE SYNC</span>
+        <span class="muted small">When the venue has no signal, taps wait safely and reconcile on reconnect.</span>
+      </div>
+      <div class="card" style="padding:8px 14px;margin-bottom:26px">
+        <div class="flow">
+          <div class="flow__step"><div class="flow__n">STEP 1</div><div class="flow__t">Capture offline</div><div class="flow__d">Tap is stamped with a unique device tap ID.</div></div>
+          <div class="flow__step"><div class="flow__n">STEP 2</div><div class="flow__t">Queue locally</div><div class="flow__d">Stored on-device in an encrypted local queue.</div></div>
+          <div class="flow__step"><div class="flow__n">STEP 3</div><div class="flow__t">Detect network</div><div class="flow__d">App watches for connectivity, then flushes.</div></div>
+          <div class="flow__step"><div class="flow__n">STEP 4</div><div class="flow__t">Batch sync</div><div class="flow__d">Whole queue posts to the server at once.</div></div>
+          <div class="flow__step"><div class="flow__n">STEP 5</div><div class="flow__t">De-duplicate</div><div class="flow__d">Server ignores repeats — one record per tap.</div></div>
+        </div>
+      </div>
+
+      <div style="margin-bottom:10px;display:flex;align-items:center;gap:12px">
+        <span class="pill"><span class="dot" style="background:var(--accent)"></span> SIS IMPORT</span>
+        <span class="muted small">Student records flow in from your Student Information System — repeatable and safe to re-run.</span>
+      </div>
+      <div class="card" style="padding:8px 14px">
+        <div class="flow">
+          <div class="flow__step"><div class="flow__n">STEP 1</div><div class="flow__t">Upload / connect</div><div class="flow__d">CSV file, a DB link, or the SIS API.</div></div>
+          <div class="flow__step"><div class="flow__n">STEP 2</div><div class="flow__t">Map columns</div><div class="flow__d">Match source fields once; saved for next time.</div></div>
+          <div class="flow__step"><div class="flow__n">STEP 3</div><div class="flow__t">Validate</div><div class="flow__d">Rows are checked; errors flagged per row.</div></div>
+          <div class="flow__step"><div class="flow__n">STEP 4</div><div class="flow__t">Upsert</div><div class="flow__d">New students added, existing ones updated.</div></div>
+          <div class="flow__step"><div class="flow__n">STEP 5</div><div class="flow__t">Report</div><div class="flow__d">Inserted / updated / failed counts per batch.</div></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 06 — ARCHITECTURE -->
+  <section class="slide" id="s6a">
+    <span class="slidetag">07 — Architecture</span>
+    <div class="slide__inner">
+      <p class="eyebrow">How it fits together</p>
+      <div class="split" style="align-items:start;gap:40px">
+        <div>
+          <h2>One API is the source of truth.</h2>
+          <p class="lead" style="margin-top:16px">The web admin and the mobile capture app both speak to a single .NET API. Nothing is duplicated; every device sees the same data.</p>
+          <div class="feat" style="margin-top:22px">
+            <div class="feat__item"><span class="feat__mark">◆</span><div><b>Clean, layered backend</b><p>Controllers → Services → EF Core. The database is never exposed directly.</p></div></div>
+            <div class="feat__item"><span class="feat__mark">◆</span><div><b>Provider-agnostic data</b><p>SQL Server or PostgreSQL — your choice, same code.</p></div></div>
+            <div class="feat__item"><span class="feat__mark">◆</span><div><b>Real-time layer</b><p>SignalR pushes live attendance to every open dashboard.</p></div></div>
+          </div>
+        </div>
+        <div class="arch">
+          <div class="node"><div class="t">React Web Admin</div><div class="s">manage · monitor · report</div></div>
+          <div class="node-row">
+            <div class="node"><div class="t">Mobile / Kiosk App</div><div class="s">RFID capture · offline queue</div></div>
+            <div class="node"><div class="t">RFID Reader</div><div class="s">BLE · USB · handheld</div></div>
+          </div>
+          <div class="arch__link">HTTPS · JSON · JWT</div>
+          <div class="node node--api"><div class="t">.NET 8 Web API</div><div class="s">auth · attendance · reports · SignalR</div></div>
+          <div class="arch__link">EF Core</div>
+          <div class="node node--db"><div class="t">SQL Server / PostgreSQL</div><div class="s">+ Redis cache · SIS import worker</div></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 06 — WEB ADMIN -->
+  <section class="slide" id="s6">
+    <span class="slidetag">08 — Web Admin</span>
+    <div class="slide__inner">
+      <p class="eyebrow">For administrators &amp; organizers</p>
+      <h2 style="margin-bottom:26px">The command center — set up, monitor, and report.</h2>
+      <div class="grid grid-4">
+        <div class="card"><h3>Dashboard</h3><p>Today's events, KPIs, and live counts at a glance.</p></div>
+        <div class="card"><h3>Students &amp; Groups</h3><p>Profiles, RFID cards, courses, sections, and org rosters.</p></div>
+        <div class="card"><h3>Events &amp; Calendar</h3><p>Create, schedule, and assign attendees; live per-event view.</p></div>
+        <div class="card"><h3>Reports Builder</h3><p>Filter, preview, and export branded PDF / CSV.</p></div>
+        <div class="card"><h3>Users &amp; Roles</h3><p>Permission matrix — grant precisely what each role needs.</p></div>
+        <div class="card"><h3>Devices</h3><p>Register readers and kiosks; issue and rotate keys.</p></div>
+        <div class="card"><h3>SIS Import</h3><p>Upload, map columns, run, and monitor student sync.</p></div>
+        <div class="card"><h3>Settings</h3><p>Grace periods, branding, retention, and school config.</p></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 07 — MOBILE / RFID -->
+  <section class="slide" id="s7">
+    <span class="slidetag">09 — Mobile &amp; RFID</span>
+    <div class="slide__inner">
+      <p class="eyebrow">The tapping device</p>
+      <div class="split" style="align-items:start">
+        <div>
+          <h2>Built for the door, not the desk.</h2>
+          <p class="lead" style="margin-top:16px">Your existing phone or tablet is the tapping station — same app, Android-first. The scan screen is large, loud, and forgiving.</p>
+          <div class="feat" style="margin-top:24px">
+            <div class="feat__item"><span class="feat__mark">◆</span><div><b>Phone-connected RFID reader — supplied</b><p>We provide a compact reader that plugs into a phone over Bluetooth or USB. An ordinary phone already in your school becomes a tap-and-go scanner — no dedicated handheld to buy.</p></div></div>
+            <div class="feat__item"><span class="feat__mark">◆</span><div><b>Offline-first by design</b><p>Taps are stored locally and synced on reconnect. A client-generated tap ID guarantees no double-counting.</p></div></div>
+            <div class="feat__item"><span class="feat__mark">◆</span><div><b>Card-only entry</b><p>The RFID card is the ID — no card, no entry. Attendance is captured by tap alone, keeping every count honest.</p></div></div>
+          </div>
+        </div>
+        <div class="card card--signal" style="padding:26px">
+          <div class="card__num">SCAN SCREEN — LIVE</div>
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px">
+            <div>
+              <div style="font-family:var(--serif);font-size:1.5rem;font-weight:600">Reyes, Maria C.</div>
+              <div class="mono small muted" style="font-family:var(--mono)">BSIT 3A · 2023-04871</div>
+            </div>
+            <span class="pill" style="border-color:var(--green);color:var(--green)"><span class="dot g"></span> PRESENT</span>
+          </div>
+          <div class="grid grid-3" style="gap:12px">
+            <div class="kpi"><div class="big">148</div><span class="lbl">Present</span></div>
+            <div class="kpi"><div class="big" style="color:var(--amber)">12</div><span class="lbl">Late</span></div>
+            <div class="kpi"><div class="big" style="color:var(--text-soft)">210</div><span class="lbl">Expected</span></div>
+          </div>
+          <div style="display:flex;gap:10px;margin-top:18px">
+            <span class="pill"><span class="dot t"></span> Online</span>
+            <span class="pill">Queue · 0 pending</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 08 — REPORTS -->
+  <section class="slide" id="s8">
+    <span class="slidetag">10 — Reporting</span>
+    <div class="slide__inner">
+      <p class="eyebrow">From taps to signed documents</p>
+      <h2 style="margin-bottom:8px">The numbers leaders actually ask for.</h2>
+      <p class="lead" style="margin-bottom:26px">Every report exports to branded PDF or CSV; heavy exports run in the background and hand back a download link.</p>
+      <div class="grid grid-2" style="gap:16px">
+        <div class="card"><h3>Event Attendance Summary</h3><p>Present / Late / Absent / Excused counts, attendance rate, and a timeline of taps.</p></div>
+        <div class="card"><h3>Absentee Report</h3><p>Everyone expected who never tapped in — the list follow-up starts from.</p></div>
+        <div class="card"><h3>Student History</h3><p>One student's attendance across every event, with status per event.</p></div>
+        <div class="card"><h3>Group &amp; Course Analytics</h3><p>Attendance rate by group, course, or year over any date range.</p></div>
+      </div>
+      <div class="grid grid-4" style="margin-top:24px">
+        <div class="kpi card"><div class="big">76%</div><span class="lbl">Sample attendance rate</span></div>
+        <div class="kpi card"><div class="big">&lt;1s</div><span class="lbl">Tap to recorded</span></div>
+        <div class="kpi card"><div class="big">PDF</div><span class="lbl">+ CSV exports</span></div>
+        <div class="kpi card"><div class="big">100%</div><span class="lbl">Tap idempotency</span></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- SCREENS -->
+  <section class="slide" id="s-screens">
+    <span class="slidetag">11 — The Screens</span>
+    <div class="slide__inner">
+      <p class="eyebrow">What organizers actually see</p>
+      <h2 style="margin-bottom:26px">A clear live picture, then a clean report to send.</h2>
+      <div class="split" style="align-items:stretch;gap:24px">
+
+        <!-- Live dashboard mock -->
+        <div class="card card--signal" style="padding:24px;display:flex;flex-direction:column">
+          <div class="card__num">LIVE EVENT DASHBOARD</div>
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px">
+            <div>
+              <div style="font-family:var(--serif);font-size:1.35rem;font-weight:600">Foundation Day Assembly</div>
+              <div class="mono small muted" style="font-family:var(--mono)">Gymnasium · 8:00 AM</div>
+            </div>
+            <span class="pill" style="border-color:var(--green);color:var(--green)"><span class="dot g"></span> LIVE</span>
+          </div>
+          <div class="grid grid-3" style="gap:12px;margin-bottom:16px">
+            <div class="kpi"><div class="big">160</div><span class="lbl">Checked in</span></div>
+            <div class="kpi"><div class="big" style="color:var(--text-soft)">210</div><span class="lbl">Expected</span></div>
+            <div class="kpi"><div class="big" style="color:var(--signal)">76%</div><span class="lbl">Turnout</span></div>
+          </div>
+          <div style="display:flex;height:8px;border-radius:100px;overflow:hidden;background:var(--surface-2);margin-bottom:14px">
+            <span style="width:70%;background:var(--green)"></span>
+            <span style="width:6%;background:var(--amber)"></span>
+          </div>
+          <div style="display:flex;flex-direction:column;gap:8px;font-size:0.86rem">
+            <div style="display:flex;justify-content:space-between;align-items:center;padding:8px 12px;border:1px solid var(--line);border-radius:8px">
+              <span>Reyes, Maria C. <span class="muted">· BSIT 3A</span></span><span class="pill" style="border-color:var(--green);color:var(--green)">Present</span>
+            </div>
+            <div style="display:flex;justify-content:space-between;align-items:center;padding:8px 12px;border:1px solid var(--line);border-radius:8px">
+              <span>Santos, Juan D. <span class="muted">· BSCS 2B</span></span><span class="pill" style="border-color:var(--amber);color:var(--amber)">Late</span>
+            </div>
+            <div style="display:flex;justify-content:space-between;align-items:center;padding:8px 12px;border:1px solid var(--line);border-radius:8px">
+              <span>Cruz, Ana L. <span class="muted">· BSA 4A</span></span><span class="pill" style="border-color:var(--green);color:var(--green)">Present</span>
+            </div>
+          </div>
+          <div class="muted small" style="margin-top:14px;font-family:var(--mono)">Updates live as students tap in ↑</div>
+        </div>
+
+        <!-- Report preview mock -->
+        <div class="card" style="padding:24px;display:flex;flex-direction:column">
+          <div class="card__num">ATTENDANCE SUMMARY · PDF</div>
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px">
+            <div>
+              <div style="font-family:var(--serif);font-size:1.35rem;font-weight:600">Event Report</div>
+              <div class="mono small muted" style="font-family:var(--mono)">Generated · Jul 13, 2026</div>
+            </div>
+            <span class="pill"><span class="dot" style="background:var(--accent)"></span> READY</span>
+          </div>
+          <div class="grid grid-2" style="gap:12px;margin-bottom:16px">
+            <div style="padding:12px;border:1px solid var(--line);border-radius:8px"><div style="font-family:var(--serif);font-size:1.5rem;color:var(--green)">148</div><div class="lbl small">Present</div></div>
+            <div style="padding:12px;border:1px solid var(--line);border-radius:8px"><div style="font-family:var(--serif);font-size:1.5rem;color:var(--amber)">12</div><div class="lbl small">Late</div></div>
+            <div style="padding:12px;border:1px solid var(--line);border-radius:8px"><div style="font-family:var(--serif);font-size:1.5rem;color:var(--rose)">50</div><div class="lbl small">Absent</div></div>
+            <div style="padding:12px;border:1px solid var(--line);border-radius:8px"><div style="font-family:var(--serif);font-size:1.5rem;color:var(--text-soft)">8</div><div class="lbl small">Excused</div></div>
+          </div>
+          <div style="border:1px solid var(--line);border-radius:8px;overflow:hidden;font-size:0.82rem">
+            <div style="display:flex;justify-content:space-between;padding:9px 12px;background:var(--surface-2);font-family:var(--mono);font-size:11px;letter-spacing:0.05em;color:var(--text-soft)"><span>STUDENT</span><span>CHECK-IN</span></div>
+            <div style="display:flex;justify-content:space-between;padding:9px 12px;border-top:1px solid var(--line)"><span>Abad, Liza</span><span class="muted" style="font-variant-numeric:tabular-nums">08:02</span></div>
+            <div style="display:flex;justify-content:space-between;padding:9px 12px;border-top:1px solid var(--line)"><span>Bautista, Marco</span><span class="muted" style="font-variant-numeric:tabular-nums">08:05</span></div>
+            <div style="display:flex;justify-content:space-between;padding:9px 12px;border-top:1px solid var(--line)"><span>Del Rosario, Kim</span><span class="muted" style="font-variant-numeric:tabular-nums">08:11</span></div>
+          </div>
+          <div style="display:flex;gap:10px;margin-top:16px">
+            <span class="pill"><span class="dot" style="background:var(--accent)"></span> Export PDF</span>
+            <span class="pill">Export CSV</span>
+          </div>
+        </div>
+      </div>
+      <p class="small muted" style="margin-top:16px">Illustrative mockups with sample data — final screens are branded with your school logo.</p>
+    </div>
+  </section>
+
+  <!-- SECURITY / SIS -->
+  <section class="slide" id="s9">
+    <span class="slidetag">12 — Trust &amp; Data</span>
+    <div class="slide__inner">
+      <p class="eyebrow">Secure, integrated, and yours</p>
+      <div class="split" style="align-items:start">
+        <div>
+          <h2>Student data stays protected and in sync.</h2>
+          <div class="feat" style="margin-top:22px">
+            <div class="feat__item"><span class="feat__mark">◆</span><div><b>SIS integration</b><p>Import students from CSV, a read-only DB link, or the SIS API — mapped once, re-runnable, and idempotent.</p></div></div>
+            <div class="feat__item"><span class="feat__mark">◆</span><div><b>Permission-based access</b><p>Every action is gated by a fine-grained permission, enforced on the server — not just hidden in the UI.</p></div></div>
+            <div class="feat__item"><span class="feat__mark">◆</span><div><b>Full audit trail</b><p>Every change is logged with who, what, and when — a complete, tamper-evident record.</p></div></div>
+            <div class="feat__item"><span class="feat__mark">◆</span><div><b>School-scoped isolation</b><p>Data is filtered by school on every query, so records never cross boundaries.</p></div></div>
+          </div>
+        </div>
+        <div class="grid" style="gap:14px">
+          <div class="card card--gold"><h3>Encrypted in transit</h3><p>HTTPS only, HSTS, rate-limited login and tap endpoints, secrets in a vault.</p></div>
+          <div class="card card--gold"><h3>JWT authentication</h3><p>Short-lived access tokens with rotating refresh tokens, hashed at rest.</p></div>
+          <div class="card card--gold"><h3>Tested for integrity</h3><p>Automated tests cover deduplication and idempotency — the guarantee that a tap counts once.</p></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 10 — DEPLOYMENT -->
+  <section class="slide" id="s10">
+    <span class="slidetag">13 — Deployment</span>
+    <div class="slide__inner">
+      <p class="eyebrow">Your infrastructure, your call</p>
+      <h2 style="margin-bottom:8px">One codebase. Two ways to run it.</h2>
+      <p class="lead" style="margin-bottom:24px">The same Dockerized system ships as a managed cloud service or installs on your own servers — only the hosting differs.</p>
+      <div class="tablewrap">
+        <table class="compare">
+          <thead>
+            <tr><th>Concern</th><th class="col-a">SaaS — Managed</th><th class="col-b">On-Premise — School-Hosted</th></tr>
+          </thead>
+          <tbody>
+            <tr><th>Hosting</th><td class="col-a">Vendor cloud</td><td class="col-b">Your servers</td></tr>
+            <tr><th>Updates</th><td class="col-a">Automatic</td><td class="col-b">School-applied, with guidance</td></tr>
+            <tr><th>Data location</th><td class="col-a">Vendor cloud</td><td class="col-b">Campus network — full data sovereignty</td></tr>
+            <tr><th>Cost model</th><td class="col-a">Subscription</td><td class="col-b">One-time license + optional support</td></tr>
+            <tr><th>Backups &amp; monitoring</th><td class="col-a">Handled for you</td><td class="col-b">School-managed</td></tr>
+            <tr><th>Source code</th><td class="col-a">Hosted service</td><td class="col-b">Delivered in full</td></tr>
+            <tr><th>Capture devices</th><td class="col-a">Your existing phones / tablets</td><td class="col-b">Your existing phones / tablets</td></tr>
+            <tr><th>RFID reader</th><td class="col-a">Phone-connected — supplied by us</td><td class="col-b">Phone-connected — supplied by us</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p class="small muted" style="margin-top:16px">You use the phones and tablets you already have as capture devices. The only added hardware is the compact phone-connected RFID reader we supply — confirmed during Discovery.</p>
+    </div>
+  </section>
+
+  <!-- 11 — ROADMAP -->
+  <section class="slide" id="s11">
+    <span class="slidetag">14 — Roadmap</span>
+    <div class="slide__inner">
+      <p class="eyebrow">From kickoff to campus-wide</p>
+      <h2 style="margin-bottom:18px">A phased delivery — roughly 12–16 weeks to launch.</h2>
+      <div class="road">
+        <div class="road__row"><div class="road__ph">1</div><div class="road__name">Discovery &amp; Planning<span>REQUIREMENTS</span></div><div class="road__desc">Finalize requirements &amp; SIS mapping, pick RFID readers, confirm database and deployment, lock the API contract.</div><div class="road__dur">1–2 wks</div></div>
+        <div class="road__row"><div class="road__ph">2</div><div class="road__name">Web System<span>CORE BUILD</span></div><div class="road__desc">Database, auth &amp; roles, students, events, attendance with live updates, and the full web admin.</div><div class="road__dur">8–10 wks</div></div>
+        <div class="road__row"><div class="road__ph">3</div><div class="road__name">Mobile / RFID<span>WITHIN PHASE 2</span></div><div class="road__desc">Scan screen, offline queue &amp; sync, live roster, RFID adapters, and device registration.</div><div class="road__dur">parallel</div></div>
+        <div class="road__row"><div class="road__ph">4</div><div class="road__name">Migration &amp; Testing<span>UAT</span></div><div class="road__desc">SIS import pipeline, user acceptance testing, plus performance, security, and idempotency checks.</div><div class="road__dur">1–2 wks</div></div>
+        <div class="road__row"><div class="road__ph">5</div><div class="road__name">Deployment &amp; Training<span>GO-LIVE</span></div><div class="road__desc">Dockerized deployment, admin &amp; organizer training, and full documentation handover.</div><div class="road__dur">1–2 wks</div></div>
+        <div class="road__row"><div class="road__ph">6</div><div class="road__name">Support<span>ONGOING</span></div><div class="road__desc">Bug fixes, monitoring, and enhancements under the support agreement.</div><div class="road__dur">ongoing</div></div>
+      </div>
+      <p class="lead" style="margin-top:30px;color:var(--accent);font-family:var(--serif);font-size:1.35rem;max-width:none">Ready to tap in? Let's schedule the Discovery workshop.</p>
+    </div>
+  </section>
+
+</main>
+
+<script>
+  (function () {
+    var slides = Array.prototype.slice.call(document.querySelectorAll(".slide"));
+    var counter = document.getElementById("counter");
+    var rail = document.getElementById("rail");
+    var prevBtn = document.getElementById("prevbtn");
+    var nextBtn = document.getElementById("nextbtn");
+    var total = slides.length;
+    var pad = function (n) { return (n < 10 ? "0" : "") + n; };
+    var reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    var activeIdx = 0;
+
+    function currentIndex() {
+      var mid = window.scrollY + window.innerHeight / 2;
+      var idx = 0;
+      for (var i = 0; i < slides.length; i++) { if (slides[i].offsetTop <= mid) idx = i; }
+      return idx;
+    }
+
+    // Tag the direct, meaningful children of each slide as staggered reveal targets.
+    // Each element type gets a "flavor" class (direction/scale) and an --i stagger index.
+    function flavorFor(el) {
+      if (el.classList.contains("eyebrow")) return "rv-eyebrow";
+      if (el.tagName === "H1" || el.tagName === "H2" || el.tagName === "H3") return "rv-heading";
+      if (el.classList.contains("road__row")) return "rv-row";
+      return "rv-card";
+    }
+    function tagReveals() {
+      slides.forEach(function (slide) {
+        if (slide.classList.contains("cover")) return; // cover has its own bespoke intro
+        var inner = slide.querySelector(".slide__inner");
+        if (!inner) return;
+        var i = 0;
+        Array.prototype.forEach.call(inner.children, function (child) {
+          // Grid/flow containers: stagger their items instead of the container.
+          if (child.classList.contains("grid") || child.classList.contains("road")) {
+            Array.prototype.forEach.call(child.children, function (item) {
+              item.classList.add("reveal");
+              item.classList.add(item.classList.contains("road__row") ? "rv-row"
+                : item.classList.contains("kpi") ? "rv-step" : "rv-card");
+              item.style.setProperty("--i", i++);
+            });
+            return;
+          }
+          child.classList.add("reveal", flavorFor(child));
+          child.style.setProperty("--i", i++);
+        });
+        // Flow steps get their own finer stagger (only if not already tagged).
+        slide.querySelectorAll(".flow__step").forEach(function (s, k) {
+          if (s.classList.contains("reveal")) return;
+          s.classList.add("reveal", "rv-step"); s.style.setProperty("--i", k);
+        });
+      });
+    }
+
+    // Reveal transition: arm every slide, then activate whichever scrolls into view.
+    // Re-arm on exit so the staggered entrance replays when you navigate back.
+    if (!reduceMotion && "IntersectionObserver" in window) {
+      tagReveals();
+      slides.forEach(function (s, i) { if (i !== 0) s.classList.add("is-armed"); });
+      slides[0].classList.add("is-active");
+      var io = new IntersectionObserver(function (entries) {
+        entries.forEach(function (entry) {
+          if (entry.isIntersecting && entry.intersectionRatio >= 0.5) {
+            entry.target.classList.remove("is-armed");
+            entry.target.classList.add("is-active");
+          } else if (entry.intersectionRatio === 0) {
+            entry.target.classList.remove("is-active");
+            entry.target.classList.add("is-armed");
+          }
+        });
+      }, { threshold: [0, 0.5, 1] });
+      slides.forEach(function (s) { io.observe(s); });
+    }
+
+    // Cover intro: cascade the hero elements in on first load.
+    (function coverIntro() {
+      var cover = document.querySelector(".cover");
+      if (!cover || reduceMotion) return;
+      var chips = cover.querySelectorAll(".stack-chips span");
+      chips.forEach(function (c, k) { c.style.animationDelay = (0.55 + k * 0.06) + "s"; });
+      requestAnimationFrame(function () { cover.classList.add("play"); });
+    })();
+
+    // Progress rail + counter + button state on scroll
+    var ticking = false;
+    function update() {
+      var h = document.documentElement;
+      var max = h.scrollHeight - h.clientHeight;
+      var pct = max > 0 ? (h.scrollTop / max) * 100 : 0;
+      rail.style.width = pct + "%";
+      activeIdx = currentIndex();
+      counter.textContent = pad(activeIdx + 1) + " / " + pad(total);
+      prevBtn.disabled = activeIdx <= 0;
+      nextBtn.disabled = activeIdx >= total - 1;
+      ticking = false;
+    }
+    window.addEventListener("scroll", function () {
+      if (!ticking) { window.requestAnimationFrame(update); ticking = true; }
+    }, { passive: true });
+    window.addEventListener("resize", update);
+    update();
+
+    // Navigation (buttons + keyboard)
+    function go(dir) {
+      var next = Math.max(0, Math.min(slides.length - 1, currentIndex() + dir));
+      slides[next].scrollIntoView({
+        behavior: reduceMotion ? "auto" : "smooth",
+        block: "start"
+      });
+    }
+    prevBtn.addEventListener("click", function () { go(-1); });
+    nextBtn.addEventListener("click", function () { go(1); });
+
+    document.addEventListener("keydown", function (e) {
+      if (e.key === "ArrowRight" || e.key === "ArrowDown" || e.key === "PageDown" || e.key === " ") {
+        e.preventDefault(); go(1);
+      } else if (e.key === "ArrowLeft" || e.key === "ArrowUp" || e.key === "PageUp") {
+        e.preventDefault(); go(-1);
+      } else if (e.key === "Home") { e.preventDefault(); slides[0].scrollIntoView({ behavior: "smooth" }); }
+        else if (e.key === "End") { e.preventDefault(); slides[slides.length - 1].scrollIntoView({ behavior: "smooth" }); }
+    });
+
+    // Theme toggle
+    var btn = document.getElementById("themebtn");
+    var root = document.documentElement;
+    btn.addEventListener("click", function () {
+      var cur = root.getAttribute("data-theme");
+      if (!cur) {
+        cur = window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+      }
+      root.setAttribute("data-theme", cur === "dark" ? "light" : "dark");
+    });
+  })();
+</script>

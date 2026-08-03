@@ -3,7 +3,17 @@
 **Project:** Events Attendance Monitoring System for Students with RFID Integration — University of San Agustin
 **Prepared for:** Center for Information and Communications Support Service (CICSS)
 **Stack:** React (Web Admin) · React Native (Mobile RFID Capture) · .NET (Backend API)
-**Document version:** 1.0 — 2026-06-22
+**Document version:** 1.1 — 2026-07-13
+
+---
+
+## Value at a Glance
+
+**Attendance tracking that works fast, with a clear, easily readable display.** Our software turns the phones and scanners you already have into a powerful, reliable attendance station.
+
+- **Use what you already have.** No need to buy new equipment — the app runs on the phones, tablets, or scanners already in your school.
+- **Works without Wi-Fi.** If the internet goes down, the app keeps working. It saves the attendance data on the device and syncs the moment you reconnect.
+- **A plug-in RFID reader for the phone.** We will supply a compact RFID reader that connects directly to a phone (via Bluetooth/USB), so an ordinary phone becomes a tap-and-go scanning station — no dedicated handheld required.
 
 ---
 
@@ -278,15 +288,15 @@ Schools ──< Students          Events >── EventGroups ──< StudentGrou
 | EventId | uniqueidentifier | FK→Events, NOT NULL, INDEX | |
 | OccurrenceId | uniqueidentifier | FK→EventSchedules, NULL | If recurring |
 | StudentId | uniqueidentifier | FK→Students, NOT NULL, INDEX | |
-| RfidCardId | uniqueidentifier | FK→RfidCards, NULL | Card used (null if manual) |
+| RfidCardId | uniqueidentifier | FK→RfidCards, NULL | Card used (null only for admin corrections/imports) |
 | CheckInAt | datetime2 | NULL | First tap (UTC) |
 | CheckOutAt | datetime2 | NULL | Time-out tap (if TimeInOut) |
 | Status | nvarchar(20) | NOT NULL | Present/Late/Absent/Excused |
-| CaptureMethod | nvarchar(20) | NOT NULL, default 'Rfid' | Rfid/Manual/Import |
+| CaptureMethod | nvarchar(20) | NOT NULL, default 'Rfid' | Rfid (door entry) / Correction (admin, web) / Import |
 | DeviceId | uniqueidentifier | FK→Devices, NULL | Capturing device |
 | DeviceTapId | nvarchar(100) | NULL | Client-generated id for dedupe |
 | Notes | nvarchar(500) | NULL | |
-| RecordedByUserId | uniqueidentifier | FK→Users, NULL | Manual entry author |
+| RecordedByUserId | uniqueidentifier | FK→Users, NULL | Admin who made a correction (null for RFID taps) |
 | CreatedAt / UpdatedAt | datetime2 | NOT NULL | |
 
 **Constraints/Indexes:**
@@ -369,7 +379,7 @@ Each module = a feature folder in `EAMS.Application` (DTOs, validators, service 
 | **Groups** | Student groups & membership | `IStudentGroupService` |
 | **Events** | CRUD events, status transitions, associate attendees | `IEventService`, `IEventGroupService` |
 | **Schedules** | Recurrence expansion, calendar feed | `IScheduleService` (RRULE engine) |
-| **Attendance** | Tap capture, manual entry, dedupe, status calc, live broadcast | `IAttendanceService`, `AttendanceHub` (SignalR) |
+| **Attendance** | Tap capture, admin corrections, dedupe, status calc, live broadcast | `IAttendanceService`, `AttendanceHub` (SignalR) |
 | **Devices** | Register readers/kiosks, API keys, heartbeat | `IDeviceService` |
 | **Reports** | Aggregations + PDF/CSV export | `IReportService`, `IExportService` |
 | **SIS Import** | CSV/DB/API ingestion, mapping, batch tracking | `ISisImportService`, Hangfire jobs |
@@ -380,7 +390,9 @@ Each module = a feature folder in `EAMS.Application` (DTOs, validators, service 
 - Tap before `StartAt + GraceMinutes` → `Present`.
 - Tap after grace → `Late`.
 - No tap by `EndAt` for an expected attendee → `Absent` (batch job at event close).
-- `Excused` set manually by an organizer/admin.
+- `Excused` set by an organizer/admin as an audited correction.
+
+> **Entry policy — card-only:** the RFID card *is* the ID; no card, no entry. Attendance at the door is captured **exclusively by RFID tap** — there is no manual "check-in by hand" at the point of entry. Status corrections (e.g. marking `Excused`) are made afterward on the web by an authorized admin and are fully audited.
 
 ---
 
@@ -433,7 +445,7 @@ Each module = a feature folder in `EAMS.Application` (DTOs, validators, service 
 |---|---|---|---|
 | POST | `/attendance/tap` | `attendance.capture` | **Core.** `{eventId, occurrenceId?, cardUid, deviceId, deviceTapId, tappedAt}` → resolves student, validates window, upserts record, broadcasts |
 | POST | `/attendance/tap/batch` | `attendance.capture` | Offline sync — array of taps; idempotent by `deviceTapId` |
-| POST | `/attendance/manual` | `attendance.write` | `{eventId, studentId, status, checkInAt?, notes}` |
+| POST | `/attendance/correction` | `attendance.write` | Admin-only correction (web, audited). `{eventId, studentId, status, checkInAt?, notes}`. Not a door-capture path — floor entry is RFID tap only. |
 | PUT | `/attendance/{id}` | `attendance.write` | Edit status/notes (audited) |
 | GET | `/attendance` | `attendance.read` | Filters: `eventId`, `studentId`, `status`, date range |
 | GET | `/attendance/live/{eventId}` | `attendance.read` | Snapshot for dashboard (SignalR pushes deltas) |
@@ -529,7 +541,7 @@ Each module = a feature folder in `EAMS.Application` (DTOs, validators, service 
 | **Login** | Auth as organizer, or kiosk mode via device API key |
 | **Event Picker** | Choose the active/open event (or scheduled occurrence) |
 | **Scan Screen** | Big status display; listens for taps; shows last student (name, photo, Present/Late), running present count, online/offline + queue badge |
-| **Roster** | Searchable expected list; manual check-in fallback; mark excused |
+| **Roster** | Searchable expected list; live present/absent view (read-only — entry is by RFID tap only) |
 | **Sync / Queue** | Pending offline taps, retry, last sync time |
 | **Settings** | Reader pairing (BLE), tap mode (single / time-in-out), sound/vibration feedback |
 
@@ -538,7 +550,7 @@ Each module = a feature folder in `EAMS.Application` (DTOs, validators, service 
 2. Write to `expo-sqlite` queue: `{localId(uuid), eventId, occurrenceId, cardUid, deviceTapId, tappedAt, synced:0}`.
 3. Connectivity watcher flushes queue via `POST /attendance/tap/batch`; server dedupes by `(deviceId, deviceTapId)`.
 4. On success mark `synced:1`; on conflict (already present) treat as success.
-5. Periodic pull of the event's student roster for offline UID→name resolution and manual fallback.
+5. Periodic pull of the event's student roster for offline UID→name resolution and the live present/absent view.
 
 > `deviceTapId` is a client-generated UUID — the keystone of idempotency. The same tap retried any number of times produces exactly one record.
 
@@ -564,7 +576,9 @@ interface RfidReader {
 ```
 The Scan screen is reader-agnostic — swapping hardware only changes the adapter. UID normalization (uppercase hex, strip separators) happens once in the adapter so the API always receives canonical UIDs matching `RfidCards.CardUid`.
 
-> **Note (per proposal):** RFID hardware is procured separately. Recommend testing 1–2 reader models during Discovery to lock the adapter.
+**Phone-connected RFID reader (supplied).** As part of this project we will provide a compact RFID reader that connects directly to a phone — over **Bluetooth LE** (untethered) or **USB/OTG** (keyboard-wedge). This turns any ordinary phone already in the school into a tap-and-go scanning station, so no dedicated handheld or new tablet purchase is required. The reader targets the **BLE SDK** and **keyboard-wedge** adapters above; the exact model is confirmed during Discovery.
+
+> **Note:** The school's existing phones/tablets/scanners are used as the capture devices. The only hardware we add is the small phone-connected RFID reader described above. Recommend testing the chosen reader during Discovery to lock the adapter.
 
 ---
 
@@ -626,7 +640,8 @@ Both options share one Dockerized codebase; only hosting differs (per proposal �
 | Updates | Automatic | School-applied (with guidance) |
 | Data location | Vendor cloud | School network (data sovereignty) |
 | Cost model | Subscription | One-time license + optional support |
-| RFID readers | Client-provided | Client-provided |
+| Capture devices | School's existing phones/tablets/scanners | School's existing phones/tablets/scanners |
+| RFID reader | Phone-connected reader supplied by vendor | Phone-connected reader supplied by vendor |
 
 ---
 
@@ -651,7 +666,7 @@ Mapped to the proposal's phases.
 |---|---|---|
 | **1 — Discovery & Planning** | 1–2 wks | Finalize requirements, SIS data mapping, pick RFID reader model(s), confirm DB provider & deployment option, lock API contract (OpenAPI) |
 | **2 — Web System Development** | 8–10 wks | DB schema + EF migrations; Auth/RBAC; Students/Groups; Events/Schedules; Attendance + SignalR; Devices; Settings; Web admin SPA for all above; Swagger |
-| **3 — Mobile / RFID** | (within Phase 2) | RN app: login, event picker, scan screen, offline queue/sync, roster fallback; RFID adapters; device registration |
+| **3 — Mobile / RFID** | (within Phase 2) | RN app: login, event picker, scan screen, offline queue/sync, live roster; RFID adapters; device registration |
 | **4 — SIS Migration & Testing** | 1–2 wks | Import pipeline (CSV → DB/API); mapping UI; UAT; performance & security testing; idempotency tests |
 | **5 — Deployment & Training** | 1–2 wks | Dockerized deploy (SaaS or on-prem); training for admins/organizers; documentation handover (user manuals, technical docs, install guide) |
 | **6 — Post-Deployment Support** | Ongoing | Bug fixes, monitoring, enhancements per support agreement |
