@@ -62,6 +62,9 @@ Checks CI runs (run these before declaring work done):
   FROM dbo.Schools s
   WHERE s.Code = 'USA' AND NOT EXISTS (SELECT 1 FROM dbo.Terms t WHERE t.SchoolId = s.Id);
   ```
+  This hand-written SQL is a **workaround, not the intended flow** — `docs/PHASE-5-YEAR-LEVEL-AND-TERM-ADMIN.md`
+  (D-50) plans an admin write surface for terms so an operator can create one. Until that ships, the
+  SQL above is the only way.
 - **Nothing outside `EAMS.Infrastructure` can see `EamsDbContext`.** Every type in that assembly is
   `internal` except `AddEamsInfrastructure`. Controllers talk to `IStudentService` /
   `IEventService` / `IAttendanceService` from `EAMS.Application.Abstractions` and speak DTOs only.

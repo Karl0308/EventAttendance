@@ -247,6 +247,7 @@ Schools ──< Students          Events >── EventGroups ──< StudentGrou
 | SchoolId | uniqueidentifier | FK→Schools, NOT NULL | |
 | Name | nvarchar(150) | NOT NULL | e.g. "BSIT 3A", "SSC Officers" |
 | Type | nvarchar(30) | NOT NULL | Course/Section/Org/Custom |
+| | | | *As built, also `College`/`Program`; `YearLevel` proposed (D-49)* |
 | CreatedAt / UpdatedAt | datetime2 | NOT NULL | |
 
 `StudentGroupMembers` (junction)
@@ -349,6 +350,12 @@ Schools ──< Students          Events >── EventGroups ──< StudentGrou
 | RunByUserId | uniqueidentifier | FK→Users, NULL | |
 
 `SisImportRows` — `Id`, `BatchId` (FK), `RowNumber`, `RawData` (nvarchar(max), JSON of source row), `Result` (Inserted/Updated/Failed/Skipped), `ErrorMessage`, `StudentId` (FK, nullable).
+
+> **Drift.** As built, `SisImportBatches` also carries `TermId` (required — ADR-001 D-5), an
+> `Excel` source, `SourceSheetName`, `FileHash`, `ImportProfileId` and `SkippedRows`/`WarningRows`.
+> One batch covers the **whole institution** for its term, all year levels together; year is derived
+> per student rather than declared per batch ([Phase 5 §3](docs/PHASE-5-YEAR-LEVEL-AND-TERM-ADMIN.md),
+> D-47).
 
 ### 4.13 `AuditLogs` & `SystemSettings`
 
@@ -474,6 +481,7 @@ Each module = a feature folder in `EAMS.Application` (DTOs, validators, service 
 |---|---|---|---|
 | POST | `/sis/import/upload` | `sis.import` | Multipart CSV → creates batch, returns preview/mapping |
 | POST | `/sis/import/{batchId}/run` | `sis.import` | Enqueue Hangfire job with field mapping |
+| | | | *As built: `.xlsx`, synchronous, `termId` required on both* |
 | GET | `/sis/import/{batchId}` | `sis.import` | Batch status + counts |
 | GET | `/sis/import/{batchId}/rows?result=Failed` | `sis.import` | Row-level results/errors |
 
@@ -655,6 +663,12 @@ Mapped to the proposal's phases.
 | **4 — SIS Migration & Testing** | 1–2 wks | Import pipeline (CSV → DB/API); mapping UI; UAT; performance & security testing; idempotency tests |
 | **5 — Deployment & Training** | 1–2 wks | Dockerized deploy (SaaS or on-prem); training for admins/organizers; documentation handover (user manuals, technical docs, install guide) |
 | **6 — Post-Deployment Support** | Ongoing | Bug fixes, monitoring, enhancements per support agreement |
+
+> **Current work.** The phases above are the proposal's commercial phases; the build has since been
+> tracked by numbered decisions (D-1…D-46) across `docs/adr/`. The next slice — derived year levels,
+> dynamic event audiences, and term administration — is planned in
+> **[Phase 5](docs/PHASE-5-YEAR-LEVEL-AND-TERM-ADMIN.md)** (D-47…D-52, proposed). Its organising
+> principle: **the import loads everyone; all grouping happens at event creation.**
 
 ### Suggested build order (dependency-driven)
 1. Solution scaffolding, DB schema, EF migrations, seed roles/permissions.

@@ -150,6 +150,25 @@ It is the only recovery route out of a terminal status (D-14). Adding a status g
 a change that reads as a *safety improvement* in review, since the tap path has one — turns D-14 into
 a dead end with no way back. Nothing tests this today.
 
+## Proposed, not yet decided
+
+**D-47 … D-53** are *proposed* in
+[`../PHASE-5-YEAR-LEVEL-AND-TERM-ADMIN.md`](../PHASE-5-YEAR-LEVEL-AND-TERM-ADMIN.md) and are listed
+here so the numbering stays unambiguous — nothing in code may cite them until they are accepted.
+
+| Pending | Decision |
+|---|---|
+| **D-47** | Year level is **derived** from the student's program-shaped home section (`BSCRIM 2-A` for a BSCRIM student), never from any section containing a digit — subject blocks (`NSTP 2`, `GE 8`) mix year levels. Ambiguity yields `null`, never a guess |
+| **D-48** | Derived year writes to `StudentTermRecord` only — never to the ADR-001 D-2 `Student` display cache |
+| **D-49** | Year level becomes an invitable audience by projecting into `StudentGroup`, not by extending `EventGroups` — the same trade as ADR-003 |
+| **D-50** | The event audience builder exposes a **closed** list of five academic fields (college, program, year, section, course), each resolving through `Enrollments`/`StudentTermRecords`. **The `Students` cache columns are unreachable by construction** — an open "filter any column" builder is the most likely way to reintroduce the ADR-001 D-2 defect, because the wrong columns are the convenient ones |
+| **D-51** | Values within a filter field union; fields intersect; separate additions union |
+| **D-52** | A multi-filter audience materialises to individual student rows, because `EventGroups` unions its rows and attaching constituents to mean an intersection would over-count the ADR-003 D-12 denominator |
+| **D-53** | Terms get an admin write surface; the rest of `/academic` stays read-only because the importer owns those tables |
+
+That document is the plan for the next slice, not an ADR. On implementation these fold into the
+ADR-004 consolidation alongside the unwritten D-22…D-46.
+
 ## Conventions
 
 - Structure: Context → Options Considered → Decision → Consequences (positive / negative / neutral) →
