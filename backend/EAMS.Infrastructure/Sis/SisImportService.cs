@@ -1378,9 +1378,15 @@ internal sealed class SisImportService : ISisImportService
                 changed |= Assign(record.ProgramId, programId, v => record.ProgramId = v);
                 changed |= Assign(record.HomeSectionKey, sectionKey, v => record.HomeSectionKey = v);
                 changed |= Assign(record.HomeSectionName, sectionName, v => record.HomeSectionName = v);
-                // YearLevel is deliberately left alone: the export has no year-level column, and
-                // deriving one from a section name ('BSFS 2-A' looks like year 2) would be a guess
-                // stored as a fact. A null here means "not recorded", which is true.
+                // YearLevel is deliberately left alone *here*, and it is no longer left alone
+                // everywhere: the export still has no year-level column, and reading a section name
+                // row by row ('NSTP 2' looks exactly as much like year 2 as 'BSCRIM 2-A' does) would be
+                // a guess stored as a fact. D-47 derives it instead, in StudentGroupProjection, from
+                // the student's *whole* enrollment set measured against their own programme code —
+                // which this pass cannot do, because it is looking at one student's rows before the
+                // offerings they resolve to are all known. The projection runs at the end of every
+                // import, so a re-import still recomputes the year; it just does not happen on this
+                // line. See YearLevels.
                 if (changed) record.UpdatedAt = DateTime.UtcNow;
                 resolved[first.RegNo] = new Touched<StudentTermRecord>(
                     record, changed ? SisImportEntityAction.Updated : SisImportEntityAction.Unchanged,

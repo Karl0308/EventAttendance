@@ -225,7 +225,7 @@ public class PaginationTests : IntegrationTest
             ("GET /academic/course-offerings", "CourseOfferings",
                 () => academic.ListCourseOfferingsAsync(Guid.NewGuid(), null, null, page)),
             ("GET /student-groups", "StudentGroups",
-                () => StudentGroupsOn(db).ListAsync(null, null, page)),
+                () => StudentGroupsOn(db).ListAsync(null, null, null, null, page)),
         };
 
         foreach (var read in reads)

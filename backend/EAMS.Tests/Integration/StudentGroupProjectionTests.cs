@@ -200,24 +200,52 @@ public class StudentGroupProjectionTests : IntegrationTest
 
     /// <summary>
     /// A section group projects a <em>key</em> shared by many offerings, so there is no row for it to
-    /// point at — which is why <c>SourceKey</c> exists at all. The other three do point at a row, and
-    /// that is what lets a reader get from a group back to the offering it came from.
+    /// point at — which is why <c>SourceKey</c> exists at all. A year-level group is the second
+    /// instance of that shape (D-49): a derived <c>StudentTermRecords.YearLevel</c> value shared by
+    /// many students, with no year-level table behind it and deliberately none added. The other three
+    /// do point at a row, and that is what lets a reader get from a group back to the offering it came
+    /// from.
+    ///
+    /// <para>
+    /// <b>This test used to read "only a section", and the arrangement below is what made the wider
+    /// claim testable rather than merely true on a fixture that produced no year.</b> The shared world
+    /// enrols everyone in <c>BSFS 2-A</c> under a <c>BSCRIM</c> programme, which D-47's anchor
+    /// correctly refuses, so no year group existed here to contradict the old name. Adding one
+    /// programme-shaped section is what turns "Section or YearLevel" into a statement with something
+    /// on both sides of it.
+    /// </para>
     /// </summary>
     [Fact]
-    public async Task Only_a_section_group_has_no_source_row_to_point_at()
+    public async Task Only_a_section_or_year_level_group_has_no_source_row_to_point_at()
     {
         var world = await ArrangeAsync();
+
+        await using (var db = NewDbContext())
+        {
+            var course = TestData.NewCourse(world.SchoolId, "CRIM 1", "Intro to Criminal Law");
+            db.Courses.Add(course);
+            // Prefixed by the world's own programme code, so this one *is* a home section and Santos
+            // derives a year from it.
+            var offering = TestData.NewOffering(world.TermId, course.Id, "BSCRIM 2-A");
+            db.CourseOfferings.Add(offering);
+            db.Enrollments.Add(TestData.NewEnrollment(world.SantosId, offering.Id));
+            await db.SaveChangesAsync();
+        }
+
         await SyncAsync(world.TermId);
 
         await using var read = NewDbContext();
         var groups = await read.StudentGroups.AsNoTracking()
             .Where(g => g.SourceType == GroupSourceType.Derived).ToListAsync();
 
+        var rowless = new[] { GroupSourceEntityType.Section, GroupSourceEntityType.YearLevel };
+
+        Assert.Contains(groups, g => g.SourceEntityType == GroupSourceEntityType.YearLevel);
         Assert.All(
-            groups.Where(g => g.SourceEntityType == GroupSourceEntityType.Section),
+            groups.Where(g => rowless.Contains(g.SourceEntityType)),
             g => Assert.Null(g.SourceEntityId));
         Assert.All(
-            groups.Where(g => g.SourceEntityType != GroupSourceEntityType.Section),
+            groups.Where(g => !rowless.Contains(g.SourceEntityType)),
             g => Assert.NotNull(g.SourceEntityId));
 
         Assert.Equal(world.CollegeId, groups

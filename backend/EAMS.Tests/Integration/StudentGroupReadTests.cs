@@ -74,7 +74,7 @@ public class StudentGroupReadTests : IntegrationTest
         await ArrangeProjectedSchoolAsync();
 
         await using var db = NewDbContext();
-        var groups = (await StudentGroupsOn(db).ListAsync(null, null, PageRequest.Default)).Items;
+        var groups = (await StudentGroupsOn(db).ListAsync(null, null, null, null, PageRequest.Default)).Items;
 
         Assert.Contains(groups, g => g.SourceType == GroupSourceType.Manual);
         Assert.Contains(groups, g => g.SourceType == GroupSourceType.Derived);
@@ -100,7 +100,7 @@ public class StudentGroupReadTests : IntegrationTest
         await ArrangeProjectedSchoolAsync();
 
         await using var db = NewDbContext();
-        var groups = (await StudentGroupsOn(db).ListAsync(GroupSourceType.Manual, null, PageRequest.Default)).Items;
+        var groups = (await StudentGroupsOn(db).ListAsync(GroupSourceType.Manual, null, null, null, PageRequest.Default)).Items;
 
         var manual = Assert.Single(groups);
         Assert.Null(manual.TermId);
@@ -125,7 +125,7 @@ public class StudentGroupReadTests : IntegrationTest
         School.CurrentSchoolId = second;
 
         await using var db = NewDbContext();
-        var groups = (await StudentGroupsOn(db).ListAsync(null, null, PageRequest.Default)).Items;
+        var groups = (await StudentGroupsOn(db).ListAsync(null, null, null, null, PageRequest.Default)).Items;
 
         Assert.NotEmpty(groups);
         Assert.Contains(groups, g => g.Name == "SSC Officers (ZZZ)");
@@ -134,7 +134,7 @@ public class StudentGroupReadTests : IntegrationTest
         // Negative control: unpinned, both schools' groups are visible from the identical call — so the
         // exclusion above is the query filter's doing and not an artifact of the fixture.
         await using var unscoped = NewDbContext(new TestSchoolContext());
-        var all = (await StudentGroupsOn(unscoped).ListAsync(null, null, PageRequest.Default)).Items;
+        var all = (await StudentGroupsOn(unscoped).ListAsync(null, null, null, null, PageRequest.Default)).Items;
         Assert.Contains(all, g => g.Name == "SSC Officers (AAA)");
         Assert.Contains(all, g => g.Name == "SSC Officers (ZZZ)");
     }
@@ -149,15 +149,15 @@ public class StudentGroupReadTests : IntegrationTest
         await using var db = NewDbContext();
         var service = StudentGroupsOn(db);
 
-        var derived = (await service.ListAsync(GroupSourceType.Derived, null, PageRequest.Default)).Items;
+        var derived = (await service.ListAsync(GroupSourceType.Derived, null, null, null, PageRequest.Default)).Items;
         Assert.NotEmpty(derived);
         Assert.All(derived, g => Assert.Equal(GroupSourceType.Derived, g.SourceType));
 
-        var manual = (await service.ListAsync(GroupSourceType.Manual, null, PageRequest.Default)).Items;
+        var manual = (await service.ListAsync(GroupSourceType.Manual, null, null, null, PageRequest.Default)).Items;
         Assert.All(manual, g => Assert.Equal(GroupSourceType.Manual, g.SourceType));
 
         Assert.Equal(
-            ((await service.ListAsync(null, null, PageRequest.Default)).Items).Count,
+            ((await service.ListAsync(null, null, null, null, PageRequest.Default)).Items).Count,
             derived.Count + manual.Count);
     }
 
@@ -175,7 +175,7 @@ public class StudentGroupReadTests : IntegrationTest
         await ArrangeProjectedSchoolAsync();
 
         await using var db = NewDbContext();
-        var groups = (await StudentGroupsOn(db).ListAsync(spelling, null, PageRequest.Default)).Items;
+        var groups = (await StudentGroupsOn(db).ListAsync(spelling, null, null, null, PageRequest.Default)).Items;
 
         Assert.NotEmpty(groups);
         Assert.All(groups, g => Assert.Equal(GroupSourceType.Derived, g.SourceType));
@@ -195,8 +195,145 @@ public class StudentGroupReadTests : IntegrationTest
         await using var db = NewDbContext();
         var service = StudentGroupsOn(db);
 
-        Assert.NotEmpty((await service.ListAsync(null, null, PageRequest.Default)).Items);
-        Assert.Empty((await service.ListAsync("Banana", null, PageRequest.Default)).Items);
+        Assert.NotEmpty((await service.ListAsync(null, null, null, null, PageRequest.Default)).Items);
+        Assert.Empty((await service.ListAsync("Banana", null, null, null, PageRequest.Default)).Items);
+    }
+
+    // ------------------------------------------------------------------------------------ type
+
+    /// <summary>
+    /// A section arranged to be <em>programme-shaped</em> — its key begins with the fixture
+    /// programme's own <c>CodeKey</c> — so D-47's anchor fires and the term gains a year-level group.
+    /// The default <c>BSFS 2-A</c> deliberately does not, which is what keeps every test above
+    /// unchanged.
+    ///
+    /// <para>
+    /// The value is arranged rather than taken from the real roster: whether the registrar's
+    /// <c>PROGRAM</c> column produces a code that prefixes its own section names is an open question,
+    /// and nothing in this file depends on the answer. What is being tested here is the filter, not
+    /// the derivation.
+    /// </para>
+    /// </summary>
+    private const string ProgrammeShapedSection = "BSCRIM 2-A";
+
+    /// <summary>
+    /// <b>The axis an audience builder picks along</b> — "show me the year levels", "show me the
+    /// sections" — and the reason D-49 made year a <c>Type</c> rather than a new event-side concept.
+    /// </summary>
+    [Fact]
+    public async Task The_type_filter_narrows_to_one_kind_of_audience()
+    {
+        await ArrangeProjectedSchoolAsync(section: ProgrammeShapedSection);
+
+        await using var db = NewDbContext();
+        var service = StudentGroupsOn(db);
+
+        var years = (await service.ListAsync(
+            null, StudentGroupType.YearLevel, null, null, PageRequest.Default)).Items;
+
+        var year = Assert.Single(years);
+        Assert.Equal(StudentGroupType.YearLevel, year.Type);
+        Assert.Equal(GroupSourceEntityType.YearLevel, year.SourceEntityType);
+        Assert.Equal("2nd Year (2025-2026-1)", year.Name);
+
+        // The other kinds are still there and still findable — the filter narrowed, it did not empty.
+        var sections = (await service.ListAsync(
+            null, StudentGroupType.Section, null, null, PageRequest.Default)).Items;
+        Assert.All(sections, g => Assert.Equal(StudentGroupType.Section, g.Type));
+        Assert.Contains(sections, g => g.Name == $"{ProgrammeShapedSection} (2025-2026-1)");
+
+        Assert.True(
+            (await service.ListAsync(null, null, null, null, PageRequest.Default)).Items.Count
+                > years.Count + sections.Count,
+            "The unfiltered list must be larger than the two filtered ones, or the filter proved nothing.");
+    }
+
+    /// <summary>
+    /// Casing is canonicalized rather than rejected, exactly as <c>sourceType</c> is — liberal in what
+    /// is accepted, canonical in what is compared. The comparison has to be decided in C# rather than
+    /// left to the database's case-insensitive collation, or the rule would hold only for as long as
+    /// the deployment's collation does.
+    /// </summary>
+    [Theory]
+    [InlineData("YearLevel")]
+    [InlineData("yearlevel")]
+    [InlineData("YEARLEVEL")]
+    [InlineData("  YearLevel  ")]
+    public async Task The_type_filter_is_case_insensitive(string spelling)
+    {
+        await ArrangeProjectedSchoolAsync(section: ProgrammeShapedSection);
+
+        await using var db = NewDbContext();
+        var groups = (await StudentGroupsOn(db).ListAsync(
+            null, spelling, null, null, PageRequest.Default)).Items;
+
+        Assert.NotEmpty(groups);
+        Assert.All(groups, g => Assert.Equal(StudentGroupType.YearLevel, g.Type));
+    }
+
+    /// <summary>
+    /// <b>An undocumented value returns nothing, not everything</b> — the same asymmetry
+    /// <c>sourceType</c> draws, and the stakes are higher on this one. This is the filter an audience
+    /// builder narrows by, so a value that silently stopped filtering would hand a year picker every
+    /// college, programme, section and offering in the term, under names that look entirely plausible
+    /// beside each other. Empty is a wrong answer somebody notices immediately; unfiltered is one
+    /// nobody notices at all.
+    /// </summary>
+    [Fact]
+    public async Task An_undocumented_type_returns_no_groups_rather_than_all_of_them()
+    {
+        await ArrangeProjectedSchoolAsync(section: ProgrammeShapedSection);
+
+        await using var db = NewDbContext();
+        var service = StudentGroupsOn(db);
+
+        Assert.NotEmpty((await service.ListAsync(null, null, null, null, PageRequest.Default)).Items);
+        Assert.Empty((await service.ListAsync(null, "Banana", null, null, PageRequest.Default)).Items);
+
+        // "Year" is the near miss worth pinning: it is what somebody types from memory, and it is not
+        // a member of the set. It has to be refused like any other unknown rather than prefix-matched.
+        Assert.Empty((await service.ListAsync(null, "Year", null, null, PageRequest.Default)).Items);
+    }
+
+    // ---------------------------------------------------------------------------------- search
+
+    /// <summary>
+    /// The name is the whole of what a picker renders, so it is the whole of what <c>search</c> looks
+    /// at. It carries the term suffix the projection composes in, which is what makes a semester
+    /// searchable without a second parameter.
+    /// </summary>
+    [Fact]
+    public async Task The_search_filter_matches_the_display_name()
+    {
+        await ArrangeProjectedSchoolAsync(section: ProgrammeShapedSection);
+
+        await using var db = NewDbContext();
+        var service = StudentGroupsOn(db);
+
+        var year = Assert.Single(
+            (await service.ListAsync(null, null, null, "2nd Year", PageRequest.Default)).Items);
+        Assert.Equal(StudentGroupType.YearLevel, year.Type);
+
+        // A manual group is reachable by the same parameter — the picker does not know or care which
+        // half of the list a name came from.
+        var manual = Assert.Single(
+            (await service.ListAsync(null, null, null, "Officers", PageRequest.Default)).Items);
+        Assert.Equal(GroupSourceType.Manual, manual.SourceType);
+
+        // Case-insensitive, and a substring rather than a prefix.
+        var byProgramme =
+            (await service.ListAsync(null, null, null, "bscrim", PageRequest.Default)).Items;
+        Assert.NotEmpty(byProgramme);
+        Assert.All(byProgramme, g => Assert.Contains(
+            "BSCRIM", g.Name, StringComparison.OrdinalIgnoreCase));
+
+        Assert.Empty(
+            (await service.ListAsync(null, null, null, "no group is named this", PageRequest.Default)).Items);
+
+        // Blank is "do not filter" rather than "match the empty string", which would be the same thing
+        // here but is not the same statement — a picker with an empty search box must show everything.
+        Assert.NotEmpty(
+            (await service.ListAsync(null, null, null, "   ", PageRequest.Default)).Items);
     }
 
     // --------------------------------------------------------------------------------- termId
@@ -247,8 +384,8 @@ public class StudentGroupReadTests : IntegrationTest
         await using var read = NewDbContext();
         var service = StudentGroupsOn(read);
 
-        var thisTermGroups = (await service.ListAsync(null, thisTermId, PageRequest.Default)).Items;
-        var lastTermGroups = (await service.ListAsync(null, lastTermId, PageRequest.Default)).Items;
+        var thisTermGroups = (await service.ListAsync(null, null, thisTermId, null, PageRequest.Default)).Items;
+        var lastTermGroups = (await service.ListAsync(null, null, lastTermId, null, PageRequest.Default)).Items;
 
         Assert.NotEmpty(thisTermGroups);
         Assert.NotEmpty(lastTermGroups);
@@ -258,7 +395,7 @@ public class StudentGroupReadTests : IntegrationTest
         // Same section, two terms, disjoint groups — which is exactly why the name carries the term.
         Assert.Empty(thisTermGroups.Select(g => g.Id).Intersect(lastTermGroups.Select(g => g.Id)));
 
-        Assert.Empty((await service.ListAsync(null, Guid.NewGuid(), PageRequest.Default)).Items);
+        Assert.Empty((await service.ListAsync(null, null, Guid.NewGuid(), null, PageRequest.Default)).Items);
     }
 
     /// <summary>
@@ -294,7 +431,7 @@ public class StudentGroupReadTests : IntegrationTest
         }
 
         await using var read = NewDbContext();
-        var groups = (await StudentGroupsOn(read).ListAsync(null, null, PageRequest.Default)).Items;
+        var groups = (await StudentGroupsOn(read).ListAsync(null, null, null, null, PageRequest.Default)).Items;
 
         Assert.Equal(1, Assert.Single(groups, g => g.Id == groupId).MemberCount);
     }

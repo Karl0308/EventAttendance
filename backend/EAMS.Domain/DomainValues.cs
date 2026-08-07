@@ -367,6 +367,14 @@ public static class AttendanceMode
 /// a <c>nvarchar</c> value set is additive and safe under the global no-rename rule; the four
 /// original values are untouched, so no existing row changes meaning.
 /// </para>
+///
+/// <para>
+/// <b><see cref="YearLevel"/> is the third such addition, and it is the whole of D-49's cost.</b> Year
+/// becomes an invitable audience by being projected into this table like a section, rather than by
+/// teaching <c>EventGroups</c> a new target type — the alternative is another nullable FK on the
+/// hottest reporting path, when every existing audience, denominator, freeze and manifest query
+/// already understands a <c>StudentGroup</c>. One constant here and one projection block is the price.
+/// </para>
 /// </summary>
 public static class StudentGroupType
 {
@@ -377,7 +385,11 @@ public static class StudentGroupType
     public const string College = "College";
     public const string Program = "Program";
 
-    public static readonly IReadOnlyList<string> All = [Course, Section, Org, Custom, College, Program];
+    /// <summary>A cohort of everyone whose derived <see cref="YearLevels"/> value is the same (D-49).</summary>
+    public const string YearLevel = "YearLevel";
+
+    public static readonly IReadOnlyList<string> All =
+        [Course, Section, Org, Custom, College, Program, YearLevel];
 
     public static bool TryNormalize(string? value, out string canonical) =>
         DomainValueSet.TryNormalize(All, value, out canonical);
@@ -417,10 +429,23 @@ public static class GroupSourceType
 /// </para>
 ///
 /// <para>
-/// <see cref="Section"/> is the odd one out and the reason <c>StudentGroups.SourceKey</c> exists: a
-/// college, a programme and an offering are each a real row with an <c>Id</c>, but a "section" is a
-/// <em>key</em> shared by many offerings within a term (<c>BSFS2A</c> spans every course that cohort
-/// takes) and has no row of its own to point at.
+/// <see cref="Section"/> and <see cref="YearLevel"/> are the odd ones out, and they are the reason
+/// <c>StudentGroups.SourceKey</c> exists: a college, a programme and an offering are each a real row
+/// with an <c>Id</c>, but a "section" is a <em>key</em> shared by many offerings within a term
+/// (<c>BSFS2A</c> spans every course that cohort takes) and a "year level" is a derived
+/// <c>StudentTermRecords.YearLevel</c> value shared by many students. Neither has a row to point at, so
+/// both carry a null <c>SourceEntityId</c> and are identified by their <c>SourceKey</c> alone.
+/// </para>
+///
+/// <para>
+/// <b>A year group is not filed under <see cref="None"/>, and that was the choice worth making.</b>
+/// <see cref="None"/> is the sentinel that means "this group projects no academic concept at all" —
+/// it is what every manual group carries, and it is what a reader tests to answer "did the projection
+/// build this?". Reusing it for a derived group would make the answer to that question wrong for the
+/// one group type that has no other identifying column, and it would put year groups into the same
+/// <c>(SourceEntityType, SourceKey)</c> key space the projection reconciles manual-shaped rows in.
+/// <see cref="Section"/> already proves the "no row of its own" shape is representable without
+/// borrowing the sentinel; <see cref="YearLevel"/> is the second instance of it, not a new idea.
 /// </para>
 /// </summary>
 public static class GroupSourceEntityType
@@ -431,7 +456,14 @@ public static class GroupSourceEntityType
     public const string Section = "Section";
     public const string CourseOffering = "CourseOffering";
 
-    public static readonly IReadOnlyList<string> All = [None, College, Program, Section, CourseOffering];
+    /// <summary>
+    /// A derived <c>StudentTermRecords.YearLevel</c> value (D-47/D-49). <c>SourceKey</c> is the year
+    /// itself — <c>"2"</c> — because there is no year-level table and D-49 deliberately does not add one.
+    /// </summary>
+    public const string YearLevel = "YearLevel";
+
+    public static readonly IReadOnlyList<string> All =
+        [None, College, Program, Section, CourseOffering, YearLevel];
 
     public static bool TryNormalize(string? value, out string canonical) =>
         DomainValueSet.TryNormalize(All, value, out canonical);

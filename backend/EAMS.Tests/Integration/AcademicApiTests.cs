@@ -40,7 +40,12 @@ public class AcademicApiTests : IntegrationTest
     /// student enrolled in one of them — the smallest arrangement in which every one of the six routes
     /// returns a row.
     /// </summary>
-    private async Task<Guid> ArrangeSchoolAsync(string code = "USA")
+    /// <param name="section">
+    /// The first offering's section name. The default is not programme-shaped — <c>BSFS 2-A</c> does
+    /// not begin with the fixture programme's <c>BSCRIM</c> code — so D-47's anchor does not fire and
+    /// the term gains no year-level group. The one test that needs one passes a section that does.
+    /// </param>
+    private async Task<Guid> ArrangeSchoolAsync(string code = "USA", string section = "BSFS 2-A")
     {
         await using var db = NewDbContext();
 
@@ -57,7 +62,7 @@ public class AcademicApiTests : IntegrationTest
 
         var course = TestData.NewCourse(school.Id, collegeId: college.Id);
         db.Courses.Add(course);
-        var offering = TestData.NewOffering(term.Id, course.Id, "BSFS 2-A");
+        var offering = TestData.NewOffering(term.Id, course.Id, section);
         db.CourseOfferings.AddRange(
             offering, TestData.NewOffering(term.Id, course.Id, "BSFS 2-B"));
 
@@ -65,7 +70,7 @@ public class AcademicApiTests : IntegrationTest
         db.Students.Add(student);
         db.Enrollments.Add(TestData.NewEnrollment(student.Id, offering.Id));
         db.StudentTermRecords.Add(TestData.NewTermRecord(
-            student.Id, term.Id, program.Id, college.Id, homeSection: "BSFS 2-A"));
+            student.Id, term.Id, program.Id, college.Id, homeSection: section));
 
         db.StudentGroups.Add(TestData.NewGroup(school.Id, $"SSC Officers ({code})"));
 
@@ -189,6 +194,43 @@ public class AcademicApiTests : IntegrationTest
         Assert.Contains(
             groups.EnumerateArray(),
             g => g.GetProperty("sourceType").GetString() == GroupSourceType.Derived);
+    }
+
+    /// <summary>
+    /// The <c>type</c> and <c>search</c> filters over the wire, which is the only place their binding
+    /// is observable.
+    ///
+    /// <para>
+    /// <b>A query parameter the controller never declared is not an error — it is silently
+    /// ignored.</b> So a service-level test of the same filters passes in full while
+    /// <c>GET /student-groups?type=YearLevel</c> returns the entire school, and the audience builder
+    /// this exists for shows a year picker listing colleges and offerings. That failure is invisible
+    /// from anywhere but here.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public async Task The_group_list_narrows_by_type_and_by_name_over_the_wire()
+    {
+        // Programme-shaped, so D-47's anchor fires and the term has a year-level group to filter to.
+        await ArrangeSchoolAsync(section: "BSCRIM 2-A");
+        using var factory = new EamsApiFactory(Sql.ConnectionString);
+        using var client = factory.CreateClient();
+
+        var everything = await ArrayAsync(client, Groups);
+        Assert.True(everything.GetArrayLength() > 1);
+
+        var years = await ArrayAsync(client, $"{Groups}?type={StudentGroupType.YearLevel}");
+        Assert.Equal(1, years.GetArrayLength());
+        Assert.Equal("2nd Year (2025-2026-1)", years[0].GetProperty("name").GetString());
+        Assert.Equal(StudentGroupType.YearLevel, years[0].GetProperty("type").GetString());
+
+        var searched = await ArrayAsync(client, $"{Groups}?search=2nd%20Year");
+        Assert.Equal(1, searched.GetArrayLength());
+        Assert.Equal("2nd Year (2025-2026-1)", searched[0].GetProperty("name").GetString());
+
+        // An unknown type empties the page rather than serving every row — the whole point of the
+        // parameter is to narrow, and one that silently stops narrowing is worse than one that errors.
+        Assert.Equal(0, (await ArrayAsync(client, $"{Groups}?type=Banana")).GetArrayLength());
     }
 
     /// <summary>

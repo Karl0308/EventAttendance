@@ -10,12 +10,23 @@ namespace EAMS.Infrastructure.Services;
 /// <see cref="IStudentGroupProjection"/> for what it is for and the three rules it obeys.
 ///
 /// <para>
-/// <b>Four group kinds, and why "section" is not the same as "offering".</b> A <c>CourseOffering</c>
+/// <b>Five group kinds, and why "section" is not the same as "offering".</b> A <c>CourseOffering</c>
 /// is one course taught to one section; a <em>section</em> is the cohort itself, which appears across
 /// every offering that shares its <c>SectionKey</c> within a term. Both are useful audiences and they
 /// are not interchangeable: "everyone in BSFS 2-A" is a cohort event, "everyone in SSCI 7 – BSFS 2-A"
 /// is a class. They are projected separately, with distinct
-/// <see cref="GroupSourceEntityType"/> values.
+/// <see cref="GroupSourceEntityType"/> values. The fifth is the year level (D-49), which is the only
+/// one of the five with no academic table behind it at all — see
+/// <see cref="DeriveYearLevelsAsync"/>.
+/// </para>
+///
+/// <para>
+/// <b>This is also the only place <c>StudentTermRecord.YearLevel</c> is ever written (D-47).</b> That
+/// makes the projection a writer of the academic layer as well as a reader of it, which is a widening
+/// worth stating out loud — and it is deliberate: derivation living here rather than in the importer is
+/// what makes a corrected roster move students between year groups on the next run with no separate
+/// step. It writes that one column and nothing else, and it never touches the ADR-001 D-2
+/// <c>Students</c> cache (D-48), which <c>EamsDbContext</c> would throw over anyway.
 /// </para>
 ///
 /// <para>
@@ -40,6 +51,14 @@ internal sealed class StudentGroupProjection : IStudentGroupProjection
         string Name,
         IReadOnlySet<Guid> StudentIds);
 
+    /// <summary>
+    /// A programme's two identities, loaded once because both halves are needed and for different jobs:
+    /// <see cref="Code"/> is what a group is named after, <see cref="CodeKey"/> is what a section key is
+    /// prefix-tested against by <see cref="YearLevels.Derive"/>. Reading the display code where the key
+    /// was meant is exactly the mistake that makes a normalization layer pointless.
+    /// </summary>
+    private sealed record ProgramIdentity(string Code, string CodeKey);
+
     public async Task<GroupProjectionResult> SyncTermAsync(Guid termId, CancellationToken ct = default)
     {
         // IgnoreQueryFilters here and on every read below, and it is safe only because of what
@@ -59,16 +78,115 @@ internal sealed class StudentGroupProjection : IStudentGroupProjection
                        "must create the term before importing or projecting anything under it " +
                        "(ADR-001 D-5 makes TermId a required input on an import batch).");
 
-        var desired = await BuildDesiredGroupsAsync(term, ct);
+        // Loaded once and shared by everything below, and loaded *tracked* — the one read in this class
+        // that is. Year derivation writes StudentTermRecord.YearLevel back (D-47), so these have to be
+        // entities the change tracker knows about rather than the anonymous projections every other
+        // read here uses. They are saved by ReconcileAsync's single SaveChangesAsync, so a run that
+        // derives a year and a run that projects a group are one unit of work, not two.
+        var placements = await LoadPlacementsAsync(term, ct);
+        var programs = await LoadProgramsAsync(term, ct);
+
+        await DeriveYearLevelsAsync(term, placements, programs, ct);
+
+        var desired = await BuildDesiredGroupsAsync(term, placements, programs, ct);
         return await ReconcileAsync(term, desired, ct);
+    }
+
+    // ------------------------------------------------------------------ the shared academic reads
+
+    /// <summary>
+    /// Every student's placement for this term. Tracked; see the call site for why.
+    /// </summary>
+    private async Task<IReadOnlyList<StudentTermRecord>> LoadPlacementsAsync(
+        Term term, CancellationToken ct) =>
+        await _db.StudentTermRecords.IgnoreQueryFilters()
+            .Where(r => r.TermId == term.Id && r.Student!.SchoolId == term.SchoolId)
+            .ToListAsync(ct);
+
+    private async Task<IReadOnlyDictionary<Guid, ProgramIdentity>> LoadProgramsAsync(
+        Term term, CancellationToken ct) =>
+        await _db.Programs.IgnoreQueryFilters().AsNoTracking()
+            .Where(p => p.SchoolId == term.SchoolId)
+            .Select(p => new { p.Id, p.Code, p.CodeKey })
+            .ToDictionaryAsync(p => p.Id, p => new ProgramIdentity(p.Code, p.CodeKey), ct);
+
+    // ------------------------------------------------------------------ D-47: the derived year level
+
+    /// <summary>
+    /// Recomputes <c>StudentTermRecord.YearLevel</c> for every student in the term, from the sections
+    /// they are actually enrolled in (D-47). The rule itself lives in <see cref="YearLevels.Derive"/>,
+    /// which is where the <c>NSTP 2</c> trap is written down; this method is only the data it needs.
+    ///
+    /// <para>
+    /// <b>It is authoritative, which means it also writes <c>null</c>.</b> A student whose home section
+    /// disappeared from a corrected roster loses their year on the next run rather than keeping a stale
+    /// one — the same set-diff discipline <see cref="ReconcileAsync"/> applies to membership, and the
+    /// property that makes "re-import to fix it" a real remedy instead of advice.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>Section keys come from <c>Enrollments</c>, deliberately not from
+    /// <c>StudentTermRecord.HomeSectionKey</c>.</b> That column is the importer's mode — the section a
+    /// student appears under most often in the file — so for a student whose file rows are mostly
+    /// <c>NSTP 2</c> it holds a subject block, and anchoring on it would feed the rule exactly the
+    /// value the rule exists to reject. <c>Enrollments</c> is the full set, and D-47 needs the full set
+    /// to be able to say "these two disagree".
+    /// </para>
+    ///
+    /// <para>
+    /// <b>A year change is not counted in <see cref="GroupProjectionResult"/>, and does not need to
+    /// be.</b> The year groups are built from these same values in the same run, so a student whose
+    /// year moved is a member added and a member removed — the counters already report it, one level
+    /// down, where it is a change to something a caller can point at.
+    /// </para>
+    /// </summary>
+    private async Task DeriveYearLevelsAsync(
+        Term term, IReadOnlyList<StudentTermRecord> placements,
+        IReadOnlyDictionary<Guid, ProgramIdentity> programs, CancellationToken ct)
+    {
+        if (placements.Count == 0) return;
+
+        // Grouped in memory after a Distinct() in SQL: the term's enrollment rows are the largest set
+        // this class reads, and a student in six offerings of one section contributes that key six
+        // times to a rule that only cares whether it is there at all.
+        var sectionKeysByStudent = (await _db.Enrollments.IgnoreQueryFilters().AsNoTracking()
+                .Where(e => e.CourseOffering!.TermId == term.Id && e.Student!.SchoolId == term.SchoolId)
+                .Select(e => new { e.StudentId, e.CourseOffering!.SectionKey })
+                .Distinct()
+                .ToListAsync(ct))
+            .GroupBy(e => e.StudentId)
+            .ToDictionary(g => g.Key, g => g.Select(e => e.SectionKey).ToList());
+
+        var now = DateTime.UtcNow;
+
+        foreach (var placement in placements)
+        {
+            // Three ways to have no anchor and therefore no year, all of them ordinary rather than
+            // exceptional: no programme recorded, a programme belonging to another school (which the
+            // SchoolId predicate on LoadProgramsAsync filters out, and which must not silently fall
+            // back to some other programme's code), and no enrollments at all.
+            var derived = placement.ProgramId is { } programId
+                          && programs.TryGetValue(programId, out var program)
+                          && sectionKeysByStudent.TryGetValue(placement.StudentId, out var sections)
+                ? YearLevels.Derive(program.CodeKey, sections)
+                : null;
+
+            if (string.Equals(placement.YearLevel, derived, StringComparison.Ordinal)) continue;
+
+            placement.YearLevel = derived;
+            placement.UpdatedAt = now;
+        }
     }
 
     // ------------------------------------------------------------------ what should exist
 
-    private async Task<IReadOnlyList<DesiredGroup>> BuildDesiredGroupsAsync(Term term, CancellationToken ct)
+    private async Task<IReadOnlyList<DesiredGroup>> BuildDesiredGroupsAsync(
+        Term term, IReadOnlyList<StudentTermRecord> placements,
+        IReadOnlyDictionary<Guid, ProgramIdentity> programs, CancellationToken ct)
     {
         var groups = new List<DesiredGroup>();
-        groups.AddRange(await BuildCollegeAndProgramGroupsAsync(term, ct));
+        groups.AddRange(await BuildCollegeAndProgramGroupsAsync(term, placements, programs, ct));
+        groups.AddRange(BuildYearLevelGroups(term, placements));
         groups.AddRange(await BuildSectionAndOfferingGroupsAsync(term, ct));
         return groups;
     }
@@ -79,24 +197,15 @@ internal sealed class StudentGroupProjection : IStudentGroupProjection
     /// and would misplace every student who changed programme).
     /// </summary>
     private async Task<IReadOnlyList<DesiredGroup>> BuildCollegeAndProgramGroupsAsync(
-        Term term, CancellationToken ct)
+        Term term, IReadOnlyList<StudentTermRecord> placements,
+        IReadOnlyDictionary<Guid, ProgramIdentity> programs, CancellationToken ct)
     {
-        var placements = await _db.StudentTermRecords.IgnoreQueryFilters().AsNoTracking()
-            .Where(r => r.TermId == term.Id && r.Student!.SchoolId == term.SchoolId)
-            .Select(r => new { r.StudentId, r.CollegeId, r.ProgramId })
-            .ToListAsync(ct);
-
         if (placements.Count == 0) return [];
 
         var colleges = await _db.Colleges.IgnoreQueryFilters().AsNoTracking()
             .Where(c => c.SchoolId == term.SchoolId)
             .Select(c => new { c.Id, c.Name })
             .ToDictionaryAsync(c => c.Id, c => c.Name, ct);
-
-        var programs = await _db.Programs.IgnoreQueryFilters().AsNoTracking()
-            .Where(p => p.SchoolId == term.SchoolId)
-            .Select(p => new { p.Id, p.Code })
-            .ToDictionaryAsync(p => p.Id, p => p.Code, ct);
 
         var groups = new List<DesiredGroup>();
 
@@ -115,12 +224,56 @@ internal sealed class StudentGroupProjection : IStudentGroupProjection
 
         foreach (var byProgram in placements.Where(p => p.ProgramId is not null).GroupBy(p => p.ProgramId!.Value))
         {
-            if (!programs.TryGetValue(byProgram.Key, out var code)) continue;
+            if (!programs.TryGetValue(byProgram.Key, out var program)) continue;
 
             groups.Add(new DesiredGroup(
                 GroupSourceEntityType.Program, byProgram.Key.ToString("D"), byProgram.Key,
-                StudentGroupType.Program, NameFor(code, term),
+                StudentGroupType.Program, NameFor(program.Code, term),
                 byProgram.Select(p => p.StudentId).ToHashSet()));
+        }
+
+        return groups;
+    }
+
+    /// <summary>
+    /// The D-49 year-level audiences, built from the values <see cref="DeriveYearLevelsAsync"/> has just
+    /// written — so this reads the term records rather than re-deriving, and the group and the column
+    /// cannot disagree.
+    ///
+    /// <para>
+    /// <b>A null year joins nothing, and that is the feature.</b> Students whose only sections are
+    /// subject blocks appear in no year group at all; they stay invitable by programme, section, course
+    /// and individually. Filing them under a "(no year)" cohort would do to year exactly what the
+    /// section projection refuses to do with <see cref="AcademicKey.Unspecified"/>: offer the admin UI
+    /// a selectable audience whose members share nothing but a missing value.
+    /// </para>
+    ///
+    /// <para>
+    /// The term rides in the display name like every other derived group's, and for the sharper reason
+    /// here: "2nd Year" names a completely different set of students each September, so a stale
+    /// <c>EventGroups</c> row would otherwise read as this year's cohort.
+    /// </para>
+    /// </summary>
+    private static IReadOnlyList<DesiredGroup> BuildYearLevelGroups(
+        Term term, IReadOnlyList<StudentTermRecord> placements)
+    {
+        var groups = new List<DesiredGroup>();
+
+        foreach (var byYear in placements
+                     .Where(p => !string.IsNullOrEmpty(p.YearLevel))
+                     .GroupBy(p => p.YearLevel!, StringComparer.Ordinal))
+        {
+            groups.Add(new DesiredGroup(
+                GroupSourceEntityType.YearLevel,
+                // The bare digit, not the display label: SourceKey is what the next run matches this
+                // group on, and a key that carried an ordinal suffix would be a rendering decision
+                // baked into an identity.
+                byYear.Key,
+                // No row to point at — there is no year-level table, and D-49 deliberately does not add
+                // one. Same shape as a section group; see GroupSourceEntityType.YearLevel.
+                SourceEntityId: null,
+                StudentGroupType.YearLevel, NameFor(YearLevels.DisplayName(byYear.Key), term),
+                byYear.Select(p => p.StudentId).ToHashSet()));
         }
 
         return groups;

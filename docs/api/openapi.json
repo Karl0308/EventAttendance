@@ -3336,12 +3336,28 @@
             }
           },
           {
+            "name": "type",
+            "in": "query",
+            "description": "What kind of audience: `Course`, `Section`, `Org`, `Custom`,\r\n`College`, `Program` or `YearLevel`. Omit for every kind. Matched\r\ncase-insensitively; <b>a value outside the set returns an empty list, not every row</b>, for the\r\nreason `sourceType` does — this is the filter an audience builder narrows by, so one that\r\nsilently stopped filtering would offer a year picker every college and offering in the term.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
             "name": "termId",
             "in": "query",
             "description": "Narrows to one term's derived groups. Omit for every term's, plus the manual groups, which\r\ncarry no term. <b>The filter most worth passing</b>: a section name is reused every semester\r\nagainst an entirely different set of students, so an unscoped list holds several distinct\r\ncohorts under names differing only by the term suffix the projection composes in.",
             "schema": {
               "type": "string",
               "format": "uuid"
+            }
+          },
+          {
+            "name": "search",
+            "in": "query",
+            "description": "A substring of the group's display name — `BSFS`, `2nd`, `Officers`. Omit to\r\nmatch every name. Case-insensitive, and matched against the name alone: that is the whole of\r\nwhat this list publishes as text, and it already carries the term suffix the projection composes\r\nin, so `2025-2026-1` is searchable too.",
+            "schema": {
+              "type": "string"
             }
           },
           {
@@ -5584,7 +5600,7 @@
           },
           "type": {
             "type": "string",
-            "description": "§4.7's set plus `College` and `Program` — `Course`, `Section`, `Org`,\r\n`Custom`, `College`, `Program`. What kind of audience this is."
+            "description": "§4.7's set plus `College`, `Program` and `YearLevel` — `Course`,\r\n`Section`, `Org`, `Custom`, `College`, `Program`, `YearLevel`. What\r\nkind of audience this is, and the axis `GET /student-groups?type=…` narrows by."
           },
           "sourceType": {
             "type": "string",
@@ -5592,7 +5608,7 @@
           },
           "sourceEntityType": {
             "type": "string",
-            "description": "Which academic concept a derived group projects — `College`, `Program`, `Section`,\r\n`CourseOffering` — or `None` on a manual group. `None` is a sentinel rather than a\r\nnull so the column stays NOT NULL and the projection's unique index has no nullable component."
+            "description": "Which academic concept a derived group projects — `College`, `Program`, `Section`,\r\n`CourseOffering`, `YearLevel` — or `None` on a manual group. `None` is a\r\nsentinel rather than a null so the column stays NOT NULL and the projection's unique index has no\r\nnullable component; a year group carries its own value rather than borrowing that sentinel, because\r\n`None` is what a reader tests to mean \"the projection did not build this\"."
           },
           "termId": {
             "type": "string",

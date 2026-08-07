@@ -14,8 +14,9 @@ namespace EAMS.Application.Dtos;
 /// </para>
 /// </summary>
 /// <param name="Type">
-/// §4.7's set plus <c>College</c> and <c>Program</c> — <c>Course</c>, <c>Section</c>, <c>Org</c>,
-/// <c>Custom</c>, <c>College</c>, <c>Program</c>. What kind of audience this is.
+/// §4.7's set plus <c>College</c>, <c>Program</c> and <c>YearLevel</c> — <c>Course</c>,
+/// <c>Section</c>, <c>Org</c>, <c>Custom</c>, <c>College</c>, <c>Program</c>, <c>YearLevel</c>. What
+/// kind of audience this is, and the axis <c>GET /student-groups?type=…</c> narrows by.
 /// </param>
 /// <param name="SourceType">
 /// <c>Manual</c> (a person made it) or <c>Derived</c> (the projection owns it). The distinction
@@ -24,8 +25,10 @@ namespace EAMS.Application.Dtos;
 /// </param>
 /// <param name="SourceEntityType">
 /// Which academic concept a derived group projects — <c>College</c>, <c>Program</c>, <c>Section</c>,
-/// <c>CourseOffering</c> — or <c>None</c> on a manual group. <c>None</c> is a sentinel rather than a
-/// null so the column stays NOT NULL and the projection's unique index has no nullable component.
+/// <c>CourseOffering</c>, <c>YearLevel</c> — or <c>None</c> on a manual group. <c>None</c> is a
+/// sentinel rather than a null so the column stays NOT NULL and the projection's unique index has no
+/// nullable component; a year group carries its own value rather than borrowing that sentinel, because
+/// <c>None</c> is what a reader tests to mean "the projection did not build this".
 /// </param>
 /// <param name="TermId">
 /// The term a derived group belongs to; null on a manual group, which spans terms by nature.

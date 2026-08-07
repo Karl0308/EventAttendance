@@ -131,7 +131,8 @@ public class EventAudienceReadTests : IntegrationTest
         Assert.Equal(world.TermId, group.TermId);
         Assert.Equal("2025-2026-1", group.TermCode);
 
-        var listed = (await StudentGroupsOn(read).ListAsync(null, null, PageRequest.From(1, 50)))
+        var listed = (await StudentGroupsOn(read)
+                .ListAsync(null, null, null, null, PageRequest.From(1, 50)))
             .Items.Single(g => g.Id == world.GroupA);
 
         Assert.Equal(listed.MemberCount, group.MemberCount);
@@ -160,7 +161,8 @@ public class EventAudienceReadTests : IntegrationTest
         await using var read = NewDbContext();
 
         var group = Assert.Single((await EventsOn(read).GetAudienceAsync(world.EventId))!.Groups);
-        var listed = (await StudentGroupsOn(read).ListAsync(null, null, PageRequest.From(1, 50)))
+        var listed = (await StudentGroupsOn(read)
+                .ListAsync(null, null, null, null, PageRequest.From(1, 50)))
             .Items.Single(g => g.Id == world.GroupA);
 
         Assert.Equal(1, group.MemberCount);

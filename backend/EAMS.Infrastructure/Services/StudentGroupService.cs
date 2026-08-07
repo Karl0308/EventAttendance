@@ -27,7 +27,8 @@ internal sealed class StudentGroupService : IStudentGroupService
     public StudentGroupService(EamsDbContext db) => _db = db;
 
     public async Task<PagedResult<StudentGroupDto>> ListAsync(
-        string? sourceType, Guid? termId, PageRequest page, CancellationToken ct = default)
+        string? sourceType, string? type, Guid? termId, string? search, PageRequest page,
+        CancellationToken ct = default)
     {
         var query = _db.StudentGroups.AsNoTracking();
 
@@ -51,7 +52,37 @@ internal sealed class StudentGroupService : IStudentGroupService
             query = query.Where(g => g.SourceType == canonical);
         }
 
+        if (!string.IsNullOrWhiteSpace(type))
+        {
+            // Canonicalized and empty-on-unknown for the same two reasons `sourceType` is, and the
+            // stakes are higher on this one. `type` is the filter an audience builder narrows by — "the
+            // year-level groups", "the section groups" — so a value that silently stopped filtering
+            // would hand a year picker every college, programme, section and offering in the term,
+            // under names that look entirely plausible next to each other. Empty is a wrong answer
+            // somebody notices in the first five seconds.
+            if (!StudentGroupType.TryNormalize(type, out var canonicalType))
+            {
+                return new PagedResult<StudentGroupDto>([], page.Page, page.PageSize, Total: 0);
+            }
+
+            query = query.Where(g => g.Type == canonicalType);
+        }
+
         if (termId is { } term) query = query.Where(g => g.TermId == term);
+
+        if (!string.IsNullOrWhiteSpace(search))
+        {
+            // Name only, which is the whole of what this list publishes as text and the whole of what a
+            // picker renders. Deliberately not extended to SourceKey: that column holds a Guid string
+            // for three of the five group kinds, so searching it would match on fragments of an id no
+            // user has ever seen and produce hits nobody can explain.
+            //
+            // Not normalized through AcademicKey either, matching AcademicReferenceService.
+            // Normalization collapses separators, which is right for equality on a whole key and wrong
+            // for a substring search — "ge2" would match "GE Elect 2" across a word boundary a human
+            // did not intend. Case-insensitivity comes from the database collation, as it does there.
+            query = query.Where(g => g.Name.Contains(search));
+        }
 
         // Counted and paged through PagedQuery.ToPageAsync — the seam all nine admin lists share, so
         // the total cannot end up describing a different filter than the rows do.

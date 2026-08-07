@@ -41,6 +41,18 @@ public interface IStudentGroupService
     /// audience picker offers manual groups to a flow that asked only for cohorts.
     /// </para>
     /// </param>
+    /// <param name="type">
+    /// §4.7's <c>StudentGroups.Type</c> — <c>Course</c>, <c>Section</c>, <c>Org</c>, <c>Custom</c>,
+    /// <c>College</c>, <c>Program</c> or <c>YearLevel</c>. Null lists every kind.
+    ///
+    /// <para>
+    /// <b>This is the axis an audience builder picks along</b> — "show me the year levels", "show me
+    /// the sections" — and the reason D-49 made year a <c>Type</c> rather than a new event-side
+    /// concept. Matched case-insensitively and canonicalized, and <b>a value outside the set returns an
+    /// empty list, never every row</b>, for the same reason <paramref name="sourceType"/> does: a
+    /// silently ignored filter here fills a year picker with colleges and offerings.
+    /// </para>
+    /// </param>
     /// <param name="termId">
     /// Narrows to the derived groups of one term. Null lists every term's, plus the manual groups,
     /// which carry no term.
@@ -52,6 +64,13 @@ public interface IStudentGroupService
     /// the projection composes into them.
     /// </para>
     /// </param>
+    /// <param name="search">
+    /// A substring of the group's display name — <c>"BSFS"</c>, <c>"2nd"</c>, <c>"Officers"</c>. Null
+    /// or blank does not filter. Case-insensitive by the database's collation, and matched against the
+    /// name only: the name is the whole of what a picker shows, and the other text column
+    /// (<c>SourceKey</c>) is a Guid string for most group kinds.
+    /// </param>
     Task<PagedResult<StudentGroupDto>> ListAsync(
-        string? sourceType, Guid? termId, PageRequest page, CancellationToken ct = default);
+        string? sourceType, string? type, Guid? termId, string? search, PageRequest page,
+        CancellationToken ct = default);
 }

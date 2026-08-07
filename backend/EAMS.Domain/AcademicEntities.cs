@@ -373,6 +373,37 @@ public class StudentTermRecord : AuditableEntity
     public Guid? CollegeId { get; set; }
     public College? College { get; set; }
 
+    /// <summary>
+    /// The student's year level for this term, as a bare digit — <c>"2"</c>, not <c>"2nd Year"</c>.
+    ///
+    /// <para>
+    /// <b>Derived, and owned by <c>StudentGroupProjection</c> (D-47).</b> The roster export has no year
+    /// column, so this is computed from the student's <em>home</em> sections — those whose
+    /// <c>SectionKey</c> begins with their own programme's <c>CodeKey</c> — by
+    /// <see cref="YearLevels.Derive"/>. The importer deliberately never writes it: derivation runs
+    /// inside the projection so that a corrected roster moves students between year groups on the next
+    /// import with no manual step, which is also how a student progresses between terms.
+    /// </para>
+    ///
+    /// <para>
+    /// <b><c>null</c> is a first-class outcome, not a failure.</b> A student whose only sections are
+    /// subject blocks (<c>NSTP 2</c>, <c>ROTC</c>) gets no year, joins no year group, and stays
+    /// invitable by programme, section, course and individually. See <see cref="YearLevels"/> for why a
+    /// gap beats a guess here.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>It is never copied to <c>Students.YearLevel</c> (D-48).</b> That column is the ADR-001 D-2
+    /// display cache <c>EamsDbContext</c> refuses writes to; deriving a value does not promote it to a
+    /// join key, and every audience and denominator still resolves through <c>Enrollments</c> and this
+    /// table.
+    /// </para>
+    ///
+    /// <para>
+    /// A <c>string</c> rather than an <c>int</c> or an enum, like <c>Status</c> and
+    /// <c>CaptureMethod</c> — promoting it is a schema migration under the global no-rename rule.
+    /// </para>
+    /// </summary>
     public string? YearLevel { get; set; }
 
     /// <summary>

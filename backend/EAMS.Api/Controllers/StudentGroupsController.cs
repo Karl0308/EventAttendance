@@ -74,11 +74,24 @@ public class StudentGroupsController : ControllerBase
     /// — a mistyped filter that silently stops filtering is how a cohort-only flow ends up offering
     /// manual groups.
     /// </param>
+    /// <param name="type">
+    /// What kind of audience: <c>Course</c>, <c>Section</c>, <c>Org</c>, <c>Custom</c>,
+    /// <c>College</c>, <c>Program</c> or <c>YearLevel</c>. Omit for every kind. Matched
+    /// case-insensitively; <b>a value outside the set returns an empty list, not every row</b>, for the
+    /// reason <c>sourceType</c> does — this is the filter an audience builder narrows by, so one that
+    /// silently stopped filtering would offer a year picker every college and offering in the term.
+    /// </param>
     /// <param name="termId">
     /// Narrows to one term's derived groups. Omit for every term's, plus the manual groups, which
     /// carry no term. <b>The filter most worth passing</b>: a section name is reused every semester
     /// against an entirely different set of students, so an unscoped list holds several distinct
     /// cohorts under names differing only by the term suffix the projection composes in.
+    /// </param>
+    /// <param name="search">
+    /// A substring of the group's display name — <c>BSFS</c>, <c>2nd</c>, <c>Officers</c>. Omit to
+    /// match every name. Case-insensitive, and matched against the name alone: that is the whole of
+    /// what this list publishes as text, and it already carries the term suffix the projection composes
+    /// in, so <c>2025-2026-1</c> is searchable too.
     /// </param>
     /// <param name="page">
     /// 1-based page number, default 1. Out-of-range values are clamped, never refused; the response
@@ -94,8 +107,10 @@ public class StudentGroupsController : ControllerBase
     [HasPermissionNotEnforced(EamsPermissions.StudentsRead)]
     [ProducesResponseType(typeof(PagedResult<StudentGroupDto>), StatusCodes.Status200OK)]
     public async Task<ActionResult<PagedResult<StudentGroupDto>>> List(
-        [FromQuery] string? sourceType, [FromQuery] Guid? termId,
+        [FromQuery] string? sourceType, [FromQuery] string? type, [FromQuery] Guid? termId,
+        [FromQuery] string? search,
         [FromQuery] int? page, [FromQuery] int? pageSize,
         CancellationToken ct)
-        => Ok(await _groups.ListAsync(sourceType, termId, PageRequest.From(page, pageSize), ct));
+        => Ok(await _groups.ListAsync(
+            sourceType, type, termId, search, PageRequest.From(page, pageSize), ct));
 }
