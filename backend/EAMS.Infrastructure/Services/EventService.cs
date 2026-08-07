@@ -1017,6 +1017,358 @@ internal sealed class EventService : IEventService
             0);
     }
 
+    // ------------------------------------------------------- the audience resolver (D-50/D-51)
+
+    /// <summary>
+    /// One validated filter row, in the shape the field it names actually compares on.
+    ///
+    /// <para>
+    /// Exactly one of <paramref name="Ids"/> and <paramref name="Keys"/> is populated, decided by the
+    /// same <see cref="AudienceField"/> value that later decides which predicate is written — so the two
+    /// switches are the only place the pairing lives, and a sixth field adds an arm to each rather than
+    /// a shape to remember. Neither list is ever empty: an empty value list is dropped before a
+    /// condition is built, because D-51 makes an empty row a no-op rather than "match nobody".
+    /// </para>
+    /// </summary>
+    private sealed record AudienceCondition(
+        string Field, IReadOnlyList<Guid> Ids, IReadOnlyList<string> Keys);
+
+    /// <inheritdoc cref="IEventService.ResolveAudienceAsync"/>
+    /// <remarks>
+    /// <para>
+    /// <b>Every filter row is validated before anything is read, and the order matters.</b> Field names
+    /// and values are checked against the registry with no database access at all, so a request naming
+    /// an unregistered field is a 400 whether or not a term is current and whether or not the roster has
+    /// been imported. Validating after the term lookup would make the same malformed request answer 400
+    /// on one day and an empty 200 on another, which is the least debuggable shape an API can have.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>Three round trips, and the first one is the whole reason for the other two.</b> The count is a
+    /// <c>COUNT(*)</c> over the composed filter with no ceiling on it; the id list and the sample are
+    /// two bounded <c>TOP n</c> reads over the same ordered query. Deriving the count from the id list
+    /// instead would be one query and would reintroduce D-42 exactly: a number bounded by the read
+    /// ceiling rather than by what the filter matches. Deriving the sample from the ids would need a
+    /// second read anyway to get the names, and taking it as a prefix of the same ordering is what makes
+    /// "the preview is the head of the list" true by construction.
+    /// </para>
+    /// </remarks>
+    public async Task<AudienceResolveResponse> ResolveAudienceAsync(
+        AudienceResolveRequest request, CancellationToken ct = default)
+    {
+        var conditions = new List<AudienceCondition>();
+        IReadOnlyList<AudienceFilterDto> rows = request.Filters ?? [];
+
+        foreach (var row in rows)
+        {
+            // The field is checked even when the row carries no values. `{"field": "Nickname",
+            // "values": []}` is still an attempt to filter on something that does not exist, and
+            // answering 200 to it would teach a client that the field is fine and its values were the
+            // problem.
+            if (!AudienceField.TryNormalize(row.Field, out var field))
+            {
+                return new AudienceResolveResponse(
+                    AudienceResolveOutcome.UnknownAudienceField,
+                    $"'{row.Field}' is not a field an audience can be filtered on. The filterable " +
+                    $"fields are: {string.Join(", ", AudienceField.All)}. The list is closed on " +
+                    "purpose (D-50) — the student record's own course, year-level and section columns " +
+                    "are a display cache that is wrong for the roughly one student in four who sits " +
+                    "in more than one section, so every field resolves through the enrolment and " +
+                    "term-record tables instead.",
+                    null);
+            }
+
+            IReadOnlyList<string> values = row.Values ?? [];
+
+            // D-51: an empty-but-present row is a half-finished edit, not "match nobody". Resolving it
+            // to zero would collapse the count to nothing the moment an operator added a row and before
+            // they had chosen anything to put in it.
+            if (values.Count == 0) continue;
+
+            if (BuildCondition(field, values) is not { } condition)
+            {
+                return InvalidFilterValue(field, values);
+            }
+
+            conditions.Add(condition);
+        }
+
+        // Resolved to an id before the query is composed rather than folded in as an `r.Term.IsCurrent`
+        // predicate, for the reason AcademicReferenceService.ListCourseOfferingsAsync records: a
+        // predicate that matches nothing and a predicate that is absent are indistinguishable once
+        // written that way, so "no term is current" would silently mean "every term".
+        var termId = request.TermId ?? await _db.Terms.AsNoTracking()
+            .Where(t => t.IsCurrent)
+            // FirstOrDefault rather than Single, matching every other current-term read: the filtered
+            // unique index is what caps this at one row, and a data problem in one school must not
+            // become a 500 on a count that runs while somebody types.
+            .Select(t => (Guid?)t.Id)
+            .FirstOrDefaultAsync(ct);
+
+        if (termId is null)
+        {
+            // Empty rather than widened, and `termId: null` is what tells the caller which of the two
+            // empties this is. See AudienceResolveRequest.TermId.
+            return Resolved(new AudienceResolutionDto(
+                TermId: null,
+                Count: 0,
+                StudentIds: [],
+                StudentIdsTruncated: false,
+                StudentIdLimit: AudienceResolutionLimits.MaxStudentIds,
+                Sample: []));
+        }
+
+        var matched = MatchingPlacements(termId.Value, conditions);
+
+        // Ordered once, and both bounded reads below run over this. Student numbers are unique per
+        // school, but the unfiltered query an untenanted caller sees spans schools — so ThenBy(Id) is
+        // what makes the order total, which is what makes "the sample is a prefix of the ids" a fact
+        // rather than a coincidence of how SQL Server happened to return two TOP n reads.
+        var ordered = matched
+            .OrderBy(r => r.Student!.StudentNumber)
+            .ThenBy(r => r.StudentId);
+
+        var count = await matched.CountAsync(ct);
+
+        var studentIds = await ordered
+            // One more than the ceiling is deliberately *not* fetched to detect truncation: `count` is
+            // already the honest size, so comparing against it needs no probe row.
+            .Take(AudienceResolutionLimits.MaxStudentIds)
+            .Select(r => r.StudentId)
+            .ToListAsync(ct);
+
+        var sample = await ordered
+            .Take(AudienceResolutionLimits.SampleSize)
+            .Select(r => new
+            {
+                r.StudentId,
+                r.Student!.StudentNumber,
+                r.Student.FirstName,
+                r.Student.MiddleName,
+                r.Student.LastName,
+            })
+            .ToListAsync(ct);
+
+        return Resolved(new AudienceResolutionDto(
+            termId,
+            count,
+            studentIds,
+            // Compared against the unbounded count, never against the ceiling — a filter matching
+            // exactly the ceiling is not truncated, and saying it was would send a caller looking for
+            // students that are all already in the list.
+            StudentIdsTruncated: count > studentIds.Count,
+            StudentIdLimit: AudienceResolutionLimits.MaxStudentIds,
+            // FullName is a computed CLR property and does not translate, so the parts are projected
+            // and joined here — the same composition GetAudienceAsync and the manifest already do.
+            Sample: sample.Select(s => new AudienceStudentDto(
+                s.StudentId, s.StudentNumber,
+                string.Join(' ', new[] { s.FirstName, s.MiddleName, s.LastName }
+                    .Where(part => !string.IsNullOrWhiteSpace(part)))))
+                .ToList()));
+    }
+
+    /// <summary>
+    /// The composed filter, as a query over <c>StudentTermRecords</c> — <b>one <c>Where</c> per row, one
+    /// <c>Contains</c> per value list</b> (D-51), and no query language anywhere.
+    ///
+    /// <para>
+    /// <b>The root is the term record, and that is what makes a student in two matching sections count
+    /// once.</b> <c>UNIQUE(StudentId, TermId)</c> means this query has exactly one row per student
+    /// before any filter is applied, and the two enrolment-backed fields are written as <c>EXISTS</c>
+    /// rather than as joins, so neither can multiply that row. There is no <c>Distinct</c> here because
+    /// there is nothing for one to remove — which is the shape to keep: a <c>Distinct</c> guarding a
+    /// join is a fix that stops working the moment someone adds a projection, whereas a grain that
+    /// cannot duplicate is a fix that cannot be undone by accident. ADR-001 D-2 is the tripwire: 12 of
+    /// 52 real students sit in more than one section.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>Soft-deleted students are excluded</b>, matching every other live audience read in this class
+    /// (see <see cref="ExpectedStudentIds"/>): a student the roster says does not exist cannot be
+    /// invited to anything.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>Both enrolment predicates re-state the term.</b> A section key and a course id both repeat
+    /// across semesters, so without <c>CourseOffering.TermId == termId</c> a student's enrolment in
+    /// <em>last</em> year's <c>BSIT2A</c> would satisfy this year's filter — the same distinct-audiences
+    /// -under-identical-names failure the course-offering list's term default closes.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>No column name reaches EF from the request.</b> Each arm below writes its own predicate
+    /// against a named property; the caller only ever chooses which arm runs. That is what "the
+    /// <c>Students</c> cache columns are unreachable by construction" means in D-50, and it is why the
+    /// final arm throws instead of falling through — a registered field with no arm must fail loudly
+    /// rather than resolve as though the row had never been sent.
+    /// </para>
+    /// </summary>
+    private IQueryable<StudentTermRecord> MatchingPlacements(
+        Guid termId, IReadOnlyList<AudienceCondition> conditions)
+    {
+        var query = _db.StudentTermRecords.AsNoTracking()
+            .Where(r => r.TermId == termId && !r.Student!.IsDeleted);
+
+        foreach (var condition in conditions)
+        {
+            var ids = condition.Ids;
+            var keys = condition.Keys;
+
+            query = condition.Field switch
+            {
+                AudienceField.College =>
+                    query.Where(r => r.CollegeId != null && ids.Contains(r.CollegeId.Value)),
+
+                AudienceField.Program =>
+                    query.Where(r => r.ProgramId != null && ids.Contains(r.ProgramId.Value)),
+
+                // The derived value (D-47), never Students.YearLevel (D-48). A null year matches no
+                // year filter, which is the first-class outcome D-47 designed for — and on today's real
+                // roster it is every student, because the programme reads "BSci - Crim" while the
+                // sections read "BSCRIM 2-A" and the anchor therefore never fires. That is a registrar
+                // question, not a rule to widen.
+                AudienceField.YearLevel =>
+                    query.Where(r => r.YearLevel != null && keys.Contains(r.YearLevel)),
+
+                AudienceField.Section =>
+                    query.Where(r => _db.Enrollments.Any(e =>
+                        e.StudentId == r.StudentId
+                        && e.CourseOffering!.TermId == termId
+                        && keys.Contains(e.CourseOffering!.SectionKey))),
+
+                AudienceField.Course =>
+                    query.Where(r => _db.Enrollments.Any(e =>
+                        e.StudentId == r.StudentId
+                        && e.CourseOffering!.TermId == termId
+                        && ids.Contains(e.CourseOffering!.CourseId))),
+
+                _ => throw new ArgumentOutOfRangeException(
+                    nameof(conditions), condition.Field,
+                    $"'{condition.Field}' is in {nameof(AudienceField)}.{nameof(AudienceField.All)} " +
+                    "but has no predicate here. Adding a sixth filterable field is a constant on that " +
+                    "registry and an arm in this switch; adding only the first must fail loudly rather " +
+                    "than resolve as though the filter row had never been sent."),
+            };
+        }
+
+        return query;
+    }
+
+    /// <summary>
+    /// Turns one row's values into the form its field compares on, or <c>null</c> when any of them is
+    /// not a value that field can hold.
+    ///
+    /// <para>
+    /// <b>The whole row fails on one bad value; nothing is dropped.</b> Skipping the offending value
+    /// would widen the row silently — <c>Program is any of (BSIT, "oops")</c> would resolve as
+    /// <c>Program is BSIT</c> and report a count for a filter the operator did not build.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>Section keys are normalized before they are compared, never after</b> — the rule the whole
+    /// academic layer is built on. The stored <c>SectionKey</c> is what <c>AcademicKey</c> produced at
+    /// import, so comparing a raw <c>'BSFS 2-A'</c> against it matches nothing while looking entirely
+    /// correct. A value that normalizes onto the <c>(unspecified)</c> sentinel is refused rather than
+    /// matched: that key means "the source recorded no section", it is the audience
+    /// <see cref="AttachAudienceAsync"/> already refuses as <see cref="EventWriteOutcome.NotACohort"/>,
+    /// and a builder that could assemble it would be a way around that refusal. A blank value
+    /// normalizes onto the sentinel too, so one check covers both.
+    /// </para>
+    /// </summary>
+    private static AudienceCondition? BuildCondition(string field, IReadOnlyList<string> values)
+    {
+        switch (field)
+        {
+            case AudienceField.College:
+            case AudienceField.Program:
+            case AudienceField.Course:
+            {
+                var ids = new List<Guid>(values.Count);
+                foreach (var value in values)
+                {
+                    if (!Guid.TryParse(value, out var id)) return null;
+                    ids.Add(id);
+                }
+
+                return new AudienceCondition(field, ids, []);
+            }
+
+            case AudienceField.YearLevel:
+            {
+                var keys = new List<string>(values.Count);
+                foreach (var value in values)
+                {
+                    // Blank only. A year string outside the digits D-47 can produce is well-formed and
+                    // simply matches nobody, which is the answer this layer already gives an unknown
+                    // collegeId — see IAcademicReferenceService.ListProgramsAsync.
+                    if (string.IsNullOrWhiteSpace(value)) return null;
+                    keys.Add(value.Trim());
+                }
+
+                return new AudienceCondition(field, [], keys);
+            }
+
+            case AudienceField.Section:
+            {
+                var keys = new List<string>(values.Count);
+                foreach (var value in values)
+                {
+                    // Both spellings of the sentinel are refused, and it takes two checks because
+                    // AcademicKey deliberately makes the value unforgeable from a display string. The
+                    // literal '(unspecified)' *normalizes* to 'UNSPECIFIED' — the parentheses are
+                    // stripped — so a raw comparison is the only thing that catches a caller posting
+                    // back the sectionKey GET /academic/course-offerings publishes for a
+                    // blank-section offering, which is the likeliest way to send it. A blank value
+                    // catches the other way in: it normalizes onto the sentinel.
+                    if (string.Equals(value?.Trim(), AcademicKey.Unspecified, StringComparison.Ordinal))
+                    {
+                        return null;
+                    }
+
+                    var key = AcademicKey.NormalizeOrUnspecified(value);
+                    if (key == AcademicKey.Unspecified) return null;
+                    keys.Add(key);
+                }
+
+                return new AudienceCondition(field, [], keys);
+            }
+
+            default:
+                throw new ArgumentOutOfRangeException(
+                    nameof(field), field,
+                    $"'{field}' is in {nameof(AudienceField)}.{nameof(AudienceField.All)} but its " +
+                    "values have no reading here. See MatchingPlacements for the other half a sixth " +
+                    "field has to add.");
+        }
+    }
+
+    private static AudienceResolveResponse Resolved(AudienceResolutionDto resolution) =>
+        new(AudienceResolveOutcome.Ok, "Resolved.", resolution);
+
+    /// <summary>
+    /// The refusal for a value the field cannot hold. It names the field and echoes the values rather
+    /// than saying "invalid": the caller is a filter builder assembling a list, and "one of these is
+    /// wrong" with the list attached is the difference between a fixable error and a shrug.
+    /// </summary>
+    private static AudienceResolveResponse InvalidFilterValue(
+        string field, IReadOnlyList<string> values) =>
+        new(AudienceResolveOutcome.InvalidAudienceFilterValue,
+            $"'{field}' cannot be filtered on the values [{string.Join(", ", values)}]. " +
+            (field is AudienceField.YearLevel
+                ? "A year level is a non-blank value — the bare digit the derivation writes, such as " +
+                  "'2'. A year nobody has been derived into is not an error; it simply matches no one."
+                : field is AudienceField.Section
+                    ? "A section is its key or display name, such as 'BSFS 2-A'. The '(unspecified)' " +
+                      "sentinel — which a blank value normalizes onto — is refused: it means the " +
+                      "source recorded no section, so it is not a cohort anyone could have meant to " +
+                      "invite, and attaching it is refused for the same reason."
+                    : "This field is filtered on ids, so every value has to be a GUID. An id that " +
+                      "matches nothing is fine and simply resolves to nobody; a value that is not an " +
+                      "id at all is refused, because dropping it would quietly widen the filter.") +
+            " The whole row is refused rather than the offending value dropped — a filter that " +
+            "silently stops filtering reports a count for something nobody built.",
+            null);
+
     // ------------------------------------------------------------------------------- create/edit
 
     public async Task<EventWriteResponse> CreateAsync(

@@ -11,6 +11,21 @@ namespace EAMS.Api.Controllers;
 [Route("api/v1/events")]
 public class EventsController : ControllerBase
 {
+    /// <summary>
+    /// The machine-readable half of §6's RFC 7807 body, as on <c>StudentsController</c> and
+    /// <c>AcademicController</c>.
+    ///
+    /// <para>
+    /// <b>Stamped on the audience-resolve refusals only, and the asymmetry is deliberate rather than an
+    /// oversight.</b> The §6.3 write surface above predates this convention and its problem bodies carry
+    /// <c>title</c> and <c>detail</c> alone; adding <c>code</c> to them is additive and probably right,
+    /// but it changes bodies clients are already reading and is not this change's to make. D-50's two
+    /// refusal tokens are published contract from the day they ship — <c>UnknownAudienceField</c> is the
+    /// signal a filter builder branches on — so they arrive with the field a client is meant to read.
+    /// </para>
+    /// </summary>
+    internal const string ErrorCodeProperty = "code";
+
     private readonly IEventService _events;
     public EventsController(IEventService events) => _events = events;
 
@@ -206,6 +221,79 @@ public class EventsController : ControllerBase
     // ------------------------------------------------------------------------------- audience
 
     /// <summary>
+    /// <c>POST /events/audience/resolve</c> — how many students a filter matches, who they are, and a
+    /// preview (D-50/D-51). <b>A read that writes nothing, despite the verb.</b>
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Read-only and idempotent.</b> It resolves an audience; it does not attach one, does not touch
+    /// an event, and can be called on every keystroke of a filter builder. <c>POST</c> rather than
+    /// <c>GET</c> because the filter set is a structured body — a list of rows, each with a list of
+    /// values — which outgrows a query string as fields are added, and encoding it into one would make
+    /// the encoding part of the contract.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>Not under <c>/events/{id}</c>, because it is not about an event.</b> It is the query the
+    /// create-event screen runs <em>before</em> there is an event to attach anything to, and pinning it
+    /// to an id would force the UI to create a draft in order to count.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>Five fields, and the list is closed on purpose.</b> <c>College</c>, <c>Program</c>,
+    /// <c>YearLevel</c>, <c>Section</c>, <c>Course</c> — each resolving through <c>StudentTermRecords</c>
+    /// or <c>Enrollments</c>. The student record's own <c>course</c>/<c>yearLevel</c>/<c>section</c>
+    /// columns are unreachable from here by construction: they are the ADR-001 D-2 display cache, they
+    /// are single-valued, and 12 of the 52 students in the real roster sit in more than one section — so
+    /// a section filter reading them returns a plausible, non-empty, incomplete answer. See
+    /// <see cref="EAMS.Domain.AudienceField"/>.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>Values within a row union; rows intersect (D-51).</b> <c>Year is any of 2, 3</c> plus
+    /// <c>Program is BSIT</c> is <c>(year 2 or 3) and BSIT</c>. A row with no values is ignored rather
+    /// than treated as "match nobody" — it is a half-finished edit. An unregistered field is
+    /// <c>400 UnknownAudienceField</c> and a value the field cannot hold is
+    /// <c>400 InvalidAudienceFilterValue</c>; neither is ever silently dropped, because a filter that
+    /// vanishes reports a count nobody asked for.
+    /// </para>
+    ///
+    /// <para>
+    /// <b><c>count</c> describes exactly what the filter matches and is bounded by nothing.</b>
+    /// <c>studentIds</c> is capped, and when the cap bites <c>studentIdsTruncated</c> says so — see
+    /// <see cref="AudienceResolutionDto"/> for why this response publishes a number larger than the list
+    /// under it rather than a list that quietly describes less than the number.
+    /// </para>
+    /// </remarks>
+    /// <param name="request">The term (optional — the current one by default) and the filter rows.</param>
+    /// <param name="ct">Cancellation token.</param>
+    /// <response code="200">The resolution. Matching nobody is a 200 with <c>count: 0</c>.</response>
+    /// <response code="400">A filter row named an unknown field, or a value the field cannot hold.</response>
+    //
+    // JUDGEMENT CALL, flagged rather than buried: `events.write`, not the `events.read` every other read
+    // on this controller carries. Two reasons, and the second is the one that decided it. First, this
+    // endpoint exists only to build an audience, and attaching one is a write — a caller who may not
+    // attach has nothing to do with the answer. Second, unlike /roster and /attendees it is *not*
+    // scoped to an event somebody already assembled: an empty filter set resolves the whole term, so
+    // under `events.read` anyone who can list events could enumerate every student in the institution,
+    // which is a side door onto `students.read`. The attribute enforces nothing (ADR-001 D-6), so this
+    // is a declaration of intent on the list Phase 6 walks, and the narrower declaration is the
+    // reversible mistake.
+    [HttpPost("audience/resolve")]
+    [HasPermissionNotEnforced(EamsPermissions.EventsWrite)]
+    [ProducesResponseType(typeof(AudienceResolutionDto), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status400BadRequest)]
+    public async Task<ActionResult<AudienceResolutionDto>> ResolveAudience(
+        [FromBody] AudienceResolveRequest request, CancellationToken ct)
+    {
+        var response = await _events.ResolveAudienceAsync(request, ct);
+
+        return response.Outcome == AudienceResolveOutcome.Ok
+            ? Ok(response.Resolution)
+            : ResolveFailure(response);
+    }
+
+    /// <summary>
     /// <c>GET /events/{id}/attendees</c> — what is currently attached to this event's audience.
     /// <c>events.read</c>, matching the sibling reads.
     /// </summary>
@@ -384,6 +472,64 @@ public class EventsController : ControllerBase
         return StatusCode(status, ProblemDetailsFactory.CreateProblemDetails(
             HttpContext, statusCode: status, title: TitleFor(outcome), detail: message));
     }
+
+    /// <summary>
+    /// The status contract for the D-50 audience resolver, as one total function over
+    /// <see cref="AudienceResolveOutcome"/>.
+    ///
+    /// <para>
+    /// <b>Both refusals are 400 and neither is 409.</b> Unlike the write surface above there is no
+    /// resource whose state could forbid anything — resolving reads and nothing more — so every failure
+    /// here is a malformed request that will be malformed again on retry. <b>Nothing but
+    /// <see cref="AudienceResolveOutcome.Ok"/> may answer 2xx</b>, for the reason
+    /// <see cref="StatusCodeFor(EventWriteOutcome)"/> records: a caller that reads a success stops
+    /// asking, and a filter that was refused reported as one is a count nobody re-checks.
+    /// </para>
+    ///
+    /// <para>
+    /// Fully enumerated with a throwing final arm rather than a <c>_ =&gt; Ok(...)</c> fall-through, for
+    /// the reason every sibling mapping in this API records — a discard arm makes "an outcome nobody
+    /// mapped" indistinguishable from "an outcome that means success".
+    /// </para>
+    /// </summary>
+    internal static int StatusCodeFor(AudienceResolveOutcome outcome) => outcome switch
+    {
+        AudienceResolveOutcome.Ok => StatusCodes.Status200OK,
+
+        AudienceResolveOutcome.UnknownAudienceField
+            or AudienceResolveOutcome.InvalidAudienceFilterValue => StatusCodes.Status400BadRequest,
+
+        _ => throw new ArgumentOutOfRangeException(
+            nameof(outcome), outcome,
+            $"No HTTP status is mapped for this {nameof(AudienceResolveOutcome)}. Every outcome must " +
+            "be mapped explicitly, or an unmapped one ships as a success."),
+    };
+
+    /// <summary>
+    /// The resolver's refusal body. Same <see cref="ProblemDetailsFactory"/> seam as
+    /// <see cref="Problem(EventWriteOutcome, string)"/>, plus the <see cref="ErrorCodeProperty"/> token a
+    /// filter builder branches on — see that constant for why only this route carries it.
+    /// </summary>
+    private ObjectResult ResolveFailure(AudienceResolveResponse response)
+    {
+        var status = StatusCodeFor(response.Outcome);
+        var problem = ProblemDetailsFactory.CreateProblemDetails(
+            HttpContext, statusCode: status, title: TitleFor(response.Outcome),
+            detail: response.Message);
+
+        // Derived from the outcome in one place so the token cannot drift from the status it arrives
+        // with. `title` and `detail` are prose written for a person; this is the machine-readable half.
+        problem.Extensions[ErrorCodeProperty] = response.Outcome.ToString();
+
+        return StatusCode(status, problem);
+    }
+
+    private static string TitleFor(AudienceResolveOutcome outcome) => outcome switch
+    {
+        AudienceResolveOutcome.UnknownAudienceField => "That is not a filterable audience field.",
+        AudienceResolveOutcome.InvalidAudienceFilterValue => "A filter value cannot be read.",
+        _ => "The audience could not be resolved.",
+    };
 
     private static string TitleFor(EventWriteOutcome outcome) => outcome switch
     {

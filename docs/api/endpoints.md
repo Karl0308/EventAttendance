@@ -3,7 +3,7 @@
 <!-- GENERATED FILE — DO NOT EDIT.
      Source: docs/api/openapi.json. Regenerate: node scripts/generate-endpoint-index.mjs --write -->
 
-**Generated from [`openapi.json`](openapi.json) — do not edit by hand.** 47 operations across 8 controllers, all mounted under `/api/v1`. Routes below are written relative to that mount.
+**Generated from [`openapi.json`](openapi.json) — do not edit by hand.** 48 operations across 8 controllers, all mounted under `/api/v1`. Routes below are written relative to that mount.
 
 This page is a **map, not a contract.** It exists so you can find an endpoint; payload shapes, field types and outcome tokens live in [`openapi.json`](openapi.json), which is what you generate a client from. Behaviour a schema cannot state — what your queue does with each outcome, the card-UID and clock rules — is in [`attendance-contract-handoff.md`](attendance-contract-handoff.md).
 
@@ -17,7 +17,7 @@ This page is a **map, not a contract.** It exists so you can find an endpoint; p
 - [SisImport](#sisimport) — 4
 - [StudentGroups](#studentgroups) — 1
 - [Attendance](#attendance) — 5
-- [Events](#events) — 12
+- [Events](#events) — 13
 - [Students](#students) — 8
 
 ## Academic
@@ -93,6 +93,7 @@ This page is a **map, not a contract.** It exists so you can find an endpoint; p
 | `GET` | `/events/{id}/roster` | — | `404` | §6.3 `GET /events/{id}/roster` — expected versus actual, and the source of §12's Absentee Report. |
 | `PATCH` | `/events/{id}/status` | — | `400` `404` | §6.3 `PATCH /events/{id}/status` — Open / Close / Cancel. |
 | `GET` | `/events/{id}/summary` | — | `404` | The §6.7/§12 Event Attendance Summary. |
+| `POST` | `/events/audience/resolve` | — | `400` | How many students a filter matches, who they are, and a preview (D-50/D-51). |
 
 ## Students
 

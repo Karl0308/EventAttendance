@@ -178,6 +178,65 @@ public enum ManifestOutcome
 public record EventManifestResponse(
     ManifestOutcome Outcome, string Message, EventManifestDto? Manifest, int Attendees);
 
+/// <summary>
+/// What <c>POST /events/audience/resolve</c> decided (D-50/D-51). Its own enum rather than a member of
+/// <see cref="EventWriteOutcome"/>, for the reason <see cref="LiveOutcome"/> and
+/// <see cref="ManifestOutcome"/> each record: that table is the events <em>write</em> surface's branch
+/// list, and resolving an audience writes nothing at all.
+///
+/// <para>
+/// Both failures are 400 and both exist for one reason — <b>a filter must never quietly stop
+/// filtering.</b> A dropped row or a dropped value produces a count larger than the operator asked
+/// for, which looks entirely normal and is not discovered until the wrong people are invited.
+/// </para>
+/// </summary>
+public enum AudienceResolveOutcome
+{
+    /// <summary>A resolution was produced. 200 — possibly matching nobody, which is an answer.</summary>
+    Ok,
+
+    /// <summary>
+    /// A filter row named a field outside <see cref="EAMS.Domain.AudienceField.All"/>. 400, and the
+    /// message names both the value sent and the five that are accepted.
+    ///
+    /// <para>
+    /// <b>Refused rather than skipped, which is the whole of D-50's enforcement at this boundary.</b>
+    /// The registry is closed so that <c>Students.Course</c>, <c>Students.YearLevel</c> and
+    /// <c>Students.Section</c> are unreachable; silently ignoring an unregistered field would make an
+    /// attempt to reach them indistinguishable from not having sent it, and the caller would read the
+    /// resulting (larger) count as the answer to the filter it thought it had applied.
+    /// </para>
+    /// </summary>
+    UnknownAudienceField,
+
+    /// <summary>
+    /// A filter row carried a value the field cannot express — a non-GUID where an id belongs, a blank
+    /// string, or a <c>Section</c> value that normalizes onto <c>AcademicKey.Unspecified</c>. 400,
+    /// naming the field and the value.
+    ///
+    /// <para>
+    /// <b>The same rule as <see cref="UnknownAudienceField"/>, one level down.</b> Dropping the bad
+    /// value from the list would silently widen the row — <c>Program is any of (BSIT, "oops")</c> would
+    /// resolve as <c>Program is BSIT</c> and report a count for a filter nobody built.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>It is not the answer for a well-formed value that matches nobody.</b> An id naming a college
+    /// that does not exist is a filter that matched nothing, and this layer already answers that with an
+    /// empty result rather than an error — see <c>IAcademicReferenceService.ListProgramsAsync</c>. The
+    /// line is between a value the field cannot hold and a value it can hold but nobody has.
+    /// </para>
+    /// </summary>
+    InvalidAudienceFilterValue,
+}
+
+/// <summary>
+/// <paramref name="Resolution"/> is null unless <paramref name="Outcome"/> is
+/// <see cref="AudienceResolveOutcome.Ok"/>.
+/// </summary>
+public record AudienceResolveResponse(
+    AudienceResolveOutcome Outcome, string Message, AudienceResolutionDto? Resolution);
+
 /// <summary>Technical Plan §6.3 and the §6.7/§12 event summary and roster.</summary>
 public interface IEventService
 {
@@ -354,4 +413,50 @@ public interface IEventService
     /// <param name="id">The event.</param>
     /// <param name="ct">Cancellation token.</param>
     Task<EventManifestResponse> GetManifestAsync(Guid id, CancellationToken ct = default);
+
+    /// <summary>
+    /// <c>POST /events/audience/resolve</c> — the D-50/D-51 audience filter builder's one query: filter
+    /// rows in, a count plus the matched student ids and a preview out.
+    ///
+    /// <para>
+    /// <b>It is read-only and idempotent despite the verb.</b> Resolving writes nothing, touches no
+    /// event, and can be repeated freely — it backs a live count that runs while an operator is still
+    /// choosing values. <c>POST</c> rather than <c>GET</c> because the filter set is a structured body
+    /// of arbitrarily many rows each carrying arbitrarily many values, which outgrows a query string as
+    /// fields are added and would have to be encoded into one twice — once by the client and once by
+    /// this API's parser — with the encoding as the contract.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>It resolves to students; it does not attach them.</b> D-52 decides how a built filter becomes
+    /// an audience — materialised to individual rows when several rows are present, attached as its
+    /// group row for a single-field selection — and none of that is here. Nothing in this method's path
+    /// writes.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>How the rows combine (D-51): values within a row union, rows intersect.</b> Composed as one
+    /// <c>IQueryable</c> — one <c>Where</c> per row, one <c>Contains</c> per value list — so there is no
+    /// query language to parse and no caller-authored SQL anywhere near the audience. An empty value
+    /// list makes its row a no-op; an unregistered field or an unusable value is a refusal. See
+    /// <see cref="AudienceFilterDto"/>.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>A student in two matching sections is counted once</b>, and the de-duplication is structural —
+    /// see <see cref="AudienceResolutionDto"/>. That is the ADR-001 D-2 tripwire, and it is the reason
+    /// the builder resolves through <c>Enrollments</c> instead of reading <c>Students.Section</c>.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>Tenancy is the ambient <c>SchoolId</c> query filter and nothing else.</b> Every row this
+    /// method reads goes to an HTTP caller, so widening it would be a disclosure bug rather than the
+    /// scoping convenience it is inside <c>StudentGroupProjection</c>; nothing on this path calls
+    /// <c>IgnoreQueryFilters</c>.
+    /// </para>
+    /// </summary>
+    /// <param name="request">The term (optional) and the filter rows.</param>
+    /// <param name="ct">Cancellation token.</param>
+    Task<AudienceResolveResponse> ResolveAudienceAsync(
+        AudienceResolveRequest request, CancellationToken ct = default);
 }

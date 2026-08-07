@@ -2670,6 +2670,77 @@
         }
       }
     },
+    "/api/v1/events/audience/resolve": {
+      "post": {
+        "tags": [
+          "Events"
+        ],
+        "summary": "`POST /events/audience/resolve` — how many students a filter matches, who they are, and a\r\n             preview (D-50/D-51). <b>A read that writes nothing, despite the verb.</b>",
+        "description": "\r\n\r\n  <b>Read-only and idempotent.</b> It resolves an audience; it does not attach one, does not touch\r\n             an event, and can be called on every keystroke of a filter builder. `POST` rather than\r\n             `GET` because the filter set is a structured body — a list of rows, each with a list of\r\n             values — which outgrows a query string as fields are added, and encoding it into one would make\r\n             the encoding part of the contract.\r\n             \r\n\r\n\r\n  <b>Not under `/events/{id}`, because it is not about an event.</b> It is the query the\r\n             create-event screen runs <em>before</em> there is an event to attach anything to, and pinning it\r\n             to an id would force the UI to create a draft in order to count.\r\n             \r\n\r\n\r\n  <b>Five fields, and the list is closed on purpose.</b>\r\n  `College`, `Program`,\r\n             `YearLevel`, `Section`, `Course` — each resolving through `StudentTermRecords`\r\n             or `Enrollments`. The student record's own `course`/`yearLevel`/`section`\r\n             columns are unreachable from here by construction: they are the ADR-001 D-2 display cache, they\r\n             are single-valued, and 12 of the 52 students in the real roster sit in more than one section — so\r\n             a section filter reading them returns a plausible, non-empty, incomplete answer. See\r\n             EAMS.Domain.AudienceField.\r\n             \r\n\r\n\r\n  <b>Values within a row union; rows intersect (D-51).</b>\r\n  `Year is any of 2, 3` plus\r\n             `Program is BSIT` is `(year 2 or 3) and BSIT`. A row with no values is ignored rather\r\n             than treated as \"match nobody\" — it is a half-finished edit. An unregistered field is\r\n             `400 UnknownAudienceField` and a value the field cannot hold is\r\n             `400 InvalidAudienceFilterValue`; neither is ever silently dropped, because a filter that\r\n             vanishes reports a count nobody asked for.\r\n             \r\n\r\n\r\n  <b>\r\n    `count` describes exactly what the filter matches and is bounded by nothing.</b>\r\n  `studentIds` is capped, and when the cap bites `studentIdsTruncated` says so — see\r\n             EAMS.Application.Dtos.AudienceResolutionDto for why this response publishes a number larger than the list\r\n             under it rather than a list that quietly describes less than the number.\r\n             ",
+        "requestBody": {
+          "description": "The term (optional — the current one by default) and the filter rows.",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AudienceResolveRequest"
+              }
+            },
+            "text/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AudienceResolveRequest"
+              }
+            },
+            "application/*+json": {
+              "schema": {
+                "$ref": "#/components/schemas/AudienceResolveRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The resolution. Matching nobody is a 200 with `count: 0`.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/AudienceResolutionDto"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AudienceResolutionDto"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AudienceResolutionDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "A filter row named an unknown field, or a value the field cannot hold.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/events/{id}/attendees": {
       "get": {
         "tags": [
@@ -4353,6 +4424,105 @@
           "pollAfterSeconds": 5,
           "hasMore": false
         }
+      },
+      "AudienceFilterDto": {
+        "type": "object",
+        "properties": {
+          "field": {
+            "type": "string",
+            "description": "One of <b>five</b> values — `College`, `Program`, `YearLevel`, `Section`,\r\n`Course` — matched case-insensitively. See EAMS.Domain.AudienceField for the whole\r\nregistry and for why the list is closed rather than open over the student columns.\r\n            \r\n\r\n<b>Anything else is `400 UnknownAudienceField`, never a row that is quietly skipped.</b> A\r\nfilter that vanishes produces a count that is larger than the operator asked for, looks entirely\r\nnormal, and is invisible until the wrong people are standing in a hall.\r\n"
+          },
+          "values": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The values selected on this field — ids for `College`, `Program` and `Course`, the\r\nbare year digit for `YearLevel`, the section key for `Section`.\r\n            \r\n\r\n<b>Within one row the values union; across rows they intersect (D-51).</b>`Year is any of 2, 3` matches 2nd <em>or</em> 3rd years; adding `Program is BSIT` narrows\r\nthat to 2nd- and 3rd-year BSIT students. Two rows naming the same field intersect like any other\r\npair, because a row is a row — `Year in (2,3)` and `Year in (3,4)` resolves to year 3.\r\n\r\n<b>An empty or absent list makes the row a no-op, not \"match nobody\".</b> An empty-but-present row is\r\na half-finished edit, and resolving it to zero would collapse the count to nothing while the operator\r\nis still choosing values. The field is still validated: `{\"field\": \"Nickname\", \"values\": []}` is\r\na 400.\r\n\r\n<b>A value the field cannot express is `400 InvalidAudienceFilterValue`; a well-formed value\r\nthat matches nobody is simply an empty answer.</b> The line is between the two kinds of wrong: a\r\ncollege id that is not a GUID is a type error the caller can only have made by mistake, whereas a\r\nperfectly good id naming a college that no longer exists is the same \"filter matched nothing\" every\r\nother read in this system already answers with an empty list. The blank string is refused on every\r\nfield, and on `Section` so is the `(unspecified)` sentinel — both when it is sent verbatim,\r\nas `GET /academic/course-offerings` publishes it for a blank-section offering, and when a blank\r\nvalue normalizes onto it. That key means \"the source recorded no section\", it is the one audience\r\n`POST /events/{id}/attendees` refuses as `NotACohort`, and the builder must not be a way\r\naround that.\r\n",
+            "nullable": true
+          }
+        },
+        "additionalProperties": false,
+        "description": "One row of the filter builder: a field, and the values selected on it."
+      },
+      "AudienceResolutionDto": {
+        "type": "object",
+        "properties": {
+          "termId": {
+            "type": "string",
+            "description": "The term this resolution was actually computed against — the one requested, or the current one when\r\nnone was. `null` means no term could be resolved, in which case every other field is empty; see\r\nEAMS.Application.Dtos.AudienceResolveRequest.TermId.",
+            "format": "uuid",
+            "nullable": true
+          },
+          "count": {
+            "type": "integer",
+            "description": "<b>How many students the filter matches. It is never bounded by anything below it.</b>\r\n\r\n\r\n             This is the number the builder shows and the number an operator acts on, so it is a `COUNT(*)`\r\n             over the composed filter and not the length of EAMS.Application.Dtos.AudienceResolutionDto.StudentIds. The distinction is D-42's:\r\n             the live endpoint once published counters bounded by its read ceiling rather than by what it had\r\n             actually returned, and the result was a headline number describing rows nobody received — internally\r\n             consistent, entirely plausible, wrong. If EAMS.Application.Dtos.AudienceResolutionDto.StudentIds is short, this field is why, and\r\n             EAMS.Application.Dtos.AudienceResolutionDto.StudentIdsTruncated says so.\r\n             ",
+            "format": "int32"
+          },
+          "studentIds": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "description": "The matched students, ordered by student number then id — a total order, so two identical requests\r\nreturn the same list in the same sequence.\r\n            \r\n\r\n<b>Bounded by EAMS.Application.Dtos.AudienceResolutionDto.StudentIdLimit, and the bound is announced rather than inferred.</b> When\r\nEAMS.Application.Dtos.AudienceResolutionDto.StudentIdsTruncated is `true` this is the first EAMS.Application.Dtos.AudienceResolutionDto.StudentIdLimit of\r\nthat ordering and EAMS.Application.Dtos.AudienceResolutionDto.Count is the real size. <b>Do not attach an audience by posting a\r\ntruncated list back</b> — an attach re-runs the filter server-side (D-52), which is the only way the\r\ninvited set and the previewed count can be the same set.\r\n"
+          },
+          "studentIdsTruncated": {
+            "type": "boolean",
+            "description": "Whether EAMS.Application.Dtos.AudienceResolutionDto.StudentIds is shorter than EAMS.Application.Dtos.AudienceResolutionDto.Count. Published as its own flag\r\nrather than left for a client to derive by comparing lengths: the comparison is easy to forget, and\r\nforgetting it is silent."
+          },
+          "studentIdLimit": {
+            "type": "integer",
+            "description": "The ceiling EAMS.Application.Dtos.AudienceResolutionDto.StudentIds was cut at, whether or not it was reached. Echoed so a caller\r\ncan size its own behaviour against the server's actual limit instead of a number compiled into it.",
+            "format": "int32"
+          },
+          "sample": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AudienceStudentDto"
+            },
+            "description": "The first few matched students, with names — the \"[ Preview ]\" list. It is a <em>prefix</em> of\r\nEAMS.Application.Dtos.AudienceResolutionDto.StudentIds, from the same ordering in the same query shape, so the first name in the\r\npreview is the first id in the list."
+          }
+        },
+        "additionalProperties": false,
+        "description": "What a filter set resolves to: how many students match, who they are, and enough of them to preview.\r\n            \r\n\r\n<b>A student in two matching sections is counted once.</b> That is the ADR-001 D-2 tripwire and the\r\nreason this endpoint exists at all rather than a query over `Students.Section`. It holds\r\nstructurally rather than by a `DISTINCT` bolted on the end: the resolution is rooted in\r\n`StudentTermRecords`, which carries exactly one row per student per term, and the section and\r\ncourse filters are existence tests over `Enrollments` that cannot multiply it.\r\n"
+      },
+      "AudienceResolveRequest": {
+        "type": "object",
+        "properties": {
+          "termId": {
+            "type": "string",
+            "description": "<b>Optional, and omitting it means the term flagged `IsCurrent` — not \"every term\".</b>\r\n\r\n\r\n             The default follows `IAcademicReferenceService.ListCourseOfferingsAsync`, which is the endpoint\r\n             this builder's section and course values come from, and it follows it for the same reason: section\r\n             names repeat every semester against an entirely different cohort, so an unscoped resolution would\r\n             stack several distinct audiences under identical names and grow with every import the institution has\r\n             ever run. It also keeps the create-event screen honest — the §4 mock-up has a filter builder and no\r\n             term picker, so a required `termId` would be a field the UI has nowhere to get.\r\n             \r\n\r\n\r\n  <b>The term actually resolved against comes back on EAMS.Application.Dtos.AudienceResolutionDto.TermId.</b>\r\n             That is the price of the default and it is what makes it safe: a caller can see which semester its\r\n             count describes rather than trusting that the server picked the one it had in mind.\r\n             \r\n\r\n\r\n  <b>When no term is flagged current and none was named, the resolution is empty and its\r\n             `termId` is `null`.</b> Zero current terms is a real state — the flag is capped at one per\r\n             school by a filtered unique index, not pinned at one, and between semesters nobody has moved it.\r\n             Widening to every term in that case would restore the unbounded read the default exists to close, on\r\n             the one day nobody is watching for it. A caller that needs to tell \"this filter matches nobody\" from\r\n             \"no term is current\" reads `termId`, or asks `GET /academic/terms/current`.\r\n             ",
+            "format": "uuid",
+            "nullable": true
+          },
+          "filters": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AudienceFilterDto"
+            },
+            "description": "The rows of the builder. Null or empty resolves the whole term — which is the operator's \"or all\",\r\nnot a malformed request.",
+            "nullable": true
+          }
+        },
+        "additionalProperties": false,
+        "description": "The body of `POST /events/audience/resolve` — a term and a set of filter rows."
+      },
+      "AudienceStudentDto": {
+        "type": "object",
+        "properties": {
+          "studentId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "studentNumber": {
+            "type": "string"
+          },
+          "fullName": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false,
+        "description": "One student in a resolution preview. Identity and a display name, and deliberately nothing else —\r\nthis is a filter preview, not a roster read, and `section` in particular is absent because the\r\nonly single-valued answer available for it is the ADR-001 D-2 cache column this whole feature is\r\nbuilt to avoid reading."
       },
       "CardDto": {
         "type": "object",
