@@ -15,6 +15,7 @@ import DashboardIcon from "@mui/icons-material/Dashboard";
 import PeopleIcon from "@mui/icons-material/People";
 import EventIcon from "@mui/icons-material/Event";
 import RouterIcon from "@mui/icons-material/Router";
+import CalendarMonthIcon from "@mui/icons-material/CalendarMonth";
 
 const DRAWER_WIDTH = 240;
 
@@ -23,6 +24,10 @@ const nav = [
   { to: "/students", label: "Students", icon: <PeopleIcon /> },
   { to: "/events", label: "Events", icon: <EventIcon /> },
   { to: "/devices", label: "Devices", icon: <RouterIcon /> },
+  // Last, and that is not an accident of appending: a term is created once a semester, where the
+  // four above are visited daily. `isActive` matches on `startsWith`, and `/terms` shares no prefix
+  // with any of them.
+  { to: "/terms", label: "Terms", icon: <CalendarMonthIcon /> },
 ];
 
 export default function Layout({ children }: { children: ReactNode }) {

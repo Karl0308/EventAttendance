@@ -52,19 +52,17 @@ Checks CI runs (run these before declaring work done):
   Data now survives restarts — no more clean slate every run. The seed is **all-or-nothing**: it
   returns early if a `School` row exists, so a database created before a given seed row was added
   never gains it. A dev carrying over an older `EAMS` database therefore has no `Term` — and with no
-  term the roster-import page has an empty picker and refuses to stage a batch, since nothing in the
-  product creates one (`AcademicController` is read-only, the importer takes `TermId` as input).
-  Either drop the database and let it re-seed, or insert one by hand:
-  ```sql
-  INSERT INTO dbo.Terms (Id, SchoolId, Code, SchoolYear, Semester, IsCurrent, CreatedAt, UpdatedAt)
-  SELECT NEWID(), s.Id, '2025-2026-1', '2025-2026', '1st Semester', 1,
-         SYSUTCDATETIME(), SYSUTCDATETIME()
-  FROM dbo.Schools s
-  WHERE s.Code = 'USA' AND NOT EXISTS (SELECT 1 FROM dbo.Terms t WHERE t.SchoolId = s.Id);
-  ```
-  This hand-written SQL is a **workaround, not the intended flow** — `docs/PHASE-5-YEAR-LEVEL-AND-TERM-ADMIN.md`
-  (D-50) plans an admin write surface for terms so an operator can create one. Until that ships, the
-  SQL above is the only way.
+  term the roster-import page has an empty picker and refuses to stage a batch, because the importer
+  takes `TermId` as input.
+- **Terms are created in-product** — the SPA's `/terms` page over `POST /api/v1/academic/terms`,
+  `PUT /api/v1/academic/terms/{id}` and `PATCH /api/v1/academic/terms/{id}/current` (D-53, the write
+  surface `docs/PHASE-5-YEAR-LEVEL-AND-TERM-ADMIN.md` D-50 planned). That is the fix for the missing-term
+  case above, and it is the only supported one: **do not write `INSERT INTO dbo.Terms` by hand**, in a
+  doc or a script or a session. The route enforces the code rules (`TermText` — length, and leading or
+  trailing whitespace refused rather than trimmed) and moves the current-term flag in the one statement
+  `UX_Terms_SchoolId_Current` tolerates. Dropping the database and letting it re-seed is still fine on a
+  dev machine. `AcademicController` stays read-only; these writes live on `TermAdminService` /
+  `ITermAdminService`.
 - **Nothing outside `EAMS.Infrastructure` can see `EamsDbContext`.** Every type in that assembly is
   `internal` except `AddEamsInfrastructure`. Controllers talk to `IStudentService` /
   `IEventService` / `IAttendanceService` from `EAMS.Application.Abstractions` and speak DTOs only.

@@ -89,8 +89,9 @@ const NO_SECTIONS_IN_TERM =
   "for it yet — sections are projected from enrolments, not created by hand.";
 
 const NO_TERMS_AT_ALL =
-  "This school has no terms, so there are no sections to choose from. Terms and their sections come " +
-  "from the roster import; until one has run there is no cohort to invite.";
+  "This school has no terms, so there are no sections to choose from. A term is created on the Terms " +
+  "page; its sections then come from the roster import, so both have to have happened before there is " +
+  "a cohort to invite.";
 
 /** A section whose projection has produced nobody. Attaching it is legal and expects zero students. */
 const EMPTY_SECTION_NOTE = "0 members — the projection has not run for this section's term.";

@@ -325,6 +325,36 @@ export interface Term {
   endsOn?: string;
 }
 
+/**
+ * The body of `POST /academic/terms` and `PUT /academic/terms/{id}` — one shape for both, because the
+ * server checks them with one piece of code (D-53).
+ *
+ * **`isCurrent` is deliberately absent.** At most one term per school can be current, guarded by a
+ * filtered unique index, so moving that flag is a two-row transaction and lives on
+ * `PATCH /academic/terms/{id}/current`. Carrying it here would be one resource's payload rewriting a
+ * different resource — the same split `EventWriteRequest` draws against `PATCH /events/{id}/status`.
+ *
+ * **`schoolId` is absent for the reason it is absent from every other write request**: the tenant
+ * comes from the server's school context and never from the client.
+ *
+ * The three strings are sent **exactly as typed**. `code` in particular is the one natural key in the
+ * academic layer a person authors rather than a spreadsheet supplies, and the server answers `400`
+ * for a padded value rather than trimming it — see `termDraft.ts`.
+ */
+export interface TermWriteRequest {
+  code: string;
+  schoolYear: string;
+  semester: string;
+  /**
+   * A **calendar date** (`YYYY-MM-DD`), not an instant, and normally `null` — the SIS export has no
+   * term-date columns. `null` rather than optional: both routes take a full body, and on a
+   * replacement a missing member is ambiguous where an explicit null is not.
+   */
+  startsOn: string | null;
+  /** As `startsOn`. If both are supplied, this one may not fall before it. */
+  endsOn: string | null;
+}
+
 /** One section on an event's audience, as `GET /events/{id}/attendees` lists it. */
 export interface EventAudienceGroup {
   studentGroupId: string;

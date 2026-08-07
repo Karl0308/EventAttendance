@@ -89,6 +89,13 @@ public static class DependencyInjection
         services.AddScoped<ISisImportService, SisImportService>();
         services.AddScoped<IDeviceService, DeviceService>();
 
+        // D-53's term admin surface — the one write service in the academic layer, and registered
+        // separately from the reference service above rather than folded into it precisely so that
+        // "which academic tables are writable" is answerable from this list. It takes an ISchoolContext
+        // because a create decides which school the term is filed under; the reads above decide
+        // nothing.
+        services.AddScoped<ITermAdminService, TermAdminService>();
+
         // Resolved per request by the DeviceKey authentication handler, from the request scope — so it
         // gets the same EamsDbContext the rest of the request will use.
         services.AddScoped<IDeviceAuthenticator, DeviceAuthenticator>();

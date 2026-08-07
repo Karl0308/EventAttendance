@@ -33,6 +33,7 @@ import type {
   SisImportRunRequest,
   StudentGroup,
   Term,
+  TermWriteRequest,
 } from "./types";
 
 // The one security-relevant dependency this module has, and the reason it is in the import block
@@ -1644,6 +1645,92 @@ async function listTerms(): Promise<Term[]> {
 }
 
 /**
+ * `POST /academic/terms` — D-53, and **the only three writes anywhere under `/academic`**.
+ *
+ * Colleges, programs, courses and offerings stay read-only because the importer owns them and matches
+ * them by natural key, so a hand-authored row there is silently overwritten by the next run. A term
+ * is the one academic row a human authors rather than imports — it has no source in the roster file
+ * and every import requires one to exist first — which is why the read-only rule that protects the
+ * importer-owned tables does not apply to it.
+ *
+ * Until this existed, `CLAUDE.md` documented hand-written `INSERT INTO dbo.Terms` SQL as the only way
+ * to create one, and a database carried over from before the seed row existed left the roster-import
+ * page with an empty picker that refuses to stage a batch.
+ *
+ * **The created term is never current.** `TermWriteRequest` carries no `isCurrent` at all; moving
+ * that flag is `setTermCurrent` below.
+ *
+ * The refusals worth knowing: **400** for a blank, over-length, whitespace-padded field or dates that
+ * run backwards, and **409** for *two different things* — `TermCodeExists` when the code is taken,
+ * and `NoSchoolResolved` when there is no school row to file the term under. `termDraft.ts` tests
+ * those on the `code` extension rather than on the status, because putting the second one on the code
+ * field would send an operator to rename a code that was never the problem.
+ */
+async function createTerm(request: TermWriteRequest): Promise<Term> {
+  return writeJson(
+    "POST /academic/terms",
+    "/academic/terms",
+    { method: "POST", payload: request },
+    "The term was created",
+    toTerm,
+  );
+}
+
+/**
+ * `PUT /academic/terms/{id}` — a **full replacement** of the term's authored fields, and `code` is
+ * among them: fixing a typo in a code is the most likely edit anyone makes here.
+ *
+ * What a rename does *not* rewrite, worth knowing before offering it: derived `StudentGroup` display
+ * names embed the code at projection time (`"BSFS 2-A (2025-2026-1)"`) and keep the old text until
+ * the next import re-runs the projection. That is stale wording rather than a wrong audience, since
+ * groups resolve on ids.
+ *
+ * It does not move the current-term flag — see `setTermCurrent`. Refusals: **400** as above, **404**
+ * for a term that is not there, **409** for renaming onto another term's code.
+ */
+async function updateTerm(id: string, request: TermWriteRequest): Promise<Term> {
+  return writeJson(
+    "PUT /academic/terms/{id}",
+    `/academic/terms/${encodeURIComponent(id)}`,
+    { method: "PUT", payload: request },
+    "The change was saved",
+    toTerm,
+  );
+}
+
+/**
+ * `PATCH /academic/terms/{id}/current` — the only door into `IsCurrent`, for the same reason
+ * `PATCH /events/{id}/status` is the only door into an event's status.
+ *
+ * `IsCurrent` is not a property of the row, it is a claim about the school: a filtered unique index
+ * (`UNIQUE(SchoolId) WHERE IsCurrent = 1`) caps it at one term, so setting it **clears whichever term
+ * holds it** — a two-row transaction rather than a field write. That consequence is the one this
+ * client has to state before the press, which `currentTermConsequence` in `termDraft.ts` composes.
+ *
+ * **`isCurrent` is a required parameter rather than a defaulted one, and that is load-bearing.** The
+ * server treats a missing member as a `400` rather than binding it to `false`, precisely because a
+ * client that forgot the field would otherwise quietly retire the school's term and get a `200` for
+ * it. Taking a `boolean` here makes the omission unrepresentable one level earlier.
+ *
+ * `false` is the whole of "retiring a term": D-53 offers **no deletion**, because a term with a batch
+ * imported against it cannot be removed without data loss. Retiring leaves the school with no current
+ * term, which is an ordinary state the reads already answer for.
+ *
+ * Idempotent — setting a term that is already current, or clearing one that is not, changes nothing
+ * and answers 200. `advise()` still classifies a network failure here as `may-duplicate`, because
+ * `shape` is a proxy for idempotency and is exact only for POST; it errs safe.
+ */
+async function setTermCurrent(id: string, isCurrent: boolean): Promise<Term> {
+  return writeJson(
+    "PATCH /academic/terms/{id}/current",
+    `/academic/terms/${encodeURIComponent(id)}/current`,
+    { method: "PATCH", payload: { isCurrent } },
+    isCurrent ? "The current term was moved" : "The term was retired",
+    toTerm,
+  );
+}
+
+/**
  * Which term a section list was read for — and, when it is not the one that was asked for, the fact
  * that says the rows already fetched have to be thrown away.
  *
@@ -2240,6 +2327,9 @@ export const api = {
   revokeDeviceKey,
   listStudentGroups,
   listTerms,
+  createTerm,
+  updateTerm,
+  setTermCurrent,
   sectionChoices,
   uploadRoster,
   runImport,

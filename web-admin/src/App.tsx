@@ -6,6 +6,7 @@ import StudentsImport from "./pages/StudentsImport";
 import Events from "./pages/Events";
 import EventDetail from "./pages/EventDetail";
 import Devices from "./pages/Devices";
+import Terms from "./pages/Terms";
 
 export default function App() {
   return (
@@ -21,6 +22,10 @@ export default function App() {
         <Route path="/events" element={<Events />} />
         <Route path="/events/:id" element={<EventDetail />} />
         <Route path="/devices" element={<Devices />} />
+        {/* Its own nav entry rather than a corner of the import page: a term has to exist before a
+            roster can be imported against one, so the screen that creates one cannot be reached only
+            from the screen that is already blocked for want of it. */}
+        <Route path="/terms" element={<Terms />} />
       </Routes>
     </Layout>
   );

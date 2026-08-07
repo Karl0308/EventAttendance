@@ -55,6 +55,95 @@
             }
           }
         }
+      },
+      "post": {
+        "tags": [
+          "Academic"
+        ],
+        "summary": "`POST /academic/terms` — create a school year + semester (D-53).",
+        "description": "\r\n\r\n  <b>The one academic row a human authors rather than imports.</b> It has no source in the roster\r\n             file and every import requires one to exist first, so without this route a fresh installation's\r\n             only path to a term was hand-written SQL. The other four entity families behind this controller\r\n             stay read-only — see the controller remarks.\r\n             \r\n\r\n\r\n  <b>The new term is never current.</b> Moving that flag is `PATCH /academic/terms/{id}/current`,\r\n             which is a two-row operation under a filtered unique index rather than a field write; the create\r\n             body carries no `isCurrent` at all.\r\n             \r\n\r\n\r\n  <b>\r\n    `code` is unique per school and a duplicate is a 409, never a 500.</b> The body carries\r\n             `code: \"TermCodeExists\"`. The check is made before the insert and the unique index is caught\r\n             as well, because those are two statements and a second operator creating the same code in the\r\n             same second is decided by the index.\r\n             ",
+        "requestBody": {
+          "description": "The term's code, school year, semester and optional calendar dates.",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TermWriteRequest"
+              }
+            },
+            "text/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TermWriteRequest"
+              }
+            },
+            "application/*+json": {
+              "schema": {
+                "$ref": "#/components/schemas/TermWriteRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "The created term. `Location` names the term list — see below.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/TermDto"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TermDto"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TermDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "A field is blank, over-length, whitespace-padded, or the dates run backwards.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "A term with this code already exists in this school, or no school could be resolved to file it\r\nunder.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        }
       }
     },
     "/api/v1/academic/terms/current": {
@@ -87,6 +176,232 @@
           },
           "404": {
             "description": "No term in this school is flagged current.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/academic/terms/{id}": {
+      "put": {
+        "tags": [
+          "Academic"
+        ],
+        "summary": "`PUT /academic/terms/{id}` — edit a term's authored fields (D-53).",
+        "description": "\r\n\r\n             A full replacement of the term's own fields: `code`, `schoolYear`, `semester` and\r\n             the two optional dates. <b>It does not move the current-term flag</b> — that is\r\n             `PATCH /academic/terms/{id}/current`, and a display edit silently redefining which semester\r\n             the institution is in is exactly the side effect the split exists to prevent.\r\n             \r\n\r\n\r\n  <b>\r\n    `code` is editable, and renaming onto another term's code is a 409.</b> Fixing a typo in\r\n             a code is the most likely edit anyone makes here. What a rename does not rewrite: derived\r\n             `StudentGroup` display names embed the code at projection time\r\n             (`\"BSFS 2-A (2025-2026-1)\"`) and keep the old text until the next import re-runs the\r\n             projection — stale wording, not a wrong audience, since groups resolve on ids.\r\n             ",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The term.",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "The new field values.",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TermWriteRequest"
+              }
+            },
+            "text/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TermWriteRequest"
+              }
+            },
+            "application/*+json": {
+              "schema": {
+                "$ref": "#/components/schemas/TermWriteRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The updated term.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/TermDto"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TermDto"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TermDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "A field is blank, over-length, whitespace-padded, or the dates run backwards.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such term.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Another term in this school already holds that code.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/academic/terms/{id}/current": {
+      "patch": {
+        "tags": [
+          "Academic"
+        ],
+        "summary": "`PATCH /academic/terms/{id}/current` — make this the current term, or retire it (D-53).",
+        "description": "\r\n\r\n  <b>Its own route rather than an `isCurrent` field on the PUT, for the same reason\r\n             `PATCH /events/{id}/status` is its own route.</b>\r\n  `IsCurrent` is not a property of the\r\n             row, it is a claim about the school: a filtered unique index\r\n             (`UNIQUE(SchoolId) WHERE IsCurrent = 1`) caps it at one term per school, so setting it\r\n             clears whichever term holds it — a two-row transaction, not a field write. A PUT carrying the\r\n             flag would be one resource's payload silently rewriting a different resource, and it would fail\r\n             or no-op depending on which term happened to be current at the time.\r\n             \r\n\r\n\r\n  <b>\r\n    `isCurrent` is required, and omitting it is a 400 rather than a default.</b> A missing\r\n             JSON member would bind to `false` and quietly retire the school's term. Send\r\n             `{\"isCurrent\": true}` to make this term current, or `{\"isCurrent\": false}` to retire it\r\n             — which is the only retirement there is, since D-53 offers no deletion. Retiring leaves the\r\n             school with no current term, an ordinary state the reads already answer for.\r\n             \r\n\r\n\r\n             Idempotent: setting a term that is already current, or clearing one that is not, changes nothing\r\n             and answers 200.\r\n             ",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The term.",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "`{\"isCurrent\": true}` or `{\"isCurrent\": false}`.",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TermCurrentRequest"
+              }
+            },
+            "text/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TermCurrentRequest"
+              }
+            },
+            "application/*+json": {
+              "schema": {
+                "$ref": "#/components/schemas/TermCurrentRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The term, with its new flag. Exactly one term per school can carry it.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/TermDto"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TermDto"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TermDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`isCurrent` was not supplied.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such term.",
             "content": {
               "text/plain": {
                 "schema": {
@@ -5624,6 +5939,18 @@
           "serverTime": "2026-07-29T05:31:22.117Z"
         }
       },
+      "TermCurrentRequest": {
+        "type": "object",
+        "properties": {
+          "isCurrent": {
+            "type": "boolean",
+            "description": "<b>Nullable so that omitting it is a refusal rather than a decision.</b> A non-nullable\r\n             `bool` deserializes a missing member to `false`, which on this route means \"clear the\r\n             current term\" — a client that forgot the field would silently retire the school's term and get a\r\n             `200` for it. Send `true` to make this term current, or `false` to retire it; there is\r\n             no default.\r\n            \r\n             \r\n`false` is the whole of \"retiring a term\", and it is why this route is not named\r\n             `make-current`: D-53 offers no deletion, because a term with a batch imported against it cannot\r\n             be removed without data loss. Clearing the flag leaves zero current terms, which is an ordinary state\r\n             the read surface already answers for — `GET /academic/terms/current` 404s and\r\n             `GET /academic/course-offerings` returns an empty page.\r\n             ",
+            "nullable": true
+          }
+        },
+        "additionalProperties": false,
+        "description": "The body of `PATCH /academic/terms/{id}/current` (D-53)."
+      },
       "TermDto": {
         "type": "object",
         "properties": {
@@ -5691,6 +6018,34 @@
         },
         "additionalProperties": false,
         "description": "One page of an admin list read, plus what the caller needs to ask for the next one.\r\n            \r\n\r\n<b>Every §6.2/§6.3 admin list returns this; `GET /attendance/live/{eventId}` deliberately does\r\nnot.</b> That endpoint pages by cursor (`since`/`cursor`/`hasMore`) because it is a\r\npolling delta rather than a list — a client asks \"what changed after this point\", not \"give me rows\r\n40 to 60\" — and its shape is frozen published contract under D-29/D-30/D-42. Offset paging over a\r\nlive feed also drops rows: an insert below the cursor shifts every subsequent row up by one and the\r\nnext page skips it. The two mechanisms coexisting is correct, not an inconsistency to tidy.\r\n"
+      },
+      "TermWriteRequest": {
+        "type": "object",
+        "properties": {
+          "code": {
+            "type": "string"
+          },
+          "schoolYear": {
+            "type": "string"
+          },
+          "semester": {
+            "type": "string"
+          },
+          "startsOn": {
+            "type": "string",
+            "description": "Optional, and normally absent — the SIS export has no term-date columns, so a real term carries\r\nneither date. Supplied as `YYYY-MM-DD`: a term boundary is a calendar date in the school's own\r\ntimezone and has no time of day.",
+            "format": "date",
+            "nullable": true
+          },
+          "endsOn": {
+            "type": "string",
+            "description": "Optional. If both dates are supplied, this one may not fall before StartsOn.",
+            "format": "date",
+            "nullable": true
+          }
+        },
+        "additionalProperties": false,
+        "description": "The body of `POST /academic/terms` and `PUT /academic/terms/{id}` (D-53).\r\n            \r\n\r\n<b>EAMS.Application.Dtos.TermWriteRequest.Code is stored exactly as typed.</b> It is the one natural key in the academic\r\nlayer that is authored by a person rather than scraped from a spreadsheet cell, so there is no dirt\r\nto clean and `AcademicKey` never touches it. A value with leading or trailing whitespace is a\r\n`400` rather than a silent trim — see EAMS.Domain.TermText for why refusing beats\r\nnormalizing here.\r\n\r\n<b>`SchoolId` is deliberately absent</b>, exactly as it is on `EventWriteRequest` and\r\n`DeviceWriteRequest`: the tenant comes from\r\nEAMS.Application.Abstractions.ISchoolContext, never from the request.\r\n\r\n<b>`IsCurrent` is deliberately absent too, and that is not symmetry for its own sake.</b>\r\nMoving the flag is a two-row operation guarded by a filtered unique index\r\n(`UX_Terms_SchoolId_Current`), so it is `PATCH /academic/terms/{id}/current` — the same\r\nsplit `PATCH /events/{id}/status` draws for the same reason. It also keeps the create path's\r\nunique-violation arm unambiguous: with the current flag out of the body, the only index a create can\r\npossibly break is `UX_Terms_SchoolId_Code`, so answering `TermCodeExists` is a fact rather\r\nthan a guess between two indexes.\r\n"
       }
     },
     "securitySchemes": {
@@ -5705,7 +6060,7 @@
   "tags": [
     {
       "name": "Academic",
-      "description": "ADR-001 D-1's academic layer over HTTP — <b>reads only</b>."
+      "description": "ADR-001 D-1's academic layer over HTTP — <b>reads, plus D-53's three term-administration writes and\r\nnothing else</b>."
     },
     {
       "name": "Devices",

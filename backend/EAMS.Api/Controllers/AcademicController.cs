@@ -2,11 +2,13 @@ using EAMS.Api.Authorization;
 using EAMS.Application.Abstractions;
 using EAMS.Application.Dtos;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.Mvc.Infrastructure;
 
 namespace EAMS.Api.Controllers;
 
 /// <summary>
-/// ADR-001 D-1's academic layer over HTTP — <b>reads only</b>.
+/// ADR-001 D-1's academic layer over HTTP — <b>reads, plus D-53's three term-administration writes and
+/// nothing else</b>.
 /// </summary>
 /// <remarks>
 /// <para>
@@ -14,15 +16,34 @@ namespace EAMS.Api.Controllers;
 /// been in place since Phase 2, and nothing exposed them. The admin SPA therefore could not build an
 /// event-audience picker — "invite BSCRIM 2-A" was unanswerable over the API, because listing the
 /// sections required reading the database by hand. That was the single hard blocker on the whole
-/// back-office, and closing it is the whole of this controller's job.
+/// back-office, and closing it is the whole of this controller's original job.
 /// </para>
 ///
 /// <para>
-/// <b>No POST, PUT or DELETE, and their absence is a decision.</b> The roster import owns every table
-/// behind these routes. A hand-created course is matched by the importer on its normalized key and is
-/// either silently overwritten or — if the operator typed the code differently — duplicated into a
-/// second row that splits the enrollments between them. Who wins that conflict is an open question,
-/// and until it is answered the honest surface is the one that cannot create it.
+/// <b>Colleges, programmes, courses and offerings are read-only, and their having no POST, PUT or
+/// DELETE is a decision.</b> The roster import owns those four tables. A hand-created course is matched
+/// by the importer on its normalized key and is either silently overwritten or — if the operator typed
+/// the code differently — duplicated into a second row that splits the enrollments between them. Who
+/// wins that conflict is an open question, and until it is answered the honest surface is the one that
+/// cannot create it.
+/// </para>
+///
+/// <para>
+/// <b><c>Terms</c> is the exception, and the carve-out is narrower than reversing that (D-53).</b> The
+/// importer only ever <em>reads</em> <c>Terms</c> — it takes a <c>TermId</c> as input (ADR-001 D-5) and
+/// writes no row of that table — so a hand-authored term has no conflict to lose. A term is also the
+/// one academic row with no source in the roster file, and every import needs one to exist first: until
+/// these three routes landed, the documented way to create one was hand-written SQL against
+/// <c>dbo.Terms</c>, which is not a procedure an operator can be given. The writes go through
+/// <see cref="ITermAdminService"/> rather than <see cref="IAcademicReferenceService"/>, so that
+/// interface's reads-only reasoning stays true of every method on it.
+/// </para>
+///
+/// <para>
+/// <b>Still no DELETE, anywhere on this controller.</b> A term with a batch imported against it cannot
+/// be removed without taking that batch's enrolments and term records with it, which the no-data-loss
+/// rule forbids. Retiring a term is <c>PATCH /academic/terms/{id}/current</c> with
+/// <c>isCurrent: false</c>.
 /// </para>
 ///
 /// <para>
@@ -45,8 +66,23 @@ namespace EAMS.Api.Controllers;
 [Route("api/v1/academic")]
 public class AcademicController : ControllerBase
 {
+    /// <summary>The machine-readable half of §6's RFC 7807 body, as on <c>StudentsController</c>.</summary>
+    internal const string ErrorCodeProperty = "code";
+
     private readonly IAcademicReferenceService _academic;
-    public AcademicController(IAcademicReferenceService academic) => _academic = academic;
+
+    /// <summary>
+    /// D-53's term writes. A second dependency rather than three more methods on the reference service
+    /// — see <see cref="ITermAdminService"/> for why the read-only argument that protects the other
+    /// four entity families does not reach terms.
+    /// </summary>
+    private readonly ITermAdminService _terms;
+
+    public AcademicController(IAcademicReferenceService academic, ITermAdminService terms)
+    {
+        _academic = academic;
+        _terms = terms;
+    }
 
     // ------------------------------------------------------------------------------------- terms
 
@@ -103,6 +139,157 @@ public class AcademicController : ControllerBase
     {
         var term = await _academic.GetCurrentTermAsync(ct);
         return term is null ? NotFound() : Ok(term);
+    }
+
+    // ------------------------------------------------------------------------ terms: D-53 writes
+
+    /// <summary>
+    /// <c>POST /academic/terms</c> — create a school year + semester (D-53).
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>The one academic row a human authors rather than imports.</b> It has no source in the roster
+    /// file and every import requires one to exist first, so without this route a fresh installation's
+    /// only path to a term was hand-written SQL. The other four entity families behind this controller
+    /// stay read-only — see the controller remarks.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>The new term is never current.</b> Moving that flag is <c>PATCH /academic/terms/{id}/current</c>,
+    /// which is a two-row operation under a filtered unique index rather than a field write; the create
+    /// body carries no <c>isCurrent</c> at all.
+    /// </para>
+    ///
+    /// <para>
+    /// <b><c>code</c> is unique per school and a duplicate is a 409, never a 500.</b> The body carries
+    /// <c>code: "TermCodeExists"</c>. The check is made before the insert and the unique index is caught
+    /// as well, because those are two statements and a second operator creating the same code in the
+    /// same second is decided by the index.
+    /// </para>
+    /// </remarks>
+    /// <param name="request">The term's code, school year, semester and optional calendar dates.</param>
+    /// <param name="ct">Cancellation token.</param>
+    /// <response code="201">The created term. <c>Location</c> names the term list — see below.</response>
+    /// <response code="400">A field is blank, over-length, whitespace-padded, or the dates run backwards.</response>
+    /// <response code="409">
+    /// A term with this code already exists in this school, or no school could be resolved to file it
+    /// under.
+    /// </response>
+    // The Location header names the collection rather than the new row, for the reason
+    // StudentsController.AddCard's does: there is no GET /academic/terms/{id}, and a 201 whose Location
+    // 404s is worse than one naming the resource the term is actually visible on. Adding a by-id read
+    // was considered and left out — D-53 defines three routes, and this controller's surface is the
+    // thing the decision is about.
+    [HttpPost("terms")]
+    [HasPermissionNotEnforced(EamsPermissions.AcademicWrite)]
+    [ProducesResponseType(typeof(TermDto), StatusCodes.Status201Created)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status409Conflict)]
+    public async Task<ActionResult<TermDto>> CreateTerm(
+        [FromBody] TermWriteRequest request, CancellationToken ct)
+    {
+        var response = await _terms.CreateAsync(request, ct);
+        if (response.Outcome != TermWriteOutcome.Saved) return Failure(response);
+
+        return CreatedAtAction(nameof(Terms), null, response.Term);
+    }
+
+    /// <summary>
+    /// <c>PUT /academic/terms/{id}</c> — edit a term's authored fields (D-53).
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// A full replacement of the term's own fields: <c>code</c>, <c>schoolYear</c>, <c>semester</c> and
+    /// the two optional dates. <b>It does not move the current-term flag</b> — that is
+    /// <c>PATCH /academic/terms/{id}/current</c>, and a display edit silently redefining which semester
+    /// the institution is in is exactly the side effect the split exists to prevent.
+    /// </para>
+    ///
+    /// <para>
+    /// <b><c>code</c> is editable, and renaming onto another term's code is a 409.</b> Fixing a typo in
+    /// a code is the most likely edit anyone makes here. What a rename does not rewrite: derived
+    /// <c>StudentGroup</c> display names embed the code at projection time
+    /// (<c>"BSFS 2-A (2025-2026-1)"</c>) and keep the old text until the next import re-runs the
+    /// projection — stale wording, not a wrong audience, since groups resolve on ids.
+    /// </para>
+    /// </remarks>
+    /// <param name="id">The term.</param>
+    /// <param name="request">The new field values.</param>
+    /// <param name="ct">Cancellation token.</param>
+    /// <response code="200">The updated term.</response>
+    /// <response code="400">A field is blank, over-length, whitespace-padded, or the dates run backwards.</response>
+    /// <response code="404">No such term.</response>
+    /// <response code="409">Another term in this school already holds that code.</response>
+    [HttpPut("terms/{id:guid}")]
+    [HasPermissionNotEnforced(EamsPermissions.AcademicWrite)]
+    [ProducesResponseType(typeof(TermDto), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status404NotFound)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status409Conflict)]
+    public async Task<ActionResult<TermDto>> UpdateTerm(
+        Guid id, [FromBody] TermWriteRequest request, CancellationToken ct)
+    {
+        var response = await _terms.UpdateAsync(id, request, ct);
+        return response.Outcome == TermWriteOutcome.Saved ? Ok(response.Term) : Failure(response);
+    }
+
+    /// <summary>
+    /// <c>PATCH /academic/terms/{id}/current</c> — make this the current term, or retire it (D-53).
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Its own route rather than an <c>isCurrent</c> field on the PUT, for the same reason
+    /// <c>PATCH /events/{id}/status</c> is its own route.</b> <c>IsCurrent</c> is not a property of the
+    /// row, it is a claim about the school: a filtered unique index
+    /// (<c>UNIQUE(SchoolId) WHERE IsCurrent = 1</c>) caps it at one term per school, so setting it
+    /// clears whichever term holds it — a two-row transaction, not a field write. A PUT carrying the
+    /// flag would be one resource's payload silently rewriting a different resource, and it would fail
+    /// or no-op depending on which term happened to be current at the time.
+    /// </para>
+    ///
+    /// <para>
+    /// <b><c>isCurrent</c> is required, and omitting it is a 400 rather than a default.</b> A missing
+    /// JSON member would bind to <c>false</c> and quietly retire the school's term. Send
+    /// <c>{"isCurrent": true}</c> to make this term current, or <c>{"isCurrent": false}</c> to retire it
+    /// — which is the only retirement there is, since D-53 offers no deletion. Retiring leaves the
+    /// school with no current term, an ordinary state the reads already answer for.
+    /// </para>
+    ///
+    /// <para>
+    /// Idempotent: setting a term that is already current, or clearing one that is not, changes nothing
+    /// and answers 200.
+    /// </para>
+    /// </remarks>
+    /// <param name="id">The term.</param>
+    /// <param name="request"><c>{"isCurrent": true}</c> or <c>{"isCurrent": false}</c>.</param>
+    /// <param name="ct">Cancellation token.</param>
+    /// <response code="200">The term, with its new flag. Exactly one term per school can carry it.</response>
+    /// <response code="400"><c>isCurrent</c> was not supplied.</response>
+    /// <response code="404">No such term.</response>
+    [HttpPatch("terms/{id:guid}/current")]
+    [HasPermissionNotEnforced(EamsPermissions.AcademicWrite)]
+    [ProducesResponseType(typeof(TermDto), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status404NotFound)]
+    public async Task<ActionResult<TermDto>> SetCurrentTerm(
+        Guid id, [FromBody] TermCurrentRequest request, CancellationToken ct)
+    {
+        // Bound as bool? and refused here rather than in the service, because "the member was absent"
+        // is a fact only the deserializer has — by the time a bool reaches the service it is
+        // indistinguishable from a deliberate false, and on this route false is a destructive
+        // instruction. The service's own guards still cover every value it can be handed.
+        if (request.IsCurrent is not { } isCurrent)
+        {
+            return Failure(new TermWriteResponse(
+                TermWriteOutcome.ValidationFailed,
+                "isCurrent is required. Send {\"isCurrent\": true} to make this the current term or " +
+                "{\"isCurrent\": false} to retire it — a missing member would bind to false and " +
+                "silently leave the school with no current term.",
+                null));
+        }
+
+        var response = await _terms.SetCurrentAsync(id, isCurrent, ct);
+        return response.Outcome == TermWriteOutcome.Saved ? Ok(response.Term) : Failure(response);
     }
 
     // ---------------------------------------------------------------------------------- colleges
@@ -246,4 +433,75 @@ public class AcademicController : ControllerBase
         CancellationToken ct)
         => Ok(await _academic.ListCourseOfferingsAsync(
             termId, courseId, section, PageRequest.From(page, pageSize), ct));
+
+    // --------------------------------------------------------------------------------- mapping
+
+    /// <summary>
+    /// The status-code contract for D-53's term write surface, as one total function over
+    /// <see cref="TermWriteOutcome"/>.
+    ///
+    /// <para>
+    /// <b>Every member is listed instead of a <c>_ =&gt; Ok(...)</c> fall-through</b>, for the reason
+    /// <c>StudentsController.StatusCodeFor</c> and <c>AttendanceController.StatusCodeFor</c> both
+    /// record at length: a discard arm made "an outcome nobody mapped" indistinguishable from "an
+    /// outcome that means success", and shipped a rejection as a 200. The final arm has to exist — C#
+    /// does not treat a fully enumerated enum switch as exhaustive — but it throws rather than guessing.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>Why <c>TermCodeExists</c> is 409 and not 400.</b> Same split the students and events surfaces
+    /// draw. A blank or whitespace-padded code is wrong under every circumstance and the fix is to
+    /// change the request; a taken code rejects a payload that is entirely well formed and would be
+    /// accepted the moment the term holding that code is renamed. That is a conflict with the state of
+    /// the resource, which is what 409 is for — and it is the specific thing D-53 promises will not be
+    /// a 500.
+    /// </para>
+    /// </summary>
+    internal static int StatusCodeFor(TermWriteOutcome outcome) => outcome switch
+    {
+        TermWriteOutcome.Saved => StatusCodes.Status200OK,
+
+        // The URL claims the term exists.
+        TermWriteOutcome.NotFound => StatusCodes.Status404NotFound,
+
+        // The caller's payload: a field outside the Terms column rules, or a PATCH that did not say
+        // which way.
+        TermWriteOutcome.ValidationFailed => StatusCodes.Status400BadRequest,
+
+        // The request is fine; the state of the school forbids it. See the method remarks.
+        TermWriteOutcome.TermCodeExists
+            or TermWriteOutcome.NoSchoolResolved => StatusCodes.Status409Conflict,
+
+        _ => throw new ArgumentOutOfRangeException(
+            nameof(outcome), outcome,
+            $"No HTTP status is mapped for this {nameof(TermWriteOutcome)}. Every outcome must be " +
+            "mapped explicitly, or an unmapped one ships as a success."),
+    };
+
+    /// <summary>
+    /// §6's declared error shape (RFC 7807), built through <see cref="ProblemDetailsFactory"/> so the
+    /// <c>traceId</c> is stamped once, in <c>TracedProblemDetailsFactory</c>, rather than by each
+    /// action — the same seam every other controller's failure path uses.
+    /// </summary>
+    private ObjectResult Failure(TermWriteResponse response)
+    {
+        var status = StatusCodeFor(response.Outcome);
+        var problem = ProblemDetailsFactory.CreateProblemDetails(
+            HttpContext, statusCode: status, title: TitleFor(response.Outcome),
+            detail: response.Message);
+
+        // The token a client branches on, derived from the outcome in one place so it cannot drift
+        // from the status it arrives with. `title` and `detail` are prose written for a person.
+        problem.Extensions[ErrorCodeProperty] = response.Outcome.ToString();
+
+        return StatusCode(status, problem);
+    }
+
+    private static string TitleFor(TermWriteOutcome outcome) => outcome switch
+    {
+        TermWriteOutcome.NotFound => "Term not found.",
+        TermWriteOutcome.TermCodeExists => "That term code is already in use.",
+        TermWriteOutcome.NoSchoolResolved => "No school could be resolved.",
+        _ => "The request could not be processed.",
+    };
 }

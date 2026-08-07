@@ -3,7 +3,7 @@
 <!-- GENERATED FILE — DO NOT EDIT.
      Source: docs/api/openapi.json. Regenerate: node scripts/generate-endpoint-index.mjs --write -->
 
-**Generated from [`openapi.json`](openapi.json) — do not edit by hand.** 44 operations across 8 controllers, all mounted under `/api/v1`. Routes below are written relative to that mount.
+**Generated from [`openapi.json`](openapi.json) — do not edit by hand.** 47 operations across 8 controllers, all mounted under `/api/v1`. Routes below are written relative to that mount.
 
 This page is a **map, not a contract.** It exists so you can find an endpoint; payload shapes, field types and outcome tokens live in [`openapi.json`](openapi.json), which is what you generate a client from. Behaviour a schema cannot state — what your queue does with each outcome, the card-UID and clock rules — is in [`attendance-contract-handoff.md`](attendance-contract-handoff.md).
 
@@ -11,7 +11,7 @@ This page is a **map, not a contract.** It exists so you can find an endpoint; p
 
 ## Contents
 
-- [Academic](#academic) — 6
+- [Academic](#academic) — 9
 - [Devices](#devices) — 7
 - [EventManifest](#eventmanifest) — 1
 - [SisImport](#sisimport) — 4
@@ -29,6 +29,9 @@ This page is a **map, not a contract.** It exists so you can find an endpoint; p
 | `GET` | `/academic/courses` | — | *none declared* | Courses, optionally narrowed by college and search term. |
 | `GET` | `/academic/programs` | — | *none declared* | Degree programmes, optionally narrowed to one college. |
 | `GET` | `/academic/terms` | — | *none declared* | Every term, current first and then newest first. |
+| `POST` | `/academic/terms` | — | `400` `409` | Create a school year + semester (D-53). |
+| `PUT` | `/academic/terms/{id}` | — | `400` `404` `409` | Edit a term's authored fields (D-53). |
+| `PATCH` | `/academic/terms/{id}/current` | — | `400` `404` | Make this the current term, or retire it (D-53). |
 | `GET` | `/academic/terms/current` | — | `404` | The term flagged current, or 404 when none is. |
 
 ## Devices

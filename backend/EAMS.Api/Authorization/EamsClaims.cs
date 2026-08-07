@@ -145,4 +145,27 @@ public static class EamsPermissions
     /// </para>
     /// </summary>
     public const string AcademicRead = "academic.read";
+
+    /// <summary>
+    /// D-53's term administration — <c>POST</c>/<c>PUT /academic/terms</c> and
+    /// <c>PATCH /academic/terms/{id}/current</c>. The only write anywhere in the academic layer.
+    ///
+    /// <para>
+    /// <b>A second code rather than reusing <see cref="AcademicRead"/>, and a second one rather than
+    /// reusing <see cref="SisImport"/>.</b> Reading the academic structure is what every audience picker
+    /// and every import screen does; authoring the term that scopes all of it is what one administrator
+    /// does at the start of a semester, and the whole product hangs off getting it right — a term made
+    /// current by the wrong person points every subsequent import and every default at the wrong
+    /// semester. <c>sis.import</c> was the nearest existing fit, since the operator who creates a term
+    /// is the operator who then imports against it, but it would make "can upload a roster" and "can
+    /// redefine which semester the institution is in" one permission, which is a question Phase 6 should
+    /// get to answer rather than have pre-answered here.
+    /// </para>
+    ///
+    /// <para>
+    /// It grants no deletion, because D-53 defines none: a term with a batch imported against it cannot
+    /// be removed without data loss, and retiring one is clearing its current flag.
+    /// </para>
+    /// </summary>
+    public const string AcademicWrite = "academic.write";
 }

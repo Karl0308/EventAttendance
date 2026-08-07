@@ -7,10 +7,23 @@ namespace EAMS.Application.Abstractions;
 /// course offerings. <b>Reads only, and that is a decision rather than an unfinished half.</b>
 ///
 /// <para>
-/// The §10 roster import owns every one of these tables. A course created by hand would be matched by
-/// the importer on its normalized key and either silently overwritten or, if the operator typed the
-/// code differently, duplicated as a second row that splits the enrollments between them. Until there
-/// is a decision about which side wins, the honest surface is the one that cannot create the conflict.
+/// The §10 roster import owns colleges, programmes, courses and offerings. A course created by hand
+/// would be matched by the importer on its normalized key and either silently overwritten or, if the
+/// operator typed the code differently, duplicated as a second row that splits the enrollments between
+/// them. Until there is a decision about which side wins, the honest surface is the one that cannot
+/// create the conflict.
+/// </para>
+///
+/// <para>
+/// <b><c>Terms</c> now has a write surface, and it is deliberately not on this interface (D-53).</b>
+/// The paragraph above is an argument about tables the importer <em>writes</em>; the importer only ever
+/// reads <c>Terms</c> — it takes a <c>TermId</c> as input (ADR-001 D-5) — so a hand-authored term has
+/// no conflict to lose. A term is also the one academic row with no source in the roster file at all,
+/// and every import needs one to exist first. Those writes live on
+/// <see cref="ITermAdminService"/> rather than being added here, so that "the importer owns these
+/// tables, therefore this interface does not write them" stays true of every method that <em>is</em>
+/// here. Reads of terms stay on this interface: <see cref="ListTermsAsync"/> and
+/// <see cref="GetCurrentTermAsync"/> are what a picker calls, and splitting them off would buy nothing.
 /// </para>
 ///
 /// <para>

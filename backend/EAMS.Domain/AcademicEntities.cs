@@ -53,6 +53,77 @@ public class Term : AuditableEntity
     public DateOnly? EndsOn { get; set; }
 }
 
+/// <summary>
+/// <c>Terms</c>' column rules, stated once for the D-53 admin write surface — the same job
+/// <see cref="EventText"/> and <c>DeviceText</c> do for their tables, and here for the same reason: an
+/// over-length value reaching SQL Server comes back as error 2628
+/// (<c>String or binary data would be truncated</c>), which is a 500 on input the caller got wrong.
+///
+/// <para>
+/// <b>Every length below mirrors the migration, and none of these methods normalizes.</b> A term
+/// <c>Code</c> is operator-authored (D-53) — <c>2025-2026-1</c> is what the operator typed and is what
+/// gets stored, with no case folding and no separator stripping, unlike every other natural key in
+/// this file. <see cref="IsValidCode"/> therefore only asks whether the value is present and fits; it
+/// is deliberately not <c>AcademicKey</c>'s job.
+/// </para>
+///
+/// <para>
+/// <b>Surrounding whitespace is refused rather than trimmed, and that is the one rule here worth
+/// arguing.</b> Trimming would be normalizing the operator's value, which D-53 says not to do; storing
+/// it verbatim would let <c>' 2025-2026-1'</c> and <c>'2025-2026-1'</c> live side by side, because
+/// <c>UX_Terms_SchoolId_Code</c> sees two different strings — two terms that render identically in
+/// every picker, with imports split between them and nothing on screen to explain it. (SQL Server's
+/// comparison semantics ignore <em>trailing</em> spaces, so only the leading case actually duplicates;
+/// both are refused, because a rule that holds on one side of a string and not the other is one nobody
+/// can remember.) Refusing names the problem at the boundary and leaves the stored value exactly as
+/// authored.
+/// </para>
+///
+/// <para>
+/// <b>That refusal is a deliberate exception to the house style, not the new house style.</b> The rest
+/// of this codebase trims — <c>DeviceService</c> and <c>EventService</c> both <c>.Trim()</c> their
+/// caller-supplied text and store the result — and a service author reading <c>TermAdminService</c> for
+/// a precedent should not carry the refusal across. The exception is narrow and it is earned by one
+/// property no other table has: a term <c>Code</c> is the operator's own string, stored verbatim by
+/// D-53, so there is no normalization step in which a trim could hide. Everywhere the value is already
+/// normalized on the way in, trimming is part of that normalization and belongs there.
+/// </para>
+/// </summary>
+public static class TermText
+{
+    /// <summary>Matches <c>Terms.Code nvarchar(50)</c>.</summary>
+    public const int CodeMaxLength = 50;
+
+    /// <summary>Matches <c>Terms.SchoolYear nvarchar(20)</c> — e.g. <c>2025-2026</c>.</summary>
+    public const int SchoolYearMaxLength = 20;
+
+    /// <summary>Matches <c>Terms.Semester nvarchar(30)</c> — e.g. <c>1st Semester</c>.</summary>
+    public const int SemesterMaxLength = 30;
+
+    public static bool IsValidCode(string? value) => IsExactAndWithin(value, CodeMaxLength);
+
+    public static bool IsValidSchoolYear(string? value) => IsExactAndWithin(value, SchoolYearMaxLength);
+
+    public static bool IsValidSemester(string? value) => IsExactAndWithin(value, SemesterMaxLength);
+
+    /// <summary>
+    /// A term that ends before it starts. Both dates are optional — the SIS export has no term-date
+    /// columns, so a real term carries neither — but a pair that runs backwards is a typo the operator
+    /// can fix now, and accepting it would put a term in the system that contains no days at all.
+    /// </summary>
+    public static bool IsValidRange(DateOnly? startsOn, DateOnly? endsOn) =>
+        startsOn is not { } start || endsOn is not { } end || start <= end;
+
+    /// <summary>
+    /// Present, within <paramref name="maxLength"/>, and identical to its own trimmed form. See the
+    /// type remarks for why the last clause is a refusal rather than a silent trim.
+    /// </summary>
+    private static bool IsExactAndWithin(string? value, int maxLength) =>
+        !string.IsNullOrWhiteSpace(value)
+        && value.Length <= maxLength
+        && value == value.Trim();
+}
+
 // -------------------------------------------------------------------------------------- Colleges
 
 /// <summary>

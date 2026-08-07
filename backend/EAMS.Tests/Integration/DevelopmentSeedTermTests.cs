@@ -11,13 +11,20 @@ namespace EAMS.Tests.Integration;
 /// The seeded development <c>Term</c>.
 ///
 /// <para>
-/// <b>Nothing in the product can create a term</b>, which is the whole reason this row and this file
-/// exist. <c>AcademicController</c> is reads-only by design and the §10 importer takes a
-/// <c>TermId</c> as an <em>input</em> (ADR-001 D-5), so a freshly migrated database has no way to
-/// acquire one. Without the seed the admin SPA's roster-import page renders an empty term picker and
-/// refuses to stage a batch (<c>StudentsImport.tsx</c>, <c>NO_TERMS</c>) — i.e. the first thing a new
-/// developer tries is dead, and the failure looks like a broken import page rather than like a
-/// missing row.
+/// <b>A term is the one row the import flow cannot start without</b>, which is why this file exists.
+/// The §10 importer takes a <c>TermId</c> as an <em>input</em> (ADR-001 D-5), so without a term the
+/// admin SPA's roster-import page renders an empty picker and refuses to stage a batch
+/// (<c>StudentsImport.tsx</c>, <c>NO_TERMS</c>) — the first thing a new developer tries is dead, and the
+/// failure looks like a broken import page rather than like a missing row.
+/// </para>
+///
+/// <para>
+/// <b>D-53 gave the product a way to create one, and that did not make the seed redundant.</b>
+/// <c>ITermAdminService</c> behind <c>POST /academic/terms</c> means a freshly migrated database is
+/// recoverable by hand — which is the right answer for a real install, and is what
+/// <c>docs/DEPLOY-IIS.md</c> now tells an operator to do. It is the wrong answer for a developer whose
+/// first five minutes on the repo should not include authoring a term to make the page they were
+/// looking at work. The seed keeps that path free; these tests keep the seed.
 /// </para>
 ///
 /// <para>
@@ -88,10 +95,12 @@ public class DevelopmentSeedTermTests : IntegrationTest
 
         Assert.True(
             term is not null,
-            $"The Development host seeded no term with code '{SeedData.DevelopmentTermCode}'. Nothing " +
-            "in the product can create one — AcademicController is read-only and the importer takes a " +
-            "TermId as input — so without this row a freshly migrated database gives the roster-import " +
-            "page an empty term picker and it refuses to stage a batch (StudentsImport.tsx, NO_TERMS).");
+            $"The Development host seeded no term with code '{SeedData.DevelopmentTermCode}'. The " +
+            "importer takes a TermId as input, so without this row a freshly migrated database gives " +
+            "the roster-import page an empty term picker and it refuses to stage a batch " +
+            "(StudentsImport.tsx, NO_TERMS). A term can be authored on the /terms page (D-53), but a " +
+            "developer should not have to do that before the import page works — that is what the seed " +
+            "is for, and its removal is what this test exists to catch.");
 
         Assert.Equal(SchoolYear, term!.SchoolYear);
         Assert.Equal(Semester, term.Semester);

@@ -249,10 +249,17 @@ internal static class SeedData
     }
 
     /// <summary>
-    /// A term, because nothing in the product can create one: <c>AcademicController</c> is read-only by
-    /// design and the importer takes a <c>TermId</c> as an *input* (ADR-001 D-5). Without this row the
-    /// roster-import page's term picker is empty and the page correctly refuses to stage a batch — i.e.
-    /// the first thing a new developer tries is dead.
+    /// A term, because the importer takes a <c>TermId</c> as an *input* (ADR-001 D-5) and never creates
+    /// one. Without this row the roster-import page's term picker is empty and the page correctly
+    /// refuses to stage a batch — i.e. the first thing a new developer tries is dead.
+    ///
+    /// <para>
+    /// <b>D-53 gave the product a way to author a term, and that did not make this row redundant.</b>
+    /// A term can now be created on the SPA's <c>/terms</c> page (<c>TermAdminService</c>;
+    /// <c>AcademicController</c> itself stays read-only for the four importer-owned families). That is
+    /// the right recovery for an install, and the wrong one for a developer's first five minutes — the
+    /// point of a seed is that the import page works before anyone has been told what a term is.
+    /// </para>
     ///
     /// <para>
     /// <b>This is guarded on <c>Terms</c> rather than riding the school guard, because riding it failed

@@ -173,6 +173,30 @@ public abstract class IntegrationTest : IAsyncLifetime
     internal IStudentGroupService StudentGroupsOn(EamsDbContext db) => new StudentGroupService(db);
 
     /// <summary>
+    /// D-53's term write surface, wired to the same tenant as <see cref="NewDbContext()"/>.
+    ///
+    /// <para>
+    /// It takes <see cref="School"/> where <see cref="AcademicOn"/> does not, and the asymmetry is the
+    /// same one <see cref="StudentsOn"/> and <see cref="EventsOn(EamsDbContext)"/> record: creating a
+    /// term has to decide which school it is filed under, and that answer comes from the context rather
+    /// than the request. A read decides nothing and is scoped by the query filter alone.
+    /// </para>
+    /// </summary>
+    internal ITermAdminService TermsOn(EamsDbContext db) =>
+        new TermAdminService(db, School, NullLogger<TermAdminService>.Instance);
+
+    /// <summary>
+    /// The same service with a logger a test can read back, for the reason
+    /// <see cref="CapturingLogger{T}"/> exists: losing the duplicate-code race to
+    /// <c>UX_Terms_SchoolId_Code</c> is a failure the service <em>recovers from</em>, so the caller
+    /// gets a tidy 409 whether the conflict was decided by the pre-check or by the index. The log entry
+    /// is the only observable difference between those two paths, and therefore the only way a test can
+    /// prove it exercised the one that matters.
+    /// </summary>
+    internal ITermAdminService TermsOn(EamsDbContext db, CapturingLogger<TermAdminService> logger) =>
+        new TermAdminService(db, School, logger);
+
+    /// <summary>
     /// The §10 import pipeline, wired to the same context the test asserts against.
     ///
     /// <para>

@@ -1,9 +1,14 @@
 namespace EAMS.Application.Dtos;
 
-// The read surface over ADR-001 D-1's academic layer. Phase 3b-2 is reads only: the §10 import owns
-// every one of these tables, and a hand-written course would be silently overwritten — or worse,
-// duplicated under a second key — by the next roster run. Nothing here has a write counterpart on
-// purpose.
+// The read surface over ADR-001 D-1's academic layer, plus the one write surface D-53 carved out of
+// it. Phase 3b-2 was reads only: the §10 import owns every one of these tables, and a hand-written
+// course would be silently overwritten — or worse, duplicated under a second key — by the next roster
+// run. That still holds for colleges, programmes, courses and offerings, and none of them has a write
+// counterpart here.
+//
+// `Term` is the exception, and the carve-out is narrower than it looks: the importer only ever *reads*
+// Terms — it takes a TermId as input (ADR-001 D-5) and writes no row of that table — so the conflict
+// the read-only rule exists to prevent cannot arise. See TermWriteRequest.
 //
 // **Every DTO below publishes the display column and hides the *Key one, with one exception.** The
 // normalized keys (`NameKey`, `CodeKey`) exist so `'SSCI 7'` and `'SSci7'` resolve to one row; they
@@ -29,6 +34,64 @@ namespace EAMS.Application.Dtos;
 public record TermDto(
     Guid Id, string Code, string SchoolYear, string Semester, bool IsCurrent,
     DateOnly? StartsOn, DateOnly? EndsOn);
+
+/// <summary>
+/// The body of <c>POST /academic/terms</c> and <c>PUT /academic/terms/{id}</c> (D-53).
+///
+/// <para>
+/// <b><see cref="Code"/> is stored exactly as typed.</b> It is the one natural key in the academic
+/// layer that is authored by a person rather than scraped from a spreadsheet cell, so there is no dirt
+/// to clean and <c>AcademicKey</c> never touches it. A value with leading or trailing whitespace is a
+/// <c>400</c> rather than a silent trim — see <see cref="EAMS.Domain.TermText"/> for why refusing beats
+/// normalizing here.
+/// </para>
+///
+/// <para>
+/// <b><c>SchoolId</c> is deliberately absent</b>, exactly as it is on <c>EventWriteRequest</c> and
+/// <c>DeviceWriteRequest</c>: the tenant comes from
+/// <see cref="EAMS.Application.Abstractions.ISchoolContext"/>, never from the request.
+/// </para>
+///
+/// <para>
+/// <b><c>IsCurrent</c> is deliberately absent too, and that is not symmetry for its own sake.</b>
+/// Moving the flag is a two-row operation guarded by a filtered unique index
+/// (<c>UX_Terms_SchoolId_Current</c>), so it is <c>PATCH /academic/terms/{id}/current</c> — the same
+/// split <c>PATCH /events/{id}/status</c> draws for the same reason. It also keeps the create path's
+/// unique-violation arm unambiguous: with the current flag out of the body, the only index a create can
+/// possibly break is <c>UX_Terms_SchoolId_Code</c>, so answering <c>TermCodeExists</c> is a fact rather
+/// than a guess between two indexes.
+/// </para>
+/// </summary>
+/// <param name="StartsOn">
+/// Optional, and normally absent — the SIS export has no term-date columns, so a real term carries
+/// neither date. Supplied as <c>YYYY-MM-DD</c>: a term boundary is a calendar date in the school's own
+/// timezone and has no time of day.
+/// </param>
+/// <param name="EndsOn">
+/// Optional. If both dates are supplied, this one may not fall before <paramref name="StartsOn"/>.
+/// </param>
+public record TermWriteRequest(
+    string Code, string SchoolYear, string Semester, DateOnly? StartsOn, DateOnly? EndsOn);
+
+/// <summary>
+/// The body of <c>PATCH /academic/terms/{id}/current</c> (D-53).
+/// </summary>
+/// <param name="IsCurrent">
+/// <b>Nullable so that omitting it is a refusal rather than a decision.</b> A non-nullable
+/// <c>bool</c> deserializes a missing member to <c>false</c>, which on this route means "clear the
+/// current term" — a client that forgot the field would silently retire the school's term and get a
+/// <c>200</c> for it. Send <c>true</c> to make this term current, or <c>false</c> to retire it; there is
+/// no default.
+///
+/// <para>
+/// <c>false</c> is the whole of "retiring a term", and it is why this route is not named
+/// <c>make-current</c>: D-53 offers no deletion, because a term with a batch imported against it cannot
+/// be removed without data loss. Clearing the flag leaves zero current terms, which is an ordinary state
+/// the read surface already answers for — <c>GET /academic/terms/current</c> 404s and
+/// <c>GET /academic/course-offerings</c> returns an empty page.
+/// </para>
+/// </param>
+public record TermCurrentRequest(bool? IsCurrent);
 
 /// <summary>
 /// A college. <paramref name="Code"/> is nullable because the roster source has no college code

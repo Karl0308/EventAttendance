@@ -105,21 +105,23 @@ Three behaviours are gated on `IsDevelopment()`, and this decides all three at o
 | Database seeding (school, **term**, students, kiosk device) | yes | **no** |
 | Well-known development kiosk key | seeded | **not seeded** |
 
-**The term matters.** Nothing in the product can create a Term — `AcademicController` is read-only
-and the roster importer takes a `TermId` as input. On `Production` you get a migrated but empty
-database, the import page's term picker is empty, and **roster import is unusable**. There is no
-screen to fix that from.
+**The term still matters, but it is no longer a dead end.** The roster importer takes a `TermId` as
+input, so with no term the import page's term picker is empty and **roster import cannot be started**.
+On `Production` you get a migrated but empty database and that is exactly the state you are in.
+
+The difference from earlier builds is that there is now a screen for it: the admin SPA's **Terms** page
+(`/terms`, over `POST /api/v1/academic/terms`, `PUT /api/v1/academic/terms/{id}` and
+`PATCH /api/v1/academic/terms/{id}/current`) creates a term, edits it, and moves the current-term flag.
+So the first-run order on a `Production` install is: open Terms, create the term, make it current, then
+import the roster. **Do not insert a `Terms` row by hand** — the page enforces the code and date rules
+the API checks and puts the current-term flag where exactly one term can hold it.
 
 So: use **`Development`** if you want a working demo with seed data and Swagger — accepting that it
 also seeds a publicly-known device key, which is only acceptable behind the gate from §0. Use
-`Production` for a clean database, and insert a term by hand before importing:
+`Production` for a clean database, and create the term through the Terms page on first run.
 
-```sql
-INSERT INTO Terms (Id, SchoolId, Code, SchoolYear, Semester, IsCurrent, CreatedAt)
-SELECT NEWID(), Id, '2025-2026-1', '2025-2026', '1st Semester', 1, SYSUTCDATETIME() FROM Schools;
-```
-
-(`Production` also needs a `Schools` row first — the tenancy filter hides everything without one.)
+(`Production` also needs a `Schools` row first — the tenancy filter hides everything without one, the
+Terms page included.)
 
 ### Database
 
