@@ -88,37 +88,33 @@ internal static class SeedData
 
     public static async Task InitializeAsync(EamsDbContext db, CancellationToken ct = default)
     {
-        if (await db.Schools.AnyAsync(ct)) return;
-
-        var school = new School
+        var school = await db.Schools.FirstOrDefaultAsync(ct);
+        if (school is null)
         {
-            Name = "University of San Agustin",
-            Code = "USA",
-            Address = "General Luna St, Iloilo City",
-            ContactEmail = "cicss@usa.edu.ph",
-            TimeZone = "Asia/Manila",
-        };
-        db.Schools.Add(school);
+            school = new School
+            {
+                Name = "University of San Agustin",
+                Code = "USA",
+                Address = "General Luna St, Iloilo City",
+                ContactEmail = "cicss@usa.edu.ph",
+                TimeZone = "Asia/Manila",
+            };
+            db.Schools.Add(school);
+        }
 
-        // A term, because nothing in the product can create one: AcademicController is read-only by
-        // design and the importer takes a TermId as an *input* (ADR-001 D-5). Without this row the
-        // roster-import page's term picker is empty on every freshly migrated database and the page
-        // correctly refuses to stage a batch — i.e. the first thing a new developer tries is dead.
-        //
-        // StartsOn/EndsOn stay null: the SIS export has no term-date columns at all, so a real term
-        // does not have them either (AcademicReferenceService.ListTermsAsync orders on Code precisely
-        // because those dates are usually absent). Inventing dates here would make the seed the only
-        // term in the system that carries them, which is a worse fixture than one that matches.
-        db.Terms.Add(new Term
+        await SeedTermAsync(db, school, ct);
+
+        // Everything below is the first-run bulk. It stays gated on the school having just been
+        // created, because these rows are a coherent fixture — students with cards, events, a kiosk,
+        // and taps that reference all three — and re-adding any of it onto a database an operator has
+        // already worked in would duplicate rows rather than repair them. SeedTermAsync above is the
+        // exception on purpose: see its own comment for why a term must arrive even on a carried-over
+        // database.
+        if (db.Entry(school).State != EntityState.Added)
         {
-            SchoolId = school.Id,
-            Code = DevelopmentTermCode,
-            SchoolYear = "2025-2026",
-            Semester = "1st Semester",
-            // At most one current term per school (UX_Terms_SchoolId_Current). This is the only term
-            // seeded, so a second one must not arrive here carrying IsCurrent as well.
-            IsCurrent = true,
-        });
+            await db.SaveChangesAsync(ct);
+            return;
+        }
 
         // `No` is the REGNO — Students.StudentNumber. `Uid` is the RFID card serial — RfidCards.CardUid.
         // They are DIFFERENT VALUES for different things (client correction, 2026-07-30, register D-43):
@@ -250,5 +246,52 @@ internal static class SeedData
         );
 
         await db.SaveChangesAsync(ct);
+    }
+
+    /// <summary>
+    /// A term, because nothing in the product can create one: <c>AcademicController</c> is read-only by
+    /// design and the importer takes a <c>TermId</c> as an *input* (ADR-001 D-5). Without this row the
+    /// roster-import page's term picker is empty and the page correctly refuses to stage a batch — i.e.
+    /// the first thing a new developer tries is dead.
+    ///
+    /// <para>
+    /// <b>This is guarded on <c>Terms</c> rather than riding the school guard, because riding it failed
+    /// in exactly the way that matters.</b> The term block was added to the seed after dev databases
+    /// already held a school, so <c>if (Schools.Any()) return;</c> short-circuited before ever reaching
+    /// it: those databases carry a school, students, events and a device, and zero terms — a state no
+    /// clean run can produce — and the import page is dead on every one of them. A seed step that only
+    /// ever runs on a database nobody has is not a seed step. Anything added here later wants its own
+    /// guard for the same reason.
+    /// </para>
+    ///
+    /// <para>
+    /// <c>StartsOn</c>/<c>EndsOn</c> stay null: the SIS export has no term-date columns at all, so a real
+    /// term does not have them either (<c>AcademicReferenceService.ListTermsAsync</c> orders on
+    /// <c>Code</c> precisely because those dates are usually absent). Inventing dates here would make the
+    /// seed the only term in the system that carries them, which is a worse fixture than one that
+    /// matches.
+    /// </para>
+    /// </summary>
+    private static async Task SeedTermAsync(EamsDbContext db, School school, CancellationToken ct)
+    {
+        // Any term at all, not just this one: an operator who created their own is not missing the
+        // fixture this exists to provide, and adding a second IsCurrent row would violate
+        // UX_Terms_SchoolId_Current. A school added moments ago has no rows to query, so the local
+        // check covers the fresh-database case without a round trip against an unsaved key.
+        var hasTerm = db.Entry(school).State == EntityState.Added
+            ? false
+            : await db.Terms.AnyAsync(t => t.SchoolId == school.Id, ct);
+        if (hasTerm) return;
+
+        db.Terms.Add(new Term
+        {
+            SchoolId = school.Id,
+            Code = DevelopmentTermCode,
+            SchoolYear = "2025-2026",
+            Semester = "1st Semester",
+            // At most one current term per school (UX_Terms_SchoolId_Current). Guarded above on the
+            // school having no term of any kind, so this cannot collide with an operator-created one.
+            IsCurrent = true,
+        });
     }
 }

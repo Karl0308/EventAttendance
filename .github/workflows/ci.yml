@@ -78,6 +78,18 @@ jobs:
       - name: Build
         run: npm run build
 
+      # docs/api/endpoints.md is generated from docs/api/openapi.json, so it can go stale with
+      # nothing failing — the drift Phase 4e existed to end. EndpointIndexTests already fails the
+      # backend job when a row is missing or names a route that no longer exists; this catches
+      # what a coverage assertion structurally cannot — a change to how rows are *rendered*
+      # (blurbs, the auth column) that was never regenerated. Runs here rather than in the backend
+      # job because it needs Node and that job deliberately has none.
+      #
+      # No working-directory override: the script resolves paths from its own location, and this
+      # job runs in web-admin.
+      - name: Check API endpoint index is current
+        run: node ../scripts/generate-endpoint-index.mjs
+
   # Deploy the built web-admin SPA to GitHub Pages on push to main.
   deploy-pages:
     name: Deploy Web Admin to Pages

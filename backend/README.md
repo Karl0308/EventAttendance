@@ -51,18 +51,27 @@ cd web-admin && npm run lint && npm run build
 - 2 events: *University Convocation 2026* (**Open**) and *IT Week Seminar* (**Closed**)
 - 2 attendance records already on the open event
 
-## Key endpoints
+## Endpoints
 
-| Method | Path | Notes |
-|---|---|---|
-| GET  | `/api/v1/students` | filters: `search`, `course`, `status` |
-| GET  | `/api/v1/students/{id}` | detail + cards |
-| GET  | `/api/v1/students/by-card/{cardUid}` | UID→student (UID is normalized: uppercase, separators stripped) |
-| GET  | `/api/v1/events` | filter: `status` |
-| GET  | `/api/v1/events/{id}/summary` | Present/Late/Absent/Excused + rate |
-| GET  | `/api/v1/attendance` | filters: `eventId`, `studentId`, `status` |
-| POST | `/api/v1/attendance/tap` | **core capture** — see below |
-| POST | `/api/v1/attendance/manual` | organizer override (query params) |
+**[`docs/api/endpoints.md`](../docs/api/endpoints.md) — every route, one page.** Method, path,
+whether a device key is required, and the errors each declares.
+
+A hand-written table of highlights used to sit here. It listed eight endpoints of the forty-four this
+API now serves and named none of the five controllers added after it was written, which is the
+failure mode ADR-001 D-38 describes: nothing breaks when the table is not updated, so a stale one is
+indistinguishable from a current one. The index that replaced it is generated from
+`docs/api/openapi.json` and CI fails when it drifts.
+
+- **[`docs/api/openapi.json`](../docs/api/openapi.json)** — the contract. Payload shapes, field types,
+  outcome-token enums. Generate clients from this.
+- **[`docs/api/attendance-contract-handoff.md`](../docs/api/attendance-contract-handoff.md)** — what a
+  schema cannot say: what a capture queue does with each outcome, the card-UID and clock rules.
+
+Regenerate the index after any route change:
+
+```bash
+node scripts/generate-endpoint-index.mjs --write
+```
 
 ### The tap flow (`POST /api/v1/attendance/tap`)
 

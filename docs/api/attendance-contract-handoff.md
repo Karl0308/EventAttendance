@@ -44,6 +44,12 @@ Look there for: every endpoint and payload shape, the `DeviceKey` security schem
 shape with its `code`/`serverTime` extensions, and the frozen token tables as machine-readable enums
 (`TapOutcomeCode`, `ManualOutcomeCode`, `LiveOutcomeCode`).
 
+**[`endpoints.md`](endpoints.md) is a one-page index of every route** — method, path, whether it needs
+a device key, and which errors it declares. It is generated from `openapi.json` and CI fails when the
+two disagree, so it cannot drift either. It is a **map, not a contract**: it will tell you an endpoint
+exists and roughly what it does, and deliberately carries no field-level detail. Generate your client
+from `openapi.json`; use the index to find your way around it.
+
 ## Connecting to the dev API
 
 The backend runs on a machine on the office LAN. **Ask us for the current IP** — it is DHCP, so it

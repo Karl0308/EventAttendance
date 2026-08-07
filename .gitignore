@@ -3,6 +3,9 @@
 [Oo]bj/
 *.user
 .vs/
+# `dotnet publish -o publish/...` output — build artifacts, reproducible from source. Rooted so it
+# only matches the one at the repo root, not a source directory that happens to be named `publish`.
+/publish/
 
 # --- Node / React ---
 node_modules/

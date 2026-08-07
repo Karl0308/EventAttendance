@@ -10,7 +10,6 @@ import {
   ListItemText,
   Toolbar,
   Typography,
-  Chip,
 } from "@mui/material";
 import DashboardIcon from "@mui/icons-material/Dashboard";
 import PeopleIcon from "@mui/icons-material/People";
@@ -37,7 +36,10 @@ export default function Layout({ children }: { children: ReactNode }) {
           <Typography variant="h6" noWrap sx={{ flexGrow: 1, fontWeight: 700 }}>
             EAMS — Events Attendance Monitoring
           </Typography>
-          <Chip label="MOCK DATA" color="secondary" size="small" sx={{ fontWeight: 700 }} />
+          {/* A "MOCK DATA" chip sat to the right of the title until `api.ts` stopped being a mock
+              facade. Every method on it now calls the real backend, so the chip was telling an
+              operator that live student PII and real device keys were fake. Removed rather than
+              corrected: a banner stating the ordinary case is noise the next reader has to re-verify. */}
         </Toolbar>
       </AppBar>
 
