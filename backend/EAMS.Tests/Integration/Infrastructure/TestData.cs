@@ -221,9 +221,32 @@ internal static class TestData
         CourseOfferingId = courseOfferingId,
     };
 
+    /// <summary>
+    /// <paramref name="yearLevel"/> defaults to <c>null</c> because that is what production actually
+    /// holds, and because <b>no other value this builder could default to is one the system can
+    /// produce</b>.
+    ///
+    /// <para>
+    /// <c>StudentTermRecords.YearLevel</c> has exactly one writer — <c>StudentGroupProjection</c>'s
+    /// D-47 derivation — and <see cref="YearLevels.Derive"/> emits a bare digit (<c>"2"</c>) or nothing
+    /// at all. It cannot emit <c>"2nd Year"</c>, which is the display spelling and is what this default
+    /// used to be. A fixture carrying it therefore arranged a row the importer, the projection and the
+    /// roster could never between them create, and any assertion resting on it would have been passing
+    /// against a world that does not exist. On today's live export the derivation returns <c>null</c>
+    /// for <em>every</em> student — the programme reads <c>"BSci - Crim"</c> while the sections read
+    /// <c>"BSCRIM 2-A"</c>, so the home-section anchor never fires — which makes <c>null</c> not merely
+    /// the safe default but the realistic one.
+    /// </para>
+    ///
+    /// <para>
+    /// A test that wants a year level passes the digit: <c>yearLevel: "2"</c>. A test about the
+    /// derivation itself passes nothing and runs the projection, which is the only path that writes a
+    /// value the production code would agree with.
+    /// </para>
+    /// </summary>
     public static StudentTermRecord NewTermRecord(
         Guid studentId, Guid termId, Guid? programId = null, Guid? collegeId = null,
-        string? yearLevel = "2nd Year", string? homeSection = "BSFS 2-A") => new()
+        string? yearLevel = null, string? homeSection = "BSFS 2-A") => new()
     {
         StudentId = studentId,
         TermId = termId,

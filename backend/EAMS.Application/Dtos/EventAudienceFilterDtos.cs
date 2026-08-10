@@ -40,6 +40,14 @@ namespace EAMS.Application.Dtos;
 /// <param name="Filters">
 /// The rows of the builder. Null or empty resolves the whole term — which is the operator's "or all",
 /// not a malformed request.
+///
+/// <para>
+/// <b>Capped at <see cref="EAMS.Domain.AudienceResolutionLimits.MaxFilterRows"/> rows; more is
+/// <c>400 TooManyFilterRows</c>.</b> Five fields are filterable, so twenty rows is four times what
+/// naming each of them once costs — the ceiling is reachable only by a caller who is composing a query
+/// rather than describing an audience. The rows past it are refused rather than dropped, because rows
+/// narrow each other and a dropped row can only widen the audience.
+/// </para>
 /// </param>
 public record AudienceResolveRequest(Guid? TermId, IReadOnlyList<AudienceFilterDto>? Filters);
 

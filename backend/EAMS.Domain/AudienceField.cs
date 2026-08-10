@@ -98,11 +98,18 @@ public static class AudienceField
 }
 
 /// <summary>
-/// The two ceilings <c>POST /events/audience/resolve</c> answers under, named once so the resolver, the
+/// The three ceilings <c>POST /events/audience/resolve</c> answers under, named once so the resolver, the
 /// published response and the tests that probe the boundary cannot disagree about them.
 ///
 /// <para>
-/// <b>Neither of these bounds <c>count</c>, and that is the D-42 lesson written down.</b> The live
+/// <b>Two bound the answer and one bounds the question.</b> <see cref="MaxStudentIds"/> and
+/// <see cref="SampleSize"/> cut a response that is too big to send; <see cref="MaxFilterRows"/> refuses a
+/// request that is too big to plan. They are separated because the failures are different — an oversized
+/// answer is still an answer, an oversized question never becomes one.
+/// </para>
+///
+/// <para>
+/// <b>Neither of the response bounds touches <c>count</c>, and that is the D-42 lesson written down.</b> The live
 /// endpoint once shipped counters bounded by the read ceiling rather than by the cursor it returned, so
 /// a truncated page carried a headline number describing rows it had not delivered — plausible,
 /// self-consistent, and wrong. Here <c>count</c> is a <c>COUNT(*)</c> over the composed filter and
@@ -145,4 +152,40 @@ public static class AudienceResolutionLimits
     /// agree by construction rather than by two queries happening to sort alike.
     /// </summary>
     public const int SampleSize = 25;
+
+    /// <summary>
+    /// How many filter rows one request may carry. Beyond this the request is refused with
+    /// <c>AudienceResolveOutcome.TooManyFilterRows</c> — a <b>400</b>, before the term is looked up and
+    /// before any database read.
+    ///
+    /// <para>
+    /// <b>Refused rather than truncated, unlike <see cref="MaxStudentIds"/>, and for the reason every
+    /// other refusal on this route exists.</b> Dropping the rows past the ceiling would silently widen
+    /// the filter: rows intersect (D-51), so each one discarded can only <em>grow</em> the answer, and
+    /// the caller would read a count for a filter it did not build. That is the same failure
+    /// <c>UnknownAudienceField</c> and <c>InvalidAudienceFilterValue</c> refuse, one level up from a row.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>Twenty, and the number is bounded from both directions.</b> From below: there are five
+    /// registered fields (<see cref="AudienceField.All"/>), so a filter set naming each one once is five
+    /// rows, and twenty leaves four times that for the repeated-field shape <c>AudienceFilterDto</c>
+    /// documents — <c>Year in (2,3)</c> and <c>Year in (3,4)</c> resolving to year 3. Nothing a filter
+    /// builder can construct out of five fields needs more. From above: this is composed as one
+    /// <c>Where</c> per row, and SQL Server's optimizer measurably suffers well before any plausible
+    /// caller does — a 2KB body of 50 rows cost about 3.2 seconds of planning time, and 60 rows exceeded
+    /// the server's internal resources outright (Msg 8623) and surfaced as an unhandled exception, i.e.
+    /// a 500 for a perfectly well-formed request. Twenty sits comfortably below the region where
+    /// planning cost becomes visible at all, so the ceiling is felt only by callers who are not
+    /// filtering.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>Counted over the rows as sent, not over the conditions composed from them.</b> Whether a row
+    /// with no values is dropped is an open decision; counting composed conditions would quietly couple
+    /// this ceiling to it, so that changing that decision would change what this refuses. The request's
+    /// size is a property of the request.
+    /// </para>
+    /// </summary>
+    public const int MaxFilterRows = 20;
 }

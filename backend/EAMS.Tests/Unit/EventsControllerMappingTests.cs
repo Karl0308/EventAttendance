@@ -88,4 +88,69 @@ public class EventsControllerMappingTests
     public void An_undeclared_outcome_throws_rather_than_reporting_success() =>
         Assert.Throws<ArgumentOutOfRangeException>(
             () => EventsController.StatusCodeFor((EventWriteOutcome)999));
+
+    // ------------------------------------------------------- D-50 the audience resolver's mapping
+
+    /// <summary>
+    /// The same exhaustiveness guard one enum over, because <see cref="AudienceResolveOutcome"/> is a
+    /// second, independent enum with its own <c>StatusCodeFor</c> overload — the guard above cannot see
+    /// it, so a sixth outcome added there would compile, ship, and hit the throwing arm at runtime with
+    /// nothing in the suite noticing first.
+    /// </summary>
+    [Fact]
+    public void Every_declared_audience_resolve_outcome_is_mapped()
+    {
+        foreach (var outcome in Enum.GetValues<AudienceResolveOutcome>())
+        {
+            var status = EventsController.StatusCodeFor(outcome);
+            Assert.True(
+                status is >= 200 and < 500,
+                $"{outcome} maps to {status}. Every declared AudienceResolveOutcome needs a " +
+                "deliberate status code — a new one must be added to EventsController.StatusCodeFor.");
+        }
+    }
+
+    /// <summary>
+    /// <b><c>Ok</c> is the only 200, and this is the assertion that matters more than either code.</b> A
+    /// filter builder reads the count it gets back and shows it to an operator; a refused filter
+    /// answered 2xx would publish the count of a <em>different</em>, wider filter — the one the refused
+    /// row was supposed to narrow — with nothing anywhere saying the row had been dropped. That is the
+    /// exact failure D-50's "refused rather than skipped" exists to prevent, one layer up.
+    /// </summary>
+    [Fact]
+    public void Ok_is_the_only_audience_outcome_that_may_answer_2xx()
+    {
+        Assert.Equal(
+            StatusCodes.Status200OK, EventsController.StatusCodeFor(AudienceResolveOutcome.Ok));
+
+        foreach (var outcome in Enum.GetValues<AudienceResolveOutcome>()
+                     .Where(o => o != AudienceResolveOutcome.Ok))
+        {
+            var status = EventsController.StatusCodeFor(outcome);
+            Assert.True(
+                status is >= 400 and < 500,
+                $"{outcome} maps to {status}. Nothing but Ok may answer 2xx: a refusal reported as a " +
+                "success publishes the count of a filter nobody built.");
+        }
+    }
+
+    /// <summary>
+    /// Both refusals are 400 and neither is 409, unlike the write surface above. Resolving reads and
+    /// writes nothing, so there is no resource whose state could forbid it — every failure here is a
+    /// request that will be just as malformed on retry. Pinned because "make it consistent with the
+    /// sibling mapping" is a plausible-sounding change that would be wrong.
+    /// </summary>
+    [Fact]
+    public void Both_audience_refusals_are_400_rather_than_a_state_conflict()
+    {
+        Assert.Equal(StatusCodes.Status400BadRequest,
+            EventsController.StatusCodeFor(AudienceResolveOutcome.UnknownAudienceField));
+        Assert.Equal(StatusCodes.Status400BadRequest,
+            EventsController.StatusCodeFor(AudienceResolveOutcome.InvalidAudienceFilterValue));
+    }
+
+    [Fact]
+    public void An_undeclared_audience_outcome_throws_rather_than_reporting_success() =>
+        Assert.Throws<ArgumentOutOfRangeException>(
+            () => EventsController.StatusCodeFor((AudienceResolveOutcome)999));
 }

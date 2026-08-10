@@ -1036,11 +1036,12 @@ internal sealed class EventService : IEventService
     /// <inheritdoc cref="IEventService.ResolveAudienceAsync"/>
     /// <remarks>
     /// <para>
-    /// <b>Every filter row is validated before anything is read, and the order matters.</b> Field names
-    /// and values are checked against the registry with no database access at all, so a request naming
-    /// an unregistered field is a 400 whether or not a term is current and whether or not the roster has
-    /// been imported. Validating after the term lookup would make the same malformed request answer 400
-    /// on one day and an empty 200 on another, which is the least debuggable shape an API can have.
+    /// <b>Every filter row is validated before anything is read, and the order matters.</b> The row
+    /// count is checked first, then field names and values against the registry — all of it with no
+    /// database access at all, so a request naming an unregistered field is a 400 whether or not a term
+    /// is current and whether or not the roster has been imported. Validating after the term lookup
+    /// would make the same malformed request answer 400 on one day and an empty 200 on another, which is
+    /// the least debuggable shape an API can have.
     /// </para>
     ///
     /// <para>
@@ -1058,6 +1059,24 @@ internal sealed class EventService : IEventService
     {
         var conditions = new List<AudienceCondition>();
         IReadOnlyList<AudienceFilterDto> rows = request.Filters ?? [];
+
+        // Before the rows are read at all: this is a fact about the request's size, and reading 200 rows
+        // to report the first bad field among them answers a question nobody asked. It is also the one
+        // refusal here that is not about meaning — see AudienceResolveOutcome.TooManyFilterRows.
+        if (rows.Count > AudienceResolutionLimits.MaxFilterRows)
+        {
+            return new AudienceResolveResponse(
+                AudienceResolveOutcome.TooManyFilterRows,
+                $"A filter set carries at most {AudienceResolutionLimits.MaxFilterRows} rows and this " +
+                $"one carries {rows.Count}. There are only {AudienceField.All.Count} filterable " +
+                $"fields ({string.Join(", ", AudienceField.All)}), so a set this size is composing a " +
+                "query rather than describing an audience — and each row is another condition the " +
+                "database has to plan, which past a few dozen stops being a request the server can " +
+                "answer at all. The rows past the ceiling are not dropped: rows narrow each other, so " +
+                "ignoring one can only widen the audience, and a count for a filter nobody built is " +
+                "worse than a refusal.",
+                null);
+        }
 
         foreach (var row in rows)
         {

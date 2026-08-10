@@ -259,6 +259,17 @@ public class EventsController : ControllerBase
     /// </para>
     ///
     /// <para>
+    /// <b>At most twenty rows per request</b> —
+    /// <see cref="EAMS.Domain.AudienceResolutionLimits.MaxFilterRows"/>. More is
+    /// <c>400 TooManyFilterRows</c>, refused before the term is resolved and before anything is read.
+    /// There are only five filterable fields, so twenty is four times what naming each of them once
+    /// costs; past that each extra row is another condition the database has to plan, and enough of them
+    /// compose a query the server cannot plan at all. The excess rows are refused rather than dropped
+    /// for the same reason as everything above: rows narrow each other, so ignoring one widens the
+    /// audience.
+    /// </para>
+    ///
+    /// <para>
     /// <b><c>count</c> describes exactly what the filter matches and is bounded by nothing.</b>
     /// <c>studentIds</c> is capped, and when the cap bites <c>studentIdsTruncated</c> says so — see
     /// <see cref="AudienceResolutionDto"/> for why this response publishes a number larger than the list
@@ -268,7 +279,7 @@ public class EventsController : ControllerBase
     /// <param name="request">The term (optional — the current one by default) and the filter rows.</param>
     /// <param name="ct">Cancellation token.</param>
     /// <response code="200">The resolution. Matching nobody is a 200 with <c>count: 0</c>.</response>
-    /// <response code="400">A filter row named an unknown field, or a value the field cannot hold.</response>
+    /// <response code="400">A filter row named an unknown field, or a value the field cannot hold, or the set carried more rows than the ceiling.</response>
     //
     // JUDGEMENT CALL, flagged rather than buried: `events.write`, not the `events.read` every other read
     // on this controller carries. Two reasons, and the second is the one that decided it. First, this
@@ -478,9 +489,12 @@ public class EventsController : ControllerBase
     /// <see cref="AudienceResolveOutcome"/>.
     ///
     /// <para>
-    /// <b>Both refusals are 400 and neither is 409.</b> Unlike the write surface above there is no
+    /// <b>Every refusal is 400 and none is 409.</b> Unlike the write surface above there is no
     /// resource whose state could forbid anything — resolving reads and nothing more — so every failure
-    /// here is a malformed request that will be malformed again on retry. <b>Nothing but
+    /// here is a malformed request that will be malformed again on retry. That includes
+    /// <see cref="AudienceResolveOutcome.TooManyFilterRows"/>: the ceiling is a fixed property of the
+    /// endpoint rather than of load, so it is the request that is too big and not the server that is
+    /// too busy — 400, never 429 or 503. <b>Nothing but
     /// <see cref="AudienceResolveOutcome.Ok"/> may answer 2xx</b>, for the reason
     /// <see cref="StatusCodeFor(EventWriteOutcome)"/> records: a caller that reads a success stops
     /// asking, and a filter that was refused reported as one is a count nobody re-checks.
@@ -497,7 +511,8 @@ public class EventsController : ControllerBase
         AudienceResolveOutcome.Ok => StatusCodes.Status200OK,
 
         AudienceResolveOutcome.UnknownAudienceField
-            or AudienceResolveOutcome.InvalidAudienceFilterValue => StatusCodes.Status400BadRequest,
+            or AudienceResolveOutcome.InvalidAudienceFilterValue
+            or AudienceResolveOutcome.TooManyFilterRows => StatusCodes.Status400BadRequest,
 
         _ => throw new ArgumentOutOfRangeException(
             nameof(outcome), outcome,
@@ -528,6 +543,7 @@ public class EventsController : ControllerBase
     {
         AudienceResolveOutcome.UnknownAudienceField => "That is not a filterable audience field.",
         AudienceResolveOutcome.InvalidAudienceFilterValue => "A filter value cannot be read.",
+        AudienceResolveOutcome.TooManyFilterRows => "That filter set has too many rows.",
         _ => "The audience could not be resolved.",
     };
 

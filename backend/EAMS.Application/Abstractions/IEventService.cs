@@ -185,9 +185,11 @@ public record EventManifestResponse(
 /// list, and resolving an audience writes nothing at all.
 ///
 /// <para>
-/// Both failures are 400 and both exist for one reason — <b>a filter must never quietly stop
+/// Every failure is 400 and they all exist for one reason — <b>a filter must never quietly stop
 /// filtering.</b> A dropped row or a dropped value produces a count larger than the operator asked
-/// for, which looks entirely normal and is not discovered until the wrong people are invited.
+/// for, which looks entirely normal and is not discovered until the wrong people are invited. That is
+/// why the row ceiling refuses rather than truncating, too: rows intersect, so a row discarded can only
+/// widen the answer.
 /// </para>
 /// </summary>
 public enum AudienceResolveOutcome
@@ -228,6 +230,28 @@ public enum AudienceResolveOutcome
     /// </para>
     /// </summary>
     InvalidAudienceFilterValue,
+
+    /// <summary>
+    /// The request carried more than <see cref="EAMS.Domain.AudienceResolutionLimits.MaxFilterRows"/>
+    /// filter rows. 400, naming both the number sent and the ceiling.
+    ///
+    /// <para>
+    /// <b>This one is not about what the filter means; it is about what the filter costs.</b> Each row
+    /// composes another <c>Where</c>, and a body small enough to be unremarkable — a couple of kilobytes
+    /// — can compose a query SQL Server cannot plan: 60 rows exhausted the optimizer's internal
+    /// resources (Msg 8623) and left the route answering <b>500 for a well-formed request</b>, on a
+    /// surface that is unauthenticated in the pre-auth build and not rate-limited. A refusal the caller
+    /// can read is the only honest answer to a request the server cannot serve.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>Refused rather than truncated to the ceiling</b>, for the reason above the enum: rows
+    /// intersect (D-51), so silently dropping the ones past the ceiling can only widen the audience, and
+    /// the caller would act on a count for a filter it did not build. See
+    /// <see cref="EAMS.Domain.AudienceResolutionLimits.MaxFilterRows"/> for where twenty comes from.
+    /// </para>
+    /// </summary>
+    TooManyFilterRows,
 }
 
 /// <summary>
