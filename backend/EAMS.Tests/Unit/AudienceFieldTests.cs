@@ -101,18 +101,34 @@ public class AudienceFieldTests
     }
 
     /// <summary>
-    /// The two published ceilings, pinned because three separate things read them and are only correct
-    /// if they agree: the resolver's <c>Take</c>, the <c>studentIdLimit</c> it echoes to the caller, and
-    /// the truncation flag. A change to either number is a change to the wire contract.
+    /// The three published ceilings, pinned because several separate things read them and are only
+    /// correct if they agree: the resolver's <c>Take</c>, the <c>studentIdLimit</c> it echoes to the
+    /// caller, the truncation flag, and — for <see cref="AudienceResolutionLimits.MaxFilterRows"/> —
+    /// the refusal's own <c>detail</c>, which quotes the number back to a caller trimming rows. A change
+    /// to any of the three is a change to the wire contract.
+    ///
+    /// <para>
+    /// Two of them bound the answer and one bounds the question, so only the first two relate to each
+    /// other. <c>MaxFilterRows</c> gets the one relational claim its own documentation makes: it is at
+    /// least the size of the field registry, since a filter set naming every filterable field once is
+    /// the smallest complete filter a builder can construct and a ceiling under that would refuse it.
+    /// It is deliberately <em>not</em> related to the two response bounds — an oversized answer is
+    /// still an answer, an oversized question never becomes one.
+    /// </para>
     /// </summary>
     [Fact]
     public void The_published_ceilings_are_the_documented_numbers()
     {
         Assert.Equal(5_000, AudienceResolutionLimits.MaxStudentIds);
         Assert.Equal(25, AudienceResolutionLimits.SampleSize);
+        Assert.Equal(20, AudienceResolutionLimits.MaxFilterRows);
         Assert.True(
             AudienceResolutionLimits.SampleSize < AudienceResolutionLimits.MaxStudentIds,
             "The sample is a prefix of studentIds, so a sample larger than the id ceiling would be a " +
             "list that cannot be a prefix of the one it previews.");
+        Assert.True(
+            AudienceResolutionLimits.MaxFilterRows >= AudienceField.All.Count,
+            "One row per filterable field is the smallest filter set that names them all, so a row " +
+            "ceiling below the size of the registry would refuse a request the registry invites.");
     }
 }

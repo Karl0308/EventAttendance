@@ -1308,6 +1308,62 @@ public class EventAudienceResolveTests : IntegrationTest
         Assert.Equal(0, underTheCeiling.Count);
     }
 
+    /// <summary>
+    /// <b>The row ceiling is checked before the fields are — and since both refusals are 400, the
+    /// <c>code</c> is the only thing that says which one answered.</b>
+    ///
+    /// <para>
+    /// A twenty-one row set that also names <c>Nickname</c> is refusable two ways, and the ordering
+    /// picks one. The count wins: the size of a request is knowable without reading it, so walking
+    /// twenty-one rows to report the first bad field among them spends the work the ceiling exists to
+    /// refuse — and names a field for the caller to fix and resend in a body that would still be too
+    /// big. Swap the two checks and this same request answers <c>UnknownAudienceField</c> instead: a
+    /// different token on a route whose refusal tokens are published contract, at an unchanged 400.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>Asserted on the <c>code</c> extension, because a status-only assertion passes under either
+    /// ordering</b> and would leave the reorder invisible. The at-the-ceiling half is what keeps the
+    /// other direction honest: the same bad field in the same position, one row lower, really is
+    /// refused as <c>UnknownAudienceField</c> — so the twenty-one row answer is the cap winning a race
+    /// against a live field check, not a field check that never ran.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public async Task A_filter_set_over_the_ceiling_is_refused_before_the_fields_are_validated()
+    {
+        var world = await ArrangeAsync();
+
+        using var factory = new EamsApiFactory(Sql.ConnectionString);
+        using var client = factory.CreateClient();
+
+        var program = world.CriminologyProgramId.ToString();
+
+        // The unregistered field sits first, so a field check running before the count would reach it on
+        // its very first iteration — the ordering is not being decided by where the bad row happens to be.
+        object[] overTheCeiling =
+        [
+            Filter("Nickname", "anything"),
+            .. RepeatedRows(AudienceResolutionLimits.MaxFilterRows, "Program", program),
+        ];
+        Assert.Equal(AudienceResolutionLimits.MaxFilterRows + 1, overTheCeiling.Length);
+
+        await RefusedAsync(
+            client, Body(null, overTheCeiling), AudienceResolveOutcome.TooManyFilterRows);
+
+        // One row fewer, same bad field, same position: now nothing is over the ceiling and the field
+        // check is the only refusal left to fire.
+        object[] atTheCeiling =
+        [
+            Filter("Nickname", "anything"),
+            .. RepeatedRows(AudienceResolutionLimits.MaxFilterRows - 1, "Program", program),
+        ];
+        Assert.Equal(AudienceResolutionLimits.MaxFilterRows, atTheCeiling.Length);
+
+        await RefusedAsync(
+            client, Body(null, atTheCeiling), AudienceResolveOutcome.UnknownAudienceField);
+    }
+
     // ================================================================== the wire shape itself
 
     /// <summary>
