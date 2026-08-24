@@ -100,20 +100,88 @@ public static class DependencyInjection
         // gets the same EamsDbContext the rest of the request will use.
         services.AddScoped<IDeviceAuthenticator, DeviceAuthenticator>();
 
+        // ------------------------------------------------------------------------- §11 login (6a)
+        //
+        // The data and configuration foundation for user login. None of it is reachable from the wire
+        // yet — there is no /auth route and no JWT scheme — but all of it is exercised by tests, which
+        // is the point: the pieces with a schema, a race and a policy land and get proven before the
+        // endpoint that composes them exists.
+        //
+        // The hasher is a singleton: it is stateless, and its one field is a PasswordHasher<T> whose
+        // construction reads options once. Making it scoped would rebuild that per request for no
+        // reason. Everything below it takes the request's EamsDbContext and is therefore scoped.
+        services.AddSingleton<IPasswordHasher, IdentityPasswordHasher>();
+        services.AddScoped<IUserCredentialVerifier, UserCredentialVerifier>();
+        services.AddScoped<IUserProvisioningService, UserProvisioningService>();
+        services.AddScoped<IRefreshTokenStore, RefreshTokenStore>();
+
         return services;
     }
 
     /// <summary>
-    /// Applies pending migrations, seeds dev convenience data, and pins the development tenant.
-    /// Called from the API composition root; every step is idempotent, so a second start is a no-op.
+    /// Applies pending migrations, writes the §4.11 reference data, optionally seeds dev convenience
+    /// data, and pins the development tenant. Every step is idempotent, so a second start is a no-op.
+    ///
+    /// <para>
+    /// <b>Three concerns, and until §11 they were expressed as one boolean.</b> Migration is
+    /// unconditional. <b>RBAC reference data is now unconditional too</b> — the <c>Permissions</c> rows
+    /// and the four <c>Roles</c> with their grants are what the authorization model is made of, and
+    /// enforcement over an empty <c>RolePermissions</c> table authorizes nobody, so a Production
+    /// installation that never seeded them would lock every operator out of itself and look like a
+    /// broken authorization layer while doing it. Only <paramref name="seedDevelopmentData"/> — eight
+    /// fictional students, a kiosk whose key is printed in source, and an administrator account — is
+    /// Development's alone. Riding all three on one switch is the defect this parameter list replaces.
+    /// </para>
     /// </summary>
+    /// <param name="rbac">
+    /// The permission codes and grant matrix, supplied by the composition root. It is passed in rather
+    /// than defined here because the registry lives beside the endpoints that declare the codes
+    /// (<c>EAMS.Api.Authorization</c>) and Infrastructure cannot see that assembly — see
+    /// <see cref="RbacReferenceData"/>. A host with no authorization registry passes
+    /// <see cref="RbacReferenceData.Empty"/>.
+    /// </param>
+    /// <param name="environmentName">
+    /// The host's environment. Carried through so <c>SeedData.SeedDevelopmentSuperAdminAsync</c> can
+    /// refuse independently of its caller's gate — a seeded administrator on a Staging or Production
+    /// host is not a mistake that should need one call site to stay correct.
+    /// </param>
+    /// <param name="seedDevelopmentData">
+    /// Development convenience data only. The caller decides, and <c>Program.cs</c> gates it on
+    /// <c>IsDevelopment()</c> rather than <c>!IsProduction()</c> — see
+    /// <c>SeedData.DevelopmentKioskApiKey</c> for why that distinction is load-bearing. Also passed
+    /// <c>false</c> by the <c>create-admin</c> console command, which needs the schema and the roles
+    /// and none of the fixtures.
+    /// </param>
     public static async Task InitializeEamsDatabaseAsync(
-        this IServiceProvider services, bool seed, CancellationToken ct = default)
+        this IServiceProvider services,
+        RbacReferenceData rbac,
+        string environmentName,
+        bool seedDevelopmentData,
+        CancellationToken ct = default)
     {
         using var scope = services.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<EamsDbContext>();
+        var loggerFactory = scope.ServiceProvider.GetRequiredService<ILoggerFactory>();
+
         await db.Database.MigrateAsync(ct);
-        if (seed) await SeedData.InitializeAsync(db, ct);
+
+        // Reference data, every environment. Before the dev seed, because the SuperAdmin below is
+        // granted a role that has to exist first.
+        await RbacSeed.ApplyAsync(db, rbac, loggerFactory.CreateLogger("EAMS.Rbac"), ct);
+
+        if (seedDevelopmentData)
+        {
+            await SeedData.InitializeAsync(db, ct);
+
+            await SeedData.SeedDevelopmentSuperAdminAsync(
+                db,
+                scope.ServiceProvider.GetRequiredService<IUserProvisioningService>(),
+                environmentName,
+                scope.ServiceProvider.GetRequiredService<IConfiguration>()[
+                    SeedData.DevelopmentSuperAdminPasswordKey],
+                loggerFactory.CreateLogger("EAMS.Seed"),
+                ct);
+        }
 
         ReportLivePollConfiguration(scope.ServiceProvider);
 

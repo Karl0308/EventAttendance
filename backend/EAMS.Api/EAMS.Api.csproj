@@ -16,6 +16,20 @@
     <NoWarn>$(NoWarn);CS1591;CS1573</NoWarn>
   </PropertyGroup>
 
+  <!--
+    §11 needs somewhere for a developer's secrets to live that is NOT inside the repository:
+    Jwt:SigningKey, without which this host refuses to start, and the optional
+    Seed:DevelopmentSuperAdminPassword. WebApplicationBuilder adds the user-secrets provider only in
+    the Development environment and only when this property is present, so it is the whole of what
+    makes `dotnet user-secrets set (key) (value)` against this project work.
+
+    The id is a stable random GUID and is meant to be committed — it names a folder under the
+    developer's own profile, and nothing secret is derived from it.
+  -->
+  <PropertyGroup>
+    <UserSecretsId>eams-api-3f7c1a90-2b64-4d18-9a55-6c0e8b21d4af</UserSecretsId>
+  </PropertyGroup>
+
   <ItemGroup>
     <PackageReference Include="Swashbuckle.AspNetCore" Version="7.2.0" />
   </ItemGroup>

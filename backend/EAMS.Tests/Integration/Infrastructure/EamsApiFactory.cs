@@ -21,11 +21,13 @@ namespace EAMS.Tests.Integration.Infrastructure;
 /// </summary>
 internal sealed class EamsApiFactory : WebApplicationFactory<Program>
 {
-    private const string ConnectionStringVariable = "ConnectionStrings__EamsDb";
-    private const string EnvironmentVariable = "ASPNETCORE_ENVIRONMENT";
+    private const string ConnectionStringVariable = TestHostConfiguration.ConnectionStringVariable;
+    private const string EnvironmentVariable = TestHostConfiguration.EnvironmentVariable;
+    private const string SigningKeyVariable = TestHostConfiguration.SigningKeyVariable;
 
     private readonly string? _previousConnectionString;
     private readonly string? _previousEnvironment;
+    private readonly string? _previousSigningKey;
 
     /// <summary>
     /// <b>The override has to be an environment variable, and that is not a shortcut.</b> Under
@@ -55,8 +57,15 @@ internal sealed class EamsApiFactory : WebApplicationFactory<Program>
     {
         _previousConnectionString = Environment.GetEnvironmentVariable(ConnectionStringVariable);
         _previousEnvironment = Environment.GetEnvironmentVariable(EnvironmentVariable);
+        _previousSigningKey = Environment.GetEnvironmentVariable(SigningKeyVariable);
 
         Environment.SetEnvironmentVariable(ConnectionStringVariable, connectionString);
+
+        // Phase 6a: the host REFUSES TO START without a usable Jwt:SigningKey, in every environment,
+        // so every booted host in this suite has to supply one. Nothing consumes it yet — there is no
+        // JWT scheme until 6b — but the startup guard is unconditional by design, and a test host
+        // exempted from it would be a test host that does not exercise the real startup path.
+        Environment.SetEnvironmentVariable(SigningKeyVariable, TestHostConfiguration.SigningKey);
 
         // Production, so Program.cs skips dev seeding: these tests own every row they assert on and
         // eight seeded students appearing behind them would make counts meaningless. Migration and
@@ -88,5 +97,6 @@ internal sealed class EamsApiFactory : WebApplicationFactory<Program>
 
         Environment.SetEnvironmentVariable(ConnectionStringVariable, _previousConnectionString);
         Environment.SetEnvironmentVariable(EnvironmentVariable, _previousEnvironment);
+        Environment.SetEnvironmentVariable(SigningKeyVariable, _previousSigningKey);
     }
 }

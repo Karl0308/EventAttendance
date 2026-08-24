@@ -1,6 +1,8 @@
+using EAMS.Api.Authorization;
 using EAMS.Application.Abstractions;
 using EAMS.Application.Dtos;
 using EAMS.Infrastructure.Data;
+using EAMS.Infrastructure.Identity;
 using EAMS.Infrastructure.Services;
 using EAMS.Infrastructure.Sis;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -109,6 +111,73 @@ public abstract class IntegrationTest : IAsyncLifetime
 
         Assert.Equal(DeviceWriteOutcome.Saved, response.Outcome);
         return response.IssuedKey!.ApiKey;
+    }
+
+    // ------------------------------------------------------------------------ §11 login (Phase 6a)
+
+    /// <summary>
+    /// The password hasher, real. One instance for the suite because it is stateless and each
+    /// construction reads its options — and because hashing at 210,000 PBKDF2 iterations is expensive
+    /// enough that a fresh hasher per test would be noticeable.
+    /// </summary>
+    internal static IPasswordHasher Passwords { get; } = new IdentityPasswordHasher();
+
+    /// <summary>
+    /// The refresh-token store, on the context the test asserts against. Real rather than a
+    /// stand-in: the whole of what it does is a compare-and-swap against a row and a family revoke,
+    /// and a fake would leave the one thing worth testing — that two concurrent redemptions race on
+    /// the database — untested.
+    /// </summary>
+    internal IRefreshTokenStore RefreshTokensOn(EamsDbContext db) =>
+        new RefreshTokenStore(db, NullLogger<RefreshTokenStore>.Instance);
+
+    /// <summary>The same store with a logger a test can read back, for the family-burn warning.</summary>
+    internal IRefreshTokenStore RefreshTokensOn(EamsDbContext db, CapturingLogger<RefreshTokenStore> logger) =>
+        new RefreshTokenStore(db, logger);
+
+    /// <summary>The credential check, on the same context and the same real hasher production uses.</summary>
+    internal IUserCredentialVerifier CredentialsOn(EamsDbContext db) =>
+        new UserCredentialVerifier(db, Passwords, NullLogger<UserCredentialVerifier>.Instance);
+
+    internal IUserCredentialVerifier CredentialsOn(
+        EamsDbContext db, CapturingLogger<UserCredentialVerifier> logger) =>
+        new UserCredentialVerifier(db, Passwords, logger);
+
+    /// <summary>
+    /// The user provisioning service, wired to the same tenant as <see cref="NewDbContext()"/> —
+    /// creating a user has to decide which school it is filed under, the same asymmetry
+    /// <see cref="StudentsOn"/> and <see cref="TermsOn(EamsDbContext)"/> record.
+    /// </summary>
+    internal IUserProvisioningService ProvisioningOn(EamsDbContext db) =>
+        new UserProvisioningService(db, Passwords, School);
+
+    /// <summary>
+    /// Creates a user and returns its id, <b>through <see cref="IUserProvisioningService"/> rather
+    /// than by writing the row</b> — so a fixture cannot mint a user by a rule the production path
+    /// does not use. Exactly the reasoning <see cref="IssueDeviceKeyAsync"/> records for device keys,
+    /// and it matters more here: a hand-written <c>Users</c> row could carry an unhashed password, no
+    /// role and no audit entry, and every login test above it would still pass.
+    /// </summary>
+    internal async Task<Guid> CreateUserAsync(
+        Guid schoolId,
+        string email,
+        string password,
+        string roleName = EamsRoleNames.SchoolAdmin,
+        CancellationToken ct = default)
+    {
+        var pinned = new TestSchoolContext { CurrentSchoolId = schoolId };
+        await using var db = NewDbContext(pinned);
+
+        // The role has to exist before a user can hold it. Seeded here rather than assumed, because
+        // IntegrationTest.InitializeAsync empties every table before each test — including the
+        // reference data a booted host would have written.
+        await RbacSeed.ApplyAsync(db, EamsRoles.ReferenceData, NullLogger.Instance, ct);
+
+        var result = await new UserProvisioningService(db, Passwords, pinned).CreateAsync(
+            new UserProvisioningRequest(email, "Test User", roleName), password, "test", ct);
+
+        Assert.Equal(UserProvisioningOutcome.Created, result.Outcome);
+        return result.UserId;
     }
 
     /// <summary>

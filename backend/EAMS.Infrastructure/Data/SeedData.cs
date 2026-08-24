@@ -1,5 +1,7 @@
-﻿using EAMS.Domain;
+using EAMS.Application.Abstractions;
+using EAMS.Domain;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Logging;
 
 namespace EAMS.Infrastructure.Data;
 
@@ -85,6 +87,130 @@ internal static class SeedData
     /// carried over agree on it.
     /// </summary>
     public const string DevelopmentTermCode = "2025-2026-1";
+
+    /// <summary>
+    /// The Development SuperAdmin's login. A constant for the reason
+    /// <see cref="DevelopmentCardUid"/> is one, plus a second: <c>UserProvisioningService</c> reads it
+    /// to recognise a <c>create-admin</c> collision with the seeded account and say so, instead of
+    /// telling a developer that an address they have never typed is already taken.
+    /// </summary>
+    public const string DevelopmentSuperAdminEmail = "dev-admin@usa.edu.ph";
+
+    /// <summary>
+    /// The configuration key the Development SuperAdmin's password comes from.
+    ///
+    /// <para>
+    /// <b>There is no constant holding the password, and that asymmetry with
+    /// <see cref="DevelopmentKioskApiKey"/> is the point.</b> A well-known device key is acceptable
+    /// there for exactly one reason — it is scoped to <c>attendance.capture</c> on a Development-only
+    /// row, so it is worthless anywhere it could do harm. A SuperAdmin password is not scoped to
+    /// anything: it is the credential that mints device keys and redefines which semester the
+    /// institution is in. Copying that precedent here would put a working administrator password in a
+    /// public repository, and the environment gate would be the only thing between it and a real
+    /// installation.
+    /// </para>
+    ///
+    /// <para>
+    /// So the password is configuration, and <b>when it is absent the seed does not happen</b> — it is
+    /// never defaulted, never generated, never derived. In development it belongs in user secrets:
+    /// <c>dotnet user-secrets set "Seed:DevelopmentSuperAdminPassword" "&lt;something long&gt;"
+    /// --project backend/EAMS.Api</c>.
+    /// </para>
+    /// </summary>
+    public const string DevelopmentSuperAdminPasswordKey = "Seed:DevelopmentSuperAdminPassword";
+
+    /// <summary>
+    /// The Development SuperAdmin — the account a developer logs into the admin SPA with once §11's
+    /// login endpoint exists.
+    ///
+    /// <para>
+    /// <b>Its own guard, on its own row, following <see cref="SeedTermAsync"/>.</b> Every dev database
+    /// on this project already holds a school, so anything that rides
+    /// <see cref="InitializeAsync"/>'s early return runs on a database nobody has — that failure has
+    /// already happened once here, with <c>Terms</c>, and the import page was dead on every carried-over
+    /// machine for it. This checks for the user by e-mail and nothing else.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>It creates nothing itself.</b> The row goes through <see cref="IUserProvisioningService"/>,
+    /// the same service the <c>create-admin</c> console command calls, so the password policy, the
+    /// e-mail normalization, the duplicate refusal, the role grant and the audit row are one
+    /// implementation rather than two that drift — and the one that would drift is the Production
+    /// bootstrap path, which is the one nobody exercises until they need it. The same rule
+    /// <c>IntegrationTest.IssueDeviceKeyAsync</c> follows for device keys.
+    /// </para>
+    /// </summary>
+    /// <param name="environmentName">
+    /// Re-checked here rather than trusted from the caller. The gate already exists in
+    /// <c>InitializeEamsDatabaseAsync</c>; this is a second, independent refusal, because a seeded
+    /// administrator on a Staging or Production host is not the kind of mistake that should need one
+    /// call site to stay correct. It throws rather than returning quietly — a caller that reached this
+    /// outside Development has a bug that must not be papered over.
+    /// </param>
+    /// <param name="configuredPassword">
+    /// From <see cref="DevelopmentSuperAdminPasswordKey"/>. Absent means the seed is skipped and the
+    /// reason is logged; there is no fallback.
+    /// </param>
+    public static async Task SeedDevelopmentSuperAdminAsync(
+        EamsDbContext db,
+        IUserProvisioningService provisioning,
+        string environmentName,
+        string? configuredPassword,
+        ILogger logger,
+        CancellationToken ct = default)
+    {
+        if (!EamsEnvironments.IsDevelopment(environmentName))
+        {
+            throw new InvalidOperationException(
+                $"The Development SuperAdmin seed was reached in environment '{environmentName}'. " +
+                "It creates an administrator account from a configured password and must only ever " +
+                "run in Development — see SeedData.DevelopmentSuperAdminPasswordKey.");
+        }
+
+        if (string.IsNullOrWhiteSpace(configuredPassword))
+        {
+            logger.LogInformation(
+                "No Development SuperAdmin was seeded: '{Key}' is not configured. Set it in user " +
+                "secrets to get one — there is deliberately no default and no generated password, " +
+                "because a hard-coded administrator credential in source is a real credential and a " +
+                "generated one would change on every restart.",
+                DevelopmentSuperAdminPasswordKey);
+            return;
+        }
+
+        // The guard, on this seed's own row. IgnoreQueryFilters because Users is tenant-filtered and
+        // the tenant is not pinned until after seeding — a filtered check would report the user
+        // absent and this would try to create it on every start.
+        var exists = await db.Users.AsNoTracking().IgnoreQueryFilters()
+            .AnyAsync(u => u.Email == DevelopmentSuperAdminEmail, ct);
+
+        if (exists) return;
+
+        var result = await provisioning.CreateAsync(
+            new UserProvisioningRequest(
+                DevelopmentSuperAdminEmail,
+                "Development SuperAdmin",
+                RoleName: EamsRoleNames.SuperAdmin),
+            configuredPassword,
+            actor: $"seed:{nameof(SeedDevelopmentSuperAdminAsync)}",
+            ct);
+
+        if (result.Outcome == UserProvisioningOutcome.Created)
+        {
+            logger.LogInformation(
+                "Seeded the Development SuperAdmin '{Email}' from '{Key}'. Development only.",
+                DevelopmentSuperAdminEmail, DevelopmentSuperAdminPasswordKey);
+            return;
+        }
+
+        // Warned, not thrown: the commonest cause is a configured password shorter than the policy,
+        // and a host that refuses to start over a development convenience is worse than one that
+        // starts and says why the convenience is missing.
+        logger.LogWarning(
+            "The Development SuperAdmin was not seeded ({Outcome}): {Message} The password comes " +
+            "from '{Key}'.",
+            result.Outcome, result.Message, DevelopmentSuperAdminPasswordKey);
+    }
 
     public static async Task InitializeAsync(EamsDbContext db, CancellationToken ct = default)
     {

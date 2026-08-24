@@ -1,5 +1,6 @@
 using System.Net;
 using System.Text.Json;
+using EAMS.Api.Authentication;
 using EAMS.Infrastructure;
 using EAMS.Tests.Integration.Infrastructure;
 using Microsoft.Extensions.Hosting;
@@ -221,6 +222,117 @@ public class HostPipelineTests : IntegrationTest
         {
             Environment.SetEnvironmentVariable(connectionVariable, previousConnection);
             Environment.SetEnvironmentVariable(environmentVariable, previousEnvironment);
+        }
+    }
+
+    /// <summary>
+    /// <b>The §11 twin of the test above: the host refuses to start without a usable signing key.</b>
+    ///
+    /// <para>
+    /// <b>Why a refusal rather than a generated default.</b> The convenient behaviour is to mint a
+    /// random key when none is configured, and it fails in two directions at once. In development it
+    /// rotates on every restart, so every issued token dies the moment a file is saved — the symptom
+    /// is "I keep getting logged out", which reads as a bug in login and not as a missing setting. In
+    /// production, behind more than one instance or an app pool that recycles, tokens minted by one
+    /// process are rejected by the next: intermittently, under load, for some users. Both failures are
+    /// silent and both point away from their cause.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>This asserts the guard is armed, which <c>JwtOptionsTests</c> cannot.</b> That file proves
+    /// the validator is right; a validator the composition root never calls passes every test in it
+    /// and protects nothing. The connection string is supplied deliberately — without it the host
+    /// would throw on <c>ConnectionStrings:EamsDb</c> first, because <c>AddEamsInfrastructure</c> runs
+    /// before the JWT resolution on purpose, and this test would pass for entirely the wrong reason.
+    /// </para>
+    /// </summary>
+    [Theory]
+    [InlineData(null)]                                                          // not configured
+    [InlineData("")]                                                            // configured empty
+    [InlineData("tooshort")]                                                    // under the 32-byte floor
+    [InlineData("ChangeMe-ChangeMe-ChangeMe-ChangeMe-ChangeMe-ChangeMe")]       // a copied placeholder
+    public void The_host_refuses_to_start_without_a_usable_jwt_signing_key(string? signingKey)
+    {
+        var thrown = Record.Exception(() =>
+        {
+            using var factory = new JwtKeyApiFactory(Sql.ConnectionString, signingKey);
+            using var client = factory.CreateClient(); // Builds the host — and must not get that far.
+        });
+
+        Assert.NotNull(thrown);
+
+        // The chain is walked for the reason the connection-string test records: the host builder
+        // invokes the entry point reflectively, so the guard's own exception can arrive wrapped. What
+        // must hold is that the failure names the setting an operator has to go and configure.
+        Assert.Contains(
+            Unwrap(thrown!),
+            e => e.Message.Contains(JwtOptions.SigningKeyPath, StringComparison.Ordinal));
+    }
+
+    /// <summary>
+    /// The positive control, and it is not redundant. Without it, a host that refused to start for
+    /// <em>any</em> reason would satisfy every case above — including a guard that rejects every key
+    /// ever configured, which would be a worse defect than the one being guarded against and would
+    /// look identical from the theory alone.
+    /// </summary>
+    [Fact]
+    public void A_configured_signing_key_lets_the_host_start()
+    {
+        using var factory = new JwtKeyApiFactory(Sql.ConnectionString, TestHostConfiguration.SigningKey);
+        using var client = factory.CreateClient();
+
+        Assert.NotNull(client);
+    }
+
+    /// <summary>
+    /// <b>Ordering: a host missing both settings reports the connection string, not the signing
+    /// key.</b> It is the setting an operator configures first, and it is what keeps the
+    /// connection-string refusal above failing for its own reason rather than being shadowed by a
+    /// guard added later. Pinned because the two guards are five lines apart in <c>Program.cs</c> and
+    /// swapping them would be an invisible change.
+    /// </summary>
+    [Fact]
+    public void A_host_missing_both_settings_reports_the_connection_string_first()
+    {
+        var previousConnection =
+            Environment.GetEnvironmentVariable(TestHostConfiguration.ConnectionStringVariable);
+        var previousEnvironment =
+            Environment.GetEnvironmentVariable(TestHostConfiguration.EnvironmentVariable);
+        var previousKey =
+            Environment.GetEnvironmentVariable(TestHostConfiguration.SigningKeyVariable);
+
+        try
+        {
+            Environment.SetEnvironmentVariable(TestHostConfiguration.ConnectionStringVariable, null);
+            Environment.SetEnvironmentVariable(TestHostConfiguration.SigningKeyVariable, null);
+            Environment.SetEnvironmentVariable(
+                TestHostConfiguration.EnvironmentVariable, Environments.Production);
+
+            var thrown = Record.Exception(() =>
+            {
+                using var factory = new UnconfiguredApiFactory();
+                using var client = factory.CreateClient();
+            });
+
+            Assert.NotNull(thrown);
+
+            var messages = Unwrap(thrown!).Select(e => e.Message).ToList();
+
+            Assert.Contains(
+                messages,
+                m => m.Contains(DependencyInjection.ConnectionStringName, StringComparison.Ordinal));
+            Assert.DoesNotContain(
+                messages,
+                m => m.Contains(JwtOptions.SigningKeyPath, StringComparison.Ordinal));
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable(
+                TestHostConfiguration.ConnectionStringVariable, previousConnection);
+            Environment.SetEnvironmentVariable(
+                TestHostConfiguration.EnvironmentVariable, previousEnvironment);
+            Environment.SetEnvironmentVariable(
+                TestHostConfiguration.SigningKeyVariable, previousKey);
         }
     }
 

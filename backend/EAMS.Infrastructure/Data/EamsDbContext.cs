@@ -37,6 +37,13 @@ internal class EamsDbContext : DbContext
     public DbSet<Permission> Permissions => Set<Permission>();
     public DbSet<UserRole> UserRoles => Set<UserRole>();
     public DbSet<RolePermission> RolePermissions => Set<RolePermission>();
+
+    /// <summary>
+    /// §11 login's rotating refresh tokens. Additive — not a §4.11 table; see
+    /// <see cref="RefreshToken"/> for why one <c>Users.RefreshTokenHash</c> column could not express
+    /// it, and why that column is kept and left permanently NULL rather than dropped.
+    /// </summary>
+    public DbSet<RefreshToken> RefreshTokens => Set<RefreshToken>();
     public DbSet<SisImportBatch> SisImportBatches => Set<SisImportBatch>();
     public DbSet<SisImportRow> SisImportRows => Set<SisImportRow>();
 
@@ -199,6 +206,7 @@ internal class EamsDbContext : DbContext
         ConfigureAttendanceRecords(b);
         ConfigureDevices(b);
         ConfigureRbac(b);
+        ConfigureRefreshTokens(b);
         ConfigureSisImport(b);
         ConfigureSystem(b);
         ConfigureAcademicStructure(b);
@@ -251,9 +259,18 @@ internal class EamsDbContext : DbContext
     /// Deliberately <em>not</em> filtered: <c>Schools</c> itself (the tenant root — it has no
     /// <c>SchoolId</c>, and tenant selection has to be able to see it); <c>Roles</c>,
     /// <c>Permissions</c> and <c>RolePermissions</c> (global by design in §4.11, not tenant data);
-    /// and <c>AuditLogs</c>, whose only link to a school is a <em>nullable</em> <c>UserId</c> —
-    /// filtering it would hide every system-generated entry, so it needs its own decision when §11
-    /// lands rather than a guess here. This list is the known gap, recorded rather than assumed away.
+    /// and <c>AuditLogs</c>, which now owns a nullable <c>SchoolId</c> of its own (§11 groundwork)
+    /// but is still unfiltered: a NULL there means "not attributed to a school" and covers every
+    /// system-generated entry, so the filter has to be written as a three-way predicate like
+    /// <c>SystemSettings</c>' rather than the two-way one every owner above uses, and that belongs
+    /// with the rest of §11 enforcement rather than here.
+    /// </para>
+    ///
+    /// <para>
+    /// <c>RefreshTokens</c> joins that list, and for a stronger reason than the others: a token is
+    /// redeemed <em>before</em> any tenant is resolved, so a filter would not merely be premature, it
+    /// would hide every row from the only query that reads them. See
+    /// <c>ConfigureRefreshTokens</c>. This list is the known gap, recorded rather than assumed away.
     /// </para>
     /// </summary>
     private void ConfigureSchoolIdQueryFilters(ModelBuilder b)
@@ -920,6 +937,20 @@ internal class EamsDbContext : DbContext
             e.Property(x => x.IsActive).HasDefaultValue(true).ValueGeneratedNever();
 
             e.HasOne(x => x.School).WithMany().HasForeignKey(x => x.SchoolId).IsRequired();
+
+            // GLOBALLY unique on Email alone, with no SchoolId in the key. §4.11 says so, and login
+            // depends on it: a password is presented before any tenant is known, so
+            // UserCredentialVerifier looks a user up by e-mail and nothing else, and that lookup has
+            // to have exactly one answer.
+            //
+            // Rescoping this to (SchoolId, Email) would arrive looking like a tenancy fix — every
+            // other unique index in this schema leads with SchoolId, and RfidCards.CardUid (ADR-001
+            // D-3) is an explicit precedent for narrowing a plan-level global unique to a per-school
+            // one. It is not the same case. A card is scanned by a reader that already knows its
+            // school; an e-mail is typed into a login box by someone the system has not identified
+            // yet. Widening the key would make the login lookup ambiguous, and nothing else in the
+            // suite would fail — which is why RbacSchemaTests pins it here in the database rather
+            // than leaving it inferable from this comment.
             e.HasIndex(x => x.Email).IsUnique().HasDatabaseName("UX_Users_Email");
         });
 
@@ -958,6 +989,67 @@ internal class EamsDbContext : DbContext
                 .HasDatabaseName("UX_RolePermissions_Role_Permission");
         });
     }
+
+    /// <summary>
+    /// §11 login's rotating refresh tokens. See <see cref="RefreshToken"/> for the design; this
+    /// records the three schema decisions it implies.
+    ///
+    /// <para>
+    /// <b>No <c>SchoolId</c> column and no query filter, and that is not the oversight it looks
+    /// like.</b> Every other tenant-owning table in this schema is filtered, and this one must not be:
+    /// a refresh is presented before any tenant is resolved — resolving the tenant is one of the
+    /// things it is for — so a filter here would hide every row from the only query that ever reads
+    /// them, and would do it silently, as an empty result rather than an error. The tenant reachable
+    /// through <c>UserId</c> is the honest answer and there is no second source of truth to keep in
+    /// step. It joins <c>AuditLogs</c> on the deliberately-unfiltered list.
+    /// </para>
+    ///
+    /// <para>
+    /// <b><c>TokenHash</c> is <c>nvarchar(64)</c> and unique.</b> Sized to the value exactly, for the
+    /// reason §4.12's <c>FileHash</c>/<c>RowHash</c> and §4.10's <c>ApiKeyHash</c> are: a hash that
+    /// does not fit is not a SHA-256, and SQL Server says so instead of storing a truncated one that
+    /// still looks plausible. Unique because two rows sharing a hash would mean two live tokens
+    /// redeeming each other's family — impossible from 256 bits of CSPRNG, and worth having the
+    /// database say so rather than trusting that it stays impossible. It is <c>NOT NULL</c>, so the
+    /// index carries no filter; <c>RbacSchemaTests</c> asserts that against <c>sys.indexes</c> rather
+    /// than against this model, because a later nullable <c>TokenHash</c> would silently acquire the
+    /// provider's automatic <c>IS NOT NULL</c> and stop constraining anything — the exact shape of the
+    /// attendance-index defect this codebase already paid for once.
+    /// </para>
+    ///
+    /// <para>
+    /// <b><c>FamilyId</c> is indexed because revocation walks it.</b> Detecting a replay revokes every
+    /// live token in the family, which is a range delete on a table that grows with every refresh of
+    /// every session — without the index that is a scan on the busiest table the auth system has, run
+    /// at exactly the moment something has gone wrong.
+    /// </para>
+    /// </summary>
+    private static void ConfigureRefreshTokens(ModelBuilder b) => b.Entity<RefreshToken>(e =>
+    {
+        e.ToTable("RefreshTokens");
+
+        e.Property(x => x.TokenHash).HasMaxLength(RefreshTokenValue.HashLength).IsRequired();
+
+        // Verbatim and truncated: display text for a session list, never compared on redemption.
+        e.Property(x => x.UserAgent).HasMaxLength(400);
+        e.Property(x => x.IpAddress).HasMaxLength(45); // IPv6 textual maximum, as AuditLogs.
+
+        // Configured with no navigation property on purpose. A required navigation to User — which
+        // *is* filtered — is the interaction EF warns about, and an Include through it would return
+        // null under a pinned tenant that did not happen to own the user. Redemption reads the user
+        // explicitly, ignoring the filter, in the one place that is allowed to.
+        e.HasOne<User>().WithMany().HasForeignKey(x => x.UserId).IsRequired();
+
+        e.HasIndex(x => x.TokenHash).IsUnique()
+            .HasFilter(null)
+            .HasDatabaseName("UX_RefreshTokens_TokenHash");
+
+        e.HasIndex(x => x.FamilyId).HasDatabaseName("IX_RefreshTokens_FamilyId");
+
+        // "This user's sessions", and "revoke everything this user holds". Both filter on UserId and
+        // order by issue time, so the composite serves each with one seek.
+        e.HasIndex(x => new { x.UserId, x.IssuedAt }).HasDatabaseName("IX_RefreshTokens_UserId_IssuedAt");
+    });
 
     /// <summary>
     /// §4.12 SIS import, completed by ADR-001 D-4 (the versioned mapping) and D-5 (a required
@@ -1116,6 +1208,14 @@ internal class EamsDbContext : DbContext
             e.Property(x => x.EntityType).HasMaxLength(100);
             e.Property(x => x.IpAddress).HasMaxLength(45); // IPv6 textual maximum
             e.Property(x => x.Changes); // nvarchar(max) JSON before/after
+
+            // The tenant column §11's filter decision was deferred for. Nullable and unfiltered: a
+            // NULL means "not attributed to a school", which is a real state (a system-generated
+            // entry) and must stay visible under every tenant when the filter is eventually written.
+            // See AuditLog.SchoolId — the column lands now so that rows written from here on can
+            // carry a tenant; adding it at the same time as the filter would leave every existing
+            // row with nothing to backfill from.
+            e.HasOne(x => x.School).WithMany().HasForeignKey(x => x.SchoolId);
 
             e.HasOne(x => x.User).WithMany().HasForeignKey(x => x.UserId);
             e.HasIndex(x => new { x.EntityType, x.EntityId }).HasDatabaseName("IX_AuditLogs_Entity");

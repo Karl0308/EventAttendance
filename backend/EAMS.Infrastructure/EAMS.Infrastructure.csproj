@@ -33,6 +33,23 @@
     <PackageReference Include="ClosedXML" Version="0.105.0" />
   </ItemGroup>
 
+  <!--
+    §11 password hashing — Identity's PasswordHasher<T> and nothing else from Identity.
+
+    Microsoft.Extensions.Identity.Core is the *package*, deliberately, and NOT a
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />. The framework reference is the
+    shorter way to reach the same class and it would pull the whole of ASP.NET Core into the
+    Infrastructure layer to get it — turning the §3 layering rule from "what this project can see"
+    into "what its authors remember not to use". This package brings the hasher, the options type
+    and their two dependencies.
+
+    Identity's own schema (AspNetUsers etc.) is not used: §4.11 declares this system's RBAC tables
+    and EAMS.Domain implements them. See IdentityPasswordHasher.
+  -->
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Extensions.Identity.Core" Version="9.0.1" />
+  </ItemGroup>
+
   <ItemGroup>
     <PackageReference Include="Microsoft.EntityFrameworkCore.SqlServer" Version="9.0.1" />
     <!-- Required by `dotnet ef`; PrivateAssets keeps it out of the runtime dependency graph. -->

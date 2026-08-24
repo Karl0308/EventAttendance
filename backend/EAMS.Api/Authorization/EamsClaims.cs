@@ -1,3 +1,5 @@
+using System.Reflection;
+
 namespace EAMS.Api.Authorization;
 
 /// <summary>
@@ -79,6 +81,37 @@ public static class EamsClaimTypes
 /// </summary>
 public static class EamsPermissions
 {
+    /// <summary>
+    /// <b>Every code declared above, read off the class itself rather than re-listed by hand.</b>
+    /// This is what <c>Permissions</c> is seeded from in every environment (see
+    /// <see cref="EamsRoles.ReferenceData"/>), so the table cannot fall behind the registry: a
+    /// constant added here appears in the next started host's <c>Permissions</c> table without anyone
+    /// remembering a second list.
+    ///
+    /// <para>
+    /// <b>Reflection rather than a hand-maintained array, deliberately.</b> A second list is a second
+    /// place to forget, and the failure it produces is the quiet one this class was created to end —
+    /// a code that guards an endpoint, exists on no role, and is discovered on the day enforcement
+    /// goes live by one endpoint being reachable by nobody. <c>RbacSeedTests</c> asserts the table
+    /// against these constants in both directions anyway, so a defect in this accessor is a failing
+    /// test rather than a silently short seed.
+    /// </para>
+    ///
+    /// <para>
+    /// Ordered, so the seed writes rows in a stable order and a diff of two databases is readable.
+    /// </para>
+    /// </summary>
+    public static IReadOnlyList<string> All { get; } =
+    [
+        .. typeof(EamsPermissions)
+            .GetFields(BindingFlags.Public | BindingFlags.Static | BindingFlags.DeclaredOnly)
+            .Where(f => f is { IsLiteral: true, IsInitOnly: false } && f.FieldType == typeof(string))
+            // GetRawConstantValue rather than GetValue: a const string is a literal with no storage,
+            // and this is the accessor that says so.
+            .Select(f => (string)f.GetRawConstantValue()!)
+            .Order(StringComparer.Ordinal),
+    ];
+
     /// <summary>
     /// §11: "kiosks authenticate with a long-lived device API key scoped to <c>attendance.capture</c>
     /// only". The one permission a device key carries, and the policy name of the four gated

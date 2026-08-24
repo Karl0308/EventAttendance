@@ -21,12 +21,23 @@ they are not wired together yet. Treat anything outside the core slice as unbuil
 ## Run
 
 ```bash
+# one-time, per machine: the host refuses to start without a signing key
+cd backend/EAMS.Api && dotnet user-secrets set "Jwt:SigningKey" "<64+ random characters>"
+
+# optional, Development only: seeds dev-admin@usa.edu.ph. Omit and the seed is skipped, loudly.
+cd backend/EAMS.Api && dotnet user-secrets set "Seed:DevelopmentSuperAdminPassword" "<something long>"
+
 # backend → http://localhost:5080 (Swagger at root)
 cd backend/EAMS.Api && dotnet run --urls "http://localhost:5080"
 
 # web admin → http://localhost:5173
 cd web-admin && npm install && npm run dev
 ```
+
+`Jwt:SigningKey` is **not optional and has no development default**. A generated-on-startup key would
+rotate every restart and invalidate every live session silently, so the host throws instead — on a
+missing key, one under 32 bytes (HMAC-SHA256's floor, RFC 7518 §3.2), or one that looks copied from a
+sample. On IIS it is the `Jwt__SigningKey` environment variable on the application pool.
 
 Checks CI runs (run these before declaring work done):
 `dotnet build EAMS.sln -c Release` · `dotnet test EAMS.sln -c Release` · `npm run lint` · `npm run build`

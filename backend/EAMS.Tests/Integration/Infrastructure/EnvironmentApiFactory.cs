@@ -26,12 +26,14 @@ namespace EAMS.Tests.Integration.Infrastructure;
 /// </summary>
 internal class EnvironmentApiFactory : WebApplicationFactory<Program>
 {
-    private const string ConnectionStringVariable = "ConnectionStrings__EamsDb";
-    private const string EnvironmentVariable = "ASPNETCORE_ENVIRONMENT";
+    private const string ConnectionStringVariable = TestHostConfiguration.ConnectionStringVariable;
+    private const string EnvironmentVariable = TestHostConfiguration.EnvironmentVariable;
+    private const string SigningKeyVariable = TestHostConfiguration.SigningKeyVariable;
 
     private readonly string _environment;
     private readonly string? _previousConnectionString;
     private readonly string? _previousEnvironment;
+    private readonly string? _previousSigningKey;
 
     public EnvironmentApiFactory(string connectionString, string environment)
     {
@@ -39,9 +41,14 @@ internal class EnvironmentApiFactory : WebApplicationFactory<Program>
 
         _previousConnectionString = Environment.GetEnvironmentVariable(ConnectionStringVariable);
         _previousEnvironment = Environment.GetEnvironmentVariable(EnvironmentVariable);
+        _previousSigningKey = Environment.GetEnvironmentVariable(SigningKeyVariable);
 
         Environment.SetEnvironmentVariable(ConnectionStringVariable, connectionString);
         Environment.SetEnvironmentVariable(EnvironmentVariable, environment);
+
+        // Phase 6a: the host refuses to start without a usable Jwt:SigningKey in every environment.
+        // See TestHostConfiguration.
+        Environment.SetEnvironmentVariable(SigningKeyVariable, TestHostConfiguration.SigningKey);
     }
 
     protected override void ConfigureWebHost(IWebHostBuilder builder)
@@ -62,5 +69,6 @@ internal class EnvironmentApiFactory : WebApplicationFactory<Program>
 
         Environment.SetEnvironmentVariable(ConnectionStringVariable, _previousConnectionString);
         Environment.SetEnvironmentVariable(EnvironmentVariable, _previousEnvironment);
+        Environment.SetEnvironmentVariable(SigningKeyVariable, _previousSigningKey);
     }
 }

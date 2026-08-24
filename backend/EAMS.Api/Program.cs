@@ -68,6 +68,17 @@ builder.Services.AddCors(options => options.AddPolicy(
 // Nothing else in this project can see an Infrastructure type — they are all internal.
 builder.Services.AddEamsInfrastructure(builder.Configuration);
 
+// §11's signing key, validated while the host is still being described. The host REFUSES TO START on
+// a missing, too-short or placeholder key — see JwtOptions for why a generated default would be worse
+// than a refusal in both development and production.
+//
+// Deliberately AFTER AddEamsInfrastructure: a host missing both a connection string and a key must
+// report the connection string first, because that is the setting an operator configures first and
+// because HostPipelineTests' connection-string refusal has to keep failing for its own reason. The
+// resolved options are registered but nothing consumes them yet — .AddJwtBearer arrives with the
+// /auth endpoints, and this phase is deliberately invisible from the wire.
+builder.Services.AddSingleton(JwtOptions.Resolve(builder.Configuration));
+
 // ---------------------------------------------------------------------------- device authentication
 //
 // Phase 4b (Phase 4a design, D-23). ADR-001 D-6 deferred *authorization* — §11's permission-based RBAC
@@ -169,7 +180,30 @@ AuthorizationStatus.LogEnforcementState(app.Logger);
 // The whole seed moves rather than the device row alone. Splitting the predicate would trade one
 // asymmetry for a subtler one, and eight fictional students in a Staging database a client might look
 // at is its own small hazard.
-await app.Services.InitializeEamsDatabaseAsync(seed: app.Environment.IsDevelopment());
+// The RBAC reference data is no longer on the same switch. Permissions and the four Roles with their
+// grants are written in EVERY environment — enforcement over an empty RolePermissions table
+// authorizes nobody, so a Production install that skipped them would lock every operator out of
+// itself and look like a broken authorization layer while doing it. Only the convenience data below
+// rides IsDevelopment(). See InitializeEamsDatabaseAsync.
+//
+// The grant matrix is passed in from here because it lives beside the endpoints whose codes it grants
+// (EamsRoles) and Infrastructure cannot see this assembly.
+await app.Services.InitializeEamsDatabaseAsync(
+    EamsRoles.ReferenceData,
+    app.Environment.EnvironmentName,
+    seedDevelopmentData: app.Environment.IsDevelopment());
+
+// ------------------------------------------------------------------------------ create-admin
+//
+// The Production bootstrap: `dotnet run -- create-admin --email … --name "…"`. It runs on the built
+// host — which is what composes the container and the configuration chain — and returns an exit code
+// instead of falling through to app.Run(), so no port is ever opened. Placed after the initialization
+// above because it needs the schema and the four roles, and before everything below because none of
+// the middleware or endpoint wiring is any of its business.
+if (CreateAdminCommand.IsRequested(args))
+{
+    return await CreateAdminCommand.RunAsync(app.Services, args, Console.Out);
+}
 
 // Development only. Swagger UI is an unauthenticated, complete description of an API whose
 // endpoints are all open (ADR-001 D-6) — publishing it from a production host hands an attacker
@@ -210,3 +244,8 @@ app.UseAuthorization();
 app.MapControllers();
 
 app.Run();
+
+// Reached only when the host shuts down cleanly. It exists because the create-admin branch above
+// returns an exit code, which makes this entry point int-returning — the compiler then requires every
+// path to say what it returns, and "the web host stopped normally" is 0.
+return 0;
