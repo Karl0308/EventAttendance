@@ -1,3 +1,4 @@
+using System.Text.Json;
 using EAMS.Application.Abstractions;
 using EAMS.Application.Dtos;
 using EAMS.Domain;
@@ -493,6 +494,108 @@ internal sealed class EventService : IEventService
     /// wrong rows the day §4.6 occurrences are populated.
     /// </para>
     /// </summary>
+    /// <inheritdoc />
+    public async Task<EventScanLogDto?> GetScanLogAsync(Guid id, CancellationToken ct = default)
+    {
+        // Existence is checked through the ordinary filtered set, so an event in another tenant is
+        // indistinguishable from one that never existed - the same answer every other read gives.
+        var exists = await _db.Events.AsNoTracking().AnyAsync(e => e.Id == id, ct);
+        if (!exists) return null;
+
+        // Filtered on EntityType and EntityId together, which is IX_AuditLogs_Entity exactly. Action
+        // is filtered in the same predicate rather than afterwards so the index does the work; the
+        // audit table holds every kind of entry and will only grow.
+        var rows = await _db.AuditLogs.AsNoTracking()
+            .Where(a => a.EntityType == ScanLog.EventEntityType
+                        && a.EntityId == id
+                        && a.Action == ScanLog.UnresolvedAction)
+            .OrderByDescending(a => a.CreatedAt)
+            .ThenByDescending(a => a.Id)
+            .Select(a => new { a.CreatedAt, a.Changes })
+            .ToListAsync(ct);
+
+        var scans = new List<EventScanDto>(rows.Count);
+
+        foreach (var row in rows)
+        {
+            // A row whose payload will not parse is skipped rather than thrown on. This report is a
+            // diagnostic, and one malformed row - a hand-edited audit entry, a shape written by an
+            // older build - must not take the whole report down with it. The count below is of what
+            // was actually readable, so it cannot silently claim rows it dropped.
+            var scan = ReadScan(row.Changes, row.CreatedAt);
+            if (scan is not null) scans.Add(scan);
+        }
+
+        // De-duplicated on deviceTapId at READ time, and deliberately not at write time.
+        //
+        // The tap pipeline de-duplicates by finding the attendance row a deviceTapId already wrote,
+        // which an unresolved scan never has - it is rejected before that check is reached. So a
+        // device re-flushing its queue after a dropped connection, which is ordinary and is the whole
+        // reason the key exists, would otherwise add a row per attempt and the report would describe
+        // the network rather than the cards.
+        //
+        // Fixing it here rather than on the write keeps the audit trail truthful: it records every
+        // flush that actually arrived, which is what an audit trail is for, while the report counts
+        // each real scan once. Rows with no deviceTapId cannot be de-duplicated and are kept as they
+        // are; the batch path refuses them, so they only reach here from a single tap that omitted one.
+        var deduped = scans
+            .GroupBy(s => s.DeviceTapId ?? string.Empty, StringComparer.Ordinal)
+            .SelectMany(g => g.Key.Length == 0 ? g : g.Take(1))
+            .OrderByDescending(s => s.ScannedAt)
+            .ToList();
+
+        var distinct = deduped
+            .Select(s => s.CardUid)
+            .Distinct(StringComparer.Ordinal)
+            .Count();
+
+        return new EventScanLogDto(id, deduped.Count, distinct, deduped);
+    }
+
+    private static EventScanDto? ReadScan(string? changes, DateTime recordedAt)
+    {
+        if (string.IsNullOrWhiteSpace(changes)) return null;
+
+        try
+        {
+            using var doc = JsonDocument.Parse(changes);
+            var root = doc.RootElement;
+
+            var cardUid = Text(root, "cardUid");
+            if (cardUid is null) return null;
+
+            return new EventScanDto(
+                cardUid,
+                Timestamp(root, "tappedAt") ?? recordedAt,
+                recordedAt,
+                Text(root, "deviceTapId"),
+                Identifier(root, "deviceId"),
+                Text(root, "serverOutcome") ?? "Unknown",
+                Text(root, "localOutcome"));
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
+
+        static string? Text(JsonElement root, string name) =>
+            root.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.String
+                ? v.GetString()
+                : null;
+
+        static DateTime? Timestamp(JsonElement root, string name) =>
+            root.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.String
+                && v.TryGetDateTime(out var parsed)
+                ? DateTime.SpecifyKind(parsed, DateTimeKind.Utc)
+                : null;
+
+        static Guid? Identifier(JsonElement root, string name) =>
+            root.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.String
+                && v.TryGetGuid(out var parsed)
+                ? parsed
+                : null;
+    }
+
     public async Task<EventRosterDto?> GetRosterAsync(Guid id, CancellationToken ct = default)
     {
         var ev = await _db.Events.AsNoTracking()

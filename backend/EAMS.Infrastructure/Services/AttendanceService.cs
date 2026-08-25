@@ -1,3 +1,4 @@
+using System.Text.Json;
 ﻿using EAMS.Application.Abstractions;
 using EAMS.Application.Dtos;
 using EAMS.Domain;
@@ -238,7 +239,10 @@ internal sealed class AttendanceService : IAttendanceService
         var card = await _db.RfidCards.Include(c => c.Student)
             .FirstOrDefaultAsync(c => c.CardUid == uid && c.IsActive && !c.Student!.IsDeleted, ct);
         if (card?.Student is null)
+        {
+            await LogUnresolvedScanAsync(ev, req, uid, when, serverTime, ct);
             return Reject(TapOutcome.CardNotFound, $"No active card matches UID {uid}.", serverTime);
+        }
 
         var student = card.Student;
 
@@ -1235,4 +1239,101 @@ internal sealed class AttendanceService : IAttendanceService
             $"deviceTapId '{deviceTapId}', but no conflicting record could be read back. The " +
             "constraint that fired is not one this method knows how to resolve.", violation);
     }
+
+    // ============================================================ the scan log (D-31 follow-on)
+
+    /// <summary>
+    /// Records a scan whose card resolved to nobody, so that it is visible under the event.
+    ///
+    /// <para>
+    /// <b>The gap this closes.</b> <c>CardNotFound</c> is a rejection and not a row, so until now an
+    /// unrecognised card left no trace anywhere: the device was told, and that was the end of it.
+    /// Afterwards "nobody scanned" and "somebody scanned a card we could not place" were
+    /// indistinguishable from any record the institution holds, which is the wrong way round — the
+    /// second is the one worth investigating.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>Written to <c>AuditLogs</c> rather than to a table of its own.</b> An
+    /// <c>AttendanceRecord</c> requires a student and this scan has none, so it cannot go there; and
+    /// <c>AuditLogs</c> already carries an <c>(EntityType, EntityId)</c> index, which makes "every
+    /// unresolved scan for this event" a single indexed read. No new table, no migration.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>A failure here must not fail the tap.</b> The tap is already being rejected; turning that
+    /// into a 500 would make the client retry a row that can never succeed, and §8.2 treats 5xx as
+    /// retryable — the queue would never drain. So the write is guarded, and a failure is logged at
+    /// warning rather than thrown. This is a deliberate exception to the no-silent-catch rule and it
+    /// is not silent: the log line names the event and the card.
+    /// </para>
+    /// </summary>
+    private async Task LogUnresolvedScanAsync(
+        Event ev, TapRequest req, string uid, DateTime when, DateTime serverTime, CancellationToken ct)
+    {
+        try
+        {
+            _db.AuditLogs.Add(new AuditLog
+            {
+                SchoolId = ev.SchoolId,
+                UserId = _currentUser.UserId,
+                Action = ScanLog.UnresolvedAction,
+                EntityType = ScanLog.EventEntityType,
+                EntityId = ev.Id,
+                CreatedAt = serverTime,
+                Changes = JsonSerializer.Serialize(new UnresolvedScan(
+                    uid,
+                    req.DeviceTapId,
+                    _device.DeviceId ?? req.DeviceId,
+                    when,
+                    nameof(TapOutcome.CardNotFound),
+                    Truncate(req.LocalOutcome, TapRequestLimits.MaxLocalOutcomeLength)), ScanJson),
+            });
+
+            await _db.SaveChangesAsync(ct);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            // Detach it, or the next SaveChanges on this context re-attempts the same failing insert
+            // and takes an unrelated write down with it.
+            foreach (var entry in _db.ChangeTracker.Entries<AuditLog>().ToList())
+                entry.State = EntityState.Detached;
+
+            _logger.LogWarning(
+                ex,
+                "Could not record the unresolved scan of card {CardUid} on event {EventId}. The tap " +
+                "was rejected as CardNotFound either way; only the scan-log row is missing.",
+                uid, ev.Id);
+        }
+    }
+
+    /// <summary>
+    /// camelCase, to match every other JSON this API emits.
+    ///
+    /// <para>
+    /// Without it <c>JsonSerializer</c> writes the C# property names as they are spelled, so the row
+    /// says <c>CardUid</c> while the reader - and the published DTO, and every other body this API
+    /// returns - says <c>cardUid</c>. Nothing throws; the reader simply finds no property of that
+    /// name and skips the row, and the report is empty while the writes are all succeeding. That is
+    /// exactly how this was first written, and the tests caught it.
+    /// </para>
+    /// </summary>
+    private static readonly JsonSerializerOptions ScanJson =
+        new() { PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
+
+    private static string? Truncate(string? value, int max)
+    {
+        if (string.IsNullOrWhiteSpace(value)) return null;
+        var trimmed = value.Trim();
+        return trimmed.Length <= max ? trimmed : trimmed[..max];
+    }
+
+    /// <summary>The body of an unresolved-scan audit row. Serialized into <c>AuditLog.Changes</c>.</summary>
+    private sealed record UnresolvedScan(
+        string CardUid,
+        string? DeviceTapId,
+        Guid? DeviceId,
+        DateTime TappedAt,
+        string ServerOutcome,
+        string? LocalOutcome);
 }

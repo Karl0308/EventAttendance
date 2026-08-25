@@ -3004,6 +3004,67 @@
         }
       }
     },
+    "/api/v1/events/{id}/scans": {
+      "get": {
+        "tags": [
+          "Events"
+        ],
+        "summary": "`GET /events/{id}/scans` - scans at this event that resolved to no student.\r\n            \r\n             \r\n<b>The complement of the roster, and the only place this population appears.</b> A scan whose\r\n             card resolves becomes an attendance row and is reported by `/roster` and the attendance\r\n             list. One that resolves to nobody is a `CardNotFound` rejection - an HTTP response and\r\n             nothing more - so before this report existed, \"nobody scanned\" and \"somebody scanned a card we\r\n             could not place\" were the same absence of evidence. The second is the one worth investigating,\r\n             and it was the one being discarded.\r\n             \r\n`events.read` rather than `attendance.read`: it is read from the event page, beside\r\n             the roster it completes, and a permission split that puts half of one screen behind a second\r\n             grant is a permission split nobody configures correctly.\r\n             ",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The scans, most recent first, with total and distinct-card counts.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/EventScanLogDto"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EventScanLogDto"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EventScanLogDto"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such event in this tenant.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/events/{id}/status": {
       "patch": {
         "tags": [
@@ -5783,6 +5844,76 @@
         "additionalProperties": false,
         "description": "One line of the roster."
       },
+      "EventScanDto": {
+        "type": "object",
+        "properties": {
+          "cardUid": {
+            "type": "string",
+            "description": "The normalized serial the device sent. It matched no active card in this school at the moment the\r\ntap was decided — which is not the same as \"no such card exists now\": a card issued afterwards\r\ndoes not retroactively resolve rows already written."
+          },
+          "scannedAt": {
+            "type": "string",
+            "description": "The device's `tappedAt` for this scan, not the moment the server saw it. For an offline queue\r\nthose differ by however long the device was away, and the first is when the person was standing\r\nthere.",
+            "format": "date-time"
+          },
+          "recordedAt": {
+            "type": "string",
+            "description": "When the server wrote this row. Compare with ScannedAt to see flush lag.",
+            "format": "date-time"
+          },
+          "deviceTapId": {
+            "type": "string",
+            "description": "The device's idempotency key. Present for anything queued offline; a device that omits it cannot\r\nhave its retries de-duplicated, which is why the batch path refuses rows without one.",
+            "nullable": true
+          },
+          "deviceId": {
+            "type": "string",
+            "description": "The device that captured it, where known.",
+            "format": "uuid",
+            "nullable": true
+          },
+          "serverOutcome": {
+            "type": "string",
+            "description": "What the server decided. `CardNotFound` today, and the field exists so that a second\r\nunresolved outcome can be added later without changing the shape of this report."
+          },
+          "localOutcome": {
+            "type": "string",
+            "description": "What the <em>device</em> claimed, verbatim and possibly null. <b>Never authoritative.</b> Its\r\nvalue is in disagreeing with ServerOutcome: a device reporting that it found\r\nthis card while the server could not resolve it is evidence of a stale manifest, a sync that did\r\nnot run, or a cloned card.",
+            "nullable": true
+          }
+        },
+        "additionalProperties": false,
+        "description": "One scan that reached the server and resolved to nobody, as `GET /events/{id}/scans` reports\r\nit.\r\n            \r\n\r\n<b>Every row here is a scan that is in no other record.</b> A scan whose card resolves becomes an\r\n`AttendanceRecord` and is reported by `GET /events/{id}/roster` and the attendance list;\r\nit is deliberately absent from this report rather than duplicated into it. This is the remainder —\r\nthe population that until now existed only as an HTTP response nobody kept.\r\n"
+      },
+      "EventScanLogDto": {
+        "type": "object",
+        "properties": {
+          "eventId": {
+            "type": "string",
+            "description": "The event these scans were filed under.",
+            "format": "uuid"
+          },
+          "totalScans": {
+            "type": "integer",
+            "description": "Every unresolved scan, including repeat presentations of one card.",
+            "format": "int32"
+          },
+          "distinctCards": {
+            "type": "integer",
+            "description": "How many different cards those scans represent.\r\n            \r\n\r\n\r\nBoth numbers are reported because they answer different questions and the gap between them is\r\nitself informative. Forty scans over three cards is somebody presenting a card that is not working\r\nand trying again; forty scans over forty cards is a roster that has not been given its RFID\r\ncolumn.\r\n",
+            "format": "int32"
+          },
+          "scans": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/EventScanDto"
+            },
+            "description": "Most recent first."
+          }
+        },
+        "additionalProperties": false,
+        "description": "The unresolved scans for one event, with the counts a reader needs before deciding whether the\r\nlist is worth reading."
+      },
       "EventStatusRequest": {
         "type": "object",
         "properties": {
@@ -6605,6 +6736,11 @@
           "tappedAt": {
             "type": "string",
             "format": "date-time",
+            "nullable": true
+          },
+          "localOutcome": {
+            "type": "string",
+            "description": "What the device concluded about this card from its own cached manifest, before it knew what the\r\nserver would say. Optional; omit it and nothing changes.\r\n            \r\n\r\n<b>It never influences the outcome, and a test pins that.</b> The server resolves the card itself\r\nand rules on the tap exactly as it would have without this field. A device that lied — or that is\r\nsimply running a stale manifest — cannot mark anyone present, absent, or unknown by saying so.\r\n\r\n<b>Its purpose is the disagreement.</b> A device that says it found a card the server cannot\r\nresolve is evidence of something real: a stale cache, a sync that did not run, a cloned card, a\r\nreader misreading. That case leaves no trace otherwise, because `CardNotFound` is a rejection\r\nrather than a row, and it is the case most worth seeing.\r\n\r\n<b>Free text, stored verbatim, never parsed into a closed set.</b> The vocabulary is the mobile\r\nclient's and is not fixed yet. Validating it would mean a value we have not seen could 400 an\r\nentire flush — a field that exists only for reporting must never be able to reject attendance.\r\nAnything longer than `TapRequestLimits.MaxLocalOutcomeLength` is truncated rather than\r\nrefused, for the same reason.\r\n",
             "nullable": true
           }
         },

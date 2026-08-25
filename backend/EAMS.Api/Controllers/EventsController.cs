@@ -140,6 +140,36 @@ public class EventsController : ControllerBase
         return roster is null ? NotFound() : Ok(roster);
     }
 
+    /// <summary>
+    /// <c>GET /events/{id}/scans</c> - scans at this event that resolved to no student.
+    ///
+    /// <para>
+    /// <b>The complement of the roster, and the only place this population appears.</b> A scan whose
+    /// card resolves becomes an attendance row and is reported by <c>/roster</c> and the attendance
+    /// list. One that resolves to nobody is a <c>CardNotFound</c> rejection - an HTTP response and
+    /// nothing more - so before this report existed, "nobody scanned" and "somebody scanned a card we
+    /// could not place" were the same absence of evidence. The second is the one worth investigating,
+    /// and it was the one being discarded.
+    /// </para>
+    ///
+    /// <para>
+    /// <c>events.read</c> rather than <c>attendance.read</c>: it is read from the event page, beside
+    /// the roster it completes, and a permission split that puts half of one screen behind a second
+    /// grant is a permission split nobody configures correctly.
+    /// </para>
+    /// </summary>
+    /// <response code="200">The scans, most recent first, with total and distinct-card counts.</response>
+    /// <response code="404">No such event in this tenant.</response>
+    [HttpGet("{id:guid}/scans")]
+    [HasPermissionNotEnforced(EamsPermissions.EventsRead)]
+    [ProducesResponseType(typeof(EventScanLogDto), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<ActionResult<EventScanLogDto>> Scans(Guid id, CancellationToken ct)
+    {
+        var log = await _events.GetScanLogAsync(id, ct);
+        return log is null ? NotFound() : Ok(log);
+    }
+
     // --------------------------------------------------------------------------------- writes
 
     /// <summary>

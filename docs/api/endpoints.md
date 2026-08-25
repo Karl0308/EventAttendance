@@ -3,7 +3,7 @@
 <!-- GENERATED FILE — DO NOT EDIT.
      Source: docs/api/openapi.json. Regenerate: node scripts/generate-endpoint-index.mjs --write -->
 
-**Generated from [`openapi.json`](openapi.json) — do not edit by hand.** 53 operations across 9 controllers, all mounted under `/api/v1`. Routes below are written relative to that mount.
+**Generated from [`openapi.json`](openapi.json) — do not edit by hand.** 54 operations across 9 controllers, all mounted under `/api/v1`. Routes below are written relative to that mount.
 
 This page is a **map, not a contract.** It exists so you can find an endpoint; payload shapes, field types and outcome tokens live in [`openapi.json`](openapi.json), which is what you generate a client from. Behaviour a schema cannot state — what your queue does with each outcome, the card-UID and clock rules — is in [`attendance-contract-handoff.md`](attendance-contract-handoff.md).
 
@@ -18,7 +18,7 @@ This page is a **map, not a contract.** It exists so you can find an endpoint; p
 - [SisImport](#sisimport) — 4
 - [StudentGroups](#studentgroups) — 1
 - [Attendance](#attendance) — 5
-- [Events](#events) — 13
+- [Events](#events) — 14
 - [Students](#students) — 8
 
 ## Academic
@@ -102,6 +102,7 @@ This page is a **map, not a contract.** It exists so you can find an endpoint; p
 | `DELETE` | `/events/{id}/attendees/groups/{studentGroupId}` | — | `404` `409` | Detaches one group. |
 | `DELETE` | `/events/{id}/attendees/students/{studentId}` | — | `404` `409` | Detach one individually-attached student from the event's audience. |
 | `GET` | `/events/{id}/roster` | — | `404` | §6.3 `GET /events/{id}/roster` — expected versus actual, and the source of §12's Absentee Report. |
+| `GET` | `/events/{id}/scans` | — | `404` | Scans at this event that resolved to no student. |
 | `PATCH` | `/events/{id}/status` | — | `400` `404` | §6.3 `PATCH /events/{id}/status` — Open / Close / Cancel. |
 | `GET` | `/events/{id}/summary` | — | `404` | The §6.7/§12 Event Attendance Summary. |
 | `POST` | `/events/audience/resolve` | — | `400` | How many students a filter matches, who they are, and a preview (D-50/D-51). |

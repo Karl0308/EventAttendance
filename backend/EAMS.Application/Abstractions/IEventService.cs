@@ -383,6 +383,35 @@ public interface IEventService
     Task<EventRosterDto?> GetRosterAsync(Guid id, CancellationToken ct = default);
 
     /// <summary>
+    /// <c>GET /events/{id}/scans</c> - the scans at this event that resolved to nobody.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>The complement of <see cref="GetRosterAsync"/>, not an alternative to it.</b> A scan whose
+    /// card resolves becomes an <c>AttendanceRecord</c> and is reported there; this returns only what
+    /// the roster structurally cannot hold, because an attendance row requires a student and these
+    /// scans have none. Read together the two account for every tap the server accepted.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>Read from <c>AuditLogs</c>, which is why it exists at all.</b> <c>CardNotFound</c> is a
+    /// rejection rather than a row, so before the scan log an unrecognised card left no trace: the
+    /// device was told and nothing was kept. "Nobody scanned" and "somebody scanned a card we could
+    /// not place" were the same absence of evidence, and the second is the one worth investigating.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>Repeat presentations are separate rows, deliberately.</b> The idempotency key already
+    /// absorbs replays of a single tap, so two rows for one card mean the card was genuinely
+    /// presented twice - which is what somebody does when a reader is not working, and is worth
+    /// seeing. <c>DistinctCards</c> is reported alongside so a caller can collapse them without
+    /// losing the count.
+    /// </para>
+    /// </remarks>
+    /// <returns><c>null</c> when no such event exists in this tenant, which the caller maps to 404.</returns>
+    Task<EventScanLogDto?> GetScanLogAsync(Guid id, CancellationToken ct = default);
+
+    /// <summary>
     /// <c>GET /attendance/live/{eventId}?since=</c> — the D-29 polling endpoint that stands in for the
     /// §5/§6.4 SignalR hub.
     ///

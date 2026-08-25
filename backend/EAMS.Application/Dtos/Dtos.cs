@@ -48,8 +48,49 @@ public record AttendanceDto(
     DateTime? CheckInAt, DateTime? CheckOutAt, string Status, string CaptureMethod);
 
 // POST /attendance/tap — the core capture payload from the Technical Plan §6.4.
+/// <param name="LocalOutcome">
+/// What the device concluded about this card from its own cached manifest, before it knew what the
+/// server would say. Optional; omit it and nothing changes.
+///
+/// <para>
+/// <b>It never influences the outcome, and a test pins that.</b> The server resolves the card itself
+/// and rules on the tap exactly as it would have without this field. A device that lied — or that is
+/// simply running a stale manifest — cannot mark anyone present, absent, or unknown by saying so.
+/// </para>
+///
+/// <para>
+/// <b>Its purpose is the disagreement.</b> A device that says it found a card the server cannot
+/// resolve is evidence of something real: a stale cache, a sync that did not run, a cloned card, a
+/// reader misreading. That case leaves no trace otherwise, because <c>CardNotFound</c> is a rejection
+/// rather than a row, and it is the case most worth seeing.
+/// </para>
+///
+/// <para>
+/// <b>Free text, stored verbatim, never parsed into a closed set.</b> The vocabulary is the mobile
+/// client's and is not fixed yet. Validating it would mean a value we have not seen could 400 an
+/// entire flush — a field that exists only for reporting must never be able to reject attendance.
+/// Anything longer than <c>TapRequestLimits.MaxLocalOutcomeLength</c> is truncated rather than
+/// refused, for the same reason.
+/// </para>
+/// </param>
 public record TapRequest(
-    Guid EventId, string CardUid, Guid? DeviceId, string? DeviceTapId, DateTime? TappedAt);
+    Guid EventId, string CardUid, Guid? DeviceId, string? DeviceTapId, DateTime? TappedAt,
+    string? LocalOutcome = null);
+
+/// <summary>Bounds on the free-text fields of <see cref="TapRequest"/>.</summary>
+public static class TapRequestLimits
+{
+    /// <summary>
+    /// How much of <see cref="TapRequest.LocalOutcome"/> is kept.
+    ///
+    /// <para>
+    /// Long enough for any word a client would sensibly send, short enough that a device cannot write
+    /// a megabyte into the audit trail one tap at a time. Truncated rather than rejected: this field
+    /// is reporting, and reporting must not be able to fail a capture.
+    /// </para>
+    /// </summary>
+    public const int MaxLocalOutcomeLength = 64;
+}
 
 /// <summary>
 /// The body of <c>POST /attendance/tap</c> and <c>POST /attendance/manual</c> on every path that
