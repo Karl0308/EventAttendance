@@ -148,6 +148,15 @@ try {
 
 Write-Head 'EAMS — deploy'
 
+# This script deploys onto IIS. Run on a machine without IIS it cannot do anything useful, and
+# until now it said so three steps in, as 'Access to the path C:\inetpub\eams is denied' — a
+# permissions message for what is really 'wrong machine'. Forward slashes below on purpose: they
+# work fine in Windows paths and cannot be mangled by an escape on the way into this file.
+$iisConfig = Join-Path $env:SystemRoot 'system32/inetsrv/config/applicationHost.config'
+if (-not (Test-Path $iisConfig)) {
+    throw "IIS is not installed on this machine, so there is nothing here to deploy to. This script runs ON THE SERVER: copy the release folder to the VM and run the copy there. (Looked for $iisConfig.)"
+}
+
 if ($doApi -and -not (Test-Path (Join-Path $srcApi 'EAMS.Api.dll'))) {
     throw "No api\ folder beside this script (looked in '$srcApi'). Run this from the RELEASE folder — the one containing api\, web\ and vm-deploy.ps1 — not from the repository's scripts\ folder. Build it with scripts\build-release.ps1, copy the release\ folder to this server, and run the copy inside it."
 }
