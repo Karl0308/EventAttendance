@@ -70,6 +70,30 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
+# Double-clicking a .ps1 opens a console that closes the instant the script ends — including when it
+# ends by throwing, which takes the error message with it. Everything below therefore runs inside a
+# try/catch that reports the failure and waits, but only when the console was launched for this
+# script alone. Run from an existing prompt, it behaves normally and never pauses.
+$launchedByDoubleClick = $false
+try {
+    $parent = (Get-CimInstance Win32_Process -Filter "ProcessId = $PID" -ErrorAction Stop).ParentProcessId
+    $parentName = (Get-Process -Id $parent -ErrorAction Stop).ProcessName
+    $launchedByDoubleClick = $parentName -in @('explorer', 'Explorer')
+}
+catch {
+    # Not knowable on this host. Assume it was launched from a prompt; the worst case is an error
+    # that scrolls rather than one that waits.
+}
+
+function Wait-IfLaunchedByDoubleClick {
+    if ($launchedByDoubleClick) {
+        Write-Host ''
+        Read-Host 'Press Enter to close'
+    }
+}
+
+try {
+
 $JwtVar   = 'Jwt__SigningKey'
 $ConnVar  = 'ConnectionStrings__EamsDb'
 $CorsVar  = 'Cors__AllowedOrigins__0'
@@ -259,3 +283,20 @@ Write-Step 'Both $env: lines are required. Application-pool variables belong to 
 Write-Step 'process, and create-admin runs on the fully built host — so it refuses to start without'
 Write-Step 'a signing key even though it never mints a token.'
 Write-Host ''
+
+    Wait-IfLaunchedByDoubleClick
+}
+catch {
+    Write-Host ''
+    Write-Host '  FAILED' -ForegroundColor Red
+    Write-Host "  $($_.Exception.Message)" -ForegroundColor Red
+    Write-Host ''
+    Write-Host '  Nothing further was changed. Common causes:' -ForegroundColor Yellow
+    Write-Host '    - Not running as Administrator. Right-click PowerShell, Run as administrator.'
+    Write-Host '    - The file is blocked because it came from another machine:  Unblock-File vm-setup-env.ps1'
+    Write-Host '    - Execution policy:  powershell -ExecutionPolicy Bypass -File vm-setup-env.ps1'
+    Write-Host '    - IIS management tools missing:  Install-WindowsFeature Web-Scripting-Tools'
+    Write-Host ''
+    Wait-IfLaunchedByDoubleClick
+    exit 1
+}
