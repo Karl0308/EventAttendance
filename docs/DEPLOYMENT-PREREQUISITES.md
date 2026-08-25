@@ -33,6 +33,24 @@ Nothing here is optional, and the first four produce a dead site rather than a d
 `Jwt:SigningKey`. These are set on the **application pool**, not in `appsettings.json` — that file is
 the base layer for *production* defaults, and a secret placed there is a secret in the repository.
 
+### The script
+
+Copy `scriptsm-setup-env.ps1` to the server and run it as Administrator:
+
+```powershell
+.m-setup-env.ps1
+```
+
+It prompts for the connection string, generates a signing key, sets all four variables, verifies
+them, restarts the pool, and prints the key once along with the `create-admin` command for the next
+step. Existing values are left alone — an existing signing key is not regenerated, because doing so
+signs out every live session. `-Force` overrides that.
+
+Use it rather than pasting the commands below: those need backtick line continuations, which mangle
+when pasted into a console over RDP.
+
+### By hand
+
 Run as administrator on the server:
 
 ```powershell
