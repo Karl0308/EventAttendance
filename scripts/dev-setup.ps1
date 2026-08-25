@@ -1,10 +1,10 @@
-<#
+﻿<#
 .SYNOPSIS
     One-command local setup for EAMS. Generates the two secrets the API needs and prints the login.
 
 .DESCRIPTION
     The API refuses to start without `Jwt:SigningKey`, and it seeds no administrator without
-    `Seed:DevelopmentSuperAdminPassword`. Both are deliberately absent from the repository — the
+    `Seed:DevelopmentSuperAdminPassword`. Both are deliberately absent from the repository - the
     signing key because a shared one is not a secret, the password because a working administrator
     credential in a public repository is a working administrator credential on the internet.
 
@@ -14,7 +14,7 @@
     you what to sign in with.
 
     Safe to re-run. Existing secrets are left alone unless -Force is given, because regenerating
-    them is not the harmless act it looks like — see the note on -Force below.
+    them is not the harmless act it looks like - see the note on -Force below.
 
 .PARAMETER Force
     Overwrite secrets that already exist.
@@ -34,8 +34,8 @@
 
     Run this before a full `dotnet test`. RbacSeedTests asserts that a Development host with no seed
     password creates no administrator; it clears the environment variable but cannot clear a user
-    secret, so having one configured turns that test red locally while CI — which has no user
-    secrets — stays green. An administrator that has already been seeded keeps working afterwards,
+    secret, so having one configured turns that test red locally while CI - which has no user
+    secrets - stays green. An administrator that has already been seeded keeps working afterwards,
     because the password is stored hashed in the database and this setting is only read at creation.
 
 .EXAMPLE
@@ -120,7 +120,7 @@ if (-not (Get-Command dotnet -ErrorAction SilentlyContinue)) {
 if ($RemoveSeedPassword) {
     & dotnet user-secrets remove $SeedKeyName --project $apiProject 2>$null | Out-Null
     Write-Ok "Removed '$SeedKeyName'."
-    Write-Step 'The full test suite will now pass. An administrator that already exists still works —'
+    Write-Step 'The full test suite will now pass. An administrator that already exists still works -'
     Write-Step 'the password is stored hashed in the database, and this setting is read only at creation.'
     Write-Host ''
     exit 0
@@ -136,7 +136,7 @@ if ($existingJwt -and -not $Force) {
     Write-Ok "'$JwtKeyName' is already set. Leaving it alone (-Force to regenerate)."
 }
 else {
-    if ($existingJwt) { Write-Warn 'Regenerating — every live session is now invalid.' }
+    if ($existingJwt) { Write-Warn 'Regenerating - every live session is now invalid.' }
     Set-Secret $JwtKeyName (New-RandomBase64 $SigningKeyBytes)
     Write-Ok "Generated and stored '$JwtKeyName' ($SigningKeyBytes random bytes)."
 }
@@ -154,7 +154,7 @@ if ($existingSeed -and -not $Force) {
 else {
     if ($existingSeed) {
         Write-Warn 'Regenerating. If the administrator already exists in your database this new'
-        Write-Warn 'password will NOT apply — the seed only creates an account that is absent.'
+        Write-Warn 'password will NOT apply - the seed only creates an account that is absent.'
     }
     $password = New-RandomBase64 $PasswordBytes
     Set-Secret $SeedKeyName $password
@@ -195,7 +195,7 @@ Write-Step 'cd backend\EAMS.Api;  dotnet run --urls "http://localhost:5080"'
 Write-Step 'cd web-admin;         npm install;  npm run dev'
 Write-Host ''
 Write-Step 'The account is created on the next start of a Development host, and only if it is absent.'
-Write-Step 'Watch the log for "Seeded the Development SuperAdmin" — a seed that fails warns and lets'
+Write-Step 'Watch the log for "Seeded the Development SuperAdmin" - a seed that fails warns and lets'
 Write-Step 'the host start, so a clean boot is not by itself evidence that an account exists.'
 
 Write-Head 'Before running the full test suite'

@@ -1,12 +1,12 @@
-<#
+﻿<#
 .SYNOPSIS
     Sets the EAMS API application-pool environment variables on an IIS server, and verifies them.
 
 .DESCRIPTION
     Run this ON THE VM, as Administrator, before deploying a build that includes authentication.
 
-    The API resolves its JWT settings while the host is still being described — before the web
-    server is built — so a missing or too-short `Jwt__SigningKey` is a dead site (HTTP 500.30) and
+    The API resolves its JWT settings while the host is still being described - before the web
+    server is built - so a missing or too-short `Jwt__SigningKey` is a dead site (HTTP 500.30) and
     not a broken login. The connection string is the same kind of failure. Both must exist before the
     new files are copied in, which is why this is its own step rather than something to fix
     afterwards.
@@ -29,14 +29,14 @@
     includes a path, so `http://host/eams` silently matches nothing.
 
     Defaults to http, NOT https: the Default Web Site here has no HTTPS binding, and the scheme is
-    part of an origin — a mismatch blocks every response in the browser while the server logs
+    part of an origin - a mismatch blocks every response in the browser while the server logs
     nothing. See the comment in backend/EAMS.Api/web.config.
 
 .PARAMETER Environment
     ASPNETCORE_ENVIRONMENT. Defaults to Production.
 
     Development on a reachable host seeds demonstration students and serves Swagger. It does not
-    change whether authorization is enforced — that is a separate phase — so choosing Production here
+    change whether authorization is enforced - that is a separate phase - so choosing Production here
     is about not publishing fixtures and docs, not about locking the API down.
 
 .PARAMETER SigningKey
@@ -74,7 +74,7 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
-# Double-clicking a .ps1 opens a console that closes the instant the script ends — including when it
+# Double-clicking a .ps1 opens a console that closes the instant the script ends - including when it
 # ends by throwing, which takes the error message with it. Everything below therefore runs inside a
 # try/catch that reports the failure and waits, but only when the console was launched for this
 # script alone. Run from an existing prompt, it behaves normally and never pauses.
@@ -111,7 +111,7 @@ function Write-Head { param($m) Write-Host "`n$m" -ForegroundColor Cyan }
 
 # ------------------------------------------------------------------ preflight
 
-Write-Head 'EAMS — application pool configuration'
+Write-Head 'EAMS - application pool configuration'
 
 $identity  = [Security.Principal.WindowsIdentity]::GetCurrent()
 $principal = New-Object Security.Principal.WindowsPrincipal($identity)
@@ -129,7 +129,7 @@ catch {
 $poolPath = "IIS:\AppPools\$AppPool"
 
 if (-not (Test-Path $poolPath)) {
-    throw "Application pool '$AppPool' does not exist. Create it first — see docs/DEPLOY-IIS.md section 2 — or pass -AppPool."
+    throw "Application pool '$AppPool' does not exist. Create it first - see docs/DEPLOY-IIS.md section 2 - or pass -AppPool."
 }
 
 Write-Ok "Application pool '$AppPool' found."
@@ -192,7 +192,7 @@ $generated = $null
 
 if (($existing -contains $JwtVar) -and -not $Force -and -not $SigningKey) {
     Write-Ok "'$JwtVar' is already set. Leaving it alone."
-    Write-Step 'Regenerating would sign out every live session — pass -Force if that is what you want.'
+    Write-Step 'Regenerating would sign out every live session - pass -Force if that is what you want.'
 }
 else {
     if ($SigningKey) {
@@ -204,7 +204,7 @@ else {
     }
     else {
         $bytes = New-Object byte[] $KeyBytes
-        # RandomNumberGenerator, not Get-Random — the latter is a seeded PRNG and must never produce
+        # RandomNumberGenerator, not Get-Random - the latter is a seeded PRNG and must never produce
         # a signing key.
         $rng = [System.Security.Cryptography.RandomNumberGenerator]::Create()
         try { $rng.GetBytes($bytes) } finally { $rng.Dispose() }
@@ -212,7 +212,7 @@ else {
         Write-Ok "Generated a new key ($KeyBytes random bytes)."
     }
 
-    if ($existing -contains $JwtVar) { Write-Warn 'Replacing the existing key — every live session is now invalid.' }
+    if ($existing -contains $JwtVar) { Write-Warn 'Replacing the existing key - every live session is now invalid.' }
 
     Set-PoolEnv $JwtVar $generated
     Write-Ok "Set '$JwtVar'."
@@ -235,7 +235,7 @@ Write-Ok "Set '$EnvVar' to $Environment."
 
 if ($Environment -eq 'Development') {
     Write-Warn 'Development on a reachable host seeds demonstration students and serves Swagger.'
-    Write-Warn 'It does not enforce authorization either way — that is a separate phase.'
+    Write-Warn 'It does not enforce authorization either way - that is a separate phase.'
 }
 
 # ------------------------------------------------------------------ verify
@@ -247,12 +247,12 @@ $wanted = @($ConnVar, $JwtVar, $CorsVar, $EnvVar)
 $missing = @($wanted | Where-Object { $final -notcontains $_ })
 
 foreach ($name in $wanted) {
-    if ($final -contains $name) { Write-Ok $name } else { Write-Warn "$name — MISSING" }
+    if ($final -contains $name) { Write-Ok $name } else { Write-Warn "$name - MISSING" }
 }
 
 if ($missing.Count -gt 0) {
     Write-Host ''
-    throw "Not all variables were written: $($missing -join ', '). If this server predates IIS 10 it does not support application-pool environment variables — use an <environmentVariables> block in the API's web.config instead."
+    throw "Not all variables were written: $($missing -join ', '). If this server predates IIS 10 it does not support application-pool environment variables - use an <environmentVariables> block in the API's web.config instead."
 }
 
 # ------------------------------------------------------------------ restart
@@ -266,7 +266,7 @@ if (-not $SkipRestart) {
 # ------------------------------------------------------------------ summary
 
 if ($generated) {
-    Write-Head 'SIGNING KEY — copy this now, it is not shown again'
+    Write-Head 'SIGNING KEY - copy this now, it is not shown again'
     Write-Host ''
     Write-Host "    $generated"
     Write-Host ''
@@ -284,7 +284,7 @@ Write-Host '    $env:Jwt__SigningKey            = "<the key above>"'
 Write-Host '    dotnet EAMS.Api.dll create-admin --email admin@usa.edu.ph --name "Full Name" --role SuperAdmin'
 Write-Host ''
 Write-Step 'Both $env: lines are required. Application-pool variables belong to the IIS worker'
-Write-Step 'process, and create-admin runs on the fully built host — so it refuses to start without'
+Write-Step 'process, and create-admin runs on the fully built host - so it refuses to start without'
 Write-Step 'a signing key even though it never mints a token.'
 Write-Host ''
 

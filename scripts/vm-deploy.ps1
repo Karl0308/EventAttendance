@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
     Deploys the API and the SPA on the IIS server. No administrator rights required.
 
@@ -14,13 +14,13 @@
         4. Restores the configuration the old deployment was using, and adds anything missing
         5. Brings the API back up and checks it answers
 
-    NO ADMINISTRATOR RIGHTS. Stopping an application pool needs them; app_offline.htm does not — the
+    NO ADMINISTRATOR RIGHTS. Stopping an application pool needs them; app_offline.htm does not - the
     ASP.NET Core Module sees the file appear, shuts the application down, and releases the DLLs. All
     this script needs is write access to the two application folders, which you already have because
     you are deploying into them.
 
     CONFIGURATION CARRIES FORWARD BY ITSELF. A publish overwrites web.config, which is where this
-    deployment keeps ASPNETCORE_ENVIRONMENT and the CORS origin — so a naive copy silently discards
+    deployment keeps ASPNETCORE_ENVIRONMENT and the CORS origin - so a naive copy silently discards
     them and the app starts with no connection string. This reads the old file before overwriting it
     and re-applies every environment variable it finds. Re-using the existing signing key is what
     keeps everyone signed in across a deploy.
@@ -38,7 +38,7 @@
 .PARAMETER AllowedOrigin
     The SPA's origin: scheme + host, no path. Only applied when none is already configured.
 
-    Note the default is http, not https — the Default Web Site here has no HTTPS binding, and a
+    Note the default is http, not https - the Default Web Site here has no HTTPS binding, and a
     scheme mismatch fails CORS in the browser while the server logs nothing.
 
 .PARAMETER Environment
@@ -109,7 +109,7 @@ if (-not $SourcePath) { $SourcePath = $PSScriptRoot }
 # Ask IIS where the applications actually live, rather than trusting a default.
 #
 # A default is a guess, and a wrong guess here does not fail loudly: it deploys into a folder nobody
-# serves, reports every step as succeeding, and leaves the old build running. That happened — the
+# serves, reports every step as succeeding, and leaves the old build running. That happened - the
 # documented layout was not the deployed one, and the only evidence was a route still answering 404
 # long after the deploy had been called a success. IIS knows the answer, so ask it.
 function Resolve-IisPhysicalPath {
@@ -146,10 +146,10 @@ $doWeb = -not $ApiOnly
 
 try {
 
-Write-Head 'EAMS — deploy'
+Write-Head 'EAMS - deploy'
 
 # This script deploys onto IIS. Run on a machine without IIS it cannot do anything useful, and
-# until now it said so three steps in, as 'Access to the path C:\inetpub\eams is denied' — a
+# until now it said so three steps in, as 'Access to the path C:\inetpub\eams is denied' - a
 # permissions message for what is really 'wrong machine'. Forward slashes below on purpose: they
 # work fine in Windows paths and cannot be mangled by an escape on the way into this file.
 $iisConfig = Join-Path $env:SystemRoot 'system32/inetsrv/config/applicationHost.config'
@@ -158,14 +158,14 @@ if (-not (Test-Path $iisConfig)) {
 }
 
 if ($doApi -and -not (Test-Path (Join-Path $srcApi 'EAMS.Api.dll'))) {
-    throw "No api\ folder beside this script (looked in '$srcApi'). Run this from the RELEASE folder — the one containing api\, web\ and vm-deploy.ps1 — not from the repository's scripts\ folder. Build it with scripts\build-release.ps1, copy the release\ folder to this server, and run the copy inside it."
+    throw "No api\ folder beside this script (looked in '$srcApi'). Run this from the RELEASE folder - the one containing api\, web\ and vm-deploy.ps1 - not from the repository's scripts\ folder. Build it with scripts\build-release.ps1, copy the release\ folder to this server, and run the copy inside it."
 }
 if ($doWeb -and -not (Test-Path (Join-Path $srcWeb 'index.html'))) {
     throw "No web\ folder beside this script (looked in '$srcWeb'). Run this from the RELEASE folder produced by scripts\build-release.ps1, not from the repository's scripts\ folder."
 }
 
 # Source and destination must not be the same directory. Staging the release inside the IIS folder
-# makes them the same, and the copy below clears the destination first — so it would delete the very
+# makes them the same, and the copy below clears the destination first - so it would delete the very
 # files it is about to copy, then fail trying to copy app_offline.htm onto itself. Checked on
 # resolved full paths, because 'C:\inetpub\eams\api' and 'C:\inetpub\eams\..\eams\api' are the
 # same directory spelled differently.
@@ -176,7 +176,7 @@ function Resolve-Full {
 }
 
 if ($doApi -and (Resolve-Full $srcApi) -ieq (Resolve-Full $ApiPath)) {
-    throw "The source and the destination are the same directory ($(Resolve-Full $ApiPath)). Stage the release somewhere outside the IIS application folders — C:\deploy\release, for example — and re-run from there."
+    throw "The source and the destination are the same directory ($(Resolve-Full $ApiPath)). Stage the release somewhere outside the IIS application folders - C:\deploy\release, for example - and re-run from there."
 }
 if ($doWeb -and (Resolve-Full $srcWeb) -ieq (Resolve-Full $WebPath)) {
     throw "The source and the destination are the same directory ($(Resolve-Full $WebPath)). Stage the release outside the IIS application folders and re-run from there."
@@ -230,7 +230,7 @@ if ($doApi) {
         Write-Step 'These are re-applied after the copy, so a publish does not discard them.'
     }
     else {
-        Write-Warn 'Nothing to carry forward — treating this as a first deployment.'
+        Write-Warn 'Nothing to carry forward - treating this as a first deployment.'
     }
 }
 
@@ -268,7 +268,7 @@ if ($doApi) {
 <p>The attendance system is being updated and will be back shortly.</p>
 </body>
 '@
-    Write-Ok 'app_offline.htm written — the module shuts the app down and releases the DLLs.'
+    Write-Ok 'app_offline.htm written - the module shuts the app down and releases the DLLs.'
     Start-Sleep -Seconds 3
 }
 
@@ -282,7 +282,7 @@ if ($doApi) {
         Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
 
     Copy-Item -Path (Join-Path $srcApi '*') -Destination $ApiPath -Recurse -Force
-    if (-not (Test-Path (Join-Path $ApiPath 'EAMS.Api.dll'))) { throw 'The copy did not land — EAMS.Api.dll is not in the target.' }
+    if (-not (Test-Path (Join-Path $ApiPath 'EAMS.Api.dll'))) { throw 'The copy did not land - EAMS.Api.dll is not in the target.' }
     Write-Ok 'API files copied.'
 }
 
@@ -292,8 +292,8 @@ if ($doWeb) {
     Get-ChildItem -Path $WebPath -Force | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
     Copy-Item -Path (Join-Path $srcWeb '*') -Destination $WebPath -Recurse -Force
 
-    if (-not (Test-Path (Join-Path $WebPath 'index.html'))) { throw 'The copy did not land — index.html is not in the target.' }
-    if (-not (Test-Path (Join-Path $WebPath 'web.config'))) { Write-Warn 'web.config is missing — deep links will 404 on refresh.' }
+    if (-not (Test-Path (Join-Path $WebPath 'index.html'))) { throw 'The copy did not land - index.html is not in the target.' }
+    if (-not (Test-Path (Join-Path $WebPath 'web.config'))) { Write-Warn 'web.config is missing - deep links will 404 on refresh.' }
     Write-Ok 'SPA files copied.'
 }
 
@@ -334,7 +334,7 @@ if ($doApi) {
     else {
         Write-Step 'Example: Server=.;Database=EAMS;User Id=eams_app;Password=...;TrustServerCertificate=True'
         $entered = Read-Host 'Enter the EamsDb connection string'
-        if (-not $entered) { throw 'A connection string is required — the host will not start without one.' }
+        if (-not $entered) { throw 'A connection string is required - the host will not start without one.' }
         Set-Env $ConnVar $entered
         Write-Ok 'Connection string set.'
     }
@@ -344,10 +344,10 @@ if ($doApi) {
     if ($SigningKey) {
         if ($SigningKey.Length -lt 32) { throw 'The supplied signing key is under 32 characters; the host will refuse to start.' }
         Set-Env $JwtVar $SigningKey
-        Write-Warn 'Signing key replaced — every live session is now invalid.'
+        Write-Warn 'Signing key replaced - every live session is now invalid.'
     }
     elseif ($carried.ContainsKey($JwtVar)) {
-        Write-Ok 'Signing key carried forward — existing sessions survive this deploy.'
+        Write-Ok 'Signing key carried forward - existing sessions survive this deploy.'
     }
     else {
         $bytes = New-Object byte[] 64
@@ -417,7 +417,7 @@ if (-not $healthy) {
 # ------------------------------------------------------------------ done
 
 if ($newKey) {
-    Write-Head 'SIGNING KEY — copy it now, it is not printed again'
+    Write-Head 'SIGNING KEY - copy it now, it is not printed again'
     Write-Host ''
     Write-Host "    $newKey"
     Write-Host ''

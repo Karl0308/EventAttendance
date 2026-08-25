@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
     Builds the API and the SPA and stages everything the VM needs into one folder.
 
@@ -59,7 +59,7 @@ $webOut = Join-Path $OutputPath 'web'
 
 try {
 
-Write-Head 'EAMS — build a release'
+Write-Head 'EAMS - build a release'
 
 foreach ($required in @($apiProj, $webAdmin)) {
     if (-not (Test-Path $required)) { throw "Not found: $required. Run this from inside the repository." }
@@ -87,7 +87,7 @@ if (Test-Path $envFile) {
         Write-Warn '.env.production exists but does not match the requested values:'
         ($current -split "`n" | Where-Object { $_ -match '\S' }) | ForEach-Object { Write-Step "  $_" }
         Write-Warn "Expected VITE_API_BASE_URL=$ApiBaseUrl and VITE_BASE_URL=$BaseUrl"
-        Write-Warn 'Leaving it alone — delete it and re-run if the generated values are what you want.'
+        Write-Warn 'Leaving it alone - delete it and re-run if the generated values are what you want.'
     }
 }
 else {
@@ -141,12 +141,12 @@ if (-not (Test-Path (Join-Path $dist 'index.html'))) { throw "index.html is miss
 $indexHtml = Get-Content (Join-Path $dist 'index.html') -Raw
 $expected  = ($BaseUrl.TrimEnd('/')) + '/assets/'
 if ($indexHtml -notmatch [regex]::Escape($expected)) {
-    throw "index.html does not reference '$expected'. .env.production was not picked up — the SPA would serve a blank page. Delete web-admin\.env.production, re-run, and check the values above."
+    throw "index.html does not reference '$expected'. .env.production was not picked up - the SPA would serve a blank page. Delete web-admin\.env.production, re-run, and check the values above."
 }
 Write-Ok "SPA built; assets are under '$expected'."
 
 if (-not (Test-Path (Join-Path $dist 'web.config'))) {
-    Write-Warn 'dist\web.config is missing. Deep links will 404 on refresh — check web-admin\public\web.config.'
+    Write-Warn 'dist\web.config is missing. Deep links will 404 on refresh - check web-admin\public\web.config.'
 }
 
 Copy-Item -Path $dist -Destination $webOut -Recurse -Force
@@ -162,7 +162,7 @@ if (Test-Path $deployScript) {
     Write-Ok 'vm-deploy.ps1 staged.'
 }
 else {
-    Write-Warn "vm-deploy.ps1 not found beside this script — copy it to the VM yourself."
+    Write-Warn "vm-deploy.ps1 not found beside this script - copy it to the VM yourself."
 }
 
 # ------------------------------------------------------------------ done
