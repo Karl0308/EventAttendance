@@ -26,7 +26,11 @@
 
 .PARAMETER AllowedOrigin
     The SPA's origin: scheme and host only, no path and no trailing slash. A browser origin never
-    includes a path, so `https://host/eams` silently matches nothing.
+    includes a path, so `http://host/eams` silently matches nothing.
+
+    Defaults to http, NOT https: the Default Web Site here has no HTTPS binding, and the scheme is
+    part of an origin — a mismatch blocks every response in the browser while the server logs
+    nothing. See the comment in backend/EAMS.Api/web.config.
 
 .PARAMETER Environment
     ASPNETCORE_ENVIRONMENT. Defaults to Production.
@@ -59,7 +63,7 @@
 [CmdletBinding()]
 param(
     [string]$ConnectionString,
-    [string]$AllowedOrigin = 'https://dev.iloilosupermart.com',
+    [string]$AllowedOrigin = 'http://dev.iloilosupermart.com',
     [ValidateSet('Production', 'Staging', 'Development')]
     [string]$Environment = 'Production',
     [string]$SigningKey,
