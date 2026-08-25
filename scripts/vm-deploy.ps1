@@ -120,9 +120,37 @@ if ($doWeb -and -not (Test-Path (Join-Path $srcWeb 'index.html'))) {
     throw "No index.html in '$srcWeb'. Run scripts\build-release.ps1 and copy the release folder here."
 }
 
+# Source and destination must not be the same directory. Staging the release inside the IIS folder
+# makes them the same, and the copy below clears the destination first — so it would delete the very
+# files it is about to copy, then fail trying to copy app_offline.htm onto itself. Checked on
+# resolved full paths, because 'C:\inetpub\eams\api' and 'C:\inetpub\eams\..\eams\api' are the
+# same directory spelled differently.
+function Resolve-Full {
+    param([string]$Path)
+    try { return (Resolve-Path -LiteralPath $Path -ErrorAction Stop).ProviderPath.TrimEnd('\') }
+    catch { return ([System.IO.Path]::GetFullPath($Path)).TrimEnd('\') }
+}
+
+if ($doApi -and (Resolve-Full $srcApi) -ieq (Resolve-Full $ApiPath)) {
+    throw "The source and the destination are the same directory ($(Resolve-Full $ApiPath)). Stage the release somewhere outside the IIS application folders — C:\deploy\release, for example — and re-run from there."
+}
+if ($doWeb -and (Resolve-Full $srcWeb) -ieq (Resolve-Full $WebPath)) {
+    throw "The source and the destination are the same directory ($(Resolve-Full $WebPath)). Stage the release outside the IIS application folders and re-run from there."
+}
+
 Write-Ok "Source: $SourcePath"
 if ($doApi) { Write-Ok "API  -> $ApiPath" }
 if ($doWeb) { Write-Ok "SPA  -> $WebPath" }
+
+# Say how old the build being deployed is. The files existing is not the same as the files being
+# current, and a stale staging folder deploys an old build that looks like a successful deploy.
+if ($doApi) {
+    $built = (Get-Item (Join-Path $srcApi 'EAMS.Api.dll')).LastWriteTime
+    Write-Ok "API build: $built"
+    if ($built -lt (Get-Date).AddDays(-1)) {
+        Write-Warn 'That build is over a day old. Confirm it is the one you meant to deploy.'
+    }
+}
 
 # ------------------------------------------------------------------ read the old configuration
 
