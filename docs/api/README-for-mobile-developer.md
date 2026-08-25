@@ -1,5 +1,8 @@
 # EAMS API — start here (mobile / APK developer)
 
+> **What changed recently:** [`mobile-changes.md`](mobile-changes.md). Read the top entry before
+> a release - it says whether anything needs to change on your side, and today the answer is no.
+
 The backend is ready for a capture app. This page is a **cover sheet**: what to read, in what
 order, and what to ask us for. It restates nothing — every shape and rule lives in one of the
 three files below, and duplicating them here is how a handoff goes stale.
