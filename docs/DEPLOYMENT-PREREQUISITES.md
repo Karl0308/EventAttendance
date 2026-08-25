@@ -330,6 +330,7 @@ broke.
 | A 500 on import, event audience, or student groups, with no detail | The SQL Server compatibility pin (§3) — check the server version first |
 | Signed out on every browser restart | The refresh cookie `Path` does not match what the browser sees. The API logs the resolved path once, the first time a cookie is issued |
 | Login works, everything else 401s | The SPA and API are from different builds — see §6 |
+| **405 on any PUT or DELETE**, no trace id and nothing in the log | IIS WebDAV claims those verbs before the app sees them. `backend/EAMS.Api/web.config` removes `WebDAVModule` and the `WebDAV` handler; if it recurs, that block was lost in a deploy |
 | No credentials work, and nothing is wrong in the logs | No administrator was ever created. Production seeds none — run `create-admin` (§5) |
 
 ---
