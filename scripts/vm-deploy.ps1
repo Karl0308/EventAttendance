@@ -149,10 +149,10 @@ try {
 Write-Head 'EAMS — deploy'
 
 if ($doApi -and -not (Test-Path (Join-Path $srcApi 'EAMS.Api.dll'))) {
-    throw "No EAMS.Api.dll in '$srcApi'. Run scripts\build-release.ps1 and copy the release folder here."
+    throw "No api\ folder beside this script (looked in '$srcApi'). Run this from the RELEASE folder — the one containing api\, web\ and vm-deploy.ps1 — not from the repository's scripts\ folder. Build it with scripts\build-release.ps1, copy the release\ folder to this server, and run the copy inside it."
 }
 if ($doWeb -and -not (Test-Path (Join-Path $srcWeb 'index.html'))) {
-    throw "No index.html in '$srcWeb'. Run scripts\build-release.ps1 and copy the release folder here."
+    throw "No web\ folder beside this script (looked in '$srcWeb'). Run this from the RELEASE folder produced by scripts\build-release.ps1, not from the repository's scripts\ folder."
 }
 
 # Source and destination must not be the same directory. Staging the release inside the IIS folder
