@@ -89,6 +89,14 @@ public class OpenApiDocumentTests : IntegrationTest
         (AuthMe, "get"),
         (AuthLogout, "post"),
         (AuthChangePassword, "post"),
+
+        // The first NON-auth operation gated on a person, and the first enforced read anywhere in
+        // this API (the per-event scan log). Listed by hand for the same reason the rest are: this
+        // array is the published record of what a caller must authenticate for, so an operation
+        // arriving here without somebody writing the line is an operation that started demanding a
+        // credential by accident - which a client discovers as a 401 in production rather than as a
+        // failing test here.
+        ("/api/v1/events/{id}/scans", "get"),
     ];
 
     /// <summary>Fetches and parses the served document. Fails loudly if it is not 200 JSON.</summary>

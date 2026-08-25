@@ -147,6 +147,16 @@ public class AuthorizationSeamTests
             ["AuthController.Logout"] = JwtBearerDefaults.AuthenticationScheme,
             ["AuthController.Me"] = JwtBearerDefaults.AuthenticationScheme,
             ["DevicesController.Heartbeat"] = DeviceKey.AuthenticationScheme,
+
+            // The first enforced READ, and the first gate on a person rather than a device (scan log,
+            // Phase 6 follow-on). Added deliberately: this list is the record of how far §11
+            // enforcement has actually reached, so a route appearing here without the entry being
+            // written by hand is a route that was gated by accident.
+            //
+            // It was chosen because gating it could not break a caller - the endpoint is new, the SPA
+            // section that reads it shipped with it, and no device key can reach it. When the rest of
+            // §11 lands this entry stops being special and the list grows to match.
+            ["EventsController.Scans"] = JwtBearerDefaults.AuthenticationScheme,
             ["EventManifestController.Manifest"] = DeviceKey.AuthenticationScheme,
             ["StudentsController.ByCard"] = DeviceKey.AuthenticationScheme,
         };

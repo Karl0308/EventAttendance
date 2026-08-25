@@ -18,6 +18,8 @@ import type {
   IssuedKeyDevice,
   DeviceWriteRequest,
   EventAudience,
+  EventScan,
+  EventScanLog,
   EventAudienceGroup,
   EventAudienceRequest,
   EventAudienceResult,
@@ -1959,6 +1961,50 @@ async function revokeDeviceKey(id: string): Promise<Device> {
  * `GET /events/{id}/roster`. A panel that read the empty array as "no audience" would say so directly
  * beneath a non-zero `expected`.
  */
+function toScan(row: Row, what: string): EventScan {
+  return {
+    cardUid: reqStr(row, "cardUid", what),
+    scannedAt: reqStr(row, "scannedAt", what),
+    recordedAt: reqStr(row, "recordedAt", what),
+    deviceTapId: optStr(row.deviceTapId),
+    deviceId: optStr(row.deviceId),
+    serverOutcome: reqStr(row, "serverOutcome", what),
+    // Optional on purpose: most rows will not carry one. A device that never sends it is not
+    // misbehaving, and an absent claim must not be read as a claim of absence.
+    localOutcome: optStr(row.localOutcome),
+  };
+}
+
+function toScanLog(row: Row, what: string): EventScanLog {
+  return {
+    eventId: reqStr(row, "eventId", what),
+    totalScans: reqNum(row, "totalScans", what),
+    distinctCards: reqNum(row, "distinctCards", what),
+    // Empty is the ordinary answer and a good one - it means every card presented at this event
+    // resolved to somebody. A missing key would still fail here, which is the distinction to keep:
+    // "the server said none" is not "the server said nothing".
+    scans: asRows(row.scans, `${what}.scans`).map((scan, i) => toScan(scan, `${what}.scans[${i}]`)),
+  };
+}
+
+/**
+ * `GET /events/{id}/scans` - scans at this event that resolved to no student.
+ *
+ * The roster's complement: a scan whose card resolves is an attendance row and is reported there, so
+ * read together the two account for every tap the server accepted. This is the population an
+ * attendance table structurally cannot hold, because a row there needs a student and these scans
+ * have none.
+ *
+ * **The one endpoint in this API that requires being signed in.** Everything else is still open under
+ * ADR-001 D-6. A 401 here therefore means the session expired rather than that the app is
+ * misconfigured, and it is the only call where that is currently true.
+ */
+async function getEventScans(eventId: string): Promise<EventScanLog | undefined> {
+  const what = "GET /events/{id}/scans";
+  const body = await getJsonOrMissing(what, `/events/${encodeURIComponent(eventId)}/scans`);
+  return body === undefined ? undefined : toScanLog(asRow(body, what), what);
+}
+
 async function getEventAudience(eventId: string): Promise<EventAudience | undefined> {
   const what = "GET /events/{id}/attendees";
   const body = await getJsonOrMissing(what, `/events/${encodeURIComponent(eventId)}/attendees`);
@@ -2741,6 +2787,7 @@ export const api = {
   listAttendance,
   eventSummary,
   getEventAudience,
+  getEventScans,
   attachEventAudience,
   detachEventGroup,
   detachEventStudent,

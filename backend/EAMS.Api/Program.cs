@@ -218,11 +218,28 @@ builder.Services
 // nothing is then not expressible. §11 scopes a device key to `attendance.capture` and nothing else, so
 // this is the whole of what a device may do — and a Phase 6 JWT user carrying the same permission
 // satisfies the same policy, which is what makes the authorization layer principal-agnostic.
-builder.Services.AddAuthorization(options => options.AddPolicy(
-    EamsPermissions.AttendanceCapture,
-    policy => policy
-        .AddAuthenticationSchemes(DeviceKey.AuthenticationScheme)
-        .RequireClaim(EamsClaimTypes.Permission, EamsPermissions.AttendanceCapture)));
+builder.Services.AddAuthorization(options =>
+{
+    options.AddPolicy(
+        EamsPermissions.AttendanceCapture,
+        policy => policy
+            .AddAuthenticationSchemes(DeviceKey.AuthenticationScheme)
+            .RequireClaim(EamsClaimTypes.Permission, EamsPermissions.AttendanceCapture));
+
+    // The first §11 policy that gates a *read*, and the first one bound to a person rather than a
+    // device. Bearer only, deliberately: a device key is scoped to `attendance.capture` and must not
+    // be able to satisfy an operator's permission by accident, which is what a policy naming no
+    // scheme would allow once several schemes are registered.
+    //
+    // It gates exactly one action today - GET /events/{id}/scans - because that endpoint is new,
+    // nothing consumes it yet, and no device-key route can reach it. Enforcing the rest of §11 is a
+    // deliberate later step, not something that should follow from this one existing.
+    options.AddPolicy(
+        EamsPermissions.EventsRead,
+        policy => policy
+            .AddAuthenticationSchemes(JwtBearerDefaults.AuthenticationScheme)
+            .RequireClaim(EamsClaimTypes.Permission, EamsPermissions.EventsRead));
+});
 
 // §14: "rate limiting on /auth and /attendance/tap". Partitioned by device_id — see CaptureRateLimiting
 // for why that forces the limiter to sit *after* authentication, and what the per-instance limitation

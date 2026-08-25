@@ -3010,6 +3010,7 @@
           "Events"
         ],
         "summary": "`GET /events/{id}/scans` - scans at this event that resolved to no student.\r\n            \r\n             \r\n<b>The complement of the roster, and the only place this population appears.</b> A scan whose\r\n             card resolves becomes an attendance row and is reported by `/roster` and the attendance\r\n             list. One that resolves to nobody is a `CardNotFound` rejection - an HTTP response and\r\n             nothing more - so before this report existed, \"nobody scanned\" and \"somebody scanned a card we\r\n             could not place\" were the same absence of evidence. The second is the one worth investigating,\r\n             and it was the one being discarded.\r\n             \r\n`events.read` rather than `attendance.read`: it is read from the event page, beside\r\n             the roster it completes, and a permission split that puts half of one screen behind a second\r\n             grant is a permission split nobody configures correctly.\r\n             ",
+        "description": "<b>The first read in this API that authorization actually enforces, and that is deliberate\r\n             rather than incidental.</b> ADR-001 D-6 left every read open until §11 could be applied to all\r\n             of them at once; this one arrives after the login exists, is consumed by nothing yet, and is\r\n             unreachable by any device key - the mobile surface is five DeviceKey routes and this is not\r\n             among them. So it can be gated without breaking a caller, which makes it the cheapest possible\r\n             place to prove the machinery before the rest of §11 follows.\r\n            \r\n             \r\n<b>Bearer only.</b> A device key is scoped to `attendance.capture` and has no business\r\n             reading a report; binding the policy to a scheme rather than to a claim alone is what stops a\r\n             capture credential satisfying an operator's permission.\r\n             \r\n<b>Tenancy now comes from the token, not the development pin</b> - see ADR-001 D-6 and\r\n             `AuthTenancyReachTests`. It is safe here because the event's existence is checked through\r\n             the ordinary filtered set before any audit row is read, so the scan rows are reached only via\r\n             an event id the caller's tenant already resolved.\r\n             ",
         "parameters": [
           {
             "name": "id",
@@ -3042,6 +3043,46 @@
               }
             }
           },
+          "401": {
+            "description": "No token, or an expired one.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Signed in, but without `events.read`.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
           "404": {
             "description": "No such event in this tenant.",
             "content": {
@@ -3062,7 +3103,12 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "Bearer": []
+          }
+        ]
       }
     },
     "/api/v1/events/{id}/status": {

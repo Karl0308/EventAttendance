@@ -31,6 +31,8 @@ import EditEventDialog from "../components/EditEventDialog";
 import DeleteEventDialog from "../components/DeleteEventDialog";
 import ChangeEventStatusDialog from "../components/ChangeEventStatusDialog";
 import EventAudiencePanel from "../components/EventAudiencePanel";
+import UnresolvedScansPanel from "../components/UnresolvedScansPanel";
+import type { ScanLogRead } from "../components/UnresolvedScansPanel";
 import type { AudienceRead, DetachTarget } from "../components/EventAudiencePanel";
 import AudiencePickerDialog from "../components/AudiencePickerDialog";
 // Rendered only behind `import.meta.env.DEV` below. That flag is a compile-time literal, so the
@@ -280,6 +282,15 @@ export default function EventDetail() {
    * would cost pages of rows to refresh two lines.
    */
   const audience = useApiResource(() => api.getEventAudience(id), [id]);
+
+  /**
+   * The unresolved scans, read separately from the roster and deliberately so.
+   *
+   * It is the one call in this app that requires being signed in - every other read is still open -
+   * so a failure here is its own failure and must not be able to blank the roster beside it. A
+   * combined read would let an expired session hide attendance that loaded perfectly well.
+   */
+  const scans = useApiResource(() => api.getEventScans(id), [id]);
 
   /**
    * Both writes live here rather than inside the dialogs that start them, which is D1a's shape and
@@ -617,6 +628,14 @@ export default function EventDetail() {
    * What the picker must not offer again — read from the audience rather than remembered across the
    * dialog's life, so a section attached in another tab shows as attached here too.
    */
+  /** The scan-log read, mapped into the three states its panel renders. */
+  const scansRead: ScanLogRead =
+    scans.status === "ready"
+      ? { status: "ready", log: scans.data }
+      : scans.status === "error"
+        ? { status: "error", error: scans.error }
+        : { status: "loading" };
+
   const attachedGroupIds = new Set(
     (audience.status === "ready" ? audience.data?.groups ?? [] : []).map(
       (group) => group.studentGroupId,
@@ -798,6 +817,12 @@ export default function EventDetail() {
                 student: removeStudent,
               }}
             />
+
+            {/* Below the roster and the audience, because it is the remainder of what they describe:
+                these scans have no student, so they cannot be rows in either, and reading them
+                anywhere but directly beneath the attendance they are missing from would make them
+                look like a separate system rather than the same event. */}
+            <UnresolvedScansPanel read={scansRead} onRetry={scans.reload} />
 
             {event.status === EVENT_STATUS.Open && (
               <Card sx={{ mb: 3, bgcolor: "#fff8e1" }}>

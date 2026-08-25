@@ -1,6 +1,8 @@
 using EAMS.Api.Authorization;
 using EAMS.Application.Abstractions;
 using EAMS.Application.Dtos;
+using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.Infrastructure;
 
@@ -160,9 +162,35 @@ public class EventsController : ControllerBase
     /// </summary>
     /// <response code="200">The scans, most recent first, with total and distinct-card counts.</response>
     /// <response code="404">No such event in this tenant.</response>
+    /// <remarks>
+    /// <b>The first read in this API that authorization actually enforces, and that is deliberate
+    /// rather than incidental.</b> ADR-001 D-6 left every read open until §11 could be applied to all
+    /// of them at once; this one arrives after the login exists, is consumed by nothing yet, and is
+    /// unreachable by any device key - the mobile surface is five DeviceKey routes and this is not
+    /// among them. So it can be gated without breaking a caller, which makes it the cheapest possible
+    /// place to prove the machinery before the rest of §11 follows.
+    ///
+    /// <para>
+    /// <b>Bearer only.</b> A device key is scoped to <c>attendance.capture</c> and has no business
+    /// reading a report; binding the policy to a scheme rather than to a claim alone is what stops a
+    /// capture credential satisfying an operator's permission.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>Tenancy now comes from the token, not the development pin</b> - see ADR-001 D-6 and
+    /// <c>AuthTenancyReachTests</c>. It is safe here because the event's existence is checked through
+    /// the ordinary filtered set before any audit row is read, so the scan rows are reached only via
+    /// an event id the caller's tenant already resolved.
+    /// </para>
+    /// </remarks>
+    /// <response code="401">No token, or an expired one.</response>
+    /// <response code="403">Signed in, but without <c>events.read</c>.</response>
     [HttpGet("{id:guid}/scans")]
+    [Authorize(AuthenticationSchemes = JwtBearerDefaults.AuthenticationScheme, Policy = EamsPermissions.EventsRead)]
     [HasPermissionNotEnforced(EamsPermissions.EventsRead)]
     [ProducesResponseType(typeof(EventScanLogDto), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status401Unauthorized)]
+    [ProducesResponseType(StatusCodes.Status403Forbidden)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     public async Task<ActionResult<EventScanLogDto>> Scans(Guid id, CancellationToken ct)
     {

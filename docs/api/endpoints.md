@@ -102,7 +102,7 @@ This page is a **map, not a contract.** It exists so you can find an endpoint; p
 | `DELETE` | `/events/{id}/attendees/groups/{studentGroupId}` | — | `404` `409` | Detaches one group. |
 | `DELETE` | `/events/{id}/attendees/students/{studentId}` | — | `404` `409` | Detach one individually-attached student from the event's audience. |
 | `GET` | `/events/{id}/roster` | — | `404` | §6.3 `GET /events/{id}/roster` — expected versus actual, and the source of §12's Absentee Report. |
-| `GET` | `/events/{id}/scans` | — | `404` | Scans at this event that resolved to no student. |
+| `GET` | `/events/{id}/scans` | **Bearer** | `401` `403` `404` | Scans at this event that resolved to no student. |
 | `PATCH` | `/events/{id}/status` | — | `400` `404` | §6.3 `PATCH /events/{id}/status` — Open / Close / Cancel. |
 | `GET` | `/events/{id}/summary` | — | `404` | The §6.7/§12 Event Attendance Summary. |
 | `POST` | `/events/audience/resolve` | — | `400` | How many students a filter matches, who they are, and a preview (D-50/D-51). |

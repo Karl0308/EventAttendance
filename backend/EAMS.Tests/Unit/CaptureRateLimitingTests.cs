@@ -76,7 +76,23 @@ public class CaptureRateLimitingTests
     /// exhaust the budget that room's <em>sign-ins</em> need.
     /// </para>
     /// </summary>
-    private static readonly string[] GatedButNotLimited = ["AuthController.Me"];
+    /// <remarks>
+    /// <para>
+    /// <c>EventsController.Scans</c> joins it for the same reason and one more. It is a per-event
+    /// report read from a page an operator already has open, behind a Bearer token and
+    /// <c>events.read</c> - so the flood a limiter would stop needs a valid token belonging to
+    /// somebody already entitled to the data, which is a permissions problem rather than a rate one.
+    /// </para>
+    ///
+    /// <para>
+    /// The additional reason is which budget it would land in. The only capture policy is partitioned
+    /// by device, and this endpoint has no device; the <c>auth-ip</c> policy is partitioned by address
+    /// and exists to make password guessing expensive. Putting a back-office report on that budget
+    /// would let one busy office's reporting exhaust the allowance its own sign-ins need - the
+    /// failure being that people cannot log in because their colleagues were reading a page.
+    /// </para>
+    /// </remarks>
+    private static readonly string[] GatedButNotLimited = ["AuthController.Me", "EventsController.Scans"];
 
     [Fact]
     public void The_rate_limited_actions_are_the_gated_ones_plus_the_live_poll()

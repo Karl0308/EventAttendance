@@ -804,3 +804,48 @@ export interface AuthUser {
   fullName: string;
   permissions: readonly string[];
 }
+
+/**
+ * One scan that reached the server at an event and resolved to no student —
+ * `GET /events/{id}/scans`.
+ *
+ * Every row here is a scan that appears in no other record. A scan whose card resolves becomes an
+ * attendance row and is reported by the roster; this is the remainder, which until recently existed
+ * only as an HTTP response nobody kept.
+ */
+export interface EventScan {
+  /** The normalized serial the device sent. It matched no active card at the moment the tap was decided. */
+  cardUid: string;
+  /**
+   * The device's own `tappedAt` — when the person was standing there, not when the queue arrived.
+   * For an offline flush the two differ by however long the device was away.
+   */
+  scannedAt: string;
+  /** When the server wrote the row. Compare with `scannedAt` to see flush lag. */
+  recordedAt: string;
+  /** The device's idempotency key, where it sent one. */
+  deviceTapId?: string;
+  deviceId?: string;
+  /** What the server decided. `CardNotFound` today. */
+  serverOutcome: string;
+  /**
+   * What the *device* claimed, verbatim and often absent. Never authoritative — its value is in
+   * disagreeing with `serverOutcome`, which points at a stale manifest, a sync that never ran, or a
+   * cloned card.
+   */
+  localOutcome?: string;
+}
+
+/** The unresolved scans for one event, with the counts a reader needs before opening the list. */
+export interface EventScanLog {
+  eventId: string;
+  /** Every unresolved scan, including repeat presentations of one card. */
+  totalScans: number;
+  /**
+   * How many different cards those scans represent. Reported alongside `totalScans` because the gap
+   * between them is itself the finding: forty scans over three cards is somebody retrying a card that
+   * is not working; forty over forty is a roster that has not been given its RFID column.
+   */
+  distinctCards: number;
+  scans: EventScan[];
+}
