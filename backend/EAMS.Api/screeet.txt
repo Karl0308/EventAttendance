@@ -1,0 +1,8 @@
+([xml](Get-Content .\web.config)).SelectNodes('//environmentVariable') | ForEach-Object { "$($_.name) = $($_.value)" }
+
+That prints your connection string and signing key. Then, pasting those in:
+
+$env:ConnectionStrings__EamsDb = "Server=.\SQLEXPRESS;Database=EAMS;Trusted_Connection=True;TrustServerCertificate=True"
+$env:Jwt__SigningKey            = "<paste the key from above>"
+
+dotnet EAMS.Api.dll create-admin --email admin@usa.edu.ph --name "Karl Admin" --role SuperAdmin
