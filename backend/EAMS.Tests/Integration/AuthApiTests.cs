@@ -224,6 +224,52 @@ public class AuthApiTests : IntegrationTest
         Assert.DoesNotContain(AuthCookies.RefreshCookiePathSuffix, header, StringComparison.Ordinal);
     }
 
+    /// <summary>
+    /// Both session cookies must carry an <c>Expires</c>, because they are only ever presented
+    /// together.
+    ///
+    /// <para>
+    /// <b>The regression this pins.</b> <c>eams_rt</c> was given a 14-day <c>Expires</c> and
+    /// <c>eams_csrf</c> was left a session cookie. Individually both are defensible, so neither
+    /// review caught it; together they mean that after a browser restart the refresh cookie is still
+    /// present, its CSRF pair is gone, and <c>POST /auth/refresh</c> answers <c>403
+    /// CsrfTokenInvalid</c>. Every operator re-entered their password every morning, and the refresh
+    /// cookie's fourteen days did nothing.
+    /// </para>
+    ///
+    /// <para>
+    /// Asserted as "both persist", not as "both carry the same instant", on purpose. The two
+    /// <c>Set-Cookie</c> headers are formatted to whole seconds and can straddle a tick, so pinning
+    /// equality would buy a flake in exchange for precision nothing needs. What matters is that
+    /// neither is a session cookie.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public async Task Both_auth_cookies_survive_a_browser_restart_so_the_pair_is_never_half_present()
+    {
+        await ArrangeAsync();
+
+        using var factory = new EamsApiFactory(Sql.ConnectionString);
+        using var client = new AuthApiClient(factory);
+
+        await client.LoginAsync(Email, Password);
+
+        var refresh = client.SetCookieHeader(AuthCookies.RefreshCookieName);
+        var csrf = client.SetCookieHeader(AuthCookies.CsrfCookieName);
+
+        Assert.NotNull(refresh);
+        Assert.NotNull(csrf);
+
+        Assert.Contains("expires=", refresh, StringComparison.OrdinalIgnoreCase);
+
+        Assert.True(
+            csrf.Contains("expires=", StringComparison.OrdinalIgnoreCase),
+            $"The CSRF cookie is a session cookie while the refresh cookie persists: {csrf}. A " +
+            "browser restart then drops one half of the double-submit pair, and the next refresh is " +
+            "refused for a missing pair rather than an ended session — so the refresh cookie's own " +
+            "persistence buys nothing. See AuthCookies.Issue.");
+    }
+
     // --------------------------------------------------------------------------------- refreshing
 
     [Fact]

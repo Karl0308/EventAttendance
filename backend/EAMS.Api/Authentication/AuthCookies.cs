@@ -85,10 +85,20 @@ internal static class AuthCookies
     /// </para>
     ///
     /// <para>
-    /// <b><c>Expires</c> is set on the refresh cookie and deliberately not on the CSRF cookie.</b> The
-    /// refresh cookie must survive a browser restart, or "remember me" is a fiction; the CSRF cookie
-    /// is a session cookie because it is re-minted on every refresh anyway and an expired-but-present
-    /// one would fail a comparison for a reason nobody would guess.
+    /// <b>Both cookies carry the same <c>Expires</c>, and the pair only works if they do.</b> The
+    /// refresh cookie must survive a browser restart or "remember me" is a fiction — but the CSRF
+    /// cookie is the other half of the double-submit pair that <c>/auth/refresh</c> requires. Giving
+    /// only one of them a lifetime is what this originally did, and the result was that after every
+    /// browser restart the refresh arrived carrying its credential and missing its pair, was answered
+    /// <c>403 CsrfTokenInvalid</c>, and the user signed in again — making the refresh cookie's own
+    /// persistence decorative.
+    /// </para>
+    ///
+    /// <para>
+    /// Neither half of that was wrong on its own, which is why it survived review twice: a persistent
+    /// refresh cookie is correct, and a session-scoped CSRF token is a perfectly ordinary choice. The
+    /// defect was the <em>interaction</em>. Two cookies that must be presented together need one
+    /// lifetime, and this is the only place it is decided.
     /// </para>
     /// </summary>
     public static void Issue(HttpContext context, string refreshToken, DateTime refreshExpiresAtUtc)
@@ -96,13 +106,17 @@ internal static class AuthCookies
         var path = RefreshCookiePath(context.Request);
         LogCookiePath(context, path);
 
+        // Computed once and applied to both cookies. Two expressions could drift; one cannot, and the
+        // whole defect this replaced was the two halves disagreeing about how long they live.
+        var expires = new DateTimeOffset(DateTime.SpecifyKind(refreshExpiresAtUtc, DateTimeKind.Utc));
+
         context.Response.Cookies.Append(RefreshCookieName, refreshToken, new CookieOptions
         {
             HttpOnly = true,
             Secure = true,
             SameSite = SameSiteMode.Strict,
             Path = path,
-            Expires = new DateTimeOffset(DateTime.SpecifyKind(refreshExpiresAtUtc, DateTimeKind.Utc)),
+            Expires = expires,
             IsEssential = true,
         });
 
@@ -118,6 +132,12 @@ internal static class AuthCookies
             // to `/eamsapi/api/v1/auth` is not visible to `document.cookie` on a page served from
             // `/eams`. A CSRF cookie the client cannot read is a CSRF check that always fails.
             Path = "/",
+
+            // The same lifetime as the refresh cookie, deliberately. A session cookie here expires on
+            // browser close while `eams_rt` persists, and the next refresh is then refused for a
+            // missing pair rather than an ended session. Rotation still bounds the value of a leaked
+            // token: a fresh CSRF token is minted on every login and every refresh regardless.
+            Expires = expires,
             IsEssential = true,
         });
     }
