@@ -76,6 +76,8 @@ param(
     [string]$ApiPath = 'C:\inetpub\eams\api',
     [string]$WebPath = 'C:\inetpub\eams\web',
     [string]$SourcePath,
+    [string]$ApiVirtualPath = '/eamsapi',
+    [string]$WebVirtualPath = '/eams',
     [string]$BackupPath = 'C:\backup\eams',
     [switch]$ApiOnly,
     [switch]$WebOnly,
@@ -103,6 +105,39 @@ $CorsVar = 'Cors__AllowedOrigins__0'
 $EnvVar  = 'ASPNETCORE_ENVIRONMENT'
 
 if (-not $SourcePath) { $SourcePath = $PSScriptRoot }
+
+# Ask IIS where the applications actually live, rather than trusting a default.
+#
+# A default is a guess, and a wrong guess here does not fail loudly: it deploys into a folder nobody
+# serves, reports every step as succeeding, and leaves the old build running. That happened — the
+# documented layout was not the deployed one, and the only evidence was a route still answering 404
+# long after the deploy had been called a success. IIS knows the answer, so ask it.
+function Resolve-IisPhysicalPath {
+    param([string]$VirtualPath)
+    try {
+        Import-Module WebAdministration -ErrorAction Stop
+        $app = Get-WebApplication -ErrorAction Stop |
+               Where-Object { $_.path -eq $VirtualPath } |
+               Select-Object -First 1
+        if ($app -and $app.PhysicalPath) {
+            return [Environment]::ExpandEnvironmentVariables($app.PhysicalPath).TrimEnd('\')
+        }
+    }
+    catch { }
+    return $null
+}
+
+$apiDetected = $false
+$webDetected = $false
+
+if (-not $PSBoundParameters.ContainsKey('ApiPath')) {
+    $found = Resolve-IisPhysicalPath $ApiVirtualPath
+    if ($found) { $ApiPath = $found; $apiDetected = $true }
+}
+if (-not $PSBoundParameters.ContainsKey('WebPath')) {
+    $found = Resolve-IisPhysicalPath $WebVirtualPath
+    if ($found) { $WebPath = $found; $webDetected = $true }
+}
 $srcApi = Join-Path $SourcePath 'api'
 $srcWeb = Join-Path $SourcePath 'web'
 
@@ -139,8 +174,13 @@ if ($doWeb -and (Resolve-Full $srcWeb) -ieq (Resolve-Full $WebPath)) {
 }
 
 Write-Ok "Source: $SourcePath"
-if ($doApi) { Write-Ok "API  -> $ApiPath" }
-if ($doWeb) { Write-Ok "SPA  -> $WebPath" }
+if ($doApi) { Write-Ok ("API  -> $ApiPath" + $(if ($apiDetected) { "   (from IIS $ApiVirtualPath)" } else { '   (DEFAULT - not confirmed against IIS)' })) }
+if ($doWeb) { Write-Ok ("SPA  -> $WebPath" + $(if ($webDetected) { "   (from IIS $WebVirtualPath)" } else { '   (DEFAULT - not confirmed against IIS)' })) }
+if (($doApi -and -not $apiDetected) -or ($doWeb -and -not $webDetected)) {
+    Write-Warn 'IIS could not be queried, so a path above is a guess. Deploying to the wrong folder'
+    Write-Warn 'succeeds silently and leaves the old build running. Confirm the real paths with:'
+    Write-Warn '  Get-WebApplication | Select-Object path, PhysicalPath'
+}
 
 # Say how old the build being deployed is. The files existing is not the same as the files being
 # current, and a stale staging folder deploys an old build that looks like a successful deploy.
