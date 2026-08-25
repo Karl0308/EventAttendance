@@ -7,6 +7,11 @@
 # only matches the one at the repo root, not a source directory that happens to be named `publish`.
 /publish/
 
+# `scriptsuild-release.ps1` output — the api/ and web/ builds plus the deploy script, staged for
+# copying to the server. Rooted for the same reason as `publish/` above. Around 30 MB, and entirely
+# reproducible, so it has no business in history.
+/release/
+
 # --- Node / React ---
 node_modules/
 dist/
