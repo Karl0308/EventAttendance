@@ -7,16 +7,22 @@
 // how the SPA is bundled cannot alter what the tests run against, and a change here cannot reach the
 // artefact that gets deployed.
 //
-// `environment: "node"` is the default for every file on purpose. Three of the four subjects
-// (`eventStatus`, `eventDraft`, `apiGuidance`) are pure and React-free, so a DOM would be startup
-// cost buying nothing. The one file that renders a hook opts in with a `@vitest-environment` docblock
-// of its own — see `test/useApiMutation.test.ts`.
+// `environment: "node"` is the default for every file on purpose. The pure, React-free subjects
+// (`eventStatus`, `eventDraft`, `apiGuidance`) would pay startup cost for a DOM that buys them
+// nothing. Every file that renders anything — or that reaches `document.cookie`, `sessionStorage` or
+// `fetch` — opts in with a `@vitest-environment happy-dom` docblock of its own; see
+// `test/useApiMutation.test.ts` for the original of that pattern.
 
 import { defineConfig } from "vitest/config";
 
 export default defineConfig({
   test: {
-    include: ["test/**/*.test.ts"],
+    // `.tsx` as well as `.ts`, because two subjects are components now (`PermissionGuard`) and a
+    // component test written in a `.ts` file has to spell its tree out in `createElement` calls —
+    // which is a worse test of a thing whose whole job is what it renders. Vite transforms JSX with
+    // esbuild using `tsconfig.test.json`'s `"jsx": "react-jsx"`; no plugin is involved, which is why
+    // this config still deliberately loads none.
+    include: ["test/**/*.test.ts", "test/**/*.test.tsx"],
     environment: "node",
 
     // Sets the baseline time zone before any test file is imported. It is a setup file rather than

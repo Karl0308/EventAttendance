@@ -8,6 +8,7 @@
 
 import { GROUP_SOURCE_TYPE, GROUP_TYPE_SECTION } from "./types";
 import type {
+  AuthUser,
   Student,
   StudentCardRequest,
   StudentWriteRequest,
@@ -42,9 +43,30 @@ import type {
 // outside `import.meta.env.DEV`, so nothing it names survives a production build.
 import { DEVICE_KEY_SCHEME, deviceKeyStatus, getDeviceKey } from "./deviceKey";
 
-// The URL `dotnet run --project backend/EAMS.Api --urls "http://localhost:5080"` serves. Overridden
-// per-machine by VITE_API_BASE_URL (see `.env.example`) — the capture device's host is DHCP.
-const DEFAULT_BASE_URL = "http://localhost:5080/api/v1";
+// The session this seam signs its requests with. `api.ts` is the only module that reads the access
+// token and the only one that renews it — see `authSession.ts` for why the store is not a hook and
+// why the refresh token is not in it.
+import {
+  accessToken,
+  beginSession,
+  csrfToken,
+  CSRF_HEADER_NAME,
+  endSession,
+} from "./authSession";
+
+/**
+ * **Root-relative, so the SPA and the API are the same origin.** It used to be
+ * `http://localhost:5080/api/v1`, and that has to change now that a session travels in a cookie:
+ * `eams_rt` is `SameSite=Strict` and the browser will not attach it to a request from `:5173` to
+ * `:5080` without the API opting into credentialed CORS — which is a wider hole than the one it
+ * would close. `npm run dev` proxies `/api` to the API host instead (see `vite.config.ts`), so the
+ * cookie is first-party and no CORS policy is involved at all.
+ *
+ * A deployment that serves the SPA from somewhere other than the API's own origin sets
+ * VITE_API_BASE_URL (see `.env.example`) — under IIS the two are sibling applications, so it is
+ * `/eamsapi/api/v1` rather than a host. Vite inlines that at build time.
+ */
+const DEFAULT_BASE_URL = "/api/v1";
 
 const baseUrl = (import.meta.env.VITE_API_BASE_URL ?? DEFAULT_BASE_URL).replace(/\/+$/, "");
 
@@ -188,6 +210,26 @@ function reqStr(row: Row, key: string, what: string): string {
     throw offContract(what, `\`${key}\` should be a string, got ${describeType(value)}`);
   }
   return value;
+}
+
+/**
+ * A required array of strings — `AuthUserDto.permissions` is the only one on this surface.
+ *
+ * An empty array is accepted and is not the same as a missing key: a user whose roles grant nothing
+ * is a real, sign-in-able account that simply sees no gated screen, and refusing it here would fail
+ * their login with a contract error over a permission set the server considers perfectly valid.
+ */
+function reqStrings(row: Row, key: string, what: string): readonly string[] {
+  const value = row[key];
+  if (!Array.isArray(value)) {
+    throw offContract(what, `\`${key}\` should be an array, got ${describeType(value)}`);
+  }
+  return value.map((item, i) => {
+    if (typeof item !== "string") {
+      throw offContract(what, `\`${key}[${i}]\` should be a string, got ${describeType(item)}`);
+    }
+    return item;
+  });
 }
 
 function reqNum(row: Row, key: string, what: string): number {
@@ -369,6 +411,19 @@ const timedOut = (what: string, cause: unknown, shape: ApiRequestShape, budgetMs
 const JSON_MEDIA_TYPE = "application/json";
 
 /**
+ * The scheme a *person's* token uses, as `AuthTokenResponse.tokenType` names it.
+ *
+ * A sibling of `DEVICE_KEY_SCHEME` and never a substitute for it: a kiosk sends
+ * `Authorization: DeviceKey …` and is scoped to `attendance.capture` alone, a person sends
+ * `Authorization: Bearer …`. Two credentials reach this API and they never mix — the tap path below
+ * composes its own header for exactly that reason and is not routed through `send`.
+ */
+const BEARER_SCHEME = "Bearer";
+
+/** The one status that asks "is this session still live?". Everything else is the caller's answer. */
+const HTTP_UNAUTHORIZED = 401;
+
+/**
  * The write half of a request, absent on every read.
  *
  * A discrete argument rather than a spread `RequestInit`: the two headers and the serialisation are
@@ -426,13 +481,25 @@ const wireBodyOf = (write: RequestBody | undefined): WireBody => {
   return { body: JSON.stringify(write.payload), contentType: JSON_MEDIA_TYPE };
 };
 
-async function send(
+/**
+ * One request, signed with the token it is handed, and no renewal logic of its own.
+ *
+ * Split out of `send` so that the retry `send` performs is *this* function called a second time
+ * rather than `send` calling itself: a self-call would carry the whole renewal path with it, and
+ * "one refresh, then one replay" would become a recursion whose depth is decided by how long the
+ * server keeps answering 401. The bound is structural here — `send` calls this at most twice.
+ *
+ * @param bearer the access token to sign with, captured by the caller *before* the request goes out.
+ *   Passed in rather than read here, because the value that matters on the way back is the one this
+ *   attempt actually used — see `send`.
+ */
+async function sendOnce(
   what: string,
   path: string,
-  query?: Record<string, string | undefined>,
-  write?: RequestBody,
-  /** Overridden only where the default is the wrong shape of budget — see `UPLOAD_TIMEOUT_MS`. */
-  timeoutMs: number = REQUEST_TIMEOUT_MS,
+  query: Record<string, string | undefined> | undefined,
+  write: RequestBody | undefined,
+  timeoutMs: number,
+  bearer: string | undefined,
 ) {
   // Derived once, here, from the method — which is what actually decides it. Every `ApiError` this
   // request can produce carries the answer, so no error-rendering surface has to work it out again.
@@ -450,15 +517,26 @@ async function send(
   // here would declare the wrong boundary. `shape` above is deliberately NOT derived this way; see the
   // comment there.
   const { body, contentType } = wireBodyOf(write);
+
+  // Composed here and nowhere else in the SPA. A component that built its own `Authorization` header
+  // would be holding the access token, which is the one value `authSession.ts` keeps out of the React
+  // tree entirely — and it would miss the renewal below, so its request would be the one that fails
+  // fifteen minutes in while every other request quietly renewed.
+  const headers: Record<string, string> = { Accept: JSON_MEDIA_TYPE };
+  if (contentType !== undefined) headers["Content-Type"] = contentType;
+  if (bearer !== undefined) headers.Authorization = `${BEARER_SCHEME} ${bearer}`;
+
   try {
     return await fetch(buildUrl(path, query), {
       method,
-      headers:
-        contentType === undefined
-          ? { Accept: JSON_MEDIA_TYPE }
-          : { Accept: JSON_MEDIA_TYPE, "Content-Type": contentType },
+      headers,
       body,
       signal: AbortSignal.timeout(timeoutMs),
+      // Not `include`. Every route reached through here authenticates with `Authorization: Bearer`,
+      // and the refresh cookie is scoped to `/api/v1/auth`, so there is nothing for the browser to
+      // attach — asking it to attach credentials anyway would only widen what a future same-site
+      // page could ride on. The two routes that *do* need the cookie go through `sendAuth`.
+      credentials: "same-origin",
     });
   } catch (cause) {
     if (isTimeout(cause)) throw timedOut(what, cause, shape, timeoutMs);
@@ -477,6 +555,71 @@ async function send(
       { shape, cause },
     );
   }
+}
+
+/**
+ * A request, and — if the session had just aged out from under it — **one** renewal and **one**
+ * replay.
+ *
+ * ---------------------------------------------------------------------------------------------
+ * WHY THE STAMPEDE IS THE THING THIS GUARDS AGAINST
+ * ---------------------------------------------------------------------------------------------
+ *
+ * The obvious implementation renews on every 401, and it is wrong in a way that only shows up on a
+ * screen that reads more than one thing. `eventDetail()` fires four requests in one `Promise.all`; if
+ * the access token expired a moment earlier, all four come back 401 and all four call
+ * `POST /auth/refresh` with the same cookie. Refresh rotation is **single-use, and a second
+ * presentation of an already-rotated token is read as a replay** — which revokes every live token in
+ * the family (`AuthController.Refresh` says so in its own remarks). So the naive version does not
+ * merely make three redundant calls: three of them are treated as a stolen-token replay and the user
+ * is signed out of every tab, by their own dashboard loading.
+ *
+ * Two things stop that, and both are needed.
+ *
+ * **One in-flight renewal, shared.** `renewSession()` hands every caller the same promise while one
+ * is running, so requests that 401 *concurrently* wait on a single call rather than each making one.
+ *
+ * **A staleness check, for the ones that are not concurrent.** A request that went out with token
+ * `T1`, was answered slowly, and comes back 401 *after* someone else already renewed to `T2` must not
+ * start a second renewal — the first one already fixed it. Comparing the token this attempt actually
+ * used against the token the store holds now is what tells those apart, and it is why `sendOnce`
+ * takes the bearer as an argument instead of reading it itself: read on the way back, the value would
+ * always be the current one and the comparison would be against itself.
+ *
+ * **A 401 on a request that carried no token is not a renewal question.** Nothing signed it, so there
+ * is nothing that could have expired; it is a call made before sign-in and it is returned as it
+ * stands rather than made the reason to spend a rotation.
+ *
+ * The replay is the same `sendOnce` call with the new token, once. If *that* 401s the response is
+ * returned and becomes an ordinary `ApiError` — where `advise()`'s 401 arm now reads it as a dead
+ * session rather than as something worth pressing again.
+ *
+ * **Replaying a write is safe here, and it is the one thing in this function worth checking rather
+ * than assuming.** Everywhere else in this file a re-sent `POST` is how a user ends up with two
+ * events — `ApiRequestShape` exists for exactly that. It is different here because the first attempt
+ * was answered **401**: authentication runs before the action, so the server refused it before
+ * anything could be applied. The replay is the first attempt that the server actually considered.
+ * That reasoning holds for 401 alone, which is why this branch is on that status and not on a range.
+ */
+async function send(
+  what: string,
+  path: string,
+  query?: Record<string, string | undefined>,
+  write?: RequestBody,
+  /** Overridden only where the default is the wrong shape of budget — see `UPLOAD_TIMEOUT_MS`. */
+  timeoutMs: number = REQUEST_TIMEOUT_MS,
+) {
+  const signedWith = accessToken();
+  const answer = await sendOnce(what, path, query, write, timeoutMs, signedWith);
+
+  if (answer.status !== HTTP_UNAUTHORIZED || signedWith === undefined) return answer;
+
+  // Someone else's renewal already replaced the token this attempt used, so this request needs the
+  // new one and not a rotation of its own.
+  const renewed = accessToken() !== signedWith ? true : (await renewSession()) === "renewed";
+  if (!renewed) return answer;
+
+  return sendOnce(what, path, query, write, timeoutMs, accessToken());
 }
 
 async function parseBody(
@@ -599,6 +742,284 @@ async function writeJson<T>(
 async function writeNoContent(what: string, path: string, write: RequestBody): Promise<void> {
   const res = await send(what, path, undefined, write);
   if (!res.ok) throw httpError(what, await readProblem(res), "write");
+}
+
+// ---------------------------------------------------------------------------------------------
+// Sessions — §6.1 / §11, and the only three routes in this file that are not ordinary requests
+// ---------------------------------------------------------------------------------------------
+//
+// `POST /auth/login`, `POST /auth/refresh` and `POST /auth/logout` do not go through `send`, and each
+// of the three differences is load-bearing:
+//
+//   - **`credentials: "include"`.** These are the only routes the refresh cookie is scoped to, so
+//     they are the only ones where the browser has anything to attach. Every other endpoint
+//     authenticates with a header a cross-site page cannot set, which is what confines this API's
+//     CSRF exposure to these two — see `AuthCookies.CsrfTokenMatches`.
+//   - **The `X-CSRF-Token` header**, on refresh and logout. Its value is the readable `eams_csrf`
+//     cookie, re-read on every call because the server re-mints it on every issue.
+//   - **No renewal on a 401.** A 401 from `refresh` *is* the answer; asking `send` to renew it would
+//     be a refresh that refreshes itself.
+//
+// `GET /auth/me` is deliberately not wired. `login` and `refresh` both return the identical
+// `AuthUserDto`, so calling it would be a round trip to re-ask a question the reply in hand already
+// answered — and it would answer it from the same token, so not even more freshly.
+
+const AUTH_LOGIN_PATH = "/auth/login";
+const AUTH_REFRESH_PATH = "/auth/refresh";
+const AUTH_LOGOUT_PATH = "/auth/logout";
+
+const SIGN_IN_WHAT = "Signing in";
+const RENEWAL_WHAT = "Renewing the session";
+const SIGN_OUT_WHAT = "Signing out";
+
+/**
+ * What a renewal settled as. Three arms rather than a boolean, because the middle one is the whole
+ * reason this is not a boolean.
+ *
+ * `renewed` — a new access token is in the store. `ended` — the server refused definitively (401, or
+ * a 403 saying the double-submit pair did not match); the session is over and has been cleared.
+ * `unreachable` — the API did not answer, or failed while answering, or rate-limited the attempt.
+ *
+ * **`unreachable` deliberately does not sign the user out.** A 502 from a proxy or a dropped Wi-Fi
+ * connection is not evidence that a session ended, and treating it as one throws away whatever the
+ * user had typed at the moment the network hiccuped — while offering them a login form they cannot
+ * submit either, because the API is exactly as unreachable for that. The failed request surfaces as
+ * an ordinary `ApiError` instead and the screen says what happened.
+ */
+type Renewal = "renewed" | "ended" | "unreachable";
+
+/** The refusals that mean the session is over: 401 from the token, 403 from the CSRF pair. */
+const HTTP_FORBIDDEN = 403;
+
+/**
+ * The renewal that may be running. **The single most important variable in this file.**
+ *
+ * See `send` for what a stampede of parallel refreshes does to the rotation's replay detection. This
+ * cell is what makes concurrent callers share one call; the token comparison in `send` is what stops
+ * sequential ones from starting a second.
+ */
+let renewalInFlight: Promise<Renewal> | undefined;
+
+/**
+ * Renews the session, or joins the renewal already in progress.
+ *
+ * The cell is cleared in `finally` — before the promise it holds resolves for anyone awaiting it,
+ * which is fine (they hold the promise, not the cell) and is what lets a *later* 401 start a genuinely
+ * new renewal rather than being answered by a stale settled one.
+ */
+function renewSession(): Promise<Renewal> {
+  renewalInFlight ??= runRenewal().finally(() => {
+    renewalInFlight = undefined;
+  });
+  return renewalInFlight;
+}
+
+async function runRenewal(): Promise<Renewal> {
+  let res: Response;
+  try {
+    res = await sendAuth(AUTH_REFRESH_PATH, { csrf: true, bearer: false });
+  } catch (cause) {
+    // Not a swallow: the outcome is returned, the session is deliberately left alone (see `Renewal`),
+    // and the reason is recorded. `debug` rather than `error` — a renewal racing a network blip is
+    // ordinary, and red console entries for ordinary things teach people to scroll past the console.
+    console.debug(`EAMS: ${RENEWAL_WHAT.toLowerCase()} could not reach the API`, cause);
+    return "unreachable";
+  }
+
+  if (res.ok) {
+    try {
+      const issued = issuedSessionFrom(await parseBody(res, RENEWAL_WHAT, "write"), RENEWAL_WHAT);
+      beginSession(issued.accessToken, issued.user);
+      return "renewed";
+    } catch (cause) {
+      // The server rotated the cookie and this build cannot read the token it answered with, so
+      // there is no way to sign another request: the session is over in every sense that matters
+      // here, even though the browser now holds a perfectly good new cookie. `warn`, not `debug` —
+      // unlike a network blip, this is the two sides being on different versions.
+      console.warn(`EAMS: ${AUTH_REFRESH_PATH} answered off-contract`, cause);
+      endSession("expired");
+      return "ended";
+    }
+  }
+
+  if (res.status === HTTP_UNAUTHORIZED || res.status === HTTP_FORBIDDEN) {
+    // 401: no cookie, or one that is expired, unknown, or already used — the API deliberately does
+    // not say which. 403: the double-submit pair did not match, which after a browser restart is what
+    // a surviving `eams_rt` beside a lost session-scoped `eams_csrf` looks like. Both are "this
+    // browser cannot renew", and both are answered by signing in.
+    endSession("expired");
+    return "ended";
+  }
+
+  console.debug(`EAMS: ${AUTH_REFRESH_PATH} answered ${res.status}; the session is left as it was`);
+  return "unreachable";
+}
+
+/**
+ * The three cookie-bearing routes, on their own `fetch` for the reasons the section note gives.
+ *
+ * The `AbortSignal.timeout` is the same budget an ordinary read gets: a sign-in that hangs forever is
+ * the one failure a user cannot act on, and it is worse here than anywhere else because the form has
+ * nothing on screen to fall back to.
+ */
+async function sendAuth(
+  path: string,
+  options: { readonly payload?: unknown; readonly csrf: boolean; readonly bearer: boolean },
+): Promise<Response> {
+  const headers: Record<string, string> = { Accept: JSON_MEDIA_TYPE };
+  if (options.payload !== undefined) headers["Content-Type"] = JSON_MEDIA_TYPE;
+
+  if (options.csrf) {
+    const token = csrfToken();
+    // Sent when there is one and simply omitted when there is not, rather than refused here. A
+    // missing cookie and a mismatched one are the same condition to the server (`403
+    // CsrfTokenInvalid`), and inventing a *second*, client-side way for the same thing to fail would
+    // mean one condition reaching the user as two different sentences depending on which side noticed
+    // — the exact split `AuthCookies.ClearRefreshToken` refuses to create on the server.
+    if (token !== undefined) headers[CSRF_HEADER_NAME] = token;
+  }
+
+  if (options.bearer) {
+    const token = accessToken();
+    if (token !== undefined) headers.Authorization = `${BEARER_SCHEME} ${token}`;
+  }
+
+  return fetch(buildUrl(path), {
+    method: "POST",
+    headers,
+    body: options.payload === undefined ? undefined : JSON.stringify(options.payload),
+    signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+    credentials: "include",
+  });
+}
+
+/** The access token and the person it speaks for, as `login` and `refresh` both answer. */
+interface IssuedSession {
+  readonly accessToken: string;
+  readonly user: AuthUser;
+}
+
+/**
+ * `AuthTokenResponse`, narrowed at the boundary like every other reply.
+ *
+ * `tokenType` is checked rather than ignored, and it is the one field here worth being fussy about:
+ * the DTO says it exists precisely so a client composes its header from the response instead of from
+ * a hard-coded string it will get wrong once. Checking it means a server that ever answered a
+ * different scheme fails here, loudly, instead of every subsequent request being refused for a reason
+ * that names nothing.
+ *
+ * `expiresAt` is deliberately **not** read. The DTO suggests refreshing ahead of it because "a 401
+ * mid-navigation is a lost page" — and with the replay in `send`, it is not: the request that meets
+ * an expired token is renewed and re-sent without the caller ever seeing it. A timer would add a
+ * second renewal path, firing in background tabs nobody is looking at, to solve a problem the
+ * reactive path already solves losslessly.
+ */
+function issuedSessionFrom(body: unknown, what: string): IssuedSession {
+  const row = asRow(body, what);
+
+  const scheme = reqStr(row, "tokenType", what);
+  if (scheme !== BEARER_SCHEME) {
+    throw offContract(what, `\`tokenType\` should be "${BEARER_SCHEME}", got "${scheme}"`);
+  }
+
+  return {
+    accessToken: reqStr(row, "accessToken", what),
+    user: authUserFrom(asRow(row.user, `${what}.user`), `${what}.user`),
+  };
+}
+
+const authUserFrom = (row: Row, what: string): AuthUser => ({
+  id: reqStr(row, "id", what),
+  schoolId: reqStr(row, "schoolId", what),
+  email: reqStr(row, "email", what),
+  fullName: reqStr(row, "fullName", what),
+  permissions: reqStrings(row, "permissions", what),
+});
+
+/**
+ * `POST /auth/login`. On success the session is live before this resolves; on failure it throws an
+ * `ApiError` carrying the server's own sentence and its `traceId`.
+ *
+ * **Every failure is one 401 with `code: InvalidCredentials`** — unknown address, wrong password and
+ * deactivated account alike, deliberately, so that the answer is not an account-enumeration oracle.
+ * There is nothing finer for a screen to branch on and it must not invent one. A 429 is the other
+ * refusal a form will meet, and it is the rate limiter rather than the credential.
+ *
+ * The password is passed straight through and is never stored, logged, or retried with.
+ */
+async function signIn(email: string, password: string): Promise<AuthUser> {
+  let res: Response;
+  try {
+    res = await sendAuth(AUTH_LOGIN_PATH, {
+      payload: { email, password },
+      csrf: false,
+      bearer: false,
+    });
+  } catch (cause) {
+    if (isTimeout(cause)) throw timedOut(SIGN_IN_WHAT, cause, "write", REQUEST_TIMEOUT_MS);
+    throw new ApiError(
+      "network",
+      0,
+      `Cannot reach the EAMS API at ${baseUrl} — ${SIGN_IN_WHAT.toLowerCase()} was not sent.`,
+      { shape: "write", cause },
+    );
+  }
+
+  if (!res.ok) throw httpError(SIGN_IN_WHAT, await readProblem(res), "write");
+
+  const issued = issuedSessionFrom(await parseBody(res, SIGN_IN_WHAT, "write"), SIGN_IN_WHAT);
+  beginSession(issued.accessToken, issued.user);
+  return issued.user;
+}
+
+/**
+ * The silent renewal a page load starts — **the intended startup path, not an error**.
+ *
+ * The access token lives in memory only, so a reload always begins with none; whether the browser
+ * still holds a renewable session is a question only this call can answer, and a UI that skipped it
+ * would sign a signed-in user out every time they pressed F5.
+ *
+ * It is the same single-flight call `send` uses, which is what stops a reload whose first screen
+ * fires four reads from racing its own startup refresh.
+ *
+ * **It resolves the `unknown` state in every case, including the one `renewSession` deliberately
+ * leaves alone.** A renewal that could not reach the API does not sign a *signed-in* user out — but
+ * at startup there is nobody to keep signed in, and leaving the store on `unknown` would hold the app
+ * on its loading screen for as long as the API stays down, with nothing on screen saying why.
+ * `never` rather than `expired`, because "we could not find out" must not be shown to a first-time
+ * visitor as "you were signed out".
+ */
+async function restoreSession(): Promise<void> {
+  if ((await renewSession()) === "unreachable") endSession("never");
+}
+
+/**
+ * `POST /auth/logout`, then the local session, in that order — and the local session goes either way.
+ *
+ * **This session only.** Signing out on a laptop does not sign the user out on their phone; the
+ * operation that ends every session is `POST /auth/change-password`.
+ *
+ * A failure is reported to the console and does not stop the local half. Refusing to clear would
+ * leave someone who pressed Sign out looking at a signed-in interface, which is worse than the thing
+ * being hedged against; and the honest statement of what a failed logout leaves behind is that the
+ * refresh cookie may still be live until it expires, which is a fact no amount of client-side
+ * insistence changes. `warn` rather than `debug`: unlike a renewal racing a blip, a logout the server
+ * did not honour is not ordinary.
+ */
+async function signOut(): Promise<void> {
+  try {
+    const res = await sendAuth(AUTH_LOGOUT_PATH, { csrf: true, bearer: true });
+    if (!res.ok) {
+      console.warn(
+        `EAMS: ${AUTH_LOGOUT_PATH} answered ${res.status}. This browser is signed out, but the ` +
+          "session may not have been revoked on the server until it expires.",
+      );
+    }
+  } catch (cause) {
+    console.warn(`EAMS: ${SIGN_OUT_WHAT.toLowerCase()} did not reach the API`, cause);
+  } finally {
+    endSession("signedOut");
+  }
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -2300,6 +2721,9 @@ async function eventDetail(eventId: string): Promise<EventDetailData> {
 }
 
 export const api = {
+  signIn,
+  restoreSession,
+  signOut,
   listStudents,
   countStudents,
   getStudent,

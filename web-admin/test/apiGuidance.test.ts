@@ -31,6 +31,8 @@ import type { Retryable, ServerEffect } from "../src/apiGuidance";
 // ---------------------------------------------------------------------------------------------
 
 const HTTP_BAD_REQUEST = 400;
+const HTTP_UNAUTHORIZED = 401;
+const HTTP_FORBIDDEN = 403;
 const HTTP_CONFLICT = 409;
 const HTTP_TOO_MANY_REQUESTS = 429;
 const HTTP_SERVER_ERROR = 500;
@@ -63,6 +65,25 @@ const MATRIX: readonly Case[] = [
   // pressing the button again is as safe as it is on a read.
   { label: "400 validation refusal", kind: "http", status: HTTP_BAD_REQUEST, onWrite: SAFE, onRead: SAFE },
   { label: "409 conflict", kind: "http", status: HTTP_CONFLICT, onWrite: SAFE, onRead: SAFE },
+
+  // The server decided as well — and decided that this caller may not. Retrying provably cannot
+  // help, because nothing about the request changes between the two attempts: a 401 here has already
+  // survived one refresh-and-replay inside `send`, and a 403 is the same account either way. They sit
+  // in `HOPELESS` rather than `SAFE`, which is where they used to sit and what this change is about.
+  {
+    label: "401 dead session",
+    kind: "http",
+    status: HTTP_UNAUTHORIZED,
+    onWrite: HOPELESS,
+    onRead: HOPELESS,
+  },
+  {
+    label: "403 permission the account lacks",
+    kind: "http",
+    status: HTTP_FORBIDDEN,
+    onWrite: HOPELESS,
+    onRead: HOPELESS,
+  },
 
   // The request went out and the answer does not prove the server did nothing.
   {
@@ -140,6 +161,71 @@ describe("across the whole matrix", () => {
       if (guidance.serverEffect === "unknown") {
         expect(guidance.message).toContain("Check the list before sending it again.");
       }
+    }
+  });
+});
+
+describe("a session that ended, and a permission an account does not have", () => {
+  // ---------------------------------------------------------------------------------------------
+  // THE NEGATIVE CONTROL FOR THIS ARM
+  // ---------------------------------------------------------------------------------------------
+  //
+  // Before the 401/403 branch existed, both statuses fell into the "every other 4xx" arm, which
+  // answers `retryable: "safe"` and told the user, verbatim: *"Retry if the reason may have cleared
+  // since — you have signed in again, or a conflicting edit has finished."*
+  //
+  // The assertions below are that sentence, inverted. They are the pre-change expectations written as
+  // refusals, so if the arm is ever deleted or folded back in, these fail by name rather than the
+  // matrix failing with a number. Reverting `advise`'s new branch was run against them and both fail:
+  // `expected "safe" to be false`.
+  //
+  // The reason it is now wrong is not stylistic. `send` renews the session once and replays the
+  // request, so **a 401 that reaches `advise` has already survived a refresh** — it is a session the
+  // server declined to renew, and inviting the user to press the button again is inviting them to
+  // watch it fail identically. The advice they need is the one thing that sentence never said.
+
+  const refusal = (status: number, shape: ApiRequestShape) =>
+    new ApiError("http", status, "refused", { shape });
+
+  it("no longer calls a dead session safe to retry", () => {
+    for (const shape of ["read", "write"] as const) {
+      expect(advise(refusal(HTTP_UNAUTHORIZED, shape)).retryable).not.toBe("safe");
+      expect(isResendUnsafe(refusal(HTTP_UNAUTHORIZED, shape))).toBe(true);
+    }
+  });
+
+  it("no longer offers 'you have signed in again' as a reason a refusal may have cleared", () => {
+    // The phrase is gone from the general 4xx arm too: 401 and 403 no longer reach it, so the only
+    // thing left there that clears on its own is somebody else's edit finishing.
+    for (const status of [HTTP_UNAUTHORIZED, HTTP_FORBIDDEN, HTTP_BAD_REQUEST, HTTP_CONFLICT]) {
+      for (const shape of ["read", "write"] as const) {
+        expect(advise(refusal(status, shape)).message).not.toContain("signed in again");
+      }
+    }
+  });
+
+  it("sends a dead session to sign in, and says so on a read and a write alike", () => {
+    for (const shape of ["read", "write"] as const) {
+      expect(advise(refusal(HTTP_UNAUTHORIZED, shape)).message).toContain("Sign in again");
+    }
+  });
+
+  it("does NOT send a 403 to sign in, because it is the same account either way", () => {
+    // The half most easily got wrong. A 403 is authenticated and unauthorised; "sign in again" is the
+    // advice most likely to waste the reader's afternoon, and it is what a single shared 401/403
+    // message would have told them.
+    const guidance = advise(refusal(HTTP_FORBIDDEN, "read"));
+    expect(guidance.message).toContain("not permitted");
+    expect(guidance.message).toContain("administrator");
+    expect(guidance.message).not.toContain("Sign in again");
+  });
+
+  it("reports both as having changed nothing, on a write too", () => {
+    // A real claim, not a default: authorization runs before the action, so a refused write is one
+    // the server decided against rather than one it may have half-applied. It is what keeps a form's
+    // heading from saying the outcome is unknown when it is not.
+    for (const status of [HTTP_UNAUTHORIZED, HTTP_FORBIDDEN]) {
+      expect(advise(refusal(status, "write")).serverEffect).toBe("none");
     }
   });
 });

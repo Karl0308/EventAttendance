@@ -13,6 +13,8 @@ import { ApiError } from "./api";
 
 // Statuses this UI actually reacts to. Named so the branch reads as a decision rather than as
 // arithmetic, and so nobody has to remember which side of 500 the comparison is on.
+const HTTP_UNAUTHORIZED = 401;
+const HTTP_FORBIDDEN = 403;
 const HTTP_TOO_MANY_REQUESTS = 429;
 const HTTP_SERVER_ERROR_FLOOR = 500;
 
@@ -156,6 +158,40 @@ export function advise(error: unknown): Guidance {
               serverEffect: "none",
             };
       }
+      if (error.status === HTTP_UNAUTHORIZED || error.status === HTTP_FORBIDDEN) {
+        // ---------------------------------------------------------------------------------------
+        // The arm that did not exist before there was a session to lose
+        // ---------------------------------------------------------------------------------------
+        //
+        // These two used to fall into the "every other 4xx" arm below, which answers
+        // `retryable: "safe"` and says *"Retry if the reason may have cleared since — you have signed
+        // in again, or a conflicting edit has finished."* That sentence was written for a build with
+        // no login in it, where "you have signed in again" meant something a user could go and do in
+        // another window. It is now wrong in both halves.
+        //
+        // **A 401 that reaches here has already survived a refresh.** `send` renews the session once
+        // and replays the request; a 401 escaping that is a session the server refused to renew, so
+        // "retry, it is safe" invites the user to press a button that provably cannot work — and the
+        // one thing that *would* work, signing in again, is what the message never says.
+        //
+        // **A 403 is not a login problem at all**, and telling a user to sign in again is the advice
+        // most likely to waste their afternoon. The account is authenticated and lacks the
+        // permission; it is the same account after signing in again. So the two share a verdict and
+        // not a sentence.
+        //
+        // `serverEffect: "none"` on a write as well as a read, and that is a real claim rather than a
+        // default: authorization runs before the action, so a refused request is one the server
+        // decided against rather than one it may have half-applied. `retryable: false` is what stops
+        // a form offering the resend anyway.
+        return {
+          message:
+            error.status === HTTP_UNAUTHORIZED
+              ? "Your session has ended, so the API refused this and did not apply it. Sign in again, then try once more."
+              : "Your account is not permitted to do this, so the API refused it and did not apply it. Ask an EAMS administrator for the permission — signing in again as the same user will not change it.",
+          retryable: false,
+          serverEffect: "none",
+        };
+      }
       if (error.status === HTTP_TOO_MANY_REQUESTS) {
         // A 429 usually refuses before anything is handled — but "usually" is not something this
         // client can check. A gateway that rate-limits in front of an origin which already handled
@@ -175,10 +211,16 @@ export function advise(error: unknown): Guidance {
       // Every other 4xx is the server having *decided*: a validation refusal or a conflict, reached
       // before anything was written. That is the one class of write failure where pressing the button
       // again is as safe as it is on a read.
+      //
+      // Both sentences used to offer "you have signed in again" as a reason the refusal might have
+      // cleared. It is gone from both: 401 and 403 no longer reach this arm, so the only thing left
+      // here that clears on its own is somebody else's edit finishing — and an instruction naming an
+      // action that cannot apply to any status still routed here is an instruction that sends people
+      // to do something irrelevant.
       return {
         message: write
-          ? "The API refused the request and did not apply it. Correct what it says above, or send it again if the reason may have cleared since — a conflicting edit has finished, or you have signed in again."
-          : "The API refused the request. Retry if the reason may have cleared since — you have signed in again, or a conflicting edit has finished.",
+          ? "The API refused the request and did not apply it. Correct what it says above, or send it again if the reason may have cleared since — a conflicting edit has finished, say."
+          : "The API refused the request. Retry if the reason may have cleared since — a conflicting edit has finished, say.",
         retryable: "safe",
         serverEffect: "none",
       };

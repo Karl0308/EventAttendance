@@ -779,3 +779,28 @@ export interface EventSummary {
   /** Share of the *invited* who turned up, as a percentage to one decimal place (0–100). */
   attendanceRate: number;
 }
+
+/**
+ * The signed-in person, exactly as `AuthUserDto` describes them — the body of `GET /auth/me` and the
+ * `user` member of every `POST /auth/login` and `POST /auth/refresh` reply.
+ *
+ * **`permissions` is what the presented token carries, not a fresh read of the database**, and the
+ * DTO's own remarks are worth restating here because the difference is invisible until the day it
+ * looks like a bug: a grant an administrator revoked one minute ago is still honoured by a token
+ * minted two minutes ago, and this list still names it. That is deliberate. It makes the UI's model
+ * of what it may do exactly the server's model for exactly as long as the token lives — the
+ * alternative shows a button the server would refuse. A change lands at the next refresh, which is at
+ * most one access-token lifetime away.
+ *
+ * `readonly string[]` rather than a union of the known codes. The server is authoritative and may
+ * grant one this build has never heard of; a union would make that a type error at the boundary and
+ * fail a sign-in over a permission the UI does not even use. The codes this SPA *asks about* are
+ * named in `permissions.ts`.
+ */
+export interface AuthUser {
+  id: string;
+  schoolId: string;
+  email: string;
+  fullName: string;
+  permissions: readonly string[];
+}

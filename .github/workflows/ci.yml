@@ -11,11 +11,13 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
-# Allow the deploy job to publish to GitHub Pages.
+# Checks only. The GitHub Pages deployment this workflow used to run was removed with the SPA's
+# login screen (Phase 6c): the admin app's home is IIS, same-origin with the API, and a public Pages
+# URL serving an authenticated login form pointed at a `localhost` API is not something anyone wants
+# indexed. `pages: write` and `id-token: write` went with it — a token scope nothing needs is a token
+# scope worth not minting.
 permissions:
   contents: read
-  pages: write
-  id-token: write
 
 jobs:
   backend:
@@ -75,6 +77,13 @@ jobs:
       - name: Lint
         run: npm run lint
 
+      # `vitest run` — non-watch, and it exits non-zero on a failure, so nothing extra is needed to
+      # make it a gate. It runs BEFORE the build on purpose: a type error and a broken assertion are
+      # both worth knowing about, and the suite is the faster of the two to answer. Until this step
+      # existed the tests in `web-admin/test/` ran for nobody but whoever remembered locally.
+      - name: Test
+        run: npm run test
+
       - name: Build
         run: npm run build
 
@@ -90,44 +99,3 @@ jobs:
       - name: Check API endpoint index is current
         run: node ../scripts/generate-endpoint-index.mjs
 
-  # Deploy the built web-admin SPA to GitHub Pages on push to main.
-  deploy-pages:
-    name: Deploy Web Admin to Pages
-    needs: web-admin
-    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
-    runs-on: ubuntu-latest
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
-    defaults:
-      run:
-        working-directory: web-admin
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Setup Node
-        uses: actions/setup-node@v4
-        with:
-          node-version: "22"
-          cache: npm
-          cache-dependency-path: web-admin/package-lock.json
-
-      - name: Install
-        run: npm ci
-
-      - name: Build
-        run: npm run build
-
-      # SPA fallback: GitHub Pages has no server rewrite, so deep links/refreshes
-      # would 404. Serving index.html as 404.html lets the client router take over.
-      - name: Add SPA 404 fallback
-        run: cp dist/index.html dist/404.html
-
-      - name: Upload Pages artifact
-        uses: actions/upload-pages-artifact@v3
-        with:
-          path: web-admin/dist
-
-      - name: Deploy to GitHub Pages
-        id: deployment
-        uses: actions/deploy-pages@v4
