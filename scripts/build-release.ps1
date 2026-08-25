@@ -82,6 +82,12 @@ if (Test-Path $envFile) {
     if ($current -match [regex]::Escape("VITE_API_BASE_URL=$ApiBaseUrl") -and
         $current -match [regex]::Escape("VITE_BASE_URL=$BaseUrl")) {
         Write-Ok '.env.production already has the expected values.'
+        $firstBytes = [System.IO.File]::ReadAllBytes($envFile) | Select-Object -First 3
+        if ($firstBytes.Count -ge 3 -and $firstBytes[0] -eq 0xEF -and $firstBytes[1] -eq 0xBB -and $firstBytes[2] -eq 0xBF) {
+            Write-Warn 'It starts with a byte-order mark, so Vite will ignore the FIRST line. Rewriting without one.'
+            [System.IO.File]::WriteAllText($envFile, $wanted, (New-Object System.Text.UTF8Encoding($false)))
+            Write-Ok 'Rewritten without a BOM.'
+        }
     }
     else {
         Write-Warn '.env.production exists but does not match the requested values:'
@@ -91,7 +97,12 @@ if (Test-Path $envFile) {
     }
 }
 else {
-    Set-Content -Path $envFile -Value $wanted -Encoding utf8 -NoNewline
+    # WriteAllText with an explicit BOM-less encoding, NOT Set-Content -Encoding utf8: on Windows
+    # PowerShell 5.1 that switch writes a byte-order mark, and Vite then reads the first key as
+    # "<BOM>VITE_API_BASE_URL", which does not start with VITE_ and is silently ignored. The second
+    # line still parses, so the build half-works - correct asset paths, default API URL - and the
+    # only symptom is every API call 404ing against a prefix nothing is mounted on.
+    [System.IO.File]::WriteAllText($envFile, $wanted, (New-Object System.Text.UTF8Encoding($false)))
     Write-Ok "Created .env.production (git-ignored, so it does not arrive with a clone)."
     Write-Step "  VITE_API_BASE_URL=$ApiBaseUrl"
     Write-Step "  VITE_BASE_URL=$BaseUrl"
@@ -144,6 +155,17 @@ if ($indexHtml -notmatch [regex]::Escape($expected)) {
     throw "index.html does not reference '$expected'. .env.production was not picked up - the SPA would serve a blank page. Delete web-admin\.env.production, re-run, and check the values above."
 }
 Write-Ok "SPA built; assets are under '$expected'."
+
+# Checking index.html only proves VITE_BASE_URL was read. VITE_API_BASE_URL is inlined into the
+# JavaScript instead, and it failed independently once: the asset path was right, the API base was
+# the default, and every request went to a prefix with no application on it. Check the bundle.
+$bundle = Get-ChildItem (Join-Path $dist 'assets') -Filter '*.js' | Sort-Object Length -Descending | Select-Object -First 1
+if (-not $bundle) { throw "No JavaScript emitted into $distssets." }
+$bundleText = Get-Content $bundle.FullName -Raw
+if ($bundleText -notmatch [regex]::Escape($ApiBaseUrl)) {
+    throw "The bundle does not contain '$ApiBaseUrl'. VITE_API_BASE_URL was not applied, so every API call would go to the default /api/v1 and 404. Check web-admin\.env.production - a byte-order mark on the first line makes Vite ignore it."
+}
+Write-Ok "API base URL '$ApiBaseUrl' is baked into $($bundle.Name)."
 
 $distWebConfig = Join-Path $dist 'web.config'
 if (-not (Test-Path $distWebConfig)) {
