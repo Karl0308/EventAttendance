@@ -23,6 +23,7 @@ Nothing here is optional, and the first four produce a dead site rather than a d
 | 5 | SQL Server **2016 or newer** (see §3) | Works on 2012 only because of a compatibility pin |
 | 6 | The SPA deployed in the same window as the API | Login breaks in ways neither side explains |
 | 7 | A database the app login can create tables in | Migrations fail on startup |
+| 8 | An administrator account, created by you (§5) | **Nobody can sign in.** There is no default login and no bootstrap endpoint |
 
 ---
 
@@ -246,7 +247,20 @@ neither side's error messages explain.
    start before the settings exist wastes a diagnostic cycle.
 2. Publish and deploy the API.
 3. Publish and deploy the SPA.
-4. Verify (§7).
+4. **Create the administrator account (§5).** Nothing creates one for you on a Production host, and
+   there is no bootstrap endpoint and no default login — a deployment that skips this step is a
+   deployment nobody can sign in to. From the published API directory:
+
+   ```powershell
+   $env:ConnectionStrings__EamsDb = "<the same value as on the app pool>"
+   $env:Jwt__SigningKey            = "<the same value as on the app pool>"
+
+   dotnet EAMS.Api.dll create-admin --email admin@usa.edu.ph --name "Full Name" --role SuperAdmin
+   ```
+
+   Both `$env:` lines are required and are the step people miss — see §5 for why a command that
+   never mints a token still refuses to run without a signing key.
+5. Verify (§7), including signing in with the account you just made.
 
 ### Migrations run on startup
 
@@ -288,6 +302,7 @@ broke.
 | A 500 on import, event audience, or student groups, with no detail | The SQL Server compatibility pin (§3) — check the server version first |
 | Signed out on every browser restart | The refresh cookie `Path` does not match what the browser sees. The API logs the resolved path once, the first time a cookie is issued |
 | Login works, everything else 401s | The SPA and API are from different builds — see §6 |
+| No credentials work, and nothing is wrong in the logs | No administrator was ever created. Production seeds none — run `create-admin` (§5) |
 
 ---
 
