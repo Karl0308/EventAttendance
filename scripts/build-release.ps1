@@ -145,8 +145,31 @@ if ($indexHtml -notmatch [regex]::Escape($expected)) {
 }
 Write-Ok "SPA built; assets are under '$expected'."
 
-if (-not (Test-Path (Join-Path $dist 'web.config'))) {
+$distWebConfig = Join-Path $dist 'web.config'
+if (-not (Test-Path $distWebConfig)) {
     Write-Warn 'dist\web.config is missing. Deep links will 404 on refresh - check web-admin\public\web.config.'
+}
+else {
+    # Keep the deep-link fallback pointed at the same prefix the bundle was built for.
+    #
+    # The 404 rule names a site-relative URL, so it has to agree with the IIS virtual path, which is
+    # what VITE_BASE_URL already describes. Written by hand these two drift apart silently: the app
+    # loads, and only a refresh or a pasted link shows that the fallback is aimed at the wrong prefix.
+    # Deriving one from the other removes the chance.
+    $wcXml  = [xml](Get-Content $distWebConfig)
+    $errNode = $wcXml.SelectSingleNode('//httpErrors/error[@statusCode="404"]')
+    if ($errNode) {
+        $target = ($BaseUrl.TrimEnd('/')) + '/index.html'
+        if ($errNode.GetAttribute('path') -ne $target -or $errNode.GetAttribute('responseMode') -ne 'ExecuteURL') {
+            $errNode.SetAttribute('path', $target)
+            $errNode.SetAttribute('responseMode', 'ExecuteURL')
+            $wcXml.Save($distWebConfig)
+        }
+        Write-Ok "Deep-link fallback -> $target (ExecuteURL)"
+    }
+    else {
+        Write-Warn 'dist\web.config has no 404 rule. Deep links will break on refresh.'
+    }
 }
 
 Copy-Item -Path $dist -Destination $webOut -Recurse -Force
