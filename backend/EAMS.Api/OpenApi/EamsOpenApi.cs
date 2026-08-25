@@ -1,5 +1,6 @@
 using System.Reflection;
 using EAMS.Application.Dtos;
+using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.OpenApi.Models;
 using DeviceKey = EAMS.Domain.DeviceKey;
 
@@ -42,6 +43,13 @@ public static class EamsOpenApi
     public const string DeviceKeySecuritySchemeId = DeviceKey.AuthenticationScheme;
 
     /// <summary>
+    /// The §11 human credential (Phase 6b). The id is the scheme name the pipeline registers, so the
+    /// operation filter can match an <c>[Authorize(AuthenticationSchemes = …)]</c> straight to a
+    /// security definition without a translation table between the two.
+    /// </summary>
+    public const string BearerSecuritySchemeId = JwtBearerDefaults.AuthenticationScheme;
+
+    /// <summary>
     /// Registers the API explorer and Swashbuckle with everything the published contract needs.
     ///
     /// <para>
@@ -66,6 +74,7 @@ public static class EamsOpenApi
             }
 
             options.AddSecurityDefinition(DeviceKeySecuritySchemeId, DeviceKeyScheme);
+            options.AddSecurityDefinition(BearerSecuritySchemeId, BearerScheme);
 
             // Applies the requirement to exactly the endpoints that carry [Authorize] for this scheme,
             // rather than to every operation via AddSecurityRequirement — see the filter.
@@ -114,9 +123,14 @@ public static class EamsOpenApi
             "- **Errors are RFC 7807** `application/problem+json`. Every body carries a `traceId` to",
             "  quote back and, on the attendance surface, a stable `code` to branch on — never the",
             "  human-readable `title` or `detail`, which are reworded freely.",
-            "- **Capture endpoints require a device key** (`DeviceKey` below). Everything else is open",
-            "  for now: authentication for human users is Phase 6, and until it lands this API must",
-            "  stay on a local or trusted network.",
+            "- **Capture endpoints require a device key** (`DeviceKey` below).",
+            "- **The `/auth` endpoints sign a person in** and issue a `Bearer` access token (`Bearer`",
+            "  below). Three of them require one.",
+            "- **Everything else is still open.** A login existing is not the same as authorization",
+            "  being enforced: the roster, the events, the import pipeline and the dashboard accept",
+            "  an uncredentialed request today. Enforcing permissions across that surface is a later",
+            "  phase (ADR-001 D-6), so **an endpoint with no `Auth` marked is not a public endpoint,",
+            "  it is an unprotected one** — this API must stay on a local or trusted network.",
             "",
             "See the `TapOutcomeCode`, `ManualOutcomeCode` and `LiveOutcomeCode` schemas for the frozen",
             "token tables.",
@@ -178,6 +192,47 @@ public static class EamsOpenApi
     /// <c>OpenApiDocumentTests</c> builds it on every test run.
     /// </para>
     /// </summary>
+    /// <summary>
+    /// §11's access token, as an integrator sees it.
+    ///
+    /// <para>
+    /// <c>SecuritySchemeType.Http</c> with <c>scheme: bearer</c> rather than the <c>ApiKey</c> shape
+    /// the device key uses, because this one <em>is</em> RFC 6750 and a generated client should
+    /// compose the header from the standard rather than from a string in a description.
+    /// </para>
+    /// </summary>
+    private static OpenApiSecurityScheme BearerScheme => new()
+    {
+        Type = SecuritySchemeType.Http,
+        Scheme = "bearer",
+        BearerFormat = "JWT",
+        In = ParameterLocation.Header,
+        Name = "Authorization",
+        Description = string.Join('\n',
+        [
+            "The human credential. Obtained from `POST /api/v1/auth/login` and sent on every call:",
+            "",
+            "```",
+            "Authorization: Bearer <accessToken>",
+            "```",
+            "",
+            "**Fifteen-minute lifetime.** Hold it in memory — never in `localStorage`, and never in a",
+            "cookie. Renew it with `POST /api/v1/auth/refresh`, which reads the `eams_rt` httpOnly",
+            "cookie the login set; the refresh token is never in a request or response body.",
+            "",
+            "The token carries `sub` (`user:<guid>`), `school_id`, and one `perm` claim per effective",
+            "permission, resolved through the caller's roles at issue. There is deliberately no role",
+            "claim: authorization in this system is permission-based.",
+            "",
+            "`POST /api/v1/auth/refresh` and `POST /api/v1/auth/logout` additionally require the",
+            "`X-CSRF-Token` header, echoing the readable `eams_csrf` cookie. No other endpoint does —",
+            "they authenticate with this header, which a cross-site page cannot set.",
+            "",
+            "Failures: `401 InvalidCredentials` / `SessionMissing` / `SessionExpired`,",
+            "`403 CsrfTokenInvalid`, `429 RateLimited` (honour `Retry-After`).",
+        ]),
+    };
+
     internal static IEnumerable<string> XmlCommentPaths()
     {
         // EAMS.Application by type rather than by name, so a rename is a compile error here too.

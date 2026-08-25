@@ -19,7 +19,16 @@ internal sealed class UserProvisioningService : IUserProvisioningService
     /// composition rule (no "one digit, one symbol") because length is what actually resists an offline
     /// attack on a leaked hash and composition rules mostly produce <c>Password1!</c>.
     /// </summary>
-    private const int MinimumPassword = 12;
+    /// <summary>
+    /// The minimum password length this system will accept, at creation and at change.
+    ///
+    /// <para>
+    /// <c>internal</c> rather than private since Phase 6b: <c>AuthService.ChangePasswordAsync</c>
+    /// holds a new password to the same bar, and two numbers that must agree is one number written
+    /// twice.
+    /// </para>
+    /// </summary>
+    internal const int MinimumPassword = 12;
 
     /// <summary>
     /// The audit <c>Action</c> every provisioned user leaves behind. A constant rather than a literal

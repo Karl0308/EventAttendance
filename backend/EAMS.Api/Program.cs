@@ -2,6 +2,7 @@
 using EAMS.Api;
 using EAMS.Api.Authentication;
 using EAMS.Api.Authorization;
+using EAMS.Api.Controllers;
 using EAMS.Api.Cors;
 using EAMS.Api.Identity;
 using EAMS.Api.MultiTenancy;
@@ -9,7 +10,9 @@ using EAMS.Api.OpenApi;
 using EAMS.Api.RateLimiting;
 using EAMS.Application.Abstractions;
 using EAMS.Infrastructure;
+using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Mvc.Infrastructure;
+using Microsoft.IdentityModel.Tokens;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using DeviceKey = EAMS.Domain.DeviceKey;
 
@@ -75,9 +78,19 @@ builder.Services.AddEamsInfrastructure(builder.Configuration);
 // Deliberately AFTER AddEamsInfrastructure: a host missing both a connection string and a key must
 // report the connection string first, because that is the setting an operator configures first and
 // because HostPipelineTests' connection-string refusal has to keep failing for its own reason. The
-// resolved options are registered but nothing consumes them yet — .AddJwtBearer arrives with the
-// /auth endpoints, and this phase is deliberately invisible from the wire.
-builder.Services.AddSingleton(JwtOptions.Resolve(builder.Configuration));
+// resolved options are consumed by the Bearer scheme below and by TokenIssuer, which read this one
+// instance — so a token this host mints is a token this host accepts by construction rather than by
+// two call sites agreeing on a key.
+var jwt = JwtOptions.Resolve(builder.Configuration);
+builder.Services.AddSingleton(jwt);
+
+// The only thing in this system that signs a token (D-74). Singleton: it is stateless once the
+// credentials are built, and rebuilding an HMAC key per request is pure cost.
+builder.Services.AddSingleton<TokenIssuer>();
+
+// The tight (email, ip) + email anti-guess limiter. Singleton because its partition tables ARE its
+// memory — a scoped instance would mint a fresh, empty limiter per request and refuse nothing.
+builder.Services.AddSingleton<AuthAccountLimiter>();
 
 // ---------------------------------------------------------------------------- device authentication
 //
@@ -91,7 +104,115 @@ builder.Services.AddSingleton(JwtOptions.Resolve(builder.Configuration));
 // development use until §11 lands in full. See AuthorizationStatus, which says so on every start.
 builder.Services
     .AddAuthentication(DeviceKey.AuthenticationScheme)
-    .AddScheme<DeviceKeyOptions, DeviceKeyHandler>(DeviceKey.AuthenticationScheme, _ => { });
+    .AddScheme<DeviceKeyOptions, DeviceKeyHandler>(DeviceKey.AuthenticationScheme, _ => { })
+
+    // ------------------------------------------------------------------------- human authentication
+    //
+    // Phase 6b, and it is ADDITIVE in the literal sense: this line sits beside the device scheme
+    // rather than instead of it, exactly as DeviceKeyHandler's remarks predicted. The device handler
+    // returns NoResult when a request carries no DeviceKey header, so the two never contend, and no
+    // endpoint outside /auth carries [Authorize] for this scheme — every other route behaves exactly
+    // as it did before this line existed. AuthStagedCutoverTests asserts that rather than assuming it.
+    .AddJwtBearer(JwtBearerDefaults.AuthenticationScheme, options =>
+    {
+        // ⚠ THE SHARPEST TRAP IN THIS PHASE. LEAVE THIS FALSE.
+        //
+        // The default is true, and what it does is rewrite well-known short claim names into the
+        // WS-Federation URIs ClaimTypes.* uses — `sub` becomes
+        // `http://schemas.xmlsoap.org/ws/2005/05/identity/claims/nameidentifier`. It does NOT touch
+        // `school_id` or `perm`, because those are not in its map.
+        //
+        // So with the default: every permission policy still passes, ClaimsSchoolContext still
+        // resolves the right tenant, /auth/me still answers — and ClaimsCurrentUser.UserId silently
+        // returns null, because it looks for `sub` and `sub` is gone. Every audited write on the
+        // endpoint Technical Plan §6.4 specifically calls audited would be attributed to nobody, with
+        // a fully green test suite. The failure is invisible in every direction except the one nobody
+        // checks.
+        //
+        // EamsClaimTypes exists to make "both schemes emit the same claim types" checkable; this flag
+        // is what makes it true on the read side. JwtBearerClaimMappingTests fails if it is flipped.
+        options.MapInboundClaims = false;
+
+        options.TokenValidationParameters = new TokenValidationParameters
+        {
+            // `sub` is the identity.
+            //
+            // RoleClaimType is deliberately NOT set, and not set to null either — the setter throws
+            // IDX10103 on null or whitespace, which AuthTokenCompositionTests found before any host
+            // did: the options delegate runs lazily on the first authenticated request, so a null here
+            // would have started fine, served every open endpoint, and thrown on the first sign-in.
+            // The default (the WS-Federation role URI) is exactly right: this system mints no role
+            // claim of any kind, so nothing ever matches it and User.IsInRole is permanently false.
+            // Authorization here is permission-based (EamsPermissions); a role vocabulary that no
+            // policy consults is one a future endpoint would eventually branch on.
+            NameClaimType = EamsClaimTypes.Subject,
+
+            ValidateIssuer = true,
+            ValidIssuer = jwt.Issuer,
+
+            ValidateAudience = true,
+            ValidAudience = jwt.Audience,
+
+            ValidateIssuerSigningKey = true,
+            IssuerSigningKey = TokenIssuer.SigningKey(jwt),
+
+            // Pinned, and this is the one validation setting whose absence is a vulnerability rather
+            // than a laxity. Without it the token's own `alg` header decides how it is verified, which
+            // is the whole of the `alg: none` and RS256-to-HS256 confusion families. One algorithm,
+            // named in one place, shared with the minting side.
+            ValidAlgorithms = [TokenIssuer.Algorithm],
+
+            ValidateLifetime = true,
+
+            // Zero, not the five-minute default. A fifteen-minute access token whose lifetime IS its
+            // revocation window (see JwtOptions.AccessTokenLifetime) must not quietly be a
+            // twenty-minute one — five minutes of slack is a third of the budget.
+            ClockSkew = TimeSpan.Zero,
+        };
+
+        options.Events = new JwtBearerEvents
+        {
+            // The framework default is a bare 401 with no body — the same gap DeviceKeyHandler closed
+            // for the device scheme. §6's header declares RFC 7807 for every error on this API, and a
+            // caller needs one accessor to branch on and one traceId to quote back.
+            OnChallenge = async context =>
+            {
+                context.HandleResponse();
+
+                context.Response.StatusCode = StatusCodes.Status401Unauthorized;
+                context.Response.Headers.Append(
+                    Microsoft.Net.Http.Headers.HeaderNames.WWWAuthenticate,
+                    JwtBearerDefaults.AuthenticationScheme);
+
+                var factory = context.HttpContext.RequestServices
+                    .GetRequiredService<ProblemDetailsFactory>();
+
+                var problem = factory.CreateProblemDetails(
+                    context.HttpContext,
+                    statusCode: StatusCodes.Status401Unauthorized,
+                    title: "Sign-in is required.",
+                    // Deliberately says nothing about WHY a presented token failed. "Expired",
+                    // "wrong signature" and "wrong audience" are three different facts about a key an
+                    // attacker is probing, and the client's action is the same in all three: refresh,
+                    // then sign in.
+                    detail:
+                        "This endpoint requires 'Authorization: Bearer <accessToken>'. Obtain one " +
+                        "from POST /api/v1/auth/login, or renew an expired one with " +
+                        "POST /api/v1/auth/refresh.",
+                    instance: context.Request.Path);
+
+                problem.Extensions["code"] = AuthController.InvalidCredentialsCode;
+
+                await context.HttpContext.RequestServices
+                    .GetRequiredService<IProblemDetailsService>()
+                    .WriteAsync(new ProblemDetailsContext
+                    {
+                        HttpContext = context.HttpContext,
+                        ProblemDetails = problem,
+                    });
+            },
+        };
+    });
 
 // The policy name and the claim value are the same string on purpose: a policy that exists and demands
 // nothing is then not expressible. §11 scopes a device key to `attendance.capture` and nothing else, so
@@ -106,7 +227,7 @@ builder.Services.AddAuthorization(options => options.AddPolicy(
 // §14: "rate limiting on /auth and /attendance/tap". Partitioned by device_id — see CaptureRateLimiting
 // for why that forces the limiter to sit *after* authentication, and what the per-instance limitation
 // means behind several SaaS instances.
-builder.Services.AddCaptureRateLimiter();
+builder.Services.AddCaptureRateLimiter(AuthRateLimiting.AddAuthPolicies);
 
 // Both seams become claims-reading here, replacing the Infrastructure defaults registered above.
 // Scoped, because the answer is now a property of the request rather than of the process.
@@ -118,6 +239,13 @@ builder.Services.AddCaptureRateLimiter();
 builder.Services.AddHttpContextAccessor();
 builder.Services.Replace(ServiceDescriptor.Scoped<ISchoolContext, ClaimsSchoolContext>());
 builder.Services.Replace(ServiceDescriptor.Scoped<IDeviceContext, ClaimsDeviceContext>());
+
+// The third seam, and the last of the family ADR-001 D-6 created (Phase 6b). It changes nothing about
+// any existing endpoint: no route outside /auth accepts a Bearer token, so there is no principal for
+// it to find on any of them and it answers null exactly as UnauthenticatedCurrentUser did. What it
+// buys is that attribution is correct on the day enforcement arrives — a NULL RecordedByUserId cannot
+// be backfilled afterwards, which is why this seam existed before there was anything to put in it.
+builder.Services.Replace(ServiceDescriptor.Scoped<ICurrentUser, ClaimsCurrentUser>());
 
 var app = builder.Build();
 
@@ -162,6 +290,25 @@ else
         LocalDevelopmentCors.PolicyName, string.Join(", ", corsOrigins),
         LocalDevelopmentCors.ConfigurationSection);
 }
+
+// Said out loud on every start, beside the CORS line, because it fails the same way a wrong CORS
+// origin does — silently, in the browser, with nothing in any server log.
+//
+// The refresh cookie's Path is derived per request from Request.PathBase, which IIS sets from the
+// application alias. Under docs/DEPLOY-IIS.md the API is an application named `eamsapi` under Default
+// Web Site, so the real path is `/eamsapi/api/v1/auth`. If the cookie is written at a path the browser
+// does not consider a prefix of the refresh URL, it is never sent back: POST /auth/refresh arrives
+// with no cookie and answers 401 forever, and nothing anywhere says why. AuthCookies logs the RESOLVED
+// value the first time a cookie is actually issued; this line states the rule, so an operator reading
+// a cold start knows what to look for.
+// Note the repeated {Suffix}: Microsoft.Extensions.Logging templates are POSITIONAL despite the
+// names, so a placeholder used twice needs the value passed twice. Getting that wrong throws a
+// FormatException from inside the logger at startup, which is a failure mode worth one comment.
+app.Logger.LogInformation(
+    "Refresh-token cookie Path is the request's PathBase followed by '{Suffix}', resolved per " +
+    "request. The resolved value is logged once when the first session cookie is issued. A path the " +
+    "browser does not send back means POST {Suffix2}/refresh answers 401 with nothing in any log.",
+    AuthCookies.RefreshCookiePathSuffix, AuthCookies.RefreshCookiePathSuffix);
 
 // Said out loud on every start: nothing here is protected (ADR-001 D-6, Technical Plan §11).
 AuthorizationStatus.LogEnforcementState(app.Logger);

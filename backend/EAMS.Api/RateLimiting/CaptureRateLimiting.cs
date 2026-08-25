@@ -147,7 +147,19 @@ public static class CaptureRateLimiting
 
     private const string DevicePartitionPrefix = "device:";
 
-    public static void AddCaptureRateLimiter(this IServiceCollection services) =>
+    /// <param name="addMore">
+    /// Further policies to register on the same limiter (Phase 6b: <c>AuthRateLimiting</c>).
+    ///
+    /// <para>
+    /// <b>One <c>AddRateLimiter</c> call, not two.</b> A second call does not compose — the later
+    /// registration replaces the earlier options object, so the three policies above would silently
+    /// stop existing and every capture endpoint would become unlimited with nothing failing. Taking a
+    /// callback makes that impossible to get wrong from the composition root.
+    /// </para>
+    /// </param>
+    public static void AddCaptureRateLimiter(
+        this IServiceCollection services,
+        Action<RateLimiterOptions>? addMore = null) =>
         services.AddRateLimiter(options =>
         {
             options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
@@ -156,6 +168,10 @@ public static class CaptureRateLimiting
             options.AddPolicy(LivePolicyName, LivePartitionFor);
             options.AddPolicy(ManifestPolicyName, ManifestPartitionFor);
 
+            addMore?.Invoke(options);
+
+            // Last, so it covers the policies the callback added as well — one 429 body shape across
+            // the whole API, which is what lets a client branch on `code: RateLimited` and nothing else.
             options.OnRejected = WriteRejectionAsync;
         });
 
@@ -213,6 +229,7 @@ public static class CaptureRateLimiting
             {
                 LivePolicyName => "Too many live-attendance polls.",
                 ManifestPolicyName => "Too many manifest pulls.",
+                AuthRateLimiting.IpPolicyName => "Too many sign-in requests.",
                 _ => "Too many capture requests.",
             },
             detail: policy switch
@@ -227,6 +244,11 @@ public static class CaptureRateLimiting
                     $"{Window.TotalMinutes:0} minute(s). Wait for the period named by Retry-After and " +
                     "pull again. Keep the manifest you already have, and keep capturing — no refusal " +
                     "from that endpoint ever stops tap capture.",
+                AuthRateLimiting.IpPolicyName =>
+                    $"This client address is limited to {AuthRateLimiting.IpPermitsPerWindow} " +
+                    $"authentication requests per {Window.TotalMinutes:0} minute(s). Wait for the " +
+                    "period named by Retry-After and try again. Nothing about your credentials was " +
+                    "checked, and this refusal says nothing about whether any account exists.",
                 _ =>
                     $"This device is limited to {PermitsPerWindow} capture requests per " +
                     $"{Window.TotalMinutes:0} minute(s). Wait for the period named by Retry-After and " +

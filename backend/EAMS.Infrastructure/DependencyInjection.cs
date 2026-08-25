@@ -115,6 +115,11 @@ public static class DependencyInjection
         services.AddScoped<IUserProvisioningService, UserProvisioningService>();
         services.AddScoped<IRefreshTokenStore, RefreshTokenStore>();
 
+        // Phase 6b: the /auth surface's verify-and-persist half. It composes the three above and adds
+        // the effective permission set and the audit trail; it mints nothing, because the signing key
+        // never enters this assembly (D-74 — see TokenIssuer in EAMS.Api).
+        services.AddScoped<IAuthService, AuthService>();
+
         return services;
     }
 

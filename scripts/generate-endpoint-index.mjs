@@ -56,9 +56,18 @@ function blurb(op) {
   return cleaned.replace(/^[a-z]/, (c) => c.toUpperCase());
 }
 
-/** `DeviceKey` if the operation demands a device credential, otherwise open (ADR-001 D-6). */
-const auth = (op) =>
-  (op.security ?? []).some((r) => Object.keys(r).includes('DeviceKey')) ? '**DeviceKey**' : '—';
+/**
+ * The scheme(s) the operation demands, or open (ADR-001 D-6).
+ *
+ * Read off `op.security`, which the generator derives from each endpoint's own `[Authorize]` — so a
+ * scheme added to the API appears here without this file being edited, and one that is *not* in
+ * `op.security` renders as open, which is the honest answer. Two schemes exist since Phase 6b:
+ * `DeviceKey` for a capture device, `Bearer` for a signed-in person.
+ */
+const auth = (op) => {
+  const schemes = [...new Set((op.security ?? []).flatMap((r) => Object.keys(r)))].sort();
+  return schemes.length ? schemes.map((s) => `**${s}**`).join(' ') : '—';
+};
 
 /** Non-2xx codes, so the row shows what a caller has to branch on without opening the schema. */
 function failures(op) {
@@ -115,9 +124,10 @@ function render(doc) {
   );
   out.push('');
   out.push(
-    '`Auth` is **DeviceKey** where the endpoint authenticates a capture device. Everything else ' +
-      'is open: human authentication is Phase 6 (ADR-001 D-6), so an unmarked row is not a ' +
-      'public endpoint, it is an unprotected one.',
+    '`Auth` names the credential an endpoint demands: **DeviceKey** for a capture device, ' +
+      '**Bearer** for a signed-in person (`POST /auth/login`). Everything else is still open — ' +
+      'enforcement over the rest of the surface is a later phase (ADR-001 D-6), so an unmarked row ' +
+      'is not a public endpoint, it is an unprotected one.',
   );
   out.push('');
 

@@ -1,4 +1,4 @@
-using System.Net;
+﻿using System.Net;
 using System.Text.Encodings.Web;
 using System.Text.Json;
 using System.Text.Json.Nodes;
@@ -33,6 +33,20 @@ namespace EAMS.Tests.Integration;
 [Collection(DatabaseCollection.Name)]
 public class OpenApiDocumentTests : IntegrationTest
 {
+    /// <summary>
+    /// The mount point every probe controller in this test project shares. The probes are discovered
+    /// by the test host and never by the real one, so they are not the published surface and every
+    /// assertion here skips them — as does <c>Published()</c> before the committed contract is
+    /// compared.
+    ///
+    /// <para>
+    /// One home for the value because it is now load-bearing in four places: a probe route that
+    /// stopped matching this prefix would be silently asserted against as though it were a real
+    /// endpoint, and the failure would name the probe rather than the mistake.
+    /// </para>
+    /// </summary>
+    private const string TestOnlyPrefix = "/test-only/";
+
     public OpenApiDocumentTests(SqlServerFixture sql) : base(sql) { }
 
     private const string DocumentRoute = "/swagger/v1/swagger.json";
@@ -59,6 +73,22 @@ public class OpenApiDocumentTests : IntegrationTest
         (ByCard, "get"),
         (Heartbeat, "post"),
         (Manifest, "get"),
+    ];
+
+    private const string AuthMe = "/api/v1/auth/me";
+    private const string AuthLogout = "/api/v1/auth/logout";
+    private const string AuthChangePassword = "/api/v1/auth/change-password";
+
+    /// <summary>
+    /// The operations Phase 6b publishes as requiring a signed-in person. Deliberately separate from
+    /// <see cref="GatedOperations"/>: the two credentials are not interchangeable, and a document that
+    /// blurred them would tell the mobile developer a kiosk key signs a user in.
+    /// </summary>
+    private static readonly (string Path, string Method)[] BearerOperations =
+    [
+        (AuthMe, "get"),
+        (AuthLogout, "post"),
+        (AuthChangePassword, "post"),
     ];
 
     /// <summary>Fetches and parses the served document. Fails loudly if it is not 200 JSON.</summary>
@@ -194,7 +224,7 @@ public class OpenApiDocumentTests : IntegrationTest
         var undocumented = document.RootElement.GetProperty("paths").EnumerateObject()
             // The probe controllers live in this test project, so the test host discovers them and the
             // real one never does. They are not the published surface.
-            .Where(path => !path.Name.StartsWith("/test-only/", StringComparison.Ordinal))
+            .Where(path => !path.Name.StartsWith(TestOnlyPrefix, StringComparison.Ordinal))
             .SelectMany(path => path.Value.EnumerateObject()
                 .Select(operation => (Route: $"{operation.Name.ToUpperInvariant()} {path.Name}", operation.Value)))
             .Where(o => !o.Value.TryGetProperty("summary", out var s)
@@ -312,6 +342,12 @@ public class OpenApiDocumentTests : IntegrationTest
 
         foreach (var path in document.RootElement.GetProperty("paths").EnumerateObject())
         {
+            // The /test-only/ probes this assembly contributes to the host are skipped, exactly as
+            // Published() strips them before the committed contract is compared. AuthProbeController
+            // is Bearer-gated on purpose — it is the only way to test what ICurrentUser resolves to on
+            // an authenticated request — and the real application never serves it.
+            if (path.Name.StartsWith(TestOnlyPrefix, StringComparison.Ordinal)) continue;
+
             foreach (var operation in path.Value.EnumerateObject())
             {
                 if (!operation.Value.TryGetProperty("security", out var security)) continue;
@@ -321,9 +357,35 @@ public class OpenApiDocumentTests : IntegrationTest
             }
         }
 
-        var expected = GatedOperations.Select(o => $"{o.Method} {o.Path}").Order().ToList();
+        var expected = GatedOperations.Concat(BearerOperations)
+            .Select(o => $"{o.Method} {o.Path}").Order().ToList();
 
         Assert.Equal(expected, required.Order().ToList());
+
+        // And each names the right scheme. "Some security requirement is published" is the assertion
+        // that stops being useful the moment there are two schemes: publishing DeviceKey on /auth/me
+        // would pass the check above while telling an integrator to send a kiosk credential.
+        foreach (var path in document.RootElement.GetProperty("paths").EnumerateObject())
+        {
+            if (path.Name.StartsWith(TestOnlyPrefix, StringComparison.Ordinal)) continue;
+
+            foreach (var operation in path.Value.EnumerateObject())
+            {
+                if (!operation.Value.TryGetProperty("security", out var security)) continue;
+                if (security.GetArrayLength() == 0) continue;
+
+                var names = security.EnumerateArray()
+                    .SelectMany(r => r.EnumerateObject().Select(p => p.Name))
+                    .ToList();
+
+                var isBearer = BearerOperations
+                    .Any(o => o.Path == path.Name && o.Method == operation.Name);
+
+                Assert.Equal(
+                    [isBearer ? EamsOpenApi.BearerSecuritySchemeId : EamsOpenApi.DeviceKeySecuritySchemeId],
+                    names);
+            }
+        }
     }
 
     // ------------------------------------------------------------------------------ the error shape
@@ -569,7 +631,7 @@ public class OpenApiDocumentTests : IntegrationTest
         if (document["paths"] is JsonObject paths)
         {
             foreach (var route in paths.Select(p => p.Key)
-                         .Where(k => k.StartsWith("/test-only/", StringComparison.Ordinal))
+                         .Where(k => k.StartsWith(TestOnlyPrefix, StringComparison.Ordinal))
                          .ToList())
             {
                 paths.Remove(route);

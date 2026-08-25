@@ -2,7 +2,7 @@
   "openapi": "3.0.1",
   "info": {
     "title": "EAMS API",
-    "description": "Events Attendance Monitoring System — attendance capture and administration.\n\n**This document supersedes `docs/api/attendance-contract-handoff.md` as the contract.**\nIt is generated from the source, so the outcome tokens, status codes and payload shapes\nbelow are what the running build actually does.\n\n- **Base path** `/api/v1`. JSON in and out, camelCase field names.\n- **All timestamps are UTC**, ISO 8601, with an explicit `Z`. A bare or offset-bearing\n  local time misjudges the Present/Late boundary by the server's offset.\n- **Errors are RFC 7807** `application/problem+json`. Every body carries a `traceId` to\n  quote back and, on the attendance surface, a stable `code` to branch on — never the\n  human-readable `title` or `detail`, which are reworded freely.\n- **Capture endpoints require a device key** (`DeviceKey` below). Everything else is open\n  for now: authentication for human users is Phase 6, and until it lands this API must\n  stay on a local or trusted network.\n\nSee the `TapOutcomeCode`, `ManualOutcomeCode` and `LiveOutcomeCode` schemas for the frozen\ntoken tables.",
+    "description": "Events Attendance Monitoring System — attendance capture and administration.\n\n**This document supersedes `docs/api/attendance-contract-handoff.md` as the contract.**\nIt is generated from the source, so the outcome tokens, status codes and payload shapes\nbelow are what the running build actually does.\n\n- **Base path** `/api/v1`. JSON in and out, camelCase field names.\n- **All timestamps are UTC**, ISO 8601, with an explicit `Z`. A bare or offset-bearing\n  local time misjudges the Present/Late boundary by the server's offset.\n- **Errors are RFC 7807** `application/problem+json`. Every body carries a `traceId` to\n  quote back and, on the attendance surface, a stable `code` to branch on — never the\n  human-readable `title` or `detail`, which are reworded freely.\n- **Capture endpoints require a device key** (`DeviceKey` below).\n- **The `/auth` endpoints sign a person in** and issue a `Bearer` access token (`Bearer`\n  below). Three of them require one.\n- **Everything else is still open.** A login existing is not the same as authorization\n  being enforced: the roster, the events, the import pipeline and the dashboard accept\n  an uncredentialed request today. Enforcing permissions across that surface is a later\n  phase (ADR-001 D-6), so **an endpoint with no `Auth` marked is not a public endpoint,\n  it is an unprotected one** — this API must stay on a local or trusted network.\n\nSee the `TapOutcomeCode`, `ManualOutcomeCode` and `LiveOutcomeCode` schemas for the frozen\ntoken tables.",
     "version": "v1"
   },
   "paths": {
@@ -1265,6 +1265,440 @@
             }
           }
         }
+      }
+    },
+    "/api/v1/auth/login": {
+      "post": {
+        "tags": [
+          "Auth"
+        ],
+        "summary": "`POST /auth/login` — exchange an e-mail address and password for an access token and a\r\n            session.",
+        "description": "\r\n\r\n  <b>The response sets two cookies.</b>\r\n  `eams_rt` is the refresh token: `httpOnly`,\r\n            `Secure`, `SameSite=Strict`, scoped to this `/auth` path, and unreadable by any\r\n            script. `eams_csrf` is readable, and the SPA must echo its value in an\r\n            `X-CSRF-Token` header on `refresh` and `logout` — those two routes are the only\r\n            ones in the API a browser attaches an ambient credential to.\r\n            \r\n\r\n\r\n  <b>Every failure is one 401 with `code: InvalidCredentials`.</b> Do not branch on\r\n            anything finer; there is nothing finer, deliberately.\r\n            ",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LoginRequest"
+              }
+            },
+            "text/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LoginRequest"
+              }
+            },
+            "application/*+json": {
+              "schema": {
+                "$ref": "#/components/schemas/LoginRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Signed in. Body carries the access token and the effective permission set.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthTokenResponse"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthTokenResponse"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthTokenResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The body is not a login request.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unknown address, wrong password, or a deactivated account — indistinguishably.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many attempts, from this address or against this account. Honour `Retry-After`.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/auth/refresh": {
+      "post": {
+        "tags": [
+          "Auth"
+        ],
+        "summary": "`POST /auth/refresh` — rotate the session cookie and mint a new access token.",
+        "description": "\r\n\r\n  <b>The request body is empty and the request is not anonymous.</b> The refresh token is read\r\n            from the `eams_rt` cookie; sending it in a body is no longer supported (drift from §6.1,\r\n            see EAMS.Api.Authentication.AuthCookies). The `X-CSRF-Token` header is <b>required</b> and must\r\n            equal the `eams_csrf` cookie.\r\n            \r\n\r\n\r\n  <b>Rotation is single-use and replay burns the family.</b> Presenting a token that has already\r\n            been rotated revokes every live token in its family — the legitimate client pays one sign-in,\r\n            a thief's chain dies. Do not retry a refresh with the same cookie value after a failure; take\r\n            the 401 and sign in.\r\n            \r\n\r\n\r\n  <b>The permission set is re-read on every refresh</b>, so a grant changed by an administrator\r\n            takes effect within one access-token lifetime rather than at the user's next sign-in.\r\n            ",
+        "responses": {
+          "200": {
+            "description": "Rotated. New cookies are set and a new access token is returned.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthTokenResponse"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthTokenResponse"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthTokenResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No session cookie, or one that is expired, unknown, or already used.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The `X-CSRF-Token` header is missing or does not match the cookie.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many requests from this address. Honour `Retry-After`.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/auth/logout": {
+      "post": {
+        "tags": [
+          "Auth"
+        ],
+        "summary": "`POST /auth/logout` — end this session.",
+        "description": "\r\n\r\n  <b>This session only.</b> Signing out on a laptop does not sign the user out on their phone.\r\n            The operation that ends every session is `POST /auth/change-password`, which is what a\r\n            user reaches for when they believe a credential has leaked.\r\n            \r\n\r\n\r\n            Requires a Bearer token and the `X-CSRF-Token` header. It is idempotent: a logout that\r\n            presents no session cookie revokes nothing and still answers 204 with the cookies cleared,\r\n            because the postcondition — this browser is signed out — holds either way.\r\n            ",
+        "responses": {
+          "204": {
+            "description": "Signed out. Both cookies are cleared."
+          },
+          "401": {
+            "description": "No Bearer token, or one that is expired or malformed.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The `X-CSRF-Token` header is missing or does not match the cookie.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "Bearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/auth/me": {
+      "get": {
+        "tags": [
+          "Auth"
+        ],
+        "summary": "`GET /auth/me` — who this access token speaks for, and what it may do.",
+        "description": "\r\n\r\n  <b>The permissions come from the token, not from a fresh database read</b>, and that is the\r\n            whole point of the endpoint. The server will enforce what this token carries for as long as it\r\n            lives, so a UI that gates its navigation on anything else will eventually show a button the\r\n            server refuses or hide one it would have allowed. A grant changed by an administrator appears\r\n            here after the next `POST /auth/refresh` — at most one access-token lifetime away.\r\n            \r\n\r\n\r\n            The display fields are read from the database, because a name and an address are not access\r\n            decisions and do not belong in a token that travels in a header on every request.\r\n            ",
+        "responses": {
+          "200": {
+            "description": "The authenticated user.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthUserDto"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthUserDto"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthUserDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No Bearer token, or one that is expired or malformed.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The token is valid and the account behind it no longer is.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "Bearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/auth/change-password": {
+      "post": {
+        "tags": [
+          "Auth"
+        ],
+        "summary": "`POST /auth/change-password` — change the caller's own password and end every session.",
+        "description": "\r\n\r\n  <b>Requires the current password even though the caller holds a valid token.</b> A token is\r\n            what someone who walked past an unlocked laptop has; the current password is what only the\r\n            account holder has, and this is the operation that would lock the real owner out.\r\n            \r\n\r\n\r\n  <b>Every refresh token for this user is revoked, including the caller's own.</b> The reason to\r\n            change a password is usually that it may have leaked, and a rotation that leaves other sessions\r\n            live changes nothing for whoever holds one. The caller's access token keeps working until it\r\n            expires — up to fifteen minutes — and then cannot be renewed. Sign in again.\r\n            ",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ChangePasswordRequest"
+              }
+            },
+            "text/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ChangePasswordRequest"
+              }
+            },
+            "application/*+json": {
+              "schema": {
+                "$ref": "#/components/schemas/ChangePasswordRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": "Changed. Every session, including this one, has been revoked."
+          },
+          "401": {
+            "description": "No Bearer token, or the current password did not verify.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "The new password failed the rules a created account is held to.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many requests from this address. Honour `Retry-After`.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "Bearer": []
+          }
+        ]
       }
     },
     "/api/v1/devices": {
@@ -4524,6 +4958,57 @@
         "additionalProperties": false,
         "description": "One student in a resolution preview. Identity and a display name, and deliberately nothing else —\r\nthis is a filter preview, not a roster read, and `section` in particular is absent because the\r\nonly single-valued answer available for it is the ADR-001 D-2 cache column this whole feature is\r\nbuilt to avoid reading."
       },
+      "AuthTokenResponse": {
+        "type": "object",
+        "properties": {
+          "accessToken": {
+            "type": "string",
+            "description": "The signed JWT. Fifteen-minute lifetime (`JwtOptions.AccessTokenLifetime`) — its lifetime\r\n<em>is</em> its revocation window, which is why the long-lived half lives in a table instead."
+          },
+          "tokenType": {
+            "type": "string",
+            "description": "Always `Bearer`. Present so a generated client composes the header from the response rather\r\nthan from a hard-coded string it will get wrong once."
+          },
+          "expiresAt": {
+            "type": "string",
+            "description": "When AccessToken stops being accepted, UTC. The SPA refreshes ahead of this\r\nrather than waiting for a 401 — a 401 mid-navigation is a lost page, not a renewal.",
+            "format": "date-time"
+          },
+          "user": {
+            "$ref": "#/components/schemas/AuthUserDto"
+          }
+        },
+        "additionalProperties": false,
+        "description": "The 200 body of `POST /auth/login` and `POST /auth/refresh`.\r\n            \r\n\r\n<b>There is deliberately no `refreshToken` field here, and there was one in the §6.1 sketch.</b>\r\nThe refresh token now travels as an `httpOnly` cookie, so no script in the SPA can read it and\r\nno XSS can exfiltrate it; the access token stays in the body precisely so the SPA holds it in\r\nmemory and sends it as `Authorization: Bearer`. That split is what confines CSRF exposure to\r\nthe two routes the cookie is scoped to — every other endpoint is unreachable by a cross-site page\r\nbecause a cross-site page cannot set an `Authorization` header. Recorded as drift from §6.1.\r\n"
+      },
+      "AuthUserDto": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "schoolId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "email": {
+            "type": "string"
+          },
+          "fullName": {
+            "type": "string"
+          },
+          "permissions": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "<b>The permissions carried by the presented token, not a fresh read of the database.</b>\r\n\r\n\r\n             The difference matters on exactly the day it looks wrong. Permissions are baked into the access\r\n             token at issue, so a grant revoked one minute ago is still honoured by a token minted two minutes\r\n             ago until it expires. If this field answered from the database instead, the UI would hide a button\r\n             that the server would still accept, or — far worse — show one that the server would refuse, and\r\n             the user would meet a 403 the interface promised them they would not. Answering from the token\r\n             makes the UI's model of what it may do exactly the server's model, for exactly as long as the\r\n             token lives. A change takes effect at the next refresh, which is at most fifteen minutes away.\r\n             "
+          }
+        },
+        "additionalProperties": false,
+        "description": "The authenticated user, as the SPA gates its navigation on. Also the whole body of\r\n`GET /auth/me`."
+      },
       "CardDto": {
         "type": "object",
         "properties": {
@@ -4543,6 +5028,21 @@
           }
         },
         "additionalProperties": false
+      },
+      "ChangePasswordRequest": {
+        "type": "object",
+        "properties": {
+          "currentPassword": {
+            "type": "string",
+            "description": "Re-verified even though the caller already holds a valid access token. <b>The token is not the\r\nproof this operation needs.</b> A token is what an attacker who walked past an unlocked laptop\r\nhas; the current password is what only the account holder has, and this is the operation that\r\nwould lock the real owner out."
+          },
+          "newPassword": {
+            "type": "string",
+            "description": "Held to the same rules `IUserProvisioningService` applies at creation, so an account cannot\r\nbe walked below the bar it was created at."
+          }
+        },
+        "additionalProperties": false,
+        "description": "The body of `POST /auth/change-password`."
       },
       "CollegeDto": {
         "type": "object",
@@ -5387,6 +5887,21 @@
         "type": "string",
         "description": "The `code` returned by `GET /attendance/live/{eventId}` when the poll is refused.\n`Ok` never appears in a body — a successful poll is the `AttendanceLiveDto` itself.\n\nOn `InvalidCursor`, re-poll with **no** `since` and take a fresh snapshot. The cursor\nis refused rather than silently downgraded to a snapshot, because a downgrade would\nlook like \"nothing changed\" forever while the client's cursor stayed broken.\n\n| `code` | HTTP |\n|---|---|\n| `Ok` | 200 |\n| `EventNotFound` | 404 |\n| `InvalidCursor` | 400 |"
       },
+      "LoginRequest": {
+        "type": "object",
+        "properties": {
+          "email": {
+            "type": "string",
+            "description": "The login identifier. Trimmed and lower-cased server-side before the lookup, because\r\n`UX_Users_Email` stores the normalized form — a user who types `Admin@…` on a phone\r\nkeyboard must not be told their password is wrong."
+          },
+          "password": {
+            "type": "string",
+            "description": "The presented password. <b>Never logged, never echoed, never audited</b> — the failure row records\r\nthe address that was tried and nothing else."
+          }
+        },
+        "additionalProperties": false,
+        "description": "The body of `POST /auth/login`."
+      },
       "ManualOutcomeCode": {
         "enum": [
           "Saved",
@@ -5440,6 +5955,28 @@
           }
         },
         "additionalProperties": {}
+      },
+      "Seams": {
+        "type": "object",
+        "properties": {
+          "userId": {
+            "type": "string",
+            "format": "uuid",
+            "nullable": true
+          },
+          "schoolId": {
+            "type": "string",
+            "format": "uuid",
+            "nullable": true
+          },
+          "permissions": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "additionalProperties": false
       },
       "SisImportBatchDto": {
         "type": "object",
@@ -6240,6 +6777,12 @@
         "description": "The kiosk / capture credential, scoped to `attendance.capture` and nothing else.\n\nSend the **entire header value including the scheme word**:\n\n```\nAuthorization: DeviceKey eams_dk_<keyId>_<secret>\n```\n\nIssued once by `POST /api/v1/devices` and never retrievable afterwards — the server stores\nonly a hash. Store it in the platform keystore (`expo-secure-store` / Android Keystore),\nnever in `AsyncStorage`. Lose it and rotate with `POST /api/v1/devices/{id}/regenerate-key`.\n\nCase is significant and lower-case is the only accepted form for the token itself.\n\nFailures: `401 DeviceKeyMissing` / `DeviceKeyMalformed` / `DeviceKeyInvalid`,\n`403 DeviceKeyRevoked` / `DeviceInactive`, `429 RateLimited` (honour `Retry-After`).\n`DeviceKeyInvalid` deliberately does not distinguish an unknown key id from a wrong secret.",
         "name": "Authorization",
         "in": "header"
+      },
+      "Bearer": {
+        "type": "http",
+        "description": "The human credential. Obtained from `POST /api/v1/auth/login` and sent on every call:\n\n```\nAuthorization: Bearer <accessToken>\n```\n\n**Fifteen-minute lifetime.** Hold it in memory — never in `localStorage`, and never in a\ncookie. Renew it with `POST /api/v1/auth/refresh`, which reads the `eams_rt` httpOnly\ncookie the login set; the refresh token is never in a request or response body.\n\nThe token carries `sub` (`user:<guid>`), `school_id`, and one `perm` claim per effective\npermission, resolved through the caller's roles at issue. There is deliberately no role\nclaim: authorization in this system is permission-based.\n\n`POST /api/v1/auth/refresh` and `POST /api/v1/auth/logout` additionally require the\n`X-CSRF-Token` header, echoing the readable `eams_csrf` cookie. No other endpoint does —\nthey authenticate with this header, which a cross-site page cannot set.\n\nFailures: `401 InvalidCredentials` / `SessionMissing` / `SessionExpired`,\n`403 CsrfTokenInvalid`, `429 RateLimited` (honour `Retry-After`).",
+        "scheme": "bearer",
+        "bearerFormat": "JWT"
       }
     }
   },
@@ -6247,6 +6790,10 @@
     {
       "name": "Academic",
       "description": "ADR-001 D-1's academic layer over HTTP — <b>reads, plus D-53's three term-administration writes and\r\nnothing else</b>."
+    },
+    {
+      "name": "Auth",
+      "description": "Technical Plan §6.1 / §11 — human authentication (Phase 6b).\r\n            \r\n\r\n<b>This is the first and only surface in the API that a person authenticates against, and adding\r\nit changes nothing about any other endpoint.</b> ADR-001 D-6's staged cutover is unchanged: every\r\nroute outside `/auth` is still open and unauthenticated, `[HasPermissionNotEnforced]`\r\nstill enforces nothing, and `[assembly: AuthorizationNotEnforced]` is still present. Turning\r\nthose on is a later phase, and `AuthStagedCutoverTests` asserts the invariant rather than\r\nleaving it to be assumed.\r\n\r\n<b>Two credentials now reach this host and they never mix.</b> A kiosk sends\r\n`Authorization: DeviceKey …` and is scoped to `attendance.capture`; a person sends\r\n`Authorization: Bearer …` and holds whatever their roles grant. Both emit the same claim\r\n<em>types</em> (EAMS.Api.Authorization.EamsClaimTypes), so the authorization layer cannot tell them apart —\r\nwhich is exactly what `DeviceKeyHandler` was built for and why this phase is additive.\r\n\r\n<b>Where the tokens live.</b> The access token is returned in the body and held in memory by the\r\nSPA; the refresh token is an `httpOnly` cookie the browser stores and this API never reads\r\nfrom a body. That is drift from §6.1 and the reasoning is in EAMS.Api.Authentication.AuthCookies.\r\n"
     },
     {
       "name": "Devices",

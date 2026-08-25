@@ -32,6 +32,19 @@
 
   <ItemGroup>
     <PackageReference Include="Swashbuckle.AspNetCore" Version="7.2.0" />
+
+    <!--
+      Phase 6b: §11's Bearer scheme. Version-matched to the 9.0.x runtime this host targets, for the
+      reason EAMS.Tests.csproj records about EF Core — an authentication package on a different minor
+      line than the framework it plugs into is a validation pipeline that behaves differently here
+      than in production.
+
+      It lives here and NOT in EAMS.Infrastructure, deliberately. This package is what brings the
+      signing-key types (Microsoft.IdentityModel.Tokens) into a project, and the whole of D-74 is that
+      the layer holding Users.PasswordHash must not also be able to mint a credential for it. See
+      TokenIssuer.
+    -->
+    <PackageReference Include="Microsoft.AspNetCore.Authentication.JwtBearer" Version="9.0.14" />
   </ItemGroup>
 
   <!--

@@ -3,15 +3,16 @@
 <!-- GENERATED FILE — DO NOT EDIT.
      Source: docs/api/openapi.json. Regenerate: node scripts/generate-endpoint-index.mjs --write -->
 
-**Generated from [`openapi.json`](openapi.json) — do not edit by hand.** 48 operations across 8 controllers, all mounted under `/api/v1`. Routes below are written relative to that mount.
+**Generated from [`openapi.json`](openapi.json) — do not edit by hand.** 53 operations across 9 controllers, all mounted under `/api/v1`. Routes below are written relative to that mount.
 
 This page is a **map, not a contract.** It exists so you can find an endpoint; payload shapes, field types and outcome tokens live in [`openapi.json`](openapi.json), which is what you generate a client from. Behaviour a schema cannot state — what your queue does with each outcome, the card-UID and clock rules — is in [`attendance-contract-handoff.md`](attendance-contract-handoff.md).
 
-`Auth` is **DeviceKey** where the endpoint authenticates a capture device. Everything else is open: human authentication is Phase 6 (ADR-001 D-6), so an unmarked row is not a public endpoint, it is an unprotected one.
+`Auth` names the credential an endpoint demands: **DeviceKey** for a capture device, **Bearer** for a signed-in person (`POST /auth/login`). Everything else is still open — enforcement over the rest of the surface is a later phase (ADR-001 D-6), so an unmarked row is not a public endpoint, it is an unprotected one.
 
 ## Contents
 
 - [Academic](#academic) — 9
+- [Auth](#auth) — 5
 - [Devices](#devices) — 7
 - [EventManifest](#eventmanifest) — 1
 - [SisImport](#sisimport) — 4
@@ -33,6 +34,16 @@ This page is a **map, not a contract.** It exists so you can find an endpoint; p
 | `PUT` | `/academic/terms/{id}` | — | `400` `404` `409` | Edit a term's authored fields (D-53). |
 | `PATCH` | `/academic/terms/{id}/current` | — | `400` `404` | Make this the current term, or retire it (D-53). |
 | `GET` | `/academic/terms/current` | — | `404` | The term flagged current, or 404 when none is. |
+
+## Auth
+
+| Method | Route | Auth | Errors | What it does |
+|---|---|---|---|---|
+| `POST` | `/auth/change-password` | **Bearer** | `401` `422` `429` | Change the caller's own password and end every session. |
+| `POST` | `/auth/login` | — | `400` `401` `429` | Exchange an e-mail address and password for an access token and a session. |
+| `POST` | `/auth/logout` | **Bearer** | `401` `403` | End this session. |
+| `GET` | `/auth/me` | **Bearer** | `401` `404` | Who this access token speaks for, and what it may do. |
+| `POST` | `/auth/refresh` | — | `401` `403` `429` | Rotate the session cookie and mint a new access token. |
 
 ## Devices
 

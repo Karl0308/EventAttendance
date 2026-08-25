@@ -648,8 +648,34 @@ public class KnownDefectTests : IntegrationTest
                 .Any(a => a is Microsoft.AspNetCore.Mvc.Routing.HttpMethodAttribute))
             .ToList();
 
+        // AuthController is exempt, and it is the only exemption. Its five actions have no §4.11
+        // permission code to declare, because their access rules are not permissions: sign-in and
+        // refresh must be reachable by a caller who holds nothing at all, and /me, /logout and
+        // /change-password demand "any authenticated user", which is a scheme requirement rather than
+        // a grant. Minting a permission code for them would put a row in Permissions that no role
+        // could sensibly be denied and that the rename Phase 6's audit walks would have to skip
+        // anyway. Named rather than filtered by attribute, so a SIXTH auth action still has to be
+        // looked at here.
+        string[] exempt =
+        [
+            "AuthController.ChangePassword",
+            "AuthController.Login",
+            "AuthController.Logout",
+            "AuthController.Me",
+            "AuthController.Refresh",
+        ];
+
         Assert.NotEmpty(actions);
-        Assert.All(actions, action => Assert.NotEmpty(
+
+        var declaring = actions
+            .Where(a => !exempt.Contains($"{a.DeclaringType?.Name}.{a.Name}", StringComparer.Ordinal))
+            .ToList();
+
+        Assert.Equal(
+            actions.Count - exempt.Length,
+            declaring.Count);
+
+        Assert.All(declaring, action => Assert.NotEmpty(
             action.GetCustomAttributes(typeof(EAMS.Api.Authorization.HasPermissionNotEnforcedAttribute), true)));
     }
 }

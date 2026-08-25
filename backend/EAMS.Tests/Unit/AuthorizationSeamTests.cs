@@ -1,8 +1,10 @@
 using System.Reflection;
 using EAMS.Api.Authorization;
+using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc.Filters;
 using Xunit;
+using DeviceKey = EAMS.Domain.DeviceKey;
 
 namespace EAMS.Tests.Unit;
 
@@ -129,14 +131,27 @@ public class AuthorizationSeamTests
     [Fact]
     public void Only_the_device_capture_endpoints_are_gated_by_a_real_authorization_attribute()
     {
-        string[] expected =
-        [
-            "AttendanceController.Tap",
-            "AttendanceController.TapBatch",
-            "DevicesController.Heartbeat",
-            "EventManifestController.Manifest",
-            "StudentsController.ByCard",
-        ];
+        // The five DeviceKey ones D-28 gated, and the three Bearer ones Phase 6b added. Nothing else
+        // in the API carries [Authorize] — the roster, the events, the import pipeline and the
+        // dashboard are all still open under ADR-001 D-6, and enforcing §11 across them is a later
+        // phase's deliberate act rather than a side effect of a login existing.
+        //
+        // The scheme is asserted per action below, not just the presence of the attribute: a Bearer
+        // [Authorize] on a capture endpoint would tell a kiosk to go and sign in, and a DeviceKey
+        // [Authorize] on an /auth route would let a capture credential act as a person.
+        var expectedSchemes = new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["AttendanceController.Tap"] = DeviceKey.AuthenticationScheme,
+            ["AttendanceController.TapBatch"] = DeviceKey.AuthenticationScheme,
+            ["AuthController.ChangePassword"] = JwtBearerDefaults.AuthenticationScheme,
+            ["AuthController.Logout"] = JwtBearerDefaults.AuthenticationScheme,
+            ["AuthController.Me"] = JwtBearerDefaults.AuthenticationScheme,
+            ["DevicesController.Heartbeat"] = DeviceKey.AuthenticationScheme,
+            ["EventManifestController.Manifest"] = DeviceKey.AuthenticationScheme,
+            ["StudentsController.ByCard"] = DeviceKey.AuthenticationScheme,
+        };
+
+        var expected = expectedSchemes.Keys.Order(StringComparer.Ordinal).ToArray();
 
         var gated = ApiAssembly.GetTypes()
             .SelectMany(t => t.GetMembers(BindingFlags.Public | BindingFlags.Instance | BindingFlags.Static | BindingFlags.DeclaredOnly)
@@ -148,6 +163,18 @@ public class AuthorizationSeamTests
             .ToList();
 
         Assert.Equal(expected, gated);
+
+        foreach (var (action, scheme) in expectedSchemes)
+        {
+            var declared = ApiAssembly.GetTypes()
+                .SelectMany(t => t.GetMethods(BindingFlags.Public | BindingFlags.Instance | BindingFlags.DeclaredOnly))
+                .Where(m => $"{m.DeclaringType?.Name}.{m.Name}" == action)
+                .SelectMany(m => m.GetCustomAttributes(inherit: true).OfType<AuthorizeAttribute>())
+                .Select(a => a.AuthenticationSchemes)
+                .ToList();
+
+            Assert.Equal([scheme], declared);
+        }
     }
 
     /// <summary>
@@ -194,8 +221,14 @@ public class AuthorizationSeamTests
                 .Select(a => a.Permission)
                 .ToList();
 
+            // An /auth action is the one shape that legitimately carries neither a permission nor a
+            // policy: "anyone" and "any signed-in user" are not §4.11 grants. It pays for that
+            // exemption by naming its scheme — see the Policy assertion below for why that is the
+            // substitute and not a weakening.
+            var isAuthSurface = action.Method.DeclaringType?.Name == "AuthController";
+
             Assert.True(
-                declared.Count > 0,
+                declared.Count > 0 || isAuthSurface,
                 $"{name} carries [Authorize] but no [HasPermissionNotEnforced]. The inert attribute is " +
                 "the list Phase 6's rename walks; an enforced endpoint missing from it is the one " +
                 "least likely to be noticed.");
@@ -210,12 +243,21 @@ public class AuthorizationSeamTests
             // revoked key and a deactivated device, which is precisely the pair the 403 exists to
             // refuse. All four endpoints name a policy; the risk was always the *next* gated one, and
             // Phase 4d's POST /attendance/tap/batch is the one this assertion was written ahead of.
+            //
+            // Phase 6b adds the one safe way to omit a policy: pin the SCHEME to Bearer. The hazard
+            // above is entirely a property of DeviceKeyHandler, and an [Authorize] naming only the
+            // Bearer scheme never consults it — a revoked device key cannot satisfy such a gate at
+            // all, because the handler that would have said Success is not asked. So the rule is:
+            // name a policy, or name Bearer. A bare [Authorize] that does neither is still refused.
             Assert.All(action.Authorize, attribute => Assert.True(
-                attribute.Policy is not null,
-                $"{name} carries an [Authorize] with no Policy. The default policy is only " +
-                "RequireAuthenticatedUser(), and a revoked or deactivated device key authenticates " +
-                "successfully by design — so a policy-less gate admits exactly the credentials the " +
-                $"403 exists to refuse. Name a policy ('{EamsPermissions.AttendanceCapture}')."));
+                attribute.Policy is not null
+                || attribute.AuthenticationSchemes == JwtBearerDefaults.AuthenticationScheme,
+                $"{name} carries an [Authorize] with neither a Policy nor a Bearer-only scheme. The " +
+                "default policy is only RequireAuthenticatedUser(), and a revoked or deactivated " +
+                "device key authenticates successfully by design — so a gate that does neither admits " +
+                "exactly the credentials the 403 exists to refuse. Name a policy " +
+                $"('{EamsPermissions.AttendanceCapture}'), or restrict the scheme to " +
+                $"'{JwtBearerDefaults.AuthenticationScheme}'."));
 
             foreach (var policy in action.Authorize.Select(a => a.Policy).OfType<string>())
             {

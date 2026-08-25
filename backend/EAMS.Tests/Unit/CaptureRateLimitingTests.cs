@@ -47,7 +47,36 @@ public class CaptureRateLimitingTests
     /// property that stops being true the first time anyone limits an open one, and the natural repair
     /// is to delete the test.
     /// </summary>
-    private static readonly string[] LimitedButNotGated = ["AttendanceController.Live"];
+    /// <summary>
+    /// Rate-limited without carrying an <c>[Authorize]</c>.
+    ///
+    /// <para>
+    /// <c>AttendanceController.Live</c> is a deliberately open dashboard read. The two <c>/auth</c>
+    /// entries are open by necessity — a caller presenting a credential is exactly what
+    /// <c>POST /auth/login</c> is for, and <c>POST /auth/refresh</c> authenticates with a cookie
+    /// rather than a scheme — and they are the endpoints that most need a limiter, which is why the
+    /// two sets were never the same set.
+    /// </para>
+    /// </summary>
+    private static readonly string[] LimitedButNotGated =
+    [
+        "AttendanceController.Live",
+        "AuthController.Login",
+        "AuthController.Refresh",
+    ];
+
+    /// <summary>
+    /// Gated but deliberately <em>not</em> rate-limited.
+    ///
+    /// <para>
+    /// <c>GET /auth/me</c> is the SPA's cheapest call and the one it makes on every route change to
+    /// decide what to render. It is a single indexed read behind a Bearer token, so the flood a
+    /// limiter would stop is one an attacker cannot mount without a valid token — and putting it on
+    /// the shared per-address <c>auth-ip</c> budget would let one busy staff room's navigation
+    /// exhaust the budget that room's <em>sign-ins</em> need.
+    /// </para>
+    /// </summary>
+    private static readonly string[] GatedButNotLimited = ["AuthController.Me"];
 
     [Fact]
     public void The_rate_limited_actions_are_the_gated_ones_plus_the_live_poll()
@@ -63,8 +92,16 @@ public class CaptureRateLimitingTests
             m.GetCustomAttributes(inherit: true).OfType<EnableRateLimitingAttribute>().Any()));
 
         Assert.NotEmpty(gated);
+
+        // The two sets overlap rather than nest, so the relationship is stated as one: everything
+        // gated is limited except the named exceptions, and everything limited is gated except the
+        // named exceptions. Both exception lists are explicit, so adding an endpoint to either
+        // category without deciding about the other is a red build rather than a silent gap.
         Assert.Equal(
-            gated.Concat(LimitedButNotGated).OrderBy(n => n, StringComparer.Ordinal).ToList(),
+            gated.Except(GatedButNotLimited, StringComparer.Ordinal)
+                .Concat(LimitedButNotGated)
+                .OrderBy(n => n, StringComparer.Ordinal)
+                .ToList(),
             limited);
     }
 
@@ -96,8 +133,14 @@ public class CaptureRateLimitingTests
             // Three policies, three partitions. The manifest pull is gated like the capture endpoints
             // and partitioned by device like them, but it must not share their bucket: a device
             // refreshing its offline cache would otherwise spend the tap budget its kiosk needs.
+            // Four policies, four partitions. The /auth surface takes the IP-partitioned anti-flood
+            // and NOT the live one, even though both key on the remote address: sharing a partition
+            // would let a dashboard left open in a staff room spend the budget that room's sign-ins
+            // need, which is the same collision the manifest policy exists to avoid one layer down.
             var expected = action.Name switch
             {
+                _ when action.Name.StartsWith("AuthController.", StringComparison.Ordinal)
+                    => AuthRateLimiting.IpPolicyName,
                 _ when LimitedButNotGated.Contains(action.Name) => CaptureRateLimiting.LivePolicyName,
                 "EventManifestController.Manifest" => CaptureRateLimiting.ManifestPolicyName,
                 _ => CaptureRateLimiting.PolicyName,
@@ -120,6 +163,7 @@ public class CaptureRateLimitingTests
             CaptureRateLimiting.PolicyName,
             CaptureRateLimiting.LivePolicyName,
             CaptureRateLimiting.ManifestPolicyName,
+            AuthRateLimiting.IpPolicyName,
         ];
 
         Assert.Equal(policies.Length, policies.Distinct(StringComparer.Ordinal).Count());

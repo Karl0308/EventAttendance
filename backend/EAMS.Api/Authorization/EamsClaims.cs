@@ -45,7 +45,36 @@ public static class EamsClaimTypes
     public const string DeviceId = "device_id";
 
     /// <summary>Builds the <see cref="Subject"/> value for a device.</summary>
-    public static string DeviceSubject(Guid deviceId) => $"device:{deviceId}";
+    public static string DeviceSubject(Guid deviceId) => DevicePrefix + deviceId;
+
+    /// <summary>
+    /// Builds the <see cref="Subject"/> value for a human user (Phase 6b).
+    ///
+    /// <para>
+    /// Prefixed for the reason <see cref="Subject"/> records: <c>user:{guid}</c> and
+    /// <c>device:{guid}</c> can never be mistaken for one another, so a row attributed to a device
+    /// can never be read as a person's act — which is the whole distinction
+    /// <c>EamsPermissions.AttendanceCapture</c> and <c>AttendanceWrite</c> exist to keep.
+    /// </para>
+    /// </summary>
+    public static string UserSubject(Guid userId) => UserPrefix + userId;
+
+    /// <summary>
+    /// Reads a user id back out of a <see cref="Subject"/> value, or <c>null</c> for anything that is
+    /// not one — including a device subject, which is why the prefix is checked before the parse.
+    /// A bare GUID is rejected too: an unprefixed subject is a token this system did not mint in the
+    /// shape it mints them, and guessing at its meaning is how a device becomes a user.
+    /// </summary>
+    public static Guid? ReadUserId(string? subject) =>
+        subject is not null
+        && subject.StartsWith(UserPrefix, StringComparison.Ordinal)
+        && Guid.TryParse(subject.AsSpan(UserPrefix.Length), out var userId)
+            ? userId
+            : null;
+
+    private const string UserPrefix = "user:";
+
+    private const string DevicePrefix = "device:";
 }
 
 /// <summary>

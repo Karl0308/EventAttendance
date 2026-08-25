@@ -35,7 +35,16 @@ namespace EAMS.Api.Authentication;
 /// likely real mistake into a startup message.
 /// </para>
 /// </summary>
-internal sealed class JwtOptions
+/// <remarks>
+/// <b>Public rather than internal since Phase 6b, and only for accessibility arithmetic.</b>
+/// <c>TokenIssuer</c> has to be public — MVC's controller activator resolves constructor
+/// dependencies through public constructors only — and a public constructor cannot take an internal
+/// parameter type (CS0051). Nothing outside this assembly references <c>EAMS.Api</c> except the test
+/// project, which already has <c>InternalsVisibleTo</c>, so this widens no real surface. The
+/// <em>value</em> is what is sensitive, and it is still resolved from configuration at startup and
+/// held in one singleton.
+/// </remarks>
+public sealed class JwtOptions
 {
     /// <summary>The configuration section. Environment form: <c>Jwt__SigningKey</c>.</summary>
     public const string SectionName = "Jwt";
