@@ -68,13 +68,33 @@ function Test-Url {
     param([string]$Url)
     try {
         $r = Invoke-WebRequest -Uri $Url -UseBasicParsing -TimeoutSec 20 -ErrorAction Stop
-        return [pscustomobject]@{ Code = [int]$r.StatusCode; Length = $r.RawContentLength }
+        return [pscustomobject]@{ Code = [int]$r.StatusCode; Length = $r.RawContentLength; Body = $r.Content }
     }
     catch {
         $code = 0
+        $body = ''
         if ($_.Exception.Response) { $code = [int]$_.Exception.Response.StatusCode }
-        return [pscustomobject]@{ Code = $code; Length = 0 }
+        # IIS puts the useful part - the substatus and the reason - in the body, and it is served in
+        # full to localhost. A status code on its own does not distinguish 500.19 from 500.0.
+        if ($_.ErrorDetails -and $_.ErrorDetails.Message) { $body = $_.ErrorDetails.Message }
+        return [pscustomobject]@{ Code = $code; Length = $body.Length; Body = $body }
     }
+}
+
+function Show-IisError {
+    param([string]$Body)
+    if (-not $Body) { return }
+    # Pull the human-readable bits out of the IIS error page rather than printing the whole thing.
+    $wanted = @()
+    foreach ($pattern in @('<h2>(.*?)</h2>', '<h3>(.*?)</h3>', 'Detailed Error Information.*?Module\s*</th><td>(.*?)</td>',
+                           'Error Code\s*</th><td>(.*?)</td>', 'Config Error\s*</th><td>(.*?)</td>',
+                           'Config File\s*</th><td>(.*?)</td>')) {
+        foreach ($m in [regex]::Matches($Body, $pattern, 'Singleline, IgnoreCase')) {
+            $t = ($m.Groups[1].Value -replace '<[^>]+>', '').Trim()
+            if ($t -and $wanted -notcontains $t) { $wanted += $t }
+        }
+    }
+    foreach ($line in ($wanted | Select-Object -First 8)) { Write-Step "    $line" }
 }
 
 try {
@@ -210,6 +230,28 @@ Write-Step "$TestUrl -> HTTP $($after.Code)"
 $root = Test-Url ($TestUrl -replace '/[^/]*$', '/')
 Write-Step "SPA root -> HTTP $($root.Code)"
 
+# An absolute physical path is only honoured in a delegated web.config when
+# allowAbsolutePathsWhenDelegated is true in applicationHost.config, which is off by default and
+# needs a server-level change. When it is off IIS answers 500 rather than saying so. ExecuteURL takes
+# a site-relative URL instead, so it needs no server-level anything - try it before giving up.
+if ($after.Code -ge 500) {
+    Write-Warn "HTTP $($after.Code) - the absolute path is most likely being refused because"
+    Write-Warn 'allowAbsolutePathsWhenDelegated is off in applicationHost.config. Details:'
+    Show-IisError $after.Body
+
+    Write-Head '6. Second attempt: ExecuteURL with a site-relative URL'
+
+    $relative = ($WebVirtualPath.TrimEnd('/')) + '/index.html'
+    $errNode.SetAttribute('path', $relative)
+    $errNode.SetAttribute('responseMode', 'ExecuteURL')
+    $xml.Save((Resolve-Path $wcPath))
+    Write-Ok "404 rule now: path='$relative' responseMode='ExecuteURL'"
+
+    Start-Sleep -Seconds 2
+    $after = Test-Url $TestUrl
+    Write-Step "$TestUrl -> HTTP $($after.Code)"
+}
+
 Write-Host ''
 if ($after.Code -eq 200 -or ($after.Code -eq 404 -and $after.Length -gt 300)) {
     # A 404 carrying index.html's bytes is the intended outcome: the SPA boots and react-router
@@ -224,8 +266,9 @@ else {
     Write-Step '     %windir%\system32\inetsrv\appcmd.exe unlock config /section:httpErrors'
     Write-Step '  2. Confirm the application really points here:'
     Write-Step '     Get-WebApplication | Select-Object path, PhysicalPath'
-    Write-Step '  3. Restore the previous file if you want to undo:'
-    Write-Step "     Copy-Item '$backup' '$wcPath' -Force"
+    Write-Step '  3. The original file has been restored, so you are back to a 404 rather than a 500.'
+    Copy-Item -LiteralPath $backup -Destination $wcPath -Force
+    Write-Step "     (restored from $backup)"
 }
 
 Write-Host ''
