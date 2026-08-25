@@ -164,7 +164,17 @@ administrator password committed here would be a working administrator password 
 
 **Ask whoever set up the environment for the password. It is not recoverable from source.**
 
-#### Development — seeded from configuration
+#### Development — one command
+
+```powershell
+.\scripts\dev-setup.ps1
+```
+
+Generates the signing key and a seed password, stores both in user secrets, and prints the login.
+Safe to re-run — existing secrets are left alone unless you pass `-Force`. This is the whole of local
+setup.
+
+By hand, if you prefer:
 
 ```bash
 cd backend/EAMS.Api
@@ -186,7 +196,7 @@ Three things that surprise people:
 3. **It never runs in Production.** The seed refuses on a Production host, independently of its
    caller.
 
-> **Setting this secret turns one test red.** `RbacSeedTests.A_development_host_seeds_no_super_admin_when_no_password_is_configured`
+> **Setting this secret turns one test red.** `.\scripts\dev-setup.ps1 -RemoveSeedPassword` clears it. `RbacSeedTests.A_development_host_seeds_no_super_admin_when_no_password_is_configured`
 > clears the *environment variable* but cannot clear the *user-secrets* entry, so a developer who
 > follows the setup above sees a local failure that CI never reproduces. Remove the secret before a
 > full `dotnet test` run; the already-seeded account keeps working, because the password is stored

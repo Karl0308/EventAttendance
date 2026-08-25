@@ -20,8 +20,22 @@ they are not wired together yet. Treat anything outside the core slice as unbuil
 
 ## Run
 
+One-time per machine, in **PowerShell** (it is a `.ps1` — bash cannot run it):
+
+```powershell
+# Generates both secrets and prints the login. Safe to re-run.
+.\scripts\dev-setup.ps1
+
+# Before a full `dotnet test`: a configured seed password turns RbacSeedTests red
+# locally, because the test clears the env var but cannot clear a user secret. CI
+# never sees it, so this failure is local-only and looks like a real regression.
+.\scripts\dev-setup.ps1 -RemoveSeedPassword
+```
+
+By hand instead, if you prefer:
+
 ```bash
-# one-time, per machine: the host refuses to start without a signing key
+# the host refuses to start without a signing key
 cd backend/EAMS.Api && dotnet user-secrets set "Jwt:SigningKey" "<64+ random characters>"
 
 # optional, Development only: seeds dev-admin@usa.edu.ph. Omit and the seed is skipped, loudly.
