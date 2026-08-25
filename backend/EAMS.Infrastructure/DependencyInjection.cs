@@ -20,6 +20,44 @@ public static class DependencyInjection
 {
     public const string ConnectionStringName = "EamsDb";
 
+    /// <summary>
+    /// The SQL Server compatibility level EF Core is told to generate SQL for.
+    ///
+    /// <para>
+    /// <b>110 is SQL Server 2012, which is what the university's box actually runs</b> — its ceiling,
+    /// confirmed by <c>ALTER DATABASE ... SET COMPATIBILITY_LEVEL = 130</c> answering
+    /// <c>Msg 15048: Valid values of the database compatibility level are 90, 100, or 110</c>.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>Why it has to be said out loud.</b> EF Core 9 translates a parameterized
+    /// <c>.Contains(collection)</c> into <c>OPENJSON</c>, which arrived in SQL Server 2016 and
+    /// additionally requires the <em>database</em> to sit at level 130 or higher — so on 2012 it is
+    /// doubly unavailable. EF never asks the server what it is; it assumes a recent one and emits
+    /// <c>OPENJSON</c> regardless. The mismatch therefore cannot fail at startup: it fails on the
+    /// first query that filters by a list, as a bare 500. That is exactly how it was found — a roster
+    /// import died in 11ms having written nothing, and the same translation sits under 18 query sites
+    /// across <c>EventService</c>, <c>StudentGroupProjection</c> and <c>SisImportService</c>, so it
+    /// was never an import bug.
+    /// </para>
+    ///
+    /// <para>
+    /// Stating the level makes EF fall back to inlining the collection as literals — the pre-EF8
+    /// translation. <b>The cost is real and accepted:</b> a distinct SQL text per distinct list, so
+    /// more plan compilation and plan-cache churn than one parameterized plan would need.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>Unconditional, with no environment or configuration branch</b>, for the reason
+    /// <c>AuthCookies</c> gives about <c>Secure</c>: a setting that differs between where you test and
+    /// where you ship has its failure mode discovered in production. Pinned here, the test suite —
+    /// SQL Server 2022 under Testcontainers — generates the same SQL the 2012 box will run, which is
+    /// the gap that let this reach a deployment green across 1,689 tests. Raise or delete this when
+    /// that server is upgraded; it is the only thing holding this codebase to a 2012 dialect.
+    /// </para>
+    /// </summary>
+    public const int SqlServerCompatibilityLevel = 110;
+
     public static IServiceCollection AddEamsInfrastructure(
         this IServiceCollection services, IConfiguration configuration)
     {
@@ -33,6 +71,11 @@ public static class DependencyInjection
             // Transient SQL Server faults (failover, throttling) retry; everything else fails loud.
             sql.EnableRetryOnFailure(maxRetryCount: 3, maxRetryDelay: TimeSpan.FromSeconds(5), errorNumbersToAdd: null);
             sql.CommandTimeout((int)TimeSpan.FromSeconds(30).TotalSeconds);
+
+            // See SqlServerCompatibilityLevel. Without this EF emits OPENJSON, which the deployed
+            // SQL Server 2012 does not have, and every query filtering by a collection fails at
+            // runtime with nothing wrong at startup.
+            sql.UseCompatibilityLevel(SqlServerCompatibilityLevel);
         }));
 
         // ADR-001 D-6 tenant seam. Registered as the concrete type as well so database
