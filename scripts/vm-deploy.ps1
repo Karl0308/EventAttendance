@@ -423,20 +423,25 @@ if ($newKey) {
     Write-Host ''
 }
 
-Write-Head 'Next: the administrator account'
+Write-Head 'Done - sign in to check it'
 Write-Host ''
-Write-Step 'Only needed once. Nothing creates one for you.'
+Write-Step 'Open the SPA and log in. If you already have an administrator, there is nothing further'
+Write-Step 'to do here: the deploy is finished.'
+Write-Host ''
+
+Write-Head 'Only if you have never created an administrator'
+Write-Host ''
+Write-Step 'create-admin runs outside IIS, so it cannot see web.config and needs the same two settings'
+Write-Step 'in the shell. Read them from the live config rather than retyping - a mistyped connection'
+Write-Step 'string fails as a config error, and a mistyped key signs out every existing session:'
 Write-Host ''
 Write-Host "    cd $ApiPath"
-Write-Host '    $env:ConnectionStrings__EamsDb = "<your connection string>"'
-Write-Host '    $env:Jwt__SigningKey            = "<the signing key>"'
+Write-Host '    ([xml](Get-Content .\web.config)).SelectNodes(''//environmentVariable'') |'
+Write-Host '      ForEach-Object { Set-Item -Path "env:$($_.name)" -Value $_.value }'
 Write-Host '    dotnet EAMS.Api.dll create-admin --email admin@usa.edu.ph --name "Full Name" --role SuperAdmin'
 Write-Host ''
-Write-Step 'Both $env: lines are required: create-admin runs outside IIS, so it cannot see what is in'
-Write-Step 'web.config, and it runs on the fully built host so it refuses to start without a key it'
-Write-Step 'never actually uses.'
-Write-Host ''
-Write-Step 'The signing key is in web.config if you need to read it back.'
+Write-Step 'It refuses an address that already exists rather than resetting its password, so running it'
+Write-Step 'again when an administrator is present is harmless - it just tells you so.'
 Write-Host ''
 
 Wait-IfDoubleClicked
