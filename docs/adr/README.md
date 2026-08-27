@@ -16,8 +16,16 @@ it creates one hazard this file exists to close:
 | [001](ADR-001-schema-drift-from-technical-plan.md) | Schema drift from the Technical Plan | **Accepted** | D-1…D-6. **Amended by ADR-002** — do not read its follow-up list as current |
 | [002](ADR-002-phase-1-2-schema-and-import-decisions.md) | Phase 1–2 schema and import decisions | **Accepted** (2026-07-28) | D-7…D-11. Amends ADR-001 by reference; closes four of its follow-ups. **Now immutable** |
 | [003](ADR-003-phase-3a-event-audience-and-close-freeze.md) | Phase 3a — the event audience and the close-time freeze | **Accepted** (2026-07-29) | D-12…D-21. Amends 001 and 002 by reference; closes GAP 6. The first ADR about *behaviour* rather than schema. **Now immutable** |
+| [004](ADR-004-detaching-the-roster-import-run.md) | Detaching the roster import run from the HTTP request | **Accepted** (2026-08-27) | **D-54** and its eight parts (D-54.1…D-54.8). Amends 001/002/003 by reference. **Not the consolidation** — see the note at the bottom of this file. **Now immutable** |
 
 Decision numbers run continuously across documents, so `D-9` is unambiguous without naming the ADR.
+
+> **⚠ ADR-004 took the number the consolidation was reserved for.** ADR-002 anticipated a consolidating
+> ADR "around ADR-004" and ADR-003's follow-up list calls for it *at* ADR-004. That is no longer where
+> it lands: JJ's call was that a large consolidation must not be a precondition for a production defect
+> fix. **The consolidation is now due at ADR-005.** ADR-003 is `Accepted` and immutable, so its
+> follow-up box still says ADR-004 and always will — this index is the amendment, which is the hazard
+> the top of this file describes, arriving for the second time.
 
 ## Decided, but not yet registered
 
@@ -30,7 +38,7 @@ all unwritten.** Twenty of them are cited by number in shipped production code, 
 > **⚠ D-43 reverses a fact ADR-001 still asserts, and ADR-001 cannot say so itself.** ADR-001 is
 > `Accepted` and therefore immutable — it goes on stating that REGNO *is* the card UID at its lines 19,
 > 124–125 and 254, and roughly a dozen comments in the codebase now cite ADR-001 for the opposite.
-> **This row is the amendment** until the ADR-004 consolidation absorbs it. It is the exact hazard the
+> **This row is the amendment** until the ADR-005 consolidation absorbs it. It is the exact hazard the
 > top of this file describes, so it is recorded here rather than by editing an accepted document.
 
 | Pending | Decision | Status | Lives only in |
@@ -61,7 +69,7 @@ all unwritten.** Twenty of them are cited by number in shipped production code, 
 | **D-45** | **`GET /student-groups` declares `students.read`, and `groups.read` is deleted outright.** Technical Plan §7.1 line 500 already assigns `students.read` to the frontend's `/groups` page; 3b-2 minted a second code without reading it. The plan is source of truth for the permission map, so the minted code was a contradiction. **Not kept as a synonym** — two codes for one page is the drift the registry exists to stop, and a synonym has to be granted twice by every role Phase 6 writes. Pinned by absence, so re-minting it fails a test rather than passing review | pending gate | `EamsPermissions.StudentsRead`, `StudentGroupsController`, `The_groups_read_code_D_45_deleted_has_not_come_back` |
 | **D-46** | **`GET /events/{id}/manifest` — the offline capture cache**, on its own device-authenticated controller rather than as one more action on `EventsController`, because every action there is open under ADR-001 D-6 and this one carries `attendance.capture`. Four choices inside it are the load-bearing ones. **It is the invitation, not the roster**: no attendance state, because a manifest carrying it would read as authoritative on the device. **Offline validation against it is display-only and never gating** — an unknown card must still be queued, or "the cache is stale" becomes "the attendance never happened". **The version is a SHA-256 content hash over the whole published body**, not `max(UpdatedAt)` plus counts: deletes, bulk SQL (the SIS import is exactly that shape) and card deactivations all leave a watermark unmoved, and a hash cannot miss a change because the thing that changed *is* the thing hashed — never `GetHashCode`, which is per-process randomized and looks correct in a single-process dev run. **Never truncated and never paged** — over `MaxAttendees` (20,000) it is a loud `413 ManifestTooLarge`, because a short list is indistinguishable from a small event. Reuses `attendance.capture` rather than minting `events.manifest` (avoiding D-45's shape) and gets a **third rate-limit policy** partitioned by device id, so a cache refresh can never spend a kiosk's tap budget | pending gate | `EventManifestController`, `EventManifestDto`, `EventManifestVersion`, `EventManifestLimits`, `EventService` manifest region, `ConditionalGetOperationFilter`, `CaptureRateLimiting.ManifestPolicyName`, `EventManifestTests` / `EventManifestVersionMovementTests`, `docs/api/attendance-contract-handoff.md` |
 
-Deferred to the ADR-004 consolidation at JJ's direction, not forgotten.
+Deferred to the ADR-005 consolidation at JJ's direction, not forgotten.
 
 > **What D-43 does NOT close.** The import layer is corrected; the **binding question is still open** —
 > the roster in hand has no RFID column, so every student currently imports with no card and every tap
@@ -109,6 +117,12 @@ Deferred to the ADR-004 consolidation at JJ's direction, not forgotten.
 | The event status transition matrix | ADR-003 **D-18** |
 | What `Expected` / `AttendanceRate` mean, and why a walk-in is not blocked | ADR-003 **D-19/D-20** |
 | Why the freeze is not the plan's Hangfire batch job | ADR-003 **D-21** |
+| Why the **import** *is* background work when the freeze is not | ADR-004 **D-54.1** ⚠ (read with D-21 or D-21 looks like a policy) |
+| Why `POST /sis/import/{id}/run` returns `202`, and how a batch is claimed | ADR-004 **D-54**, **D-54.4** |
+| Why there is no `Queued` import status | ADR-004 **D-54.2** ⚠ |
+| How a background scope resolves its tenant | ADR-004 **D-54.3** ⚠ |
+| What recovers a `Running` batch after a process death | ADR-004 **D-54.5**, and the accepted limit in **D-54.6** |
+| The seven progress columns, and why `NULL` is the only "no progress" | ADR-004 **D-54.7** |
 
 ## Items with silent or unrecoverable failure modes
 
@@ -150,6 +164,26 @@ It is the only recovery route out of a terminal status (D-14). Adding a status g
 a change that reads as a *safety improvement* in review, since the tap path has one — turns D-14 into
 a dead end with no way back. Nothing tests this today.
 
+### ADR-004 D-54.3 — a background DI scope has no `HttpContext`, and that means "do not filter"
+
+`ClaimsSchoolContext` returns `null` when there is no `HttpContext`, and `ISchoolContext` documents
+`null` as *"do not filter"* — correct for the two cases it was written for (startup migration/seeding,
+design-time model building). A `BackgroundService` scope hits the same branch, which would have switched
+**every** global query filter off and let the roster import upsert across all schools.
+
+**No test in the suite would have failed.** `EAMS.Tests` builds one school, and with one school an
+unfiltered query and a filtered one return identical rows for every assertion. The fix (a scoped ambient
+tenant that **throws** rather than falling back to unfiltered) is asserted by reading until somebody
+builds a two-school fixture. **Do not "simplify" that throw into a fallback.**
+
+### ADR-004 D-54.2 — a new import status value reads as *finished* to every older build
+
+Both terminality predicates — `SisImportBatchDto.IsTerminal` and the SPA's `isTerminalStatus` in
+`web-admin/src/sisImport.ts` — are written as *not `Pending` and not `Running`*. That is deliberate and
+right. Its corollary is that adding a status (`Queued` was the tempting one) makes a brand-new batch
+render as a completed run with five zero counters and a red "counters do not add up" alert. Additive
+`nvarchar` value, both predicates changed in the same commit, shipped with a release — or not at all.
+
 ## Proposed, not yet decided
 
 **D-47 … D-53** are *proposed* in
@@ -167,7 +201,12 @@ here so the numbering stays unambiguous — nothing in code may cite them until 
 | **D-53** | Terms get an admin write surface; the rest of `/academic` stays read-only because the importer owns those tables |
 
 That document is the plan for the next slice, not an ADR. On implementation these fold into the
-ADR-004 consolidation alongside the unwritten D-22…D-46.
+ADR-005 consolidation alongside the unwritten D-22…D-46.
+
+**D-54 is not in either list above** — it is written, in [ADR-004](ADR-004-detaching-the-roster-import-run.md),
+and is the next number after the proposed block. Its eight parts are numbered `D-54.1`…`D-54.8` rather
+than consuming `D-55`…`D-62`, because they are one decision's parts and none is separable. **A future
+ADR continues from D-55.**
 
 ## Conventions
 
@@ -178,7 +217,9 @@ ADR-004 consolidation alongside the unwritten D-22…D-46.
   failure the practice exists to prevent.
 - A `Proposed` ADR is freely editable. An `Accepted` one is not: supersede it instead, and update this
   index.
-- A consolidating ADR superseding 001–003 is **now due at ADR-004**, not merely worth considering.
-  Four documents is where "read them together" stops being followed. The chronology is still
+- A consolidating ADR superseding 001–004 is **now due at ADR-005**, and is **overdue rather than due**:
+  ADR-003 already called four documents the point where "read them together" stops being followed, and
+  there are now five. ADR-004 took the 004 number for a production defect fix at JJ's direction — the
+  consolidation is a large document and was not going to gate a fix. The chronology is still
   load-bearing, so the consolidation must preserve *when* each decision was made and with what in
   hand — particularly ADR-003 D-13, which is only comprehensible in the order it happened.
