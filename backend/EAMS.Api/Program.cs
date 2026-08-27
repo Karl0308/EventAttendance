@@ -254,6 +254,13 @@ builder.Services.AddCaptureRateLimiter(AuthRateLimiting.AddAuthPolicies);
 // This is the largest "build toward the seam" win in the phase: every §11 global query filter now runs
 // against a tenant that can move, which is the condition under which its failure modes appear at all.
 builder.Services.AddHttpContextAccessor();
+
+// ADR-004 D-54.3. The tenant of a scope that has no HttpContext to read one from — which is every
+// scope a BackgroundService opens. Scoped, because that is the unit it describes; registered as the
+// concrete type because there is exactly one implementation and no seam to defend. Resolving it in a
+// request scope is inert: ClaimsSchoolContext consults it only when HttpContext is null.
+builder.Services.AddScoped<AmbientTenant>();
+
 builder.Services.Replace(ServiceDescriptor.Scoped<ISchoolContext, ClaimsSchoolContext>());
 builder.Services.Replace(ServiceDescriptor.Scoped<IDeviceContext, ClaimsDeviceContext>());
 
