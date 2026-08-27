@@ -6221,14 +6221,52 @@
             "format": "date-time",
             "nullable": true
           },
+          "progressPhase": {
+            "type": "string",
+            "nullable": true
+          },
+          "progressPhaseNumber": {
+            "type": "integer",
+            "format": "int32",
+            "nullable": true
+          },
+          "progressPhaseCount": {
+            "type": "integer",
+            "format": "int32",
+            "nullable": true
+          },
+          "progressUnitsDone": {
+            "type": "integer",
+            "format": "int32",
+            "nullable": true
+          },
+          "progressUnitsTotal": {
+            "type": "integer",
+            "format": "int32",
+            "nullable": true
+          },
+          "progressUpdatedAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "failureReason": {
+            "type": "string",
+            "nullable": true
+          },
           "countersReconcile": {
             "type": "boolean",
-            "description": "Whether the counters add up. Exposed rather than left for the caller to compute because it is\r\nthe one check an operator runs, and a UI that has to derive it will eventually derive it wrong.",
+            "description": "Whether the counters add up. Exposed rather than left for the caller to compute because it is\r\nthe one check an operator runs, and a UI that has to derive it will eventually derive it wrong.\r\n            \r\n\r\n<b>It is a statement about a terminal batch, and only about a terminal batch.</b> On a\r\n`Pending` or `Running` one it is <em>expected</em> to be false: `TotalRows` is\r\nthe staged row count from the moment of upload, while the four outcome counters stay at zero\r\nuntil the tally at the end of the run. That was true before anything polled a running batch, so\r\nnobody ever saw it — the only reader was a finished run's summary.\r\n\r\n<b>The computation is deliberately unchanged, and must stay unchanged.</b> The obvious \"fix\" —\r\nreturning `true` while EAMS.Application.Dtos.SisImportBatchDto.IsTerminal is false — would make a reconciliation\r\ncheck that cannot fail during the only window in which the pipeline is actually writing the\r\nnumbers it reconciles. A check that is true by construction proves nothing. So this stays\r\narithmetic, and it is the <em>caller's</em> job to ask it only of a batch whose run is over:\r\ngate on EAMS.Application.Dtos.SisImportBatchDto.IsTerminal.\r\n",
+            "readOnly": true
+          },
+          "isTerminal": {
+            "type": "boolean",
+            "description": "Whether the run is over — i.e. whether polling should stop and the results are worth reading.\r\n            \r\n\r\n<b>Expressed as \"not one of the two live states\" rather than as a list of the four finished\r\nones, and the two are not equivalent under drift.</b> A status this build has never heard of is\r\nclassified <em>terminal</em> here, which is the safe direction: the alternative leaves a poller\r\nwaiting forever on a run it will never recognise as finished. It is also the only reading under\r\nwhich a batch whose status is somehow corrupt can be looked at at all.\r\n\r\n<b>This must agree, value for value, with the SPA's `isTerminalStatus` in\r\n`web-admin/src/sisImport.ts`, which is written the same way and for the same reason.</b>\r\nThe two are the same predicate on two sides of the wire: if they disagree, one side stops\r\npolling while the other still shows a spinner, or the results step renders over a batch that\r\nhas not run. Changing either without the other is the defect. There is a unit test pinning this\r\nside against the whole of EAMS.Domain.SisImportStatus.All plus a value from outside the set.\r\n",
             "readOnly": true
           }
         },
         "additionalProperties": false,
-        "description": "A batch's summary. The five outcome counters are the reconciliation ADR-001 D-5 exists to make\r\npossible: `InsertedRows + UpdatedRows + FailedRows + SkippedRows == TotalRows`, always.\r\nEAMS.Application.Dtos.SisImportBatchDto.WarningRows is orthogonal — a warned row is already counted in one of the four."
+        "description": "A batch's summary. The five outcome counters are the reconciliation ADR-001 D-5 exists to make\r\npossible: `InsertedRows + UpdatedRows + FailedRows + SkippedRows == TotalRows` on a\r\n<em>terminal</em> batch. EAMS.Application.Dtos.SisImportBatchDto.WarningRows is orthogonal — a warned row is already counted\r\nin one of the four.\r\n            \r\n\r\n\r\nThe `Progress*` fields are all nullable and all NULL on a batch that has never reported\r\nprogress — see `SisImportBatch` for why there is no zero-valued alternative.\r\n"
       },
       "SisImportPreviewDto": {
         "type": "object",

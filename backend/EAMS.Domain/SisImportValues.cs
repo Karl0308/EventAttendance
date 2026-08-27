@@ -74,6 +74,154 @@ public static class SisImportStatus
 }
 
 /// <summary>
+/// Where a <em>running</em> import has got to — <c>SisImportBatches.ProgressPhase</c>.
+///
+/// <para>
+/// <b>This is not a second status column and must not be read as one.</b>
+/// <see cref="SisImportStatus"/> says what became of the batch and is what every existing reader,
+/// index and reconciliation depends on. This says which step of a run is currently executing, and it
+/// only means anything while the status is <see cref="SisImportStatus.Running"/>. The two answer
+/// different questions: "did it work?" versus "is it stuck, and on what?".
+/// </para>
+///
+/// <para>
+/// <b>The list is ordered, and the order is load-bearing.</b> <see cref="All"/> is written in the
+/// exact sequence a run passes through, so <c>All.IndexOf(phase) + 1</c> is the phase number a
+/// progress reader shows and <c>All.Count</c> — minus the terminal <see cref="Done"/> — is the count
+/// it shows it out of. A caller that re-orders this list changes what every stored
+/// <c>ProgressPhaseNumber</c> meant, which is why the numbers are written to the row rather than
+/// derived from this list at read time.
+/// </para>
+///
+/// <para>
+/// <b>The mapping to <c>SisImportService.ExecuteAsync</c>, which is the contract between this list and
+/// the code that writes it.</b> Each phase names one step of that method, in that method's own order:
+/// </para>
+///
+/// <list type="table">
+///   <item>
+///     <term><see cref="ClearingPreviousRun"/></term>
+///     <description>
+///     The <c>ExecuteDelete</c> of this batch's <c>SisImportRowEntities</c>. Non-empty only when this
+///     is a retry, and the one phase that can be instantaneous on a first run.
+///     </description>
+///   </item>
+///   <item>
+///     <term><see cref="ParsingRows"/></term>
+///     <description>Resolving the batch's RFID source column, then <c>ParseRows</c> over the staged rows.</description>
+///   </item>
+///   <item>
+///     <term><see cref="ResolvingDimensions"/></term>
+///     <description>
+///     <c>ResolveDimensionsAsync</c> — colleges, programmes, courses, instructors, offerings — and the
+///     <c>SaveChanges</c> that lands them.
+///     </description>
+///   </item>
+///   <item>
+///     <term><see cref="ResolvingFacts"/></term>
+///     <description>
+///     <c>ResolveFactsAsync</c> — students, cards, enrollments, term records. The longest phase on a
+///     full roster, and the reason a run needs progress at all.
+///     </description>
+///   </item>
+///   <item>
+///     <term><see cref="WritingFacts"/></term>
+///     <description>
+///     The <c>SaveChanges</c> that lands the fact pass. Separate from
+///     <see cref="ResolvingFacts"/> because it is one long database call rather than per-row work —
+///     a run sitting here is blocked on SQL Server, which is a different diagnosis.
+///     </description>
+///   </item>
+///   <item>
+///     <term><see cref="RecordingRowResults"/></term>
+///     <description>
+///     Applying the row ledger, tallying the batch counters, stamping <c>FinishedAt</c>, and saving.
+///     </description>
+///   </item>
+///   <item>
+///     <term><see cref="RefreshingStudentCache"/></term>
+///     <description><c>RefreshStudentCacheAsync</c> — the ADR-001 D-2 denormalized student columns.</description>
+///   </item>
+///   <item>
+///     <term><see cref="SyncingStudentGroups"/></term>
+///     <description>
+///     The derived-group projection for the term. Last, and outside the row results, so a batch can
+///     read <c>Completed</c> while this is still running — which is precisely why it is named.
+///     </description>
+///   </item>
+///   <item>
+///     <term><see cref="Done"/></term>
+///     <description>Terminal. Every step above finished; the status column carries the outcome.</description>
+///   </item>
+/// </list>
+///
+/// <para>
+/// <b>Nothing writes these yet.</b> The column, the constants and the DTO fields land together so the
+/// schema change is one migration rather than three; the writer is a later phase. Until then every
+/// batch's <c>ProgressPhase</c> is NULL, which honestly reads as "this run predates progress
+/// reporting".
+/// </para>
+/// </summary>
+public static class SisImportPhase
+{
+    /// <summary>Deleting the previous attempt's row-entity fan-out.</summary>
+    public const string ClearingPreviousRun = "ClearingPreviousRun";
+
+    /// <summary>Reading the staged rows' cells into parsed rows.</summary>
+    public const string ParsingRows = "ParsingRows";
+
+    /// <summary>Colleges, programmes, courses, instructors and offerings.</summary>
+    public const string ResolvingDimensions = "ResolvingDimensions";
+
+    /// <summary>Students, cards, enrollments and term records.</summary>
+    public const string ResolvingFacts = "ResolvingFacts";
+
+    /// <summary>The single save that lands the fact pass.</summary>
+    public const string WritingFacts = "WritingFacts";
+
+    /// <summary>Row outcomes, batch counters and <c>FinishedAt</c>.</summary>
+    public const string RecordingRowResults = "RecordingRowResults";
+
+    /// <summary>The ADR-001 D-2 denormalized student columns.</summary>
+    public const string RefreshingStudentCache = "RefreshingStudentCache";
+
+    /// <summary>The derived student-group projection for the term.</summary>
+    public const string SyncingStudentGroups = "SyncingStudentGroups";
+
+    /// <summary>
+    /// The run is over. Terminal, and deliberately <em>in</em> <see cref="All"/> rather than expressed
+    /// as a NULL: a batch whose phase is NULL has never reported progress at all, and a batch that
+    /// finished is not the same thing. See <see cref="Working"/> for the eight that are steps.
+    /// </summary>
+    public const string Done = "Done";
+
+    /// <summary>
+    /// The eight working phases followed by <see cref="Done"/>, <b>in run order</b> — see the type
+    /// remarks. Re-ordering this list re-interprets every <c>ProgressPhaseNumber</c> already stored.
+    /// </summary>
+    public static readonly IReadOnlyList<string> All =
+    [
+        ClearingPreviousRun, ParsingRows, ResolvingDimensions, ResolvingFacts, WritingFacts,
+        RecordingRowResults, RefreshingStudentCache, SyncingStudentGroups, Done,
+    ];
+
+    /// <summary>
+    /// The eight phases that are actual work, in run order. This — not <see cref="All"/> — is the
+    /// denominator of "phase 4 of 8": counting <see cref="Done"/> as a step would make a finished run
+    /// report 9 of 9 and a run on its last real step report 8 of 9, which reads as "one step left"
+    /// forever.
+    /// </summary>
+    public static readonly IReadOnlyList<string> Working =
+    [
+        ClearingPreviousRun, ParsingRows, ResolvingDimensions, ResolvingFacts, WritingFacts,
+        RecordingRowResults, RefreshingStudentCache, SyncingStudentGroups,
+    ];
+
+    public static bool TryNormalize(string? value, out string canonical) =>
+        SisValueSet.TryNormalize(All, value, out canonical);
+}
+
+/// <summary>
 /// Technical Plan §4.12 — <c>SisImportRows.Result</c>.
 ///
 /// <para>

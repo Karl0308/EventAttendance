@@ -100,70 +100,116 @@ internal sealed class RowLedger
         _entries[row.Id].Touches.Add((entityType, entityId, action));
 
     /// <summary>
-    /// Folds everything collected into the staged rows: one terminal result each, plus the fan-out rows.
+    /// Folds everything collected into the staged rows: one terminal result each, plus the fan-out
+    /// rows — <b>pausing at chunk boundaries so the caller can save what has accumulated</b>.
     ///
     /// <para>
     /// Every row gets a terminal result, including one nothing was recorded against, so
     /// <c>Inserted + Updated + Failed + Skipped == TotalRows</c> holds by construction rather than by
     /// each pass remembering to keep it true (ADR-001 D-5).
     /// </para>
+    ///
+    /// <para>
+    /// <b>This is a lazy sequence, and enumerating it is what performs the fold.</b> Each element means
+    /// "a chunk is staged, save now"; its value is the number of fan-out rows that chunk added. The
+    /// final element is yielded even when it carries no fan-out at all, because a row that touched
+    /// nothing still has a <c>Result</c> to write — so a full enumeration always ends with everything
+    /// staged. A caller that abandons the sequence early leaves rows unfolded, which the batch's own
+    /// counter reconciliation reports rather than hides.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>The boundary always falls between source rows.</b> A row's outcome and its own fan-out are
+    /// therefore never written by different saves, which is what makes a part-written fan-out readable
+    /// rather than merely inconsistent. It also makes <paramref name="fanOutChunkSize"/> a ceiling that
+    /// only a single row touching more entities than the whole chunk could exceed — ten is the most any
+    /// row touches (see <c>SisImportService.ResolveFactsAsync</c>), so it cannot.
+    /// </para>
     /// </summary>
-    public void Apply(EamsDbContext db)
+    public IEnumerable<int> ApplyInChunks(EamsDbContext db, int fanOutChunkSize)
     {
+        ArgumentOutOfRangeException.ThrowIfLessThan(fanOutChunkSize, 1);
+
+        var pending = 0;
+
         foreach (var row in _rows)
         {
             var entry = _entries[row.Id];
 
-            row.WarningCode = null;
-            row.WarningMessage = null;
-            row.ErrorMessage = null;
-            row.SkipReason = null;
+            // A failed row stages no fan-out at all — Stage returns before adding any — so counting its
+            // touches here would cut a chunk short against rows that are never going to be written.
+            var fanOut = entry.FailureCode is null ? entry.Touches.Count : 0;
 
-            if (entry.Warnings.Count > 0)
+            // Decided *before* the row is staged rather than after. A row is never split across two
+            // saves, so deciding afterwards would mean discovering the ceiling had already been passed.
+            if (pending > 0 && pending + fanOut > fanOutChunkSize)
             {
-                row.WarningCode = entry.Warnings
-                    .OrderBy(w => IndexOfPrecedence(w.Code))
-                    .First().Code;
-                row.WarningMessage = Clamp(
-                    string.Join(" ", entry.Warnings.Select(w => $"[{w.Code}] {w.Message}")),
-                    WarningMessageMaxLength);
+                yield return pending;
+                pending = 0;
             }
 
-            if (entry.FailureCode is not null)
-            {
-                row.Result = SisImportRowResult.Failed;
-                row.ErrorMessage = Clamp(
-                    $"{entry.FailureCode}: {entry.FailureMessage}", ErrorMessageMaxLength);
-                continue;
-            }
-
-            foreach (var (type, id, action) in entry.Touches)
-            {
-                db.SisImportRowEntities.Add(new SisImportRowEntity
-                {
-                    // Set as a navigation as well as by id: the row may itself be a pending insert on a
-                    // retry, and the navigation is what lets EF order the two. Added through the DbSet
-                    // rather than through row.Entities because Entity assigns its own Id in the
-                    // initializer, and a graph-added entity carrying an Id can be classified as an
-                    // existing row and turned into an UPDATE that matches nothing.
-                    SisImportRow = row,
-                    EntityType = type,
-                    EntityId = id,
-                    Action = action,
-                });
-            }
-
-            row.Result = Fold(entry.Touches);
-
-            if (row.Result != SisImportRowResult.Skipped) continue;
-
-            // A skip is never a shrug. When the row's only distinguishing content was a placeholder
-            // teacher, say so — that is the 27 (REGNO, COURSE_CODE) pairs, which are one enrollment
-            // described twice rather than a duplicate that was thrown away.
-            row.SkipReason = entry.Warnings.Any(w => w.Code == SisImportWarningCode.InstructorPlaceholder)
-                ? SisImportSkipReason.InstructorPlaceholder
-                : SisImportSkipReason.NoChange;
+            Stage(db, row, entry);
+            pending += fanOut;
         }
+
+        // Unconditional: the tail chunk, and — when the last rows touched nothing — the only save that
+        // carries their results.
+        yield return pending;
+    }
+
+    /// <summary>Folds one row. Extracted from <see cref="ApplyInChunks"/> so its early returns stay
+    /// early returns rather than becoming conditions the chunk accounting has to repeat.</summary>
+    private static void Stage(EamsDbContext db, SisImportRow row, Entry entry)
+    {
+        row.WarningCode = null;
+        row.WarningMessage = null;
+        row.ErrorMessage = null;
+        row.SkipReason = null;
+
+        if (entry.Warnings.Count > 0)
+        {
+            row.WarningCode = entry.Warnings
+                .OrderBy(w => IndexOfPrecedence(w.Code))
+                .First().Code;
+            row.WarningMessage = Clamp(
+                string.Join(" ", entry.Warnings.Select(w => $"[{w.Code}] {w.Message}")),
+                WarningMessageMaxLength);
+        }
+
+        if (entry.FailureCode is not null)
+        {
+            row.Result = SisImportRowResult.Failed;
+            row.ErrorMessage = Clamp(
+                $"{entry.FailureCode}: {entry.FailureMessage}", ErrorMessageMaxLength);
+            return;
+        }
+
+        foreach (var (type, id, action) in entry.Touches)
+        {
+            db.SisImportRowEntities.Add(new SisImportRowEntity
+            {
+                // Set as a navigation as well as by id: the row may itself be a pending insert on a
+                // retry, and the navigation is what lets EF order the two. Added through the DbSet
+                // rather than through row.Entities because Entity assigns its own Id in the
+                // initializer, and a graph-added entity carrying an Id can be classified as an
+                // existing row and turned into an UPDATE that matches nothing.
+                SisImportRow = row,
+                EntityType = type,
+                EntityId = id,
+                Action = action,
+            });
+        }
+
+        row.Result = Fold(entry.Touches);
+
+        if (row.Result != SisImportRowResult.Skipped) return;
+
+        // A skip is never a shrug. When the row's only distinguishing content was a placeholder
+        // teacher, say so — that is the 27 (REGNO, COURSE_CODE) pairs, which are one enrollment
+        // described twice rather than a duplicate that was thrown away.
+        row.SkipReason = entry.Warnings.Any(w => w.Code == SisImportWarningCode.InstructorPlaceholder)
+            ? SisImportSkipReason.InstructorPlaceholder
+            : SisImportSkipReason.NoChange;
     }
 
     /// <summary>

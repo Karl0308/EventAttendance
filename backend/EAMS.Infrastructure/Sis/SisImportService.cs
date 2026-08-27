@@ -58,6 +58,55 @@ internal sealed class SisImportService : ISisImportService
     /// <summary>How many staged rows an upload preview returns. Enough to eyeball, small enough to render.</summary>
     private const int PreviewSampleSize = 25;
 
+    /// <summary>
+    /// The per-command budget <see cref="RunAsync"/> raises the connection to, in seconds.
+    ///
+    /// <para>
+    /// <b>Raised here rather than in <c>AddEamsInfrastructure</c>, because the global 30 seconds is
+    /// right for everything else.</b> That default bounds a query a user is waiting on, and widening
+    /// it everywhere would turn a stuck read into a request that hangs a screen for ten minutes. The
+    /// import is the one operation whose per-command duration scales with the size of a file an
+    /// operator chose: <c>ExecuteAsync</c> runs a handful of passes, each ending in one
+    /// <c>SaveChanges</c> over every row in the batch, so at twenty thousand rows a single command
+    /// legitimately outlives a budget written for a page of students.
+    /// </para>
+    ///
+    /// <para>
+    /// Ten minutes: far above the largest roster anyone has described, and still a ceiling rather than
+    /// none at all - a command that has not returned in ten minutes is stuck, not slow, and the batch
+    /// should say <c>Failed</c> so it can be retried rather than hold a connection indefinitely.
+    /// </para>
+    /// </summary>
+    private const int RunCommandTimeoutSeconds = 600;
+
+    /// <summary>
+    /// How many <c>SisImportRowEntity</c> fan-out inserts one <c>SaveChanges</c> is allowed to carry.
+    ///
+    /// <para>
+    /// <b>The number is chosen against SQL Server's lock-escalation threshold, not against a batch
+    /// size.</b> EF wraps a multi-statement save in a transaction, and a transaction that takes roughly
+    /// five thousand row or page locks on one object is escalated by SQL Server to a lock on the whole
+    /// table. A full-roster fan-out is on the order of 190,000 inserts, so a single save crosses that
+    /// threshold almost immediately and then holds a table lock on <c>SisImportRowEntities</c> until
+    /// every last one has been written — with a transaction log that cannot truncate for the duration.
+    /// At 500 a chunk stays an order of magnitude under the threshold, so each transaction is short,
+    /// escalates nothing, and commits.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>And it is large enough that the chunking costs little.</b> The SQL Server provider already
+    /// packs about forty inserts into one command, so 500 is a dozen commands — one round trip's worth
+    /// of work per save, and ~380 saves for a 190,000-row fan-out rather than 190,000 of them. Much
+    /// smaller trades the lock for round trips; much larger walks back towards escalation.
+    /// </para>
+    ///
+    /// <para>
+    /// It is a ceiling per save rather than a quota: <see cref="RowLedger.ApplyInChunks"/> never splits
+    /// one source row across two saves, so a save carries the largest whole number of rows that fits.
+    /// </para>
+    /// </summary>
+    private const int FanOutSaveChunkSize = 500;
+
     // ==================================================================================== upload
 
     public async Task<SisImportPreviewDto> UploadAsync(
@@ -114,15 +163,21 @@ internal sealed class SisImportService : ISisImportService
     public async Task<SisImportBatchDto> RunAsync(
         Guid batchId, Guid termId, CancellationToken ct = default)
     {
-        var batch = await _db.SisImportBatches.IgnoreQueryFilters()
-                        .FirstOrDefaultAsync(b => b.Id == batchId, ct)
-                    ?? throw new SisImportBatchNotFoundException(
-                        $"No import batch {batchId}. Upload the file to create one; a batch id is " +
-                        "returned by the upload and is not something a caller invents.");
+        // AsNoTracking, and that is not a micro-optimization. This read answers the two questions below
+        // and is stale the instant it returns; the claim is what decides. Tracking it would leave the
+        // context holding the *pre-claim* row as the instance the run then writes through, so the
+        // run's own saves would carry the previous attempt's progress and failure reason back over
+        // what the claim just cleared. The instance ExecuteAsync writes through is loaded after the
+        // claim instead, below.
+        var snapshot = await _db.SisImportBatches.IgnoreQueryFilters().AsNoTracking()
+                           .FirstOrDefaultAsync(b => b.Id == batchId, ct)
+                       ?? throw new SisImportBatchNotFoundException(
+                           $"No import batch {batchId}. Upload the file to create one; a batch id is " +
+                           "returned by the upload and is not something a caller invents.");
 
-        if (batch.TermId != termId)
+        if (snapshot.TermId != termId)
             throw new SisImportException(
-                $"Batch {batchId} was uploaded for term {batch.TermId} but the run declared term " +
+                $"Batch {batchId} was uploaded for term {snapshot.TermId} but the run declared term " +
                 $"{termId}. The two must match — see SisImportRunRequest for why the term is confirmed " +
                 "at run time as well as at upload.");
 
@@ -131,11 +186,18 @@ internal sealed class SisImportService : ISisImportService
         // uploading the file again, which produces a second batch and leaves the first intact — and
         // that second batch reporting every row Skipped is the idempotency proof. A Failed batch is
         // different: nothing about it is worth preserving, and retrying is the obvious repair.
-        if (batch.Status is not (SisImportStatus.Pending or SisImportStatus.Failed))
+        //
+        // ADR-004 D-54.4: this is now belt-and-braces, NOT the defence. It reads a row and acts on the
+        // answer several statements later, so two callers can both pass it — which is the whole race.
+        // TryClaimAsync below is what actually decides, in one statement the database serializes. This
+        // check stays because it is where the *reason* lives: the WHERE clause of the claim can say
+        // which statuses are re-runnable but not why, and because refusing here saves an already-run
+        // batch a term load and a full staged-row read before the same refusal.
+        if (snapshot.Status is not (SisImportStatus.Pending or SisImportStatus.Failed))
             throw new SisImportException(
-                $"Batch {batchId} has already been run (status {batch.Status}). Upload the file again " +
-                "to import it a second time; a completed batch is kept as the record of what that run " +
-                "did and is not rewritten.");
+                $"Batch {batchId} has already been run (status {snapshot.Status}). Upload the file " +
+                "again to import it a second time; a completed batch is kept as the record of what " +
+                "that run did and is not rewritten.");
 
         var term = await LoadTermAsync(termId, ct);
 
@@ -144,15 +206,62 @@ internal sealed class SisImportService : ISisImportService
             .OrderBy(r => r.RowNumber)
             .ToListAsync(ct);
 
-        batch.Status = SisImportStatus.Running;
-        batch.StartedAt = DateTime.UtcNow;
-        await _db.SaveChangesAsync(ct);
+        // Raised for the rest of this scoped context's life, which is this request. See
+        // RunCommandTimeoutSeconds for why it is not raised globally.
+        _db.Database.SetCommandTimeout(RunCommandTimeoutSeconds);
+
+        // The claim, and it is the last thing that happens before the run starts. Everything above it
+        // can throw — an unknown term, an unreadable staged row — and every one of those must leave the
+        // batch in the status it arrived in. A claim taken before a step that can fail is a batch left
+        // Running with nothing running, which is the zombie ADR-004 exists to eliminate.
+        var claimedAt = DateTime.UtcNow;
+
+        if (!await TryClaimAsync(batchId, claimedAt, ct))
+            throw new SisImportException(
+                $"Batch {batchId} was claimed by another run. A batch runs once at a time, and the " +
+                "claim is a single statement, so exactly one caller wins and the rest are told this. " +
+                "Wait for the run in progress to finish; if you meant to import the file a second " +
+                "time, upload it again — a batch is kept as the record of what that run did and is " +
+                "not rewritten.");
+
+        // Read *after* the claim, and it is the only tracked copy of this row in the context. That
+        // ordering is load-bearing rather than tidy.
+        //
+        // ExecuteUpdate writes SQL and deliberately touches no tracked graph, so a copy loaded before
+        // the claim would still hold the pre-claim row — the previous attempt's FailureReason, its
+        // phase, its unit counts — while being the instance ExecuteAsync mutates and saves through. EF
+        // sends the properties that differ from the snapshot it loaded, so the run's own SaveChanges
+        // would write all of that back over what the claim had just cleared. Loading it here makes the
+        // snapshot the claimed row, so a pass's save carries its pass's changes and nothing else,
+        // which is also what SisImportSaveBoundaryTests pins about the progress columns.
+        //
+        // Reconciling the stale copy in memory instead was tried and is a trap: assigning the claimed
+        // values and then declaring the entry Unchanged does not leave EF agreeing with the database,
+        // and the run wrote the previous attempt's progress back. The row is the authority; read it.
+        var batch = await _db.SisImportBatches.IgnoreQueryFilters()
+                        .FirstOrDefaultAsync(b => b.Id == batchId, ct)
+                    ?? throw new SisImportBatchNotFoundException(
+                        $"Import batch {batchId} was claimed and then disappeared before the run could " +
+                        "read it back. Nothing has been imported.");
 
         try
         {
             await ExecuteAsync(batch, term, staged, ct);
         }
-        catch (Exception ex) when (ex is not OperationCanceledException)
+        // Cancellation included, and the carve-out that used to be here is what produced two
+        // permanently stuck batches on the deployment VM.
+        //
+        // The reasoning for excluding it was that a cancelled run has not "failed" - it was called off,
+        // and marking it Failed overstates what happened. That is true about the word and wrong about
+        // the consequence. `Running` is not in (Pending | Failed), so the re-run guard above refuses a
+        // batch in that state forever: a cancelled run left a batch that could not be completed, could
+        // not be retried, and was indistinguishable from one still in progress - the exact state the
+        // block below says it exists to prevent. `Failed` is the honest label for a run that did not
+        // finish, and it is the only one an operator can act on.
+        //
+        // The status write below already uses CancellationToken.None, so it still lands when the token
+        // that got us here is the one that was cancelled.
+        catch (Exception ex)
         {
             // Marked and rethrown, never swallowed. The batch says the run stopped and how far it got;
             // the exception still reaches the caller, is logged, and becomes a 500 with a trace id. A
@@ -193,6 +302,71 @@ internal sealed class SisImportService : ISisImportService
         return ToDto(batch, term);
     }
 
+    /// <summary>
+    /// The phase a claimed batch reports until the progress writer moves it on — the first of
+    /// <see cref="SisImportPhase.Working"/>, read from that list rather than named, so a re-ordering
+    /// there cannot leave the claim stamping a phase the run no longer starts with.
+    /// </summary>
+    private static string FirstWorkingPhase => SisImportPhase.Working[0];
+
+    /// <summary>
+    /// ADR-004 D-54.4 — moves a batch to <c>Running</c> in <b>one</b> statement, and reports whether
+    /// this caller is the one that moved it.
+    ///
+    /// <para>
+    /// <b>What it replaces is a read, a check and a write with no transaction around them.</b> Two
+    /// callers could both load a <c>Pending</c> batch, both find it re-runnable, and both start
+    /// importing the same roster. The window was small while the run was bounded by the HTTP request —
+    /// a second operator had to click inside it — and detaching the run (D-54) makes it ordinary: a
+    /// double-submit, a retried request, or two tabs. Here the deciding and the writing are the same
+    /// statement, so the row lock picks the winner and there is no window at all. Zero rows affected
+    /// means somebody else got there first, which the controller answers <c>409</c>.
+    /// </para>
+    ///
+    /// <para>
+    /// <b><c>IgnoreQueryFilters</c> is load-bearing, not tidiness.</b> <c>EamsDbContext</c> puts a
+    /// tenancy filter on <c>SisImportBatch</c>; without this the predicate carries a <c>SchoolId</c>
+    /// term as well, and a scoped context whose tenant does not resolve updates zero rows — which is
+    /// indistinguishable here from losing the race. Every claim would look refused and no import would
+    /// ever start, with nothing in the failure saying why. It matches the reads either side of it.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>The progress columns are reset, not merely written</b> (D-54.4). A retry of a <c>Failed</c>
+    /// batch that carried the previous attempt's <c>FailureReason</c>, <c>FinishedAt</c>, phase number
+    /// and unit counts into the new run would show an operator the last run's death notice and a
+    /// fabricated position — "phase 5 of 8" against a run that has just started phase 1. Cleared to
+    /// <c>NULL</c> rather than to zero, for the reason <c>SisImportBatch</c>'s progress block gives:
+    /// <c>NULL</c> is "nothing to report", and 0 is a claim about work done.
+    /// <see cref="SisImportBatch.ProgressPhaseNumber"/> and its count stay <c>NULL</c> here because
+    /// they are the progress writer's to fill; what this statement owes them is only that they do not
+    /// describe a previous run.
+    /// </para>
+    /// </summary>
+    private async Task<bool> TryClaimAsync(Guid batchId, DateTime claimedAt, CancellationToken ct)
+    {
+        var claimed = await _db.SisImportBatches.IgnoreQueryFilters()
+            .Where(b => b.Id == batchId
+                        && (b.Status == SisImportStatus.Pending || b.Status == SisImportStatus.Failed))
+            .ExecuteUpdateAsync(
+                s => s.SetProperty(b => b.Status, SisImportStatus.Running)
+                      .SetProperty(b => b.StartedAt, (DateTime?)claimedAt)
+                      .SetProperty(b => b.ProgressPhase, (string?)FirstWorkingPhase)
+                      .SetProperty(b => b.ProgressPhaseNumber, (int?)null)
+                      .SetProperty(b => b.ProgressPhaseCount, (int?)null)
+                      .SetProperty(b => b.ProgressUnitsDone, (int?)null)
+                      .SetProperty(b => b.ProgressUnitsTotal, (int?)null)
+                      .SetProperty(b => b.ProgressUpdatedAt, (DateTime?)claimedAt)
+                      .SetProperty(b => b.FailureReason, (string?)null)
+                      .SetProperty(b => b.FinishedAt, (DateTime?)null),
+                ct);
+
+        // Exactly one, not "at least one": Id is the primary key, so a claim that reported two rows
+        // would mean the predicate no longer identifies a single batch, and treating that as success
+        // would start a run over a set nobody has looked at.
+        return claimed == 1;
+    }
+
     private async Task ExecuteAsync(
         SisImportBatch batch, Term term, IReadOnlyList<SisImportRow> staged, CancellationToken ct)
     {
@@ -218,7 +392,36 @@ internal sealed class SisImportService : ISisImportService
         var mismatchedRows = await ResolveFactsAsync(term, parsed, dimensions, ledger, ct);
         await _db.SaveChangesAsync(ct);
 
-        ledger.Apply(_db);
+        // ---- the fan-out, in saves of its own -----------------------------------------------------
+        //
+        // Split off the batch-row update below, and chunked, and both halves of that are about how long
+        // a lock is held rather than about throughput. EF wraps a multi-statement SaveChanges in a
+        // transaction, so one save carrying the whole fan-out *and* the batch row holds an exclusive
+        // lock on the SisImportBatches row for the length of the longest phase in the run — which is
+        // precisely the interval a progress poller exists to report on. This deployment does not enable
+        // RCSI (the only snapshot work in the repo is inside AttendanceLiveTests, and EventService
+        // declines to treat it as a feature's decision), so under READ COMMITTED that poll blocks
+        // rather than reading a slightly stale row: a progress endpoint that hangs during the part you
+        // most need to watch is the original complaint arriving by a different door.
+        //
+        // Accepted consequence, decided rather than overlooked. A failure part-way through now leaves
+        // some SisImportRows carrying terminal results and the rest still Pending, where one save left
+        // them all Pending. Both states repair identically — the batch goes Failed, and a retry's
+        // ExecuteAsync deletes the prior fan-out and RowLedger re-assigns Result, WarningCode,
+        // WarningMessage, ErrorMessage and SkipReason on every row unconditionally — so the
+        // inconsistency is cosmetic and is only ever visible on a batch that already says Failed. Tally
+        // is unaffected either way: it counts the in-memory `staged` list, which the fold populates in
+        // full however the saves were grouped.
+        foreach (var _ in ledger.ApplyInChunks(_db, FanOutSaveChunkSize))
+        {
+            await _db.SaveChangesAsync(ct);
+        }
+
+        // ---- the batch row, alone -----------------------------------------------------------------
+        //
+        // Never in the same save as a SisImportRowEntity insert. That is the whole of the change above,
+        // and no read-back can see it — the rows on disk are identical either way — which is why
+        // SisImportSaveBoundaryTests asserts about save boundaries instead.
         Tally(batch, staged);
         batch.FinishedAt = DateTime.UtcNow;
         await _db.SaveChangesAsync(ct);
@@ -1720,7 +1923,13 @@ internal sealed class SisImportService : ISisImportService
     private static SisImportBatchDto ToDto(SisImportBatch batch, Term term) => new(
         batch.Id, batch.TermId, term.Code, batch.Source, batch.FileName, batch.SourceSheetName,
         batch.FileHash, batch.Status, batch.TotalRows, batch.InsertedRows, batch.UpdatedRows,
-        batch.FailedRows, batch.SkippedRows, batch.WarningRows, batch.StartedAt, batch.FinishedAt);
+        batch.FailedRows, batch.SkippedRows, batch.WarningRows, batch.StartedAt, batch.FinishedAt,
+        // Passed straight through, nulls included. The claim stamps ProgressPhase and
+        // ProgressUpdatedAt (D-54.4); the rest stay null until the progress writer lands. Null here is
+        // the honest "nothing to report" rather than a gap to be filled in with zeros on the way out.
+        batch.ProgressPhase, batch.ProgressPhaseNumber, batch.ProgressPhaseCount,
+        batch.ProgressUnitsDone, batch.ProgressUnitsTotal, batch.ProgressUpdatedAt,
+        batch.FailureReason);
 
     private static SisImportRowDto ToDto(SisImportRow row) => new(
         row.Id, row.RowNumber, row.Result, row.SkipReason, row.WarningCode, row.WarningMessage,

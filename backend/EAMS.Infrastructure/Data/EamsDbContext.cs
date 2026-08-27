@@ -1086,6 +1086,19 @@ internal class EamsDbContext : DbContext
             e.Property(x => x.SkippedRows).HasDefaultValue(0).ValueGeneratedNever();
             e.Property(x => x.WarningRows).HasDefaultValue(0).ValueGeneratedNever();
 
+            // Progress. Nullable, and deliberately WITHOUT the HasDefaultValue(0) the six counters
+            // above carry — the difference is the point, not an inconsistency. A counter's 0 is a fact
+            // about a finished run ("no rows failed"). A progress 0 would be three different facts at
+            // once: the phase has not started, the phase has no countable units, and the phase has
+            // done none of its units. NULL says "no progress was reported", which is the truth for
+            // every row that exists today and for every batch that ran before this column did.
+            //
+            // No index either: a batch is fetched by primary key on every path that reads these — the
+            // poller asks about one batch it already has the id of — so an index would cost writes on
+            // the hot path of a run to serve a query nobody makes.
+            e.Property(x => x.ProgressPhase).HasMaxLength(40);
+            e.Property(x => x.FailureReason).HasMaxLength(400);
+
             e.HasOne(x => x.School).WithMany().HasForeignKey(x => x.SchoolId).IsRequired();
             e.HasOne(x => x.RunByUser).WithMany().HasForeignKey(x => x.RunByUserId);
 

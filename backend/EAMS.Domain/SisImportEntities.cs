@@ -116,6 +116,92 @@ public class SisImportBatch : Entity
     public DateTime? StartedAt { get; set; }
     public DateTime? FinishedAt { get; set; }
 
+    // -------------------------------------------------------------------------------------------
+    // PROGRESS — where a running import has got to.
+    //
+    // All seven are nullable with NO database default and NO backfill, and that is the whole design
+    // rather than an omission. A batch that ran before progress reporting existed genuinely has no
+    // progress to report, and NULL is the only value that says so. The four existing counters are
+    // `HasDefaultValue(0)` and are right to be — zero inserted rows is a fact about a finished run.
+    // Here a 0 would collapse three different truths into one: "this phase has not started", "this
+    // phase has no countable units", and "this phase has done none of its units yet". A poller cannot
+    // tell those apart, so it would render a progress bar sitting at 0% for a run that is either
+    // finished, healthy, or dead.
+    //
+    // The atomic claim (ADR-004 D-54.4) stamps ProgressPhase and ProgressUpdatedAt when a run starts
+    // and clears the other five, so a Running batch always reports the phase it began on. The writer
+    // that moves them on between passes is a later phase; until it lands, everything but those two
+    // reads NULL — which is exactly what the paragraph above says it should mean.
+    // -------------------------------------------------------------------------------------------
+
+    /// <summary>
+    /// The step currently executing — see <see cref="SisImportPhase"/>, whose remarks carry the
+    /// mapping to <c>SisImportService.ExecuteAsync</c>. Only meaningful while <see cref="Status"/> is
+    /// <c>Running</c>; a terminal batch's last value is the step it finished on or died on.
+    /// </summary>
+    public string? ProgressPhase { get; set; }
+
+    /// <summary>
+    /// 1-based position of <see cref="ProgressPhase"/> in <see cref="SisImportPhase.Working"/>,
+    /// <b>stored rather than derived</b>. Deriving it at read time would mean a future re-ordering or
+    /// insertion in that list silently re-labelled every historical batch's progress; storing it means
+    /// an old row keeps reporting the numbering it actually ran under.
+    /// </summary>
+    public int? ProgressPhaseNumber { get; set; }
+
+    /// <summary>
+    /// How many phases the run expects in total, stored for the same reason as
+    /// <see cref="ProgressPhaseNumber"/>: "4 of 8" has to stay "4 of 8" after a ninth phase is added.
+    /// </summary>
+    public int? ProgressPhaseCount { get; set; }
+
+    /// <summary>
+    /// Units completed <em>within</em> the current phase, and <see cref="ProgressUnitsTotal"/> is what
+    /// they are out of. What a unit is belongs to the phase — rows for a parsing phase, chunks for a
+    /// fan-out — so the pair is only ever compared against itself, never across phases.
+    ///
+    /// <para>
+    /// Both are nullable independently because a phase with no meaningful unit count (one long
+    /// <c>SaveChanges</c>) must be able to report a phase without inventing a denominator. A UI reads
+    /// "no bar for this step", not "0%".
+    /// </para>
+    /// </summary>
+    public int? ProgressUnitsDone { get; set; }
+
+    /// <summary>The denominator for <see cref="ProgressUnitsDone"/>. See its remarks.</summary>
+    public int? ProgressUnitsTotal { get; set; }
+
+    /// <summary>
+    /// When the progress fields above were last written, UTC.
+    ///
+    /// <para>
+    /// <b>This is the field that makes the rest diagnosable.</b> A detached run that dies — process
+    /// recycled, connection lost — leaves a batch reading <c>Running</c> on some phase forever, and
+    /// nothing else on the row distinguishes that from a phase that is merely slow. A stale timestamp
+    /// does.
+    /// </para>
+    /// </summary>
+    public DateTime? ProgressUpdatedAt { get; set; }
+
+    /// <summary>
+    /// Why a run stopped, for an operator, when <see cref="Status"/> is <c>Failed</c>.
+    ///
+    /// <para>
+    /// Distinct from <c>SisImportRow.ErrorMessage</c>, which is per row and says a row could not be
+    /// imported. This is per <em>run</em> and says the run itself did not finish — the case where
+    /// there may be no failed row at all to explain it, because the failure was the file, the term
+    /// check, or the process. Before this column that story lived only in the log, which an operator
+    /// looking at a batch does not have.
+    /// </para>
+    ///
+    /// <para>
+    /// 400 characters: a sentence an operator can act on, deliberately not a stack trace. A truncated
+    /// exception dump would be a worse answer than a short written one, and the log keeps the full
+    /// detail for whoever needs it.
+    /// </para>
+    /// </summary>
+    public string? FailureReason { get; set; }
+
     public Guid? RunByUserId { get; set; }
     public User? RunByUser { get; set; }
 

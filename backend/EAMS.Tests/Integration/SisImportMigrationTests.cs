@@ -289,6 +289,161 @@ public class SisImportMigrationTests : IntegrationTest
         }
     }
 
+    // ------------------------------------------------------- the progress columns, and no backfill
+
+    /// <summary>The migration immediately before <c>SisImportProgress</c>.</summary>
+    private const string PreProgressMigration = "UserLoginFoundation";
+
+    private static readonly Guid LegacyBatchId = new("99999999-9999-9999-9999-999999999991");
+
+    /// <summary>
+    /// One finished batch, written by a schema that has never heard of a progress column — which is
+    /// what every batch in the developer's database and on the deployment VM is.
+    /// </summary>
+    private const string FinishedBatchPopulation = """
+        INSERT INTO SisImportBatches
+            (Id, SchoolId, TermId, Source, FileName, SourceSheetName, Status, TotalRows,
+             InsertedRows, UpdatedRows, FailedRows, SkippedRows, WarningRows, StartedAt, FinishedAt)
+        VALUES
+            ('99999999-9999-9999-9999-999999999991',
+             '11111111-1111-1111-1111-111111111111',
+             '55555555-5555-5555-5555-555555555551',
+             N'Excel', N'CCJ-roster.xlsx', N'Faculty Evaluation Report',
+             N'CompletedWithWarnings', 536, 470, 0, 0, 66, 66,
+             '2026-08-01T02:15:00', '2026-08-01T02:17:30');
+        """;
+
+    /// <summary>
+    /// <b>The no-backfill proof.</b> Applied on top of a database that already holds a finished import,
+    /// the progress migration adds its seven columns and leaves that batch reading seven NULLs — not
+    /// seven zeros, and not a fabricated "Done".
+    ///
+    /// <para>
+    /// <b>Why this is worth its own test rather than being obvious from the migration.</b> The
+    /// scaffolder's habitual answer to a new non-nullable column is a default, and a default here
+    /// would be silently wrong in a way no schema diff shows: every historical batch would come back
+    /// as a progress bar frozen at 0% out of 0 phases, which is a claim about runs that in fact
+    /// completed. A NULL says "this run predates progress reporting", which is the truth. So the
+    /// assertion is not merely that the migration applied — it is that the row that was already there
+    /// gained nothing but nulls, and lost nothing at all.
+    /// </para>
+    ///
+    /// <para>
+    /// It also pins the direction: the seven columns did not exist one migration earlier. Without that
+    /// half, a test that finds nulls afterwards proves nothing about when they arrived.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public async Task The_progress_columns_arrive_null_on_a_batch_that_ran_before_they_existed()
+    {
+        var databaseName = $"EAMS_SisProgress_{Guid.NewGuid():N}";
+        var connectionString = await Sql.CreateScratchDatabaseAsync(databaseName);
+
+        // Every progress column, named by hand rather than read off the entity — the point of the test
+        // is that the schema matches what was asked for, and deriving the list from the model under
+        // test would make it agree with itself.
+        string[] progressColumns =
+        [
+            "ProgressPhase", "ProgressPhaseNumber", "ProgressPhaseCount",
+            "ProgressUnitsDone", "ProgressUnitsTotal", "ProgressUpdatedAt", "FailureReason",
+        ];
+
+        try
+        {
+            await using (var db = SqlServerFixture.NewDbContextOn(connectionString, new TestSchoolContext()))
+                await db.GetService<IMigrator>().MigrateAsync(PreProgressMigration);
+
+            await ExecuteAsync(connectionString, PreImportPopulation);
+            await ExecuteAsync(connectionString, FinishedBatchPopulation);
+
+            // ---- one migration earlier, none of the seven exists.
+            foreach (var column in progressColumns)
+            {
+                Assert.False(
+                    await ColumnExistsAsync(connectionString, "SisImportBatches", column),
+                    $"{column} already exists at {PreProgressMigration}; this test is asserting nothing.");
+            }
+
+            var before = await CountAsync(connectionString);
+            Assert.Equal(1, await ScalarAsync<int>(
+                connectionString, "SELECT COUNT(*) FROM SisImportBatches;"));
+
+            // ---- the progress migration, applied to that populated database.
+            await using (var db = SqlServerFixture.NewDbContextOn(connectionString, new TestSchoolContext()))
+                await db.Database.MigrateAsync();
+
+            Assert.Equal(HeadMigrationCount(connectionString), await AppliedMigrationCountAsync(connectionString));
+            Assert.Equal(before, await CountAsync(connectionString));
+
+            await using (var db = SqlServerFixture.NewDbContextOn(connectionString, new TestSchoolContext()))
+            {
+                var batch = await db.SisImportBatches.AsNoTracking()
+                    .SingleAsync(x => x.Id == LegacyBatchId);
+
+                // Seven nulls. Nothing was backfilled, and nothing was defaulted.
+                Assert.Null(batch.ProgressPhase);
+                Assert.Null(batch.ProgressPhaseNumber);
+                Assert.Null(batch.ProgressPhaseCount);
+                Assert.Null(batch.ProgressUnitsDone);
+                Assert.Null(batch.ProgressUnitsTotal);
+                Assert.Null(batch.ProgressUpdatedAt);
+                Assert.Null(batch.FailureReason);
+
+                // And the batch itself survived intact — the counters, the status the column was
+                // widened for, and the file it came from. Written out by hand from the INSERT above
+                // rather than compared against a re-read, so a migration that rewrote them fails here.
+                Assert.Equal("CompletedWithWarnings", batch.Status);
+                Assert.Equal(536, batch.TotalRows);
+                Assert.Equal(470, batch.InsertedRows);
+                Assert.Equal(0, batch.UpdatedRows);
+                Assert.Equal(0, batch.FailedRows);
+                Assert.Equal(66, batch.SkippedRows);
+                Assert.Equal(66, batch.WarningRows);
+                Assert.Equal("CCJ-roster.xlsx", batch.FileName);
+                Assert.Equal("Faculty Evaluation Report", batch.SourceSheetName);
+                Assert.NotNull(batch.FinishedAt);
+
+                // 470 + 0 + 0 + 66 = 536. Hand arithmetic, and the reconciliation ADR-001 D-5 exists
+                // for: a migration that touched a counter would break it here rather than in a report
+                // an operator reads six months later.
+                Assert.Equal(
+                    batch.TotalRows,
+                    batch.InsertedRows + batch.UpdatedRows + batch.FailedRows + batch.SkippedRows);
+            }
+
+            // ---- and the new columns are usable on the row that was already there.
+            await ExecuteAsync(connectionString, $"""
+                UPDATE SisImportBatches
+                SET ProgressPhase = N'RefreshingStudentCache', ProgressPhaseNumber = 7,
+                    ProgressPhaseCount = 8, ProgressUnitsDone = 300, ProgressUnitsTotal = 536,
+                    ProgressUpdatedAt = SYSUTCDATETIME(), FailureReason = N'Connection reset.'
+                WHERE Id = '{LegacyBatchId}';
+                """);
+
+            await using (var db = SqlServerFixture.NewDbContextOn(connectionString, new TestSchoolContext()))
+            {
+                var batch = await db.SisImportBatches.AsNoTracking()
+                    .SingleAsync(x => x.Id == LegacyBatchId);
+
+                Assert.Equal(SisImportPhase.RefreshingStudentCache, batch.ProgressPhase);
+                Assert.Equal(7, batch.ProgressPhaseNumber);
+                Assert.Equal(8, batch.ProgressPhaseCount);
+                Assert.Equal(300, batch.ProgressUnitsDone);
+                Assert.Equal(536, batch.ProgressUnitsTotal);
+                Assert.NotNull(batch.ProgressUpdatedAt);
+                Assert.Equal("Connection reset.", batch.FailureReason);
+            }
+
+            // The academic layer's own guards are untouched by this migration.
+            Assert.True(await IndexExistsAsync(connectionString, "UX_CourseOfferings_Term_Course_Section"));
+            Assert.True(await IndexExistsAsync(connectionString, "UX_SisImportRows_Batch_RowNumber"));
+        }
+        finally
+        {
+            await Sql.DropScratchDatabaseAsync(databaseName);
+        }
+    }
+
     // -------------------------------------------------------------------- the reverse-path guards
 
     /// <summary>

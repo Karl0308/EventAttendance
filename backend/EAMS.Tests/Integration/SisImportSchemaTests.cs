@@ -490,6 +490,157 @@ public class SisImportSchemaTests : IntegrationTest
         Assert.Equal(longest, (await read.SisImportBatches.SingleAsync()).Status);
     }
 
+    // ============================================================================ progress columns
+
+    /// <summary>
+    /// The seven progress columns, read out of <c>INFORMATION_SCHEMA</c> rather than off the EF model,
+    /// with every expectation written by hand.
+    ///
+    /// <para>
+    /// The lengths are the two that were chosen for a reason and are therefore the two worth pinning:
+    /// <c>ProgressPhase</c> is 40 against a longest phase name of 22 characters
+    /// (<c>RefreshingStudentCache</c>), and <c>FailureReason</c> is 400 — a sentence an operator can
+    /// act on, not a stack trace.
+    /// </para>
+    /// </summary>
+    [Theory]
+    [InlineData("ProgressPhase", "nvarchar", 40)]
+    [InlineData("ProgressPhaseNumber", "int", null)]
+    [InlineData("ProgressPhaseCount", "int", null)]
+    [InlineData("ProgressUnitsDone", "int", null)]
+    [InlineData("ProgressUnitsTotal", "int", null)]
+    [InlineData("ProgressUpdatedAt", "datetime2", null)]
+    [InlineData("FailureReason", "nvarchar", 400)]
+    public async Task Every_progress_column_is_nullable_of_the_declared_type_and_has_no_default(
+        string column, string dataType, int? maxLength)
+    {
+        var actual = await ReadColumnAsync("SisImportBatches", column);
+
+        Assert.NotNull(actual);
+        Assert.Equal(dataType, actual!.DataType);
+        Assert.Equal(maxLength, actual.MaxLength);
+
+        // Nullable is not a detail here: NULL is the value that says "this run predates progress
+        // reporting", and it is the only value that can say it.
+        Assert.Equal("YES", actual.IsNullable);
+
+        // And no default, which is the half a schema diff will not show. A DEFAULT 0 would make every
+        // batch that never reported progress indistinguishable from one sitting on a phase that has
+        // done none of its units — a progress bar frozen at 0% on a run that finished months ago.
+        Assert.Null(actual.Default);
+    }
+
+    /// <summary>
+    /// The negative control for the assertion above: the six row counters on the same table <em>do</em>
+    /// carry <c>DEFAULT 0</c>, and they are right to — "no rows failed" is a fact about a finished run,
+    /// where a progress 0 is three different facts at once.
+    ///
+    /// <para>
+    /// Without this, "no default" would pass just as happily against a
+    /// <c>COLUMN_DEFAULT</c> read that never returns anything — a green test proving only that the
+    /// query is broken.
+    /// </para>
+    /// </summary>
+    [Theory]
+    [InlineData("TotalRows")]
+    [InlineData("InsertedRows")]
+    [InlineData("UpdatedRows")]
+    [InlineData("FailedRows")]
+    [InlineData("SkippedRows")]
+    [InlineData("WarningRows")]
+    public async Task The_row_counters_on_the_same_table_do_carry_a_default(string column)
+    {
+        var actual = await ReadColumnAsync("SisImportBatches", column);
+
+        Assert.NotNull(actual);
+        Assert.Equal("NO", actual!.IsNullable);
+        Assert.NotNull(actual.Default);
+        Assert.Contains("0", actual.Default);
+    }
+
+    /// <summary>
+    /// The behaviour the seven nullable columns buy: a batch can be written without mentioning any of
+    /// them, and reads back with all seven NULL rather than zeroed.
+    /// </summary>
+    [Fact]
+    public async Task A_batch_that_reports_no_progress_reads_back_as_seven_nulls()
+    {
+        var world = await ArrangeAsync();
+
+        await using (var db = NewDbContext())
+        {
+            db.SisImportBatches.Add(NewBatch(world.SchoolId, world.TermId));
+            await db.SaveChangesAsync();
+        }
+
+        await using var read = NewDbContext();
+        var batch = await read.SisImportBatches.AsNoTracking().SingleAsync();
+
+        Assert.Null(batch.ProgressPhase);
+        Assert.Null(batch.ProgressPhaseNumber);
+        Assert.Null(batch.ProgressPhaseCount);
+        Assert.Null(batch.ProgressUnitsDone);
+        Assert.Null(batch.ProgressUnitsTotal);
+        Assert.Null(batch.ProgressUpdatedAt);
+        Assert.Null(batch.FailureReason);
+
+        // The counters on the same row are 0, not null. Same table, same insert, different answer —
+        // which is the whole distinction this migration rests on.
+        Assert.Equal(0, batch.TotalRows);
+        Assert.Equal(0, batch.WarningRows);
+    }
+
+    /// <summary>
+    /// The longest phase name fits, asserted the same way <c>Status</c>'s longest value is: by storing
+    /// it and reading it back, so a column narrowed later fails here rather than as SQL Server error
+    /// 2628 in the middle of somebody's import.
+    /// </summary>
+    [Fact]
+    public async Task The_longest_phase_name_fits_in_its_column()
+    {
+        var world = await ArrangeAsync();
+        var longest = SisImportPhase.All.MaxBy(p => p.Length)!;
+
+        // Worked out by hand rather than by re-running MaxBy: 'RefreshingStudentCache' is 22
+        // characters, and nvarchar(40) is the column.
+        Assert.Equal("RefreshingStudentCache", longest);
+        Assert.Equal(22, longest.Length);
+
+        await using (var db = NewDbContext())
+        {
+            var batch = NewBatch(world.SchoolId, world.TermId);
+            batch.ProgressPhase = longest;
+            db.SisImportBatches.Add(batch);
+            await db.SaveChangesAsync();
+        }
+
+        await using var read = NewDbContext();
+        Assert.Equal(longest, (await read.SisImportBatches.SingleAsync()).ProgressPhase);
+    }
+
+    private sealed record ColumnInfo(string DataType, int? MaxLength, string IsNullable, string? Default);
+
+    private async Task<ColumnInfo?> ReadColumnAsync(string table, string column)
+    {
+        await using var connection = new SqlConnection(Sql.ConnectionString);
+        await connection.OpenAsync();
+        await using var command = new SqlCommand(
+            "SELECT DATA_TYPE, CHARACTER_MAXIMUM_LENGTH, IS_NULLABLE, COLUMN_DEFAULT " +
+            "FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = @table AND COLUMN_NAME = @column;",
+            connection);
+        command.Parameters.AddWithValue("@table", table);
+        command.Parameters.AddWithValue("@column", column);
+
+        await using var reader = await command.ExecuteReaderAsync();
+        if (!await reader.ReadAsync()) return null;
+
+        return new ColumnInfo(
+            reader.GetString(0),
+            reader.IsDBNull(1) ? null : reader.GetInt32(1),
+            reader.GetString(2),
+            reader.IsDBNull(3) ? null : reader.GetString(3));
+    }
+
     private static SisImportProfile NewProfile(Guid schoolId, int version, bool isActive) => new()
     {
         SchoolId = schoolId,

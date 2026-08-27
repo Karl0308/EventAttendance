@@ -103,7 +103,7 @@ public class SisImportController : ControllerBase
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     [ProducesResponseType(StatusCodes.Status409Conflict)]
     public async Task<ActionResult<SisImportBatchDto>> Run(
-        Guid batchId, [FromBody] SisImportRunRequest request, CancellationToken ct)
+        Guid batchId, [FromBody] SisImportRunRequest request)
     {
         if (request.TermId == Guid.Empty)
             return BadRequest(ImportProblem(
@@ -113,7 +113,25 @@ public class SisImportController : ControllerBase
 
         try
         {
-            return Ok(await _import.RunAsync(batchId, request.TermId, ct));
+            // CancellationToken.None, NOT the request's `ct`, and this is the one line that stops a
+            // closed tab corrupting an import.
+            //
+            // MVC binds `ct` to HttpContext.RequestAborted, so the browser giving up cancels it. That
+            // is right for a read and wrong for this: RunAsync has already committed `Running`, and
+            // ExecuteAsync commits in passes with no outer transaction, so a cancellation lands
+            // mid-write. Worse, RunAsync's recovery handler deliberately does not treat cancellation as
+            // a failure, so the batch was left in `Running` with no FinishedAt - a state that is not in
+            // (Pending | Failed) and therefore cannot be re-run at all. Two such batches were produced
+            // on the deployment VM by a 21,497-row roster and a 15-second client budget, and neither
+            // could be retried through the API.
+            //
+            // The run is now uncancellable by the client. It either finishes or throws, and both of
+            // those leave a batch an operator can act on. The parameter is gone from the signature
+            // rather than bound and ignored, so there is nothing here for a later edit to pass by
+            // reflex. This does NOT cover an app-pool recycle mid-run: that kills the process, no
+            // handler runs, and the batch is a zombie again. Only moving the run off the request
+            // thread fixes that one.
+            return Ok(await _import.RunAsync(batchId, request.TermId, CancellationToken.None));
         }
         catch (SisImportBatchNotFoundException ex)
         {

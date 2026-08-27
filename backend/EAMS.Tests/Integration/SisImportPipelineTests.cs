@@ -1,9 +1,11 @@
 using EAMS.Application.Abstractions;
 using EAMS.Application.Dtos;
 using EAMS.Domain;
+using EAMS.Infrastructure.Data;
 using EAMS.Infrastructure.Sis;
 using EAMS.Tests.Integration.Infrastructure;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Diagnostics;
 using Xunit;
 
 namespace EAMS.Tests.Integration;
@@ -2168,5 +2170,130 @@ public class SisImportPipelineTests : IntegrationTest
 
         // Nothing the failed pass had staged in memory was committed by the recovery write.
         Assert.Equal(0, await read.Students.CountAsync());
+    }
+
+    /// <summary>
+    /// A run cancelled after it has committed <c>Running</c> ends <c>Failed</c>, and is therefore
+    /// re-runnable.
+    ///
+    /// <para>
+    /// <b>This is the regression test for two batches that could not be finished or retried.</b> On the
+    /// deployment VM a 21,497-row roster ran past the SPA's 15-second budget; the browser aborted,
+    /// MVC's <c>CancellationToken</c> is bound to <c>HttpContext.RequestAborted</c>, and the resulting
+    /// <see cref="OperationCanceledException"/> was excluded by <c>RunAsync</c>'s catch filter. So the
+    /// <c>Failed</c> status was never written and the batch sat in <c>Running</c> with a null
+    /// <c>FinishedAt</c> - a status the re-run guard rejects, because it is in neither
+    /// <see cref="SisImportStatus.Pending"/> nor <see cref="SisImportStatus.Failed"/>. The import could
+    /// only be recovered with hand-written SQL.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>Cancellation is triggered from a real interceptor rather than by pre-cancelling the token</b>,
+    /// and the difference is the whole test. A token cancelled before the call throws while
+    /// <c>RunAsync</c> is still loading the batch, before <c>Running</c> is written, and leaves it
+    /// <c>Pending</c> - which was always retryable, so it proves nothing. Cancelling from
+    /// <c>SavedChangesAsync</c> after the first save puts the cancellation exactly where the browser
+    /// put it: past the status write, inside <c>ExecuteAsync</c>.
+    /// </para>
+    ///
+    /// <para>
+    /// The controller no longer hands the request's token to this method at all
+    /// (<c>SisImportController.Run</c>), so the browser can no longer cause this. That is the fix; this
+    /// is the belt to its braces, because a run is still cancellable from anywhere else that holds a
+    /// token, and the state it must not be left in is the same one.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public async Task A_run_cancelled_after_it_started_records_Failed_and_can_be_run_again()
+    {
+        var world = await ArrangeAsync();
+
+        using var cancelAfterFirstSave = new CancellationTokenSource();
+        var interceptor = new CancelAfterFirstSave(cancelAfterFirstSave);
+
+        var options = new DbContextOptionsBuilder<EamsDbContext>()
+            .UseSqlServer(Sql.ConnectionString)
+            .AddInterceptors(interceptor)
+            .Options;
+
+        Guid batchId;
+
+        await using (var db = new EamsDbContext(options, School))
+        {
+            var service = SisImportOn(db);
+
+            await using (var content = SyntheticRoster.Build())
+            {
+                var preview = await service.UploadAsync(
+                    new SisImportUploadRequest(content, "cancelled.xlsx", world.TermId));
+                batchId = preview.Batch.Id;
+            }
+
+            // The upload saved too, so the counter is armed only now - otherwise the run would be
+            // cancelled before it had loaded anything.
+            interceptor.Arm();
+
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(
+                () => service.RunAsync(batchId, world.TermId, cancelAfterFirstSave.Token));
+        }
+
+        await using (var read = NewDbContext())
+        {
+            var batch = await read.SisImportBatches.SingleAsync(b => b.Id == batchId);
+
+            // Failed, not Running. Running is the state that cannot be recovered.
+            Assert.Equal(SisImportStatus.Failed, batch.Status);
+            Assert.NotNull(batch.FinishedAt);
+        }
+
+        // The point of Failed rather than Running: the batch is retryable, and the retry completes.
+        await using (var retry = NewDbContext())
+        {
+            var batch = await SisImportOn(retry).RunAsync(batchId, world.TermId);
+
+            // The same terminal status an uninterrupted run of this fixture reaches - the warnings are
+            // the roster's own (see the first test in this file), not a mark left by the cancellation.
+            // Asserting the student count as well is what says the retry actually imported rather than
+            // merely finishing: ExecuteAsync clears the previous attempt's fan-out and rebuilds it, so
+            // a half-written first pass must not survive into the second.
+            Assert.Equal(SisImportStatus.CompletedWithWarnings, batch.Status);
+            Assert.Equal(ExpectedStudents, await retry.Students.CountAsync());
+        }
+    }
+
+    /// <summary>
+    /// Cancels a token once the context has committed one <c>SaveChanges</c>, which in
+    /// <c>RunAsync</c> is the first save inside <c>ExecuteAsync</c> — the dimension pass.
+    ///
+    /// <para>
+    /// It used to be the <c>Running</c> status write. That is now the ADR-004 D-54.4 claim, an
+    /// <c>ExecuteUpdate</c> that never reaches the save pipeline and so cannot be counted here. What
+    /// the test needs is unchanged either way: the cancellation has to land after the batch is
+    /// <c>Running</c> and inside the run, and both saves are.
+    /// </para>
+    ///
+    /// <para>
+    /// <c>SavedChangesAsync</c> rather than <c>SavingChangesAsync</c>: the status has to be
+    /// <em>committed</em> before the cancellation lands, or the test is arranging a different failure
+    /// from the one it is named after.
+    /// </para>
+    /// </summary>
+    private sealed class CancelAfterFirstSave(CancellationTokenSource source) : SaveChangesInterceptor
+    {
+        private bool _armed;
+
+        public void Arm() => _armed = true;
+
+        public override ValueTask<int> SavedChangesAsync(
+            SaveChangesCompletedEventData eventData, int result, CancellationToken cancellationToken = default)
+        {
+            if (_armed)
+            {
+                _armed = false;
+                source.Cancel();
+            }
+
+            return base.SavedChangesAsync(eventData, result, cancellationToken);
+        }
     }
 }
