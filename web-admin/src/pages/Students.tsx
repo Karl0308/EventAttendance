@@ -1,4 +1,4 @@
-import { useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useLayoutEffect, useRef, useState } from "react";
 import {
   Alert,
   Box,
@@ -20,6 +20,7 @@ import DeleteOutlineIcon from "@mui/icons-material/DeleteOutline";
 import { api, describeApiError } from "../api";
 import { useApiResource } from "../useApiResource";
 import { useApiMutation } from "../useApiMutation";
+import { useDebounced } from "../useDebounced";
 import { EmptyState, ErrorState, LoadingState } from "../components/ResourceStates";
 import NewStudentDialog from "../components/NewStudentDialog";
 import EditStudentDialog from "../components/EditStudentDialog";
@@ -27,12 +28,61 @@ import DeleteStudentDialog from "../components/DeleteStudentDialog";
 import StudentCardsDialog from "../components/StudentCardsDialog";
 import { knownStatus } from "../studentDraft";
 import { STUDENT_STATUS } from "../types";
-import type { Card, Student, StudentCardRequest, StudentWriteRequest } from "../types";
-
-const loadStudents = () => api.listStudents();
+import type {
+  Card,
+  Student,
+  StudentPage,
+  StudentCardRequest,
+  StudentWriteRequest,
+} from "../types";
 
 const NO_STUDENTS = "No students are on file yet.";
 const NO_MATCH = "No student matches that search.";
+
+// ---------------------------------------------------------------------------------------------
+// Paging — this grid asks the server for a page, and does not hold the roster
+// ---------------------------------------------------------------------------------------------
+//
+// It used to read the whole list and page it in the browser. That stopped working on the first real
+// roster: `api.ts` walks every page into memory and refuses past `MAX_LIST_ROWS` (2,000), and the
+// imported roster is 21,493 students, so this screen failed outright with "the list needs
+// server-side paging". The ceiling did its job — it is written to fail loud rather than silently
+// show a truncated roster as if it were the whole one.
+//
+// Three consequences follow from the grid holding one page instead of the list, and each is a
+// behaviour change worth being explicit about rather than discovering:
+//
+// **Search goes to the server.** A filter applied to the rows in hand can only match within the
+// current page, so searching for a surname beginning with W while looking at page 1 would report no
+// matches over a roster that has hundreds. `?search=` matches student number or name — the same two
+// fields the old in-memory filter read, which is why the field's label does not change.
+//
+// **Sorting is off.** Same reason, sharper: a click on the Name header would reorder the 25 rows on
+// screen while looking exactly like it reordered the roster, and the user has no way to tell those
+// apart. The endpoint has no sort parameter, so the honest options were "no sorting" or "sorting
+// that lies". The order is the server's — surname, then id as a tiebreak, which is a total order and
+// therefore a stable one to page through. Restoring sorting means adding it to `GET /students`
+// first, not re-enabling it here.
+//
+// **A page is a request.** Every page change, page-size change and settled search is a round trip.
+
+/** MUI counts pages from 0; the API counts from 1. Named so the conversion is stated, not remembered. */
+const FIRST_PAGE = 1;
+
+/**
+ * How long the search box must hold still before it becomes a request. Long enough that an ordinary
+ * typing speed produces one read rather than one per letter, short enough not to feel like lag.
+ */
+const SEARCH_SETTLE_MS = 300;
+
+/**
+ * Rows per page. All three are under the server's maximum of 200, which matters: an over-large
+ * request is clamped rather than refused, so an option above it would silently serve fewer rows than
+ * the control it came from claims.
+ */
+const PAGE_SIZES = [25, 50, 100];
+
+const DEFAULT_PAGE_SIZE = PAGE_SIZES[0];
 
 /** What a column reads as when the student has no value for it. */
 const NO_VALUE = "—";
@@ -120,9 +170,81 @@ function activeCardSummary(cards: readonly Card[]): string {
 }
 
 export default function Students() {
-  // No deps: the read takes nothing, so it runs once per mount, and again on Retry or after a write.
-  const students = useApiResource(loadStudents, []);
   const [search, setSearch] = useState("");
+  const [paginationModel, setPaginationModel] = useState({
+    page: 0,
+    pageSize: DEFAULT_PAGE_SIZE,
+  });
+
+  /**
+   * What the search box has settled on. The read depends on this rather than on `search`, so a
+   * keystroke does not spend a request; see `useDebounced`.
+   */
+  const query = useDebounced(search.trim(), SEARCH_SETTLE_MS);
+
+  /**
+   * One page of the roster. The deps are the whole question this screen asks — change the search, the
+   * page or the page size and it is a different question, which is exactly when `useApiResource`
+   * re-reads.
+   */
+  const students = useApiResource(
+    () =>
+      api.listStudentsPage(
+        { search: query === "" ? undefined : query },
+        paginationModel.page + FIRST_PAGE,
+        paginationModel.pageSize,
+      ),
+    [query, paginationModel.page, paginationModel.pageSize],
+  );
+
+  /**
+   * The last page that was read successfully, kept so a page change does not empty the grid.
+   *
+   * `useApiResource` blanks to `loading` when its deps change, which is right for it — a read for a
+   * different subject is not a newer version of what is on screen. But every page turn is a new
+   * subject, so honouring that literally would unmount the grid on each one: the header row, the
+   * column widths and the scroll position all reset, and the screen flashes on a click the user makes
+   * repeatedly. Keeping the previous page under the grid's own loading overlay is what every paged
+   * grid does, and it stays honest because the overlay says a read is running.
+   *
+   * A *failed* read still wins the screen — this is deliberately consulted only while loading. Showing
+   * yesterday's rows beside "could not load students" is the one shape `useApiResource` exists to
+   * forbid.
+   *
+   * Written in a layout effect rather than during render, for the reason that hook records about its
+   * own ref: a render may be discarded or replayed, and a mutation inside one is not guaranteed to
+   * have happened, or to have happened once.
+   */
+  const lastGood = useRef<StudentPage | undefined>(undefined);
+  useLayoutEffect(() => {
+    if (students.data !== undefined) lastGood.current = students.data;
+  });
+
+  const shown = students.data ?? (students.status === "loading" ? lastGood.current : undefined);
+
+  /**
+   * Typing moves the roster out from under the pager, so the page goes back to the first one.
+   *
+   * Without this, a search entered while on page 40 asks for page 40 of three results. The server
+   * clamps rather than refusing, so nothing breaks — but the pager would say 40 while showing the
+   * only page there is, which is the kind of disagreement people report as lost data.
+   */
+  const changeSearch = (next: string) => {
+    setSearch(next);
+    setPaginationModel((model) => (model.page === 0 ? model : { ...model, page: 0 }));
+  };
+
+  // No effect reconciles the pager with the page the server actually served, and that is a decision
+  // rather than an omission. An out-of-range page — reachable by deleting the last student on the
+  // last page — is clamped by the server and the reply carries the real rows, so the grid is correct
+  // either way; only the page *number* can disagree, for one interaction.
+  //
+  // The obvious fix is not obvious. An effect comparing `students.data.page` against
+  // `paginationModel.page` reads a reply belonging to the previous page during the render where the
+  // model has moved and the read has not yet started — layout effects run before the hook's own — so
+  // it concludes the server clamped, sets the page back, and every attempt to reach page 2 lands on
+  // page 1. Two tests in `studentsPaging.test.tsx` caught exactly that. Correcting it needs the
+  // request the reply belongs to, which is a bigger change than the disagreement it repairs.
 
   /**
    * All five writes live here rather than inside the dialogs that start them, which is D1's shape and
@@ -162,7 +284,8 @@ export default function Students() {
   /** Successful attaches on the open dialog — keys the attach form, so a success empties it. */
   const [attached, setAttached] = useState(0);
 
-  const rows = students.data;
+  /** The students on the page in view. Not the roster — see the paging note at the top of this file. */
+  const rows = shown?.students;
 
   /**
    * The open student's cards as freshly as this page can supply them.
@@ -212,15 +335,6 @@ export default function Students() {
     setNotice(next);
     setAnnouncing(true);
   };
-
-  const filtered = useMemo(() => {
-    if (rows === undefined) return [];
-    const q = search.toLowerCase().trim();
-    if (!q) return rows;
-    return rows.filter(
-      (s) => s.fullName.toLowerCase().includes(q) || s.studentNumber.includes(q),
-    );
-  }, [rows, search]);
 
   // ------------------------------------------------------------------------------------- opening
   //
@@ -441,51 +555,79 @@ export default function Students() {
         </Stack>
       </Stack>
 
-      {students.status === "loading" && <LoadingState label="Loading students…" />}
+      {/* Outside every status branch, and that is load-bearing now rather than tidiness: the read
+          depends on what is typed here, so a keystroke makes it a read for a different subject and
+          `useApiResource` blanks. Inside the `ready` branch this field would unmount on the first
+          letter, taking the caret with it — the user would type one character per focus. */}
+      <Stack direction="row" spacing={2} sx={{ mb: 2 }} alignItems="center">
+        <TextField
+          size="small"
+          label="Search name or student no."
+          value={search}
+          onChange={(e) => changeSearch(e.target.value)}
+          sx={{ width: 320 }}
+        />
+        {/* Mounted whether or not a re-read is running, so the live region exists in the DOM
+            before anything is put into it — a region inserted and populated in the same commit is
+            announced unreliably. */}
+        <Box role="status" sx={{ minHeight: 24, display: "flex", alignItems: "center" }}>
+          {students.refreshing && (
+            <Typography variant="body2" color="text.secondary">
+              Refreshing…
+            </Typography>
+          )}
+        </Box>
+        {/* The count is the roster's, not the page's, and says so. A grid showing 25 of 21,493 rows
+            with nothing naming the total reads as a roster of 25. */}
+        {shown !== undefined && (
+          <Typography variant="body2" color="text.secondary">
+            {shown.total === 0
+              ? ""
+              : `${shown.total.toLocaleString()} ${shown.total === 1 ? "student" : "students"}${
+                  query === "" ? "" : " matching"
+                }`}
+          </Typography>
+        )}
+      </Stack>
+
+      {/* `shown` rather than `status === "loading"`: a page turn keeps the previous page under the
+          grid's overlay, so the full-page spinner is for a screen that has nothing on it yet. */}
+      {students.status === "loading" && shown === undefined && (
+        <LoadingState label="Loading students…" />
+      )}
 
       {students.status === "error" && (
         <ErrorState subject="students" error={students.error} onRetry={students.reload} />
       )}
 
-      {students.status === "ready" && (
-        <>
-          <Stack direction="row" spacing={2} sx={{ mb: 2 }} alignItems="center">
-            <TextField
-              size="small"
-              label="Search name or student no."
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              sx={{ width: 320 }}
+      {shown !== undefined &&
+        (shown.total === 0 ? (
+          // Two different nothings, and the user is told which: an empty roster is not the same fact
+          // as a search that matched none of a full one. Read from the query rather than from a row
+          // count now that the rows in hand are one page — an empty page is not an empty roster.
+          <EmptyState message={query === "" ? NO_STUDENTS : NO_MATCH} />
+        ) : (
+          <div style={{ height: 520, width: "100%" }}>
+            <DataGrid
+              rows={rows ?? []}
+              columns={cols}
+              getRowId={(r) => r.id}
+              disableRowSelectionOnClick
+              // Server-side, all of it. `rowCount` is the filter's total rather than `rows.length`,
+              // which is what gives the pager a last page to reach.
+              paginationMode="server"
+              rowCount={shown.total}
+              paginationModel={paginationModel}
+              onPaginationModelChange={setPaginationModel}
+              pageSizeOptions={PAGE_SIZES}
+              loading={students.status === "loading" || students.refreshing}
+              // Both off because both would operate on the page rather than on the roster while
+              // looking like they operated on the roster. See the paging note at the top of the file.
+              disableColumnSorting
+              disableColumnFilter
             />
-            {/* Mounted whether or not a re-read is running, so the live region exists in the DOM
-                before anything is put into it — a region inserted and populated in the same commit is
-                announced unreliably. */}
-            <Box role="status" sx={{ minHeight: 24, display: "flex", alignItems: "center" }}>
-              {students.refreshing && (
-                <Typography variant="body2" color="text.secondary">
-                  Refreshing…
-                </Typography>
-              )}
-            </Box>
-          </Stack>
-          {filtered.length === 0 ? (
-            // Two different nothings, and the user is told which: an empty roster is not the same fact
-            // as a search that matched none of a full one.
-            <EmptyState message={students.data.length === 0 ? NO_STUDENTS : NO_MATCH} />
-          ) : (
-            <div style={{ height: 520, width: "100%" }}>
-              <DataGrid
-                rows={filtered}
-                columns={cols}
-                getRowId={(r) => r.id}
-                disableRowSelectionOnClick
-                pageSizeOptions={[10, 25]}
-                initialState={{ pagination: { paginationModel: { pageSize: 10 } } }}
-              />
-            </div>
-          )}
-        </>
-      )}
+          </div>
+        ))}
 
       {/* Outside the `ready` branch on purpose: a re-read that fails replaces that branch with the
           error state, and a dialog living inside it would be torn down mid-write, taking the failure

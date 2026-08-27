@@ -10,6 +10,7 @@ import { GROUP_SOURCE_TYPE, GROUP_TYPE_SECTION, SIS_IMPORT_STATUS } from "./type
 import type {
   AuthUser,
   Student,
+  StudentPage,
   StudentCardRequest,
   StudentWriteRequest,
   Card,
@@ -1184,6 +1185,34 @@ async function listAll<T>(
   throw tooLarge(what, `walking it did not reach the end within ${MAX_LIST_REQUESTS} requests`);
 }
 
+/**
+ * One page, asked for and returned. The other half of `listAll`, for a list that has outgrown it.
+ *
+ * **`MAX_LIST_ROWS` deliberately does not apply here, and that is not an omission.** That ceiling
+ * exists because `listAll` accumulates a whole list in memory and hands it to a client-side grid, so
+ * it needs a bound; this returns exactly `pageSize` rows whatever `total` says, so the thing the
+ * ceiling protects against cannot happen. Applying it anyway would refuse to show page 1 of a roster
+ * *because the roster is large* — which is the failure, not the guard.
+ *
+ * `page` is 1-based per the contract, and is passed through rather than clamped here: an out-of-range
+ * page is the server's to clamp, and the reply echoes what it actually served. A client that clamped
+ * first would have to know the total before it could ask for a page, which is circular.
+ */
+async function getPage<T>(
+  what: string,
+  path: string,
+  query: Record<string, string | undefined>,
+  page: number,
+  pageSize: number,
+  mapItem: (row: Row, what: string) => T,
+): Promise<PageOf<T>> {
+  return asPage(
+    await getJson(what, path, { ...query, page: String(page), pageSize: String(pageSize) }),
+    what,
+    mapItem,
+  );
+}
+
 // ---------------------------------------------------------------------------------------------
 // DTO mappers
 // ---------------------------------------------------------------------------------------------
@@ -1601,6 +1630,47 @@ async function listStudents(filter?: {
     { search: filter?.search, course: filter?.course, status: filter?.status },
     toStudent,
   );
+}
+
+/**
+ * `GET /students` — **one page of it**, for the grid that pages against the server.
+ *
+ * This exists because `listStudents()` above stopped working on the first real roster. That read
+ * walks every page into memory, and `MAX_LIST_ROWS` refuses past 2,000; the imported roster is
+ * 21,493, so the students screen failed with "the list needs server-side paging" — the design signal
+ * that ceiling exists to send, arriving exactly when it was supposed to.
+ *
+ * **Both reads stay.** `listStudents()` is still right for a caller that genuinely needs the whole
+ * set and is small enough to have one, and deleting it would silently convert those callers to
+ * "the first page" — the truncation the ceiling was written to prevent. What changes is that the
+ * screen with 21,493 rows no longer asks for all of them.
+ *
+ * `search` goes to the server here rather than being applied to the rows afterwards, and it has to:
+ * a client-side filter over one page can only match within that page, so searching for a surname
+ * beginning with W while looking at page 1 would correctly report no matches over the whole roster.
+ * `?search=` matches student number or name, which is what the field says it does.
+ *
+ * The `course` filter carries the same lossiness warning as `listStudents` — it reads the ADR-001 D-2
+ * single-valued display cache, so for a student in more than one section it can only name one.
+ */
+async function listStudentsPage(
+  filter: { search?: string; course?: string; status?: string },
+  page: number,
+  pageSize: number,
+): Promise<StudentPage> {
+  const read = await getPage(
+    "GET /students",
+    "/students",
+    { search: filter.search, course: filter.course, status: filter.status },
+    page,
+    pageSize,
+    toStudent,
+  );
+
+  // Renamed, not spread: `PageOf` is internal and carries `hasMore`, which this screen must not use.
+  // `hasMore` answers "is there a page after this one", and a grid needs "how many rows are there" —
+  // handing a component both invites the last-page arrow to be wired to the wrong one.
+  return { students: read.items, page: read.page, pageSize: read.pageSize, total: read.total };
 }
 
 /**
@@ -2837,6 +2907,7 @@ export const api = {
   restoreSession,
   signOut,
   listStudents,
+  listStudentsPage,
   countStudents,
   getStudent,
   createStudent,

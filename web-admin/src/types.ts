@@ -73,6 +73,35 @@ export interface Student {
 }
 
 /**
+ * One page of the roster, for the screen that shows it a page at a time.
+ *
+ * The only list type in this file that keeps its envelope. Every other read unwraps to a plain array
+ * at the seam because its screen holds the whole set; this one cannot — the first real roster is
+ * 21,493 students, an order of magnitude past what `MAX_LIST_ROWS` will hand a client-side grid, and
+ * `api.ts` refuses it loudly rather than truncating.
+ *
+ * So the grid pages against the server, and to do that it needs two facts a bare array cannot carry:
+ * which page these rows are, and how many rows exist behind the filter. Without `total` the grid has
+ * no scrollbar to size and no last page to reach — it would render 25 rows and imply there are 25.
+ */
+export interface StudentPage {
+  students: Student[];
+  /**
+   * The page actually served, 1-based, echoed by the server rather than assumed. A page number past
+   * the end is clamped, not refused, so the echo is how a caller finds out it asked for page 900 of
+   * 860 — reading back the number it sent would hide that.
+   */
+  page: number;
+  /** The size actually applied. The server clamps an over-large request to its own maximum. */
+  pageSize: number;
+  /**
+   * Every student matching the filter, not just the ones on this page. This is the number the grid's
+   * `rowCount` needs, and it is the server's own count against the same filter that produced the rows.
+   */
+  total: number;
+}
+
+/**
  * §4.3's three student statuses, verified against `StudentStatus` in `EAMS.Domain/DomainValues.cs`.
  *
  * `Student.status` stays `string` for the reason `AttendanceStatus` records below: a response cannot
