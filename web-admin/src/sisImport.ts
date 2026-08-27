@@ -14,7 +14,7 @@
 //      on a screen whose heading is "The import finished".
 
 import { ApiError } from "./api";
-import { SIS_IMPORT_STATUS } from "./types";
+import { IMPORT_PHASES, SIS_IMPORT_STATUS } from "./types";
 
 // ---------------------------------------------------------------------------------------------
 // What may be uploaded
@@ -207,3 +207,194 @@ export const TERM_IS_NOT_INFERRED =
   "The workbook does not say which term it is for, and it is never guessed from the filename or the " +
   "date: a batch filed under the wrong term looks correct afterwards, because every later query is " +
   "scoped to a term, and only a hand correction can undo it.";
+
+// ---------------------------------------------------------------------------------------------
+// What phase the run is in
+// ---------------------------------------------------------------------------------------------
+
+/**
+ * The server's phase names as an operator's words for them.
+ *
+ * Deliberately not the raw value. `ResolvingDimensions` and `ResolvingFacts` are a star-schema
+ * distinction that matters to whoever wrote the importer and to nobody sitting in front of it waiting
+ * for a roster; what the operator can use is *which part of their workbook is being worked on*, which
+ * is what these say instead.
+ *
+ * A `Record<string, string>` keyed by the contract values rather than a `Record<ImportPhaseName, …>`,
+ * and the looseness is the point: `describeImportPhase` has to answer for a phase this build has never
+ * heard of, because the server is free to grow one and this SPA is deployed separately from it.
+ */
+const PHASE_LABELS: Record<string, string> = {
+  [IMPORT_PHASES.ClearingPreviousRun]: "Clearing the previous run",
+  [IMPORT_PHASES.ParsingRows]: "Reading the workbook",
+  [IMPORT_PHASES.ResolvingDimensions]: "Matching colleges, programs and courses",
+  [IMPORT_PHASES.ResolvingFacts]: "Matching sections, students and enrolments",
+  [IMPORT_PHASES.WritingFacts]: "Writing sections, students and enrolments",
+  [IMPORT_PHASES.RecordingRowResults]: "Recording what each row did",
+  [IMPORT_PHASES.RefreshingStudentCache]: "Refreshing the student roster",
+  [IMPORT_PHASES.SyncingStudentGroups]: "Syncing section groups",
+  [IMPORT_PHASES.Done]: "Finishing up",
+};
+
+/** Said when the batch is running and has not named a phase. See `describeImportPhase`. */
+export const PHASE_UNREPORTED = "Working through the roster";
+
+/**
+ * What to call the phase the run is in.
+ *
+ * Three answers, and the third is the one worth writing down. A **known** phase gets its label. An
+ * **absent** phase gets `PHASE_UNREPORTED` — a run started before this server reported progress, which
+ * is a real state and not an error. An **unknown** phase is returned *verbatim*: a server that grew a
+ * tenth phase is telling this screen something true, and printing `ValidatingCards` raw is strictly
+ * more use to whoever is watching than "Working through the roster" would be, which would hide the one
+ * new fact on the screen behind a phrase that fits everything.
+ */
+export function describeImportPhase(phase: string | undefined): string {
+  if (phase === undefined || phase === "") return PHASE_UNREPORTED;
+  return PHASE_LABELS[phase] ?? phase;
+}
+
+// ---------------------------------------------------------------------------------------------
+// What the finished batch means
+// ---------------------------------------------------------------------------------------------
+
+/** How a finished batch should be read: the word for it, and what the operator does next. */
+export interface ImportOutcome {
+  severity: "success" | "warning" | "error";
+  heading: string;
+  whatItMeans: string;
+}
+
+/**
+ * The four terminal statuses as four different sentences — which is the fix, because until now they
+ * were two.
+ *
+ * The results screen branched on `batch.failedRows > 0`, so `CompletedWithWarnings` rendered
+ * identically to `Completed`: the same green heading, the same "the import finished", and a Warned
+ * counter sitting quietly in a row of five that nothing told anyone to look at. `types.ts` says in as
+ * many words that the three `Completed…` values are *three different answers to "do I need to go and
+ * look at the rows?"*, and a screen that renders two of them the same has thrown that answer away.
+ *
+ * Derived from `status` and not from the counters, and the two are not the same question. A counter is
+ * arithmetic about rows; the status is the server's own judgement about the run, and it is the server
+ * that decides what counts as a warning. Re-deriving it here would mean this screen and the server
+ * eventually disagreeing about a batch that neither of them is wrong about.
+ *
+ * The `default` is a real branch rather than a guard: `status` is `string` at the seam by design (the
+ * usual rule in `types.ts`), so a status this build has not heard of is reachable and must render as
+ * something honest. It gets the word verbatim and no claim about what it means.
+ */
+export function importOutcomeOf(status: string): ImportOutcome {
+  switch (status) {
+    case SIS_IMPORT_STATUS.Completed:
+      return {
+        severity: "success",
+        heading: "The import finished",
+        whatItMeans:
+          "Every row was applied and none of them raised anything worth reading. The counters below " +
+          "are the whole answer; there is nothing to go and look at.",
+      };
+
+    case SIS_IMPORT_STATUS.CompletedWithWarnings:
+      return {
+        severity: "warning",
+        heading: "The import finished, and some rows carry a warning",
+        whatItMeans:
+          "The run reached the end and every row was applied — a warning is a note about a row that " +
+          "imported, not a row that did not. Nothing needs re-running. What the warnings are worth " +
+          "reading for is the export itself: a blank section or a placeholder instructor is the " +
+          "registrar's file saying something, and it will say it again next term.",
+      };
+
+    case SIS_IMPORT_STATUS.CompletedWithErrors:
+      return {
+        severity: "error",
+        heading: "The import finished, and some rows did not import",
+        whatItMeans:
+          "The run reached the end, but the rows counted under Failed were not applied. Open them " +
+          "with the row filter below — each one carries the line number in the source workbook and " +
+          "the server's own sentence about it. Fix those lines and import the workbook again: the " +
+          "rows that did import are already in the roster, and a second run reports them Skipped.",
+      };
+
+    case SIS_IMPORT_STATUS.Failed:
+      return {
+        severity: "error",
+        heading: "The run stopped before it finished",
+        whatItMeans:
+          "This is not the same as rows failing. The run itself stopped part-way, so the rest of the " +
+          "workbook was never reached — and the rows it had already applied are in the roster, " +
+          "because they were not rolled back. Re-running is how the rest is finished rather than " +
+          "something to be avoided: the import compares every row against what is already there, so " +
+          "the rows that landed the first time are reported Skipped the second.",
+      };
+
+    default:
+      return {
+        severity: "warning",
+        heading: "The run is over",
+        whatItMeans:
+          "The API reports this batch with a status this build has no reading for, so the counters " +
+          "below are shown as they came back and nothing is claimed about them. Worth reporting: it " +
+          "means this admin build and the API are different versions.",
+      };
+  }
+}
+
+// ---------------------------------------------------------------------------------------------
+// Standing copy for the detached run
+// ---------------------------------------------------------------------------------------------
+
+/**
+ * **Operating guidance, not a nicety** — the one piece of copy on the progress screen that changes
+ * what an operator has to do.
+ *
+ * The run is detached from the request, but it is not detached from the process: on IIS the
+ * application pool shuts down after twenty minutes with no requests reaching it, and a shut-down pool
+ * takes the background run down with it. Nothing mitigates that today — it was looked at and accepted
+ * — so the two-second poll this screen makes is, literally, part of what keeps a long import alive. A
+ * closed tab is not "leaving it to finish in the background"; on a quiet server it can be closing the
+ * thing that is doing the work.
+ */
+export const LEAVE_THE_TAB_OPEN =
+  "Leave this tab open while the import runs. This page checks on the run every couple of seconds, " +
+  "and on a quiet server those checks are part of what keeps it going — closing the tab can stop a " +
+  "long import part-way. Nothing is lost if that happens, because re-running finishes it, but it is " +
+  "slower than waiting.";
+
+/** Why there is no bar and no "about 4 minutes left" on a screen that plainly could have had one. */
+export const NO_ESTIMATE_IS_HONEST =
+  "There is no percentage or time estimate here because the phases are nothing like equal — one of " +
+  "them is most of the run — so a bar would sit almost still for minutes and then jump, which is " +
+  "worse than no bar. The phase and the counts below are what is actually known.";
+
+/**
+ * Said when polling has failed several times over, and **only** then.
+ *
+ * This sentence used to be the *first* answer: a run POST that timed out reported `may-duplicate` and
+ * the screen told the operator the outcome was unknown before anything had been checked. With the run
+ * detached that is no longer true at the moment it was being said — the screen holds the batch id, and
+ * a GET is free, so the honest first move is to go and look. This is what is left when looking has
+ * itself stopped working, which is a much smaller claim and a much rarer one.
+ */
+export const OUTCOME_UNKNOWN_FROM_HERE =
+  "This screen has not been able to reach the API for several tries running, so it cannot say whether " +
+  "the run is still going. It very likely is — the run does not depend on this page hearing back. " +
+  "Nothing here changes the roster: reload when the connection is back, or open this same address " +
+  "again later, and the batch will say what became of it.";
+
+/** How many failed polls in a row before the sentence above is a fair thing to say. */
+export const POLL_FAILURES_BEFORE_UNKNOWN = 3;
+
+/** Two seconds. Slow enough not to be a load test, fast enough that a phase change is seen. */
+export const POLL_INTERVAL_MS = 2_000;
+
+/**
+ * The route the progress — and then the results — of one batch live at.
+ *
+ * One function rather than a template literal at each of the two call sites, because the two callers
+ * are the page that navigates *to* it and the router that declares it, and a route that only half
+ * exists is a blank screen rather than a compile error.
+ */
+export const importProgressPath = (batchId: string): string =>
+  `/students/import/${encodeURIComponent(batchId)}`;

@@ -1,5 +1,10 @@
 // The §10 roster import, as the three steps it actually is.
 //
+// The third step is **not on this screen**. `POST /sis/import/{batchId}/run` answers 202 and the run
+// carries on behind the request, so what used to be a results panel rendered from that reply is now
+// its own route — `/students/import/:batchId`, `StudentsImportProgress` — which polls the batch and
+// then shows what it did. This screen's job ends at handing that route a batch id.
+//
 // ---------------------------------------------------------------------------------------------
 // Why a route and not a dialog
 // ---------------------------------------------------------------------------------------------
@@ -38,7 +43,7 @@
 // that is not the same as showing none, and a reader should not conclude the stronger claim.
 
 import { useEffect, useRef, useState } from "react";
-import { Link as RouterLink } from "react-router-dom";
+import { Link as RouterLink, useNavigate } from "react-router-dom";
 import {
   Alert,
   AlertTitle,
@@ -55,12 +60,6 @@ import {
   Step,
   StepLabel,
   Stepper,
-  Table,
-  TableBody,
-  TableCell,
-  TableContainer,
-  TableHead,
-  TableRow,
   TextField,
   Typography,
 } from "@mui/material";
@@ -77,12 +76,12 @@ import {
   TERM_IS_NOT_INFERRED,
   UPLOAD_WRITES_NOTHING,
   describeSize,
-  isTerminalStatus,
+  importProgressPath,
   rosterFileProblem,
   uploadRefusalOf,
 } from "../sisImport";
-import { SIS_IMPORT_ROW_RESULT, SIS_IMPORT_STATUS } from "../types";
-import type { SisImportBatch, SisImportPreview, SisImportRow, Term } from "../types";
+import { SIS_IMPORT_STATUS } from "../types";
+import type { SisImportPreview, Term } from "../types";
 
 const TERM_FIELD_ID = "roster-import-term";
 const FILE_FIELD_ID = "roster-import-file";
@@ -96,14 +95,6 @@ const NO_TERMS =
   "This school has no terms on file, so there is nothing to import a roster into. A term has to exist " +
   "before a batch can be filed against one.";
 
-/** What the results table offers to look at. `Failed` first because it is why the filter exists. */
-const ROW_FILTERS = [
-  SIS_IMPORT_ROW_RESULT.Failed,
-  SIS_IMPORT_ROW_RESULT.Skipped,
-  SIS_IMPORT_ROW_RESULT.Inserted,
-  SIS_IMPORT_ROW_RESULT.Updated,
-] as const;
-
 const HEADING_NOT_UPLOADED = "The workbook was not staged";
 const HEADING_MAYBE_UPLOADED = "The workbook may have been staged";
 const UPLOAD_RESEND_WITHHELD =
@@ -111,24 +102,24 @@ const UPLOAD_RESEND_WITHHELD =
   "nobody runs writes nothing to the roster, so an extra one is harmless — but reload this page before " +
   "trying again so you are looking at the batch that actually exists.";
 
-const HEADING_NOT_RUN = "The import was not run";
-const HEADING_MAYBE_RUN = "The import may have been run";
-const RUN_RESEND_WITHHELD =
-  "Run is disabled because this build cannot tell whether the run happened. Running twice could not " +
-  "double-import — a second run reports every row Skipped — but check the batch first, which the " +
-  "button below does without changing anything.";
-
+const HEADING_NOT_RUN = "The import was not started";
+const HEADING_MAYBE_RUN = "The import may have been started";
 /**
- * The same withholding, said on the results step, where there is no Check button to point at.
+ * Kept, and now much harder to reach — which is the point of the change rather than a leftover.
  *
- * `RUN_RESEND_WITHHELD` names one — correctly, because on the preview step there is one beside it.
- * Reusing that text here would send the operator looking for a control that is not on this screen, so
- * the instruction is the one that does exist: reload, and read the batch's status.
+ * A run whose outcome this client cannot determine no longer stops here at all: the screen holds the
+ * batch id, a `GET` on it is `retryable: "safe"`, and going to look is strictly better than telling
+ * somebody the answer is unknown before anybody has asked. So `submitRun` navigates to the progress
+ * route on an *unknown-effect* failure and this alert is never drawn for one. What is left for it is
+ * the failure the server **decided** — a 400, a 409 — where `retryable` is `"safe"` and the withheld
+ * sentence below is not rendered either. It stays because `WriteFailureAlert` requires the text for
+ * the case where a future error kind is neither, and a component that has to be handed a sentence
+ * should not be handed a wrong one.
  */
-const RUN_AGAIN_RESEND_WITHHELD =
-  "Run again is disabled because this build cannot tell whether the second run happened. Running " +
-  "twice could not double-import — a second run reports every row Skipped — but reload this page so " +
-  "you are reading the batch's real status before pressing it again.";
+const RUN_RESEND_WITHHELD =
+  "Run is disabled because this build cannot tell whether the run was accepted. Running twice could " +
+  "not double-import — a second run reports every row Skipped — but check the batch first, which the " +
+  "button below does without changing anything.";
 
 /**
  * What the check found, when what it found is that the run is not over.
@@ -145,10 +136,6 @@ const BATCH_IS_STAGED_NOT_RUN =
   "The batch is staged and has not run — the API reports it as Pending, so the run did not reach the " +
   "server and nothing was written. Run import is safe to press.";
 
-const BATCH_IS_RUNNING =
-  "The run is in progress — the API reports the batch as Running. It reached the server and is being " +
-  "applied. Wait, then press Check this batch again for the result.";
-
 /** Where the flow is. A union rather than a step number, so the data each step needs travels with it. */
 type Stage =
   | { name: "choose" }
@@ -158,19 +145,16 @@ type Stage =
    * checks against the batch (ADR-001 D-5). Confirming with a value read back out of the batch would
    * make it check itself and always agree — so the value that goes back is the one the operator chose.
    */
-  | { name: "preview"; preview: SisImportPreview; termId: string }
-  /**
-   * `termId` travels on here for the same reason it travels on `preview`: a `Failed` batch is
-   * re-runnable (`SisImportService` accepts a run on `Pending` or `Failed`), and that re-run sends the
-   * term as a confirmation the server checks. Re-reading it from `batch.termId` would have the
-   * confirmation check itself.
-   */
-  | { name: "results"; batch: SisImportBatch; termId: string };
+  | { name: "preview"; preview: SisImportPreview; termId: string };
 
-const stepOf = (stage: Stage): number =>
-  stage.name === "choose" ? 0 : stage.name === "preview" ? 1 : 2;
+/**
+ * Two stages, three steps. The third step belongs to `/students/import/:batchId` and is drawn here
+ * only as the label of somewhere this flow is going — which is what a stepper is for.
+ */
+const stepOf = (stage: Stage): number => (stage.name === "choose" ? 0 : 1);
 
 export default function StudentsImport() {
+  const navigate = useNavigate();
   const terms = useApiResource(() => api.listTerms(), []);
 
   /**
@@ -238,6 +222,23 @@ export default function StudentsImport() {
     });
   };
 
+  /**
+   * Starts the run, and then **leaves** — in both of the two directions that matter.
+   *
+   * On success the reply is a 202 carrying a `Running` batch, so there is nothing to render here: the
+   * answer to "what happened?" is a poll, and the poll lives on the progress route.
+   *
+   * On failure the decision is finer, and it is the demotion of the old "outcome unknown" copy from a
+   * first answer to a floor. `serverEffect === "unknown"` means the request went out and this client
+   * cannot say whether the server took it — a timeout, a reset connection, a 502. The old flow stopped
+   * here and told the operator so. But this screen *holds the batch id*, and `GET /sis/import/{id}` is
+   * `retryable: "safe"`: the outcome is not unknown, it is merely unread. So it goes and reads it, and
+   * the unknown-outcome sentence is reached only if polling itself fails repeatedly.
+   *
+   * A failure the server **decided** — a 400 for a missing term, a 409 for a term mismatch or a batch
+   * that has already run — stays put. `serverEffect` is `"none"`, so nothing started, and navigating to
+   * watch a batch that is not running would replace a precise refusal with a blank progress panel.
+   */
   const submitRun = (batchId: string, term: string) => {
     setCheckNote(undefined);
     // The check's own failure state is cleared too, and not only its note: without this, "The batch
@@ -245,20 +246,22 @@ export default function StudentsImport() {
     // request that is two attempts old.
     check.reset();
     void run.run(batchId, term).then((settled) => {
-      if (settled.outcome !== "succeeded") return;
-      setStage({ name: "results", batch: settled.data, termId: term });
+      // `ignored` is a second press dropped while the first was in flight. Nothing was sent, so
+      // nothing has changed and the screen must not move.
+      if (settled.outcome === "ignored") return;
+      if (settled.outcome === "failed" && advise(settled.error).serverEffect === "none") return;
+      navigate(importProgressPath(batchId), { state: { termId: term } });
     });
   };
 
   /**
-   * Reads the batch back, and — this is the part that is not obvious — **only advances to the results
-   * step if what came back is a finished batch**.
+   * Reads the batch back, and sends the operator to the progress route unless the answer is that
+   * nothing started.
    *
-   * The results step's counters, its "the import finished" heading and its `countersReconcile` alert
-   * are all statements about a terminal batch. The path this button exists for is the one that most
-   * often returns a non-terminal one: the run timed out, so the honest answers are "it never reached
-   * the server" (`Pending`) and "it is still going" (`Running`), and both of those belong on this step
-   * as a sentence rather than on the next one as a finished-import screen that is wrong twice over.
+   * `Pending` is the one status that belongs *here*: it is proof the run never reached the server, so
+   * nothing was written and the fix is the Run button on this screen. Every other answer — `Running`,
+   * or any terminal status — is a batch with a life of its own, and the screen built to show that is
+   * the one at `/students/import/{id}`.
    */
   const submitCheck = (batchId: string, term: string) => {
     void check.run(batchId).then((settled) => {
@@ -271,24 +274,17 @@ export default function StudentsImport() {
         );
         return;
       }
-      if (!isTerminalStatus(batch.status)) {
-        setCheckNote(
-          batch.status === SIS_IMPORT_STATUS.Pending ? BATCH_IS_STAGED_NOT_RUN : BATCH_IS_RUNNING,
-        );
+      if (batch.status === SIS_IMPORT_STATUS.Pending) {
+        setCheckNote(BATCH_IS_STAGED_NOT_RUN);
         // `Pending` is proof the run did not happen, which is precisely the fact the withheld Run
         // button lacked. Clearing the failure re-enables it — the doubt the alert existed to express
         // has been answered, and answering it is what this button is for.
-        if (batch.status === SIS_IMPORT_STATUS.Pending) run.reset();
+        run.reset();
         return;
       }
       setCheckNote(undefined);
-      // The run's failure is cleared on the way through, and it is not housekeeping: the batch about
-      // to be rendered *is* the answer to the question that failure was expressing doubt about. Left
-      // set, a `Failed` batch would arrive on the results step with the timed-out run's alert above it
-      // and `Run again` greyed out by `isResendUnsafe` — the check having resolved the doubt, and the
-      // screen still acting on it.
       run.reset();
-      setStage({ name: "results", batch, termId: term });
+      navigate(importProgressPath(batchId), { state: { termId: term } });
     });
   };
 
@@ -360,16 +356,6 @@ export default function StudentsImport() {
           checking={check.status === "running"}
           checkError={check.status === "failed" ? check.error : undefined}
           checkNote={checkNote}
-        />
-      )}
-
-      {stage.name === "results" && (
-        <ResultsStep
-          batch={stage.batch}
-          onAgain={startOver}
-          onRunAgain={() => submitRun(stage.batch.id, stage.termId)}
-          running={run.status === "running"}
-          failure={run.status === "failed" ? { error: run.error } : undefined}
         />
       )}
     </Box>
@@ -748,289 +734,5 @@ function PreviewStep({
         </Alert>
       )}
     </Paper>
-  );
-}
-
-// ---------------------------------------------------------------------------------------------
-// Step 3 — what it did
-// ---------------------------------------------------------------------------------------------
-
-/**
- * The counters, and the way to the rows behind them.
- *
- * "37 succeeded, 3 failed" with no way to see which 3 is not a usable answer, which is what
- * `?result=Failed` exists for — so the rows panel below opens on that filter whenever there is
- * anything in it.
- */
-function ResultsStep({
-  batch,
-  onAgain,
-  onRunAgain,
-  running,
-  failure,
-}: {
-  batch: SisImportBatch;
-  onAgain: () => void;
-  onRunAgain: () => void;
-  running: boolean;
-  failure: { error: unknown } | undefined;
-}) {
-  /**
-   * A `Failed` batch has not finished, and it is the one status this step can offer a way out of.
-   *
-   * `SisImportService.RunAsync` accepts a run when the batch is `Pending` **or** `Failed`, and
-   * `RUN_IS_IDEMPOTENT` tells the operator in as many words that re-running is how a part-way failure
-   * is finished. Without a button that says so, the only offers on this screen send them back to the
-   * file picker — which uploads the same workbook a second time and stages a second batch to finish a
-   * job the first one can finish itself.
-   */
-  const canRunAgain = batch.status === SIS_IMPORT_STATUS.Failed;
-  const resendUnsafe = failure !== undefined && isResendUnsafe(failure.error);
-
-  const counters: { label: string; value: number; note: string }[] = [
-    {
-      label: "Inserted",
-      value: batch.insertedRows,
-      note: "new to the academic tables",
-    },
-    {
-      label: "Updated",
-      value: batch.updatedRows,
-      note: "already there, changed",
-    },
-    {
-      label: "Skipped",
-      value: batch.skippedRows,
-      note: "already true — what a re-import reports",
-    },
-    { label: "Failed", value: batch.failedRows, note: "not imported" },
-    {
-      label: "Warned",
-      value: batch.warningRows,
-      note: "imported, with a note",
-    },
-  ];
-
-  return (
-    <Paper variant="outlined" sx={{ p: 3 }}>
-      <Alert severity={batch.failedRows > 0 ? "warning" : "success"} role="status" sx={{ mb: 3 }}>
-        {/* The status word is printed, not encoded in the alert's colour: `CompletedWithWarnings` and
-            `CompletedWithErrors` are three different answers to "do I need to look at the rows?" and
-            two shades of the same icon cannot carry that. */}
-        <AlertTitle>
-          {batch.status === SIS_IMPORT_STATUS.Failed
-            ? "The run stopped"
-            : batch.failedRows > 0
-              ? "The import finished with failed rows"
-              : "The import finished"}
-        </AlertTitle>
-        <Typography variant="body2">
-          Batch {batch.id.slice(0, 8)} · term {batch.termCode} · status{" "}
-          <strong>{batch.status}</strong>
-          {batch.finishedAt !== undefined && ` · finished ${batch.finishedAt}`}
-        </Typography>
-      </Alert>
-
-      {!batch.countersReconcile && (
-        <Alert severity="error" role="alert" sx={{ mb: 3 }}>
-          <AlertTitle>The counters do not add up</AlertTitle>
-          <Typography variant="body2">
-            The API reports that inserted + updated + failed + skipped does not equal{" "}
-            {batch.totalRows}. That is the server’s own reconciliation check, not this screen’s
-            arithmetic — report it rather than re-running.
-          </Typography>
-        </Alert>
-      )}
-
-      <Typography variant="h6" component="h2" sx={{ mb: 1 }}>
-        {batch.totalRows} source {batch.totalRows === 1 ? "row" : "rows"}
-      </Typography>
-
-      <Grid container spacing={2} sx={{ mb: 3 }}>
-        {counters.map((counter) => (
-          <Grid key={counter.label} size={{ xs: 6, sm: 4, md: 2.4 }}>
-            <Paper variant="outlined" sx={{ p: 1.5, height: "100%" }}>
-              <Typography variant="h6" component="p">
-                {counter.value}
-              </Typography>
-              <Typography variant="body2">{counter.label}</Typography>
-              <Typography variant="caption" color="text.secondary">
-                {counter.note}
-              </Typography>
-            </Paper>
-          </Grid>
-        ))}
-      </Grid>
-
-      {canRunAgain && (
-        <>
-          <Alert severity="info" icon={false} sx={{ mb: 3 }}>
-            {RUN_IS_IDEMPOTENT}
-          </Alert>
-          {failure !== undefined && (
-            <WriteFailureAlert
-              error={failure.error}
-              notApplied={HEADING_NOT_RUN}
-              mayHaveApplied={HEADING_MAYBE_RUN}
-              resendWithheld={RUN_AGAIN_RESEND_WITHHELD}
-            />
-          )}
-        </>
-      )}
-
-      <Divider sx={{ my: 3 }} />
-
-      <ImportRowsPanel batch={batch} />
-
-      <Stack direction="row" spacing={2} sx={{ mt: 3 }}>
-        {canRunAgain && (
-          <Button
-            variant="contained"
-            onClick={onRunAgain}
-            disabled={running || resendUnsafe}
-            startIcon={running ? <CircularProgress size={16} color="inherit" /> : undefined}
-          >
-            {running ? "Running…" : "Run again"}
-          </Button>
-        )}
-        <Button
-          variant={canRunAgain ? "outlined" : "contained"}
-          component={RouterLink}
-          to="/students"
-        >
-          Back to students
-        </Button>
-        <Button onClick={onAgain} disabled={running}>
-          Import another file
-        </Button>
-      </Stack>
-    </Paper>
-  );
-}
-
-/**
- * The rows behind the counters, one outcome at a time.
- *
- * A separate component so the read is only ever mounted on the results step — `useApiResource` starts
- * on mount, and a hook at the page level would fetch a batch's rows while the operator was still
- * choosing a file.
- */
-function ImportRowsPanel({ batch }: { batch: SisImportBatch }) {
-  /**
-   * Opens on `Failed` when there is anything failed to look at, which is the query the endpoint exists
-   * for. When there is not, `Skipped` is the next most useful — on a re-import it is every row, and it
-   * is how an operator confirms the second run really did change nothing.
-   */
-  const [result, setResult] = useState<string>(
-    batch.failedRows > 0 ? SIS_IMPORT_ROW_RESULT.Failed : SIS_IMPORT_ROW_RESULT.Skipped,
-  );
-
-  /**
-   * Every row the read returned, painted. There is no render cap here any more and that is the point:
-   * the seam now applies `MAX_LIST_ROWS` to this endpoint and *refuses* past it (`too-large`, which
-   * `advise()` describes and `ErrorState` below renders), so a batch too big to show says so instead of
-   * being silently trimmed after the whole array was already loaded into state. One ceiling, stated
-   * once, in the layer that can decline the work rather than in the one that has already done it.
-   */
-  const rows = useApiResource(() => api.getImportRows(batch.id, result), [batch.id, result]);
-  const shown = rows.data ?? [];
-
-  return (
-    <Box>
-      <Typography variant="h6" component="h2" sx={{ mb: 1 }}>
-        Rows
-      </Typography>
-
-      <TextField
-        select
-        size="small"
-        label="Show rows that were"
-        value={result}
-        onChange={(e) => setResult(e.target.value)}
-        sx={{ width: 240, mb: 2 }}
-      >
-        {ROW_FILTERS.map((option) => (
-          <MenuItem key={option} value={option}>
-            {option}
-          </MenuItem>
-        ))}
-      </TextField>
-
-      {rows.status === "loading" && <LoadingState label="Loading rows…" />}
-
-      {rows.status === "error" && (
-        <ErrorState subject="the batch rows" error={rows.error} onRetry={rows.reload} />
-      )}
-
-      {rows.status === "ready" && shown.length === 0 && (
-        <EmptyState message={`No rows in this batch were ${result.toLowerCase()}.`} />
-      )}
-
-      {rows.status === "ready" && shown.length > 0 && (
-        <TableContainer component={Paper} variant="outlined" sx={{ overflowX: "auto" }}>
-          <Table size="small">
-            <caption style={{ captionSide: "bottom", padding: "8px 16px" }}>
-              Rows of batch {batch.id.slice(0, 8)} whose result was {result}. Row numbers are lines
-              in the source workbook — open it there to fix them.
-            </caption>
-            <TableHead>
-              <TableRow>
-                <TableCell component="th" scope="col">
-                  Row
-                </TableCell>
-                <TableCell component="th" scope="col">
-                  Result
-                </TableCell>
-                <TableCell component="th" scope="col">
-                  What the import said
-                </TableCell>
-                <TableCell component="th" scope="col">
-                  Entities touched
-                </TableCell>
-              </TableRow>
-            </TableHead>
-            <TableBody>
-              {shown.map((row) => (
-                <RowLine key={row.id} row={row} />
-              ))}
-            </TableBody>
-          </Table>
-        </TableContainer>
-      )}
-    </Box>
-  );
-}
-
-/**
- * One row.
- *
- * The result is a word in its own cell as well as a chip, so nothing here is carried by colour alone.
- * The message is the server's own sentence — `errorMessage` for a failure, `skipReason` for a skip,
- * `warningMessage` for an annotation — and the row's *contents* are deliberately not available to
- * print. See the module header.
- */
-function RowLine({ row }: { row: SisImportRow }) {
-  const said = row.errorMessage ?? row.skipReason ?? row.warningMessage;
-
-  return (
-    <TableRow>
-      <TableCell component="th" scope="row">
-        {row.rowNumber}
-      </TableCell>
-      <TableCell>
-        <Stack direction="row" spacing={1} alignItems="center">
-          <span>{row.result}</span>
-          {row.warningCode !== undefined && (
-            <Chip size="small" variant="outlined" label={row.warningCode} />
-          )}
-        </Stack>
-      </TableCell>
-      <TableCell sx={{ maxWidth: 520 }}>
-        <Typography variant="body2" sx={{ wordBreak: "break-word" }}>
-          {said ?? "—"}
-        </Typography>
-      </TableCell>
-      <TableCell>{row.entities.length}</TableCell>
-    </TableRow>
   );
 }

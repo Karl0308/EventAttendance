@@ -8,6 +8,7 @@ import Dashboard from "./pages/Dashboard";
 import Login from "./pages/Login";
 import Students from "./pages/Students";
 import StudentsImport from "./pages/StudentsImport";
+import StudentsImportProgress from "./pages/StudentsImportProgress";
 import Events from "./pages/Events";
 import EventDetail from "./pages/EventDetail";
 import Devices from "./pages/Devices";
@@ -66,6 +67,19 @@ export default function App() {
             grant on the server (§11), and an account that may correct one student's card is not
             thereby an account that may replace the roster. */}
         <Route path="/students/import" element={gated(PERMISSIONS.sisImport, <StudentsImport />)} />
+        {/* One batch: running, then finished. The same permission as its sibling and for the same
+            reason — this is where a roster import is watched and where the rows it failed on are read,
+            which is the importer's surface rather than the roster's.
+
+            A route rather than the third step of the wizard, because `POST .../run` answers 202 and
+            the run outlives the request: an operator reloads, comes back after lunch, or sends the
+            address to whoever asked them to run it, and a step reachable only by having pressed Run
+            serves none of those. Declared after `/students/import` for readability only — the static
+            segment wins over the `:batchId` param in react-router's ranking regardless of order. */}
+        <Route
+          path="/students/import/:batchId"
+          element={gated(PERMISSIONS.sisImport, <StudentsImportProgress />)}
+        />
 
         <Route path="/events" element={gated(PERMISSIONS.eventsRead, <Events />)} />
         {/* `events.read` and not `attendance.read`, even though the live board is most of the screen:

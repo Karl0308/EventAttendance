@@ -6,7 +6,7 @@
 // this is a system boundary, so a payload that drifts from the contract fails loud here instead of
 // arriving three components deep as `undefined`.
 
-import { GROUP_SOURCE_TYPE, GROUP_TYPE_SECTION } from "./types";
+import { GROUP_SOURCE_TYPE, GROUP_TYPE_SECTION, SIS_IMPORT_STATUS } from "./types";
 import type {
   AuthUser,
   Student,
@@ -275,6 +275,29 @@ function reqStrs(row: Row, key: string, what: string): string[] {
 /** Nullable-in-contract fields: JSON `null` and an absent key both collapse to `undefined`. */
 const optStr = (value: unknown): string | undefined =>
   typeof value === "string" ? value : undefined;
+
+/**
+ * The same, for a number — and the non-finite guard is not decoration.
+ *
+ * `NaN` and `Infinity` are not JSON, but they *are* what a hand-rolled serializer or a proxy that
+ * re-encodes bodies can produce, and one reaching a progress panel renders "NaN of 536" over a run
+ * that is going perfectly well. Collapsing them to `undefined` puts them on the indeterminate path,
+ * which is the honest reading of a count nobody can state.
+ */
+const optNum = (value: unknown): number | undefined =>
+  typeof value === "number" && Number.isFinite(value) ? value : undefined;
+
+/**
+ * The same, for a boolean.
+ *
+ * Deliberately **not** truthiness: `optBool(0)` and `optBool("")` are `undefined` rather than `false`,
+ * so a caller's `?? fallback` still reaches its fallback on a field the server did not send. A
+ * truthiness reading would answer `false` for "absent" and the fallback would never run — which is the
+ * whole difference between "this server says the run is not over" and "this server has not been
+ * taught to say".
+ */
+const optBool = (value: unknown): boolean | undefined =>
+  typeof value === "boolean" ? value : undefined;
 
 // ---------------------------------------------------------------------------------------------
 // Transport
@@ -691,8 +714,9 @@ async function getJsonOrMissing(
  * @param applied what the server did, in the user's words ("The event was created") — used only for
  *   the reply-unreadable message, where naming it is the difference between the user checking the
  *   list and the user sending it again.
- * @param timeoutMs the budget for this one request. Defaulted, and overridden only by the upload,
- *   whose duration is dominated by the bytes going out rather than by the server thinking.
+ * @param timeoutMs the budget for this one request. Defaulted, and overridden by the two writes whose
+ *   duration is not "how long a server may think": the upload, dominated by the bytes going out, and
+ *   the import run, dominated by how many rows the operator staged.
  */
 async function writeJson<T>(
   what: string,
@@ -1444,6 +1468,10 @@ function toAudienceResult(row: Row, what: string): EventAudienceResult {
  * `countersReconcile` is read rather than computed here — see the field's own note in `types.ts`.
  */
 function toImportBatch(row: Row, what: string): SisImportBatch {
+  // Read once and named, because `isTerminal`'s compatibility fallback below needs it too and a
+  // second `reqStr` call for the same key would be a second chance for the two readings to disagree.
+  const status = reqStr(row, "status", what);
+
   return {
     id: reqStr(row, "id", what),
     termId: reqStr(row, "termId", what),
@@ -1454,7 +1482,7 @@ function toImportBatch(row: Row, what: string): SisImportBatch {
     fileName: optStr(row.fileName),
     sourceSheetName: optStr(row.sourceSheetName),
     fileHash: optStr(row.fileHash),
-    status: reqStr(row, "status", what),
+    status,
     totalRows: reqNum(row, "totalRows", what),
     insertedRows: reqNum(row, "insertedRows", what),
     updatedRows: reqNum(row, "updatedRows", what),
@@ -1466,6 +1494,32 @@ function toImportBatch(row: Row, what: string): SisImportBatch {
     startedAt: optStr(row.startedAt),
     finishedAt: optStr(row.finishedAt),
     countersReconcile: reqBool(row, "countersReconcile", what),
+
+    // The seven progress fields, every one of them optional at the seam. Two different servers send
+    // an absent `progressUnitsTotal`: one that has never heard of progress reporting, and one whose
+    // current phase genuinely cannot state a unit count. Neither is drift, so neither may be `reqNum`
+    // — and neither may be defaulted to `0` here, because the panel's whole rule is that an absent
+    // count renders as indeterminate rather than as "nothing has happened".
+    progressPhase: optStr(row.progressPhase),
+    progressPhaseNumber: optNum(row.progressPhaseNumber),
+    progressPhaseCount: optNum(row.progressPhaseCount),
+    progressUnitsDone: optNum(row.progressUnitsDone),
+    progressUnitsTotal: optNum(row.progressUnitsTotal),
+    progressUpdatedAt: optStr(row.progressUpdatedAt),
+    failureReason: optStr(row.failureReason),
+
+    // Required in the contract and read tolerantly anyway, which is the one place this mapper bends
+    // its own rule and does so on purpose. `isTerminal` is a **computed** field the server added
+    // alongside the detached run; a build of this SPA deployed ahead of that server would otherwise
+    // throw `off-contract` on every batch read — including the reads on the results screen, which
+    // worked perfectly well before the field existed. So an absent value falls back to the derivation
+    // this client used to make for itself: everything except the two live statuses.
+    //
+    // The fallback is a *compatibility path*, not a second opinion. When the server states the field,
+    // the server wins, because it owns the set of statuses and this list is a copy.
+    isTerminal:
+      optBool(row.isTerminal) ??
+      (status !== SIS_IMPORT_STATUS.Pending && status !== SIS_IMPORT_STATUS.Running),
   };
 }
 
@@ -2354,7 +2408,13 @@ async function uploadRoster(file: File, termId: string): Promise<SisImportPrevie
 }
 
 /**
- * `POST /sis/import/{batchId}/run` — applies a staged batch. This is the write.
+ * `POST /sis/import/{batchId}/run` — **starts** a staged batch. This is the write.
+ *
+ * **202, not 200, and the batch that comes back is `Running` rather than finished.** The run is
+ * detached: the server accepts the job and answers, and the work carries on behind the request. So
+ * the reply is not the result — it is *a batch to start watching*, and `getImportBatch` is what the
+ * screen polls until `isTerminal`. A caller that renders this reply as an outcome is rendering a
+ * five-zero counter set over a run that has barely begun.
  *
  * **Idempotent with respect to the database**: running the same roster twice leaves it identical and
  * reports every row `Skipped`. That is worth saying on screen, because the operator who does not know
@@ -2373,8 +2433,14 @@ async function runImport(batchId: string, request: SisImportRunRequest): Promise
     "POST /sis/import/{batchId}/run",
     `/sis/import/${encodeURIComponent(batchId)}/run`,
     { method: "POST", payload: request },
-    "The import was run",
+    "The import was started",
     toImportBatch,
+    // The ordinary read budget, and the ten-minute one this used to carry is **deleted** rather than
+    // left unused. It existed because the run happened inside this request and the clock therefore had
+    // to be the size of the operator's roster; the 202 moved the work off the request, so what is
+    // being timed now is a server accepting a job — a bounded question, answered in milliseconds. A
+    // constant left lying about would be reached for again by the next long-looking write, and it
+    // would be just as wrong there.
   );
 }
 

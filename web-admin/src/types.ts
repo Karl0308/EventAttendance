@@ -636,9 +636,84 @@ export interface SisImportBatch {
    * reason the DTO gives for exposing it at all: it is the one check an operator runs, and a UI that
    * re-derives it will eventually derive it against a different set of fields than the server did and
    * report a disagreement that does not exist.
+   *
+   * **Only meaningful once `isTerminal`.** It is `false` for every in-flight batch by construction —
+   * a run half-way through `WritingFacts` has written some counters and not others — so a screen that
+   * renders the "the counters do not add up" alert without gating on `isTerminal` shows an operator a
+   * report-this-bug banner for the whole six minutes their perfectly healthy import is running.
    */
   countersReconcile: boolean;
+
+  // -------------------------------------------------------------------------------------------
+  // Progress — all optional, and the optionality is load-bearing
+  // -------------------------------------------------------------------------------------------
+  //
+  // The run is detached: `POST /sis/import/{batchId}/run` answers 202 with a `Running` batch and the
+  // work continues on the server, so `GET /sis/import/{batchId}` is what a screen watches. These seven
+  // are how that watch is more than a spinner.
+  //
+  // **Any of them may be absent**, and there are two different reasons, neither of which is drift:
+  // the batch ran before this server grew progress reporting, or the phase it is in has no truthful
+  // unit count to give. Absent must therefore render as *indeterminate* — "reading the workbook" with
+  // no numbers — and **never as 0**, which claims a run has done nothing when what is true is that
+  // nobody is counting.
+
+  /** One of `IMPORT_PHASES`; `string` on the wire, for the reason `EventItem.status` records. */
+  progressPhase?: string;
+  /** Which phase this is, 1-based. Paired with `progressPhaseCount` — one without the other says nothing. */
+  progressPhaseNumber?: number;
+  /** How many phases the run has. Grows when the server grows a phase; never hard-coded client-side. */
+  progressPhaseCount?: number;
+  /** Units finished *within the current phase*, not across the run. Resets each phase. */
+  progressUnitsDone?: number;
+  /** Units the current phase has to do, when the phase can say. Absent means indeterminate. */
+  progressUnitsTotal?: number;
+  /**
+   * When the server last wrote any of the above.
+   *
+   * A different fact from `startedAt`, and the one that answers "is the *run* alive?" rather than
+   * "how long have I been watching?". A screen that has been open eight minutes over a heartbeat
+   * thirty seconds old is healthy; the same screen over a heartbeat four minutes old is not.
+   */
+  progressUpdatedAt?: string;
+  /** Why a `Failed` run stopped, in the server's own words. Absent on every other status. */
+  failureReason?: string;
+
+  /**
+   * Whether the run is over, **as the server says it is** — the poll's stop condition and the gate on
+   * every counter this screen prints.
+   *
+   * Read rather than derived from `status` for the same reason `countersReconcile` is: the server owns
+   * the set of statuses, and a client that recomputes terminality against a list it holds locally will
+   * eventually meet a status it has never heard of and file it as unfinished — polling a batch that
+   * finished, forever. `toImportBatch` does fall back to a local derivation when the field is missing
+   * altogether, which is a *compatibility* path for a server that predates it, not a second opinion.
+   */
+  isTerminal: boolean;
 }
+
+/**
+ * The phases `SisImportService` reports, in run order.
+ *
+ * Here rather than in `sisImport.ts` beside their labels because they are contract, not copy: this is
+ * the server's list, and the labels are this screen's words for it. **Read these to compare, never to
+ * type a received value** — the usual rule in this file, and it matters more than usual here, because
+ * a phase this build has not heard of must still render (as itself) rather than fall through to
+ * nothing.
+ */
+export const IMPORT_PHASES = {
+  ClearingPreviousRun: "ClearingPreviousRun",
+  ParsingRows: "ParsingRows",
+  ResolvingDimensions: "ResolvingDimensions",
+  ResolvingFacts: "ResolvingFacts",
+  WritingFacts: "WritingFacts",
+  RecordingRowResults: "RecordingRowResults",
+  RefreshingStudentCache: "RefreshingStudentCache",
+  SyncingStudentGroups: "SyncingStudentGroups",
+  Done: "Done",
+} as const;
+
+export type ImportPhaseName = (typeof IMPORT_PHASES)[keyof typeof IMPORT_PHASES];
 
 /**
  * §4.12 `SisImportBatches.Status`, verified against `SisImportStatus.All` in
