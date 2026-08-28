@@ -353,11 +353,19 @@ your side — stop, and do not retry: the same URL is refused forever.
 
 ### Never truncated, never paged
 
-Over **20,000 attendees** the endpoint refuses with `ManifestTooLarge` rather than returning a partial
+Over **50,000 attendees** the endpoint refuses with `ManifestTooLarge` rather than returning a partial
 body. A short list is indistinguishable from a small event, and its consequence is legitimately-invited
 students showing up on the device as unknown cards — the exact failure this endpoint exists to prevent.
-The ceiling sits about two orders of magnitude above the largest event anyone has described; if you
-ever see it, something is wrong on our side.
+
+**This was 20,000 until 2026-08-28, and it was reached.** The first real roster import put 21,493
+students on file, an event invited all of them, and every pull answered `413` while students queued at
+the scanner. Nothing about your side of the contract changes — the number in the problem body's
+`maxAttendees` extension is authoritative and always was, which is why it is sent. If you hard-coded
+20,000 anywhere, read it from the response instead.
+
+**A manifest at the current ceiling is large** — roughly a quarter-kilobyte of JSON per attendee, so a
+whole-school event is several megabytes. Pull it once and revalidate with `If-None-Match`; a `304` is
+free and is the normal answer. If you ever see `ManifestTooLarge`, something is wrong on our side.
 
 ### Budget: 30 pulls per minute, per device
 
