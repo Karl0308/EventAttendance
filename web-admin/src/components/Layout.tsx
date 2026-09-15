@@ -44,7 +44,14 @@ interface NavEntry {
 
 const nav: readonly NavEntry[] = [
   { to: "/", label: "Dashboard", icon: <DashboardIcon />, permission: undefined },
-  { to: "/students", label: "Students", icon: <PeopleIcon />, permission: PERMISSIONS.studentsRead },
+  {
+    to: "/students",
+    // Label only — the route, the permission code and the underlying module are unchanged. The URL
+    // deliberately keeps saying `/students`; this is confirmed intentional, not a missed rename.
+    label: "Academic Community",
+    icon: <PeopleIcon />,
+    permission: PERMISSIONS.studentsRead,
+  },
   { to: "/events", label: "Events", icon: <EventIcon />, permission: PERMISSIONS.eventsRead },
   { to: "/devices", label: "Devices", icon: <RouterIcon />, permission: PERMISSIONS.devicesRead },
   // Last, and that is not an accident of appending: a term is created once a semester, where the

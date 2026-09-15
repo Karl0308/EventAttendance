@@ -47,6 +47,7 @@ import type { StatusChange } from "../eventStatus";
 import { EVENT_STATUS } from "../types";
 import type {
   AttendanceRecord,
+  AttendanceMode,
   EventAudienceGroup,
   EventAudienceRequest,
   EventAudienceStudent,
@@ -252,6 +253,9 @@ function RosterUnavailable({ error, onRetry }: { error: unknown; onRetry: () => 
     </Alert>
   );
 }
+
+/** The one mode whose grid gets a Time Out column — a named constant so a typo here is a type error. */
+const TIME_IN_OUT: AttendanceMode = "TimeInOut";
 
 const statusChipColor = (s: string) =>
   s === "Present" ? "success" : s === "Late" ? "warning" : s === "Excused" ? "info" : "error";
@@ -651,6 +655,22 @@ export default function EventDetail() {
       width: 110,
       valueFormatter: (v) => (v ? new Date(v as string).toLocaleTimeString() : "—"),
     },
+    // Time Out is only meaningful for a TimeInOut event — a Single-tap event has no check-out to
+    // show, and QA confirmed its grid must stay exactly as it is today: same five columns, same
+    // order. Spread in rather than always present, so a Single event's `cols` array is identical to
+    // what it was before this column existed.
+    ...(event?.attendanceMode === TIME_IN_OUT
+      ? [
+          {
+            field: "checkOutAt",
+            headerName: "Time Out",
+            width: 110,
+            // Same formatting as Check-in, including the "—" for a student who tapped in and has not
+            // tapped out yet — an expected, ordinary state rather than an error.
+            valueFormatter: (v: unknown) => (v ? new Date(v as string).toLocaleTimeString() : "—"),
+          } satisfies GridColDef<AttendanceRecord>,
+        ]
+      : []),
     {
       field: "status",
       headerName: "Status",

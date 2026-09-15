@@ -254,7 +254,7 @@ export default function StudentsImportProgress() {
     <Box>
       <Breadcrumbs sx={{ mb: 1 }}>
         <MuiLink component={RouterLink} to="/students" underline="hover" color="inherit">
-          Students
+          Academic Community
         </MuiLink>
         <MuiLink component={RouterLink} to="/students/import" underline="hover" color="inherit">
           Import roster

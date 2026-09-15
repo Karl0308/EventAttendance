@@ -503,6 +503,16 @@ export default function Students() {
   const cols: GridColDef<Student>[] = [
     { field: "studentNumber", headerName: "Student No.", width: 130 },
     { field: "fullName", headerName: "Name", flex: 1, minWidth: 180 },
+    {
+      field: "email",
+      headerName: "Email",
+      width: 200,
+      // `email` is the one address the read DTO serves (the school @usa.edu.ph address; the
+      // alternate address in the database is not on this endpoint). It is unset for effectively the
+      // whole imported roster today — the same absent-value treatment the RFID and Check-in columns
+      // use, so a blank cell reads as "no email on file" rather than as a broken column.
+      valueFormatter: (v) => (v ? String(v) : NO_VALUE),
+    },
     { field: "course", headerName: "Course", width: 90 },
     { field: "yearLevel", headerName: "Year", width: 110 },
     { field: "section", headerName: "Sec", width: 70 },
@@ -536,7 +546,7 @@ export default function Students() {
     <Box>
       <Stack direction="row" justifyContent="space-between" alignItems="center" sx={{ mb: 1 }}>
         <Typography variant="h5" fontWeight={700}>
-          Students
+          Academic Community
         </Typography>
         <Stack direction="row" spacing={1}>
           {/* The entry point to §10. A link rather than a button that navigates: it is a destination

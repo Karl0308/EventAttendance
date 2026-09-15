@@ -302,7 +302,7 @@ export default function StudentsImport() {
     <Box>
       <Breadcrumbs sx={{ mb: 1 }}>
         <MuiLink component={RouterLink} to="/students" underline="hover" color="inherit">
-          Students
+          Academic Community
         </MuiLink>
         <Typography color="text.primary">Import roster</Typography>
       </Breadcrumbs>
