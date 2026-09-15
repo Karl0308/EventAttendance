@@ -226,6 +226,11 @@ public class PaginationTests : IntegrationTest
                 () => academic.ListCourseOfferingsAsync(Guid.NewGuid(), null, null, page)),
             ("GET /student-groups", "StudentGroups",
                 () => StudentGroupsOn(db).ListAsync(null, null, null, null, page)),
+            // The tenth. This test's own summary says it exists to catch the read that forgets to end
+            // its ORDER BY on a unique column, and a list added without an entry here is exactly the
+            // read it cannot catch.
+            ("GET /classifications", "Classifications",
+                () => ClassificationsOn(db).ListAsync(false, page)),
         };
 
         foreach (var read in reads)

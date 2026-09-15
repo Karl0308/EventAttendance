@@ -158,6 +158,46 @@ internal static class TestData
         IsCurrent = isCurrent,
     };
 
+    /// <summary>
+    /// A vocabulary entry. <see cref="Classification.NameKey"/> is derived here rather than defaulted
+    /// to a literal, and that is load-bearing: a fixture that wrote a key by hand could put a row in
+    /// the table that <c>UX_Classifications_SchoolId_NameKey</c> treats as distinct while the service
+    /// treats it as a duplicate, and every uniqueness assertion above it would pass against a table
+    /// production can never produce.
+    /// </summary>
+    public static Classification NewClassification(
+        Guid schoolId,
+        string name = "STUDENT",
+        string axis = ClassificationAxis.Student,
+        bool isActive = true) => new()
+    {
+        SchoolId = schoolId,
+        Name = name,
+        NameKey = ClassificationText.KeyFor(name),
+        Axis = axis,
+        IsActive = isActive,
+    };
+
+    /// <summary>
+    /// A person's classification on one axis.
+    ///
+    /// <para>
+    /// <b><see cref="StudentClassification.Axis"/> is copied from the classification rather than
+    /// defaulted, and that is load-bearing.</b> The column is denormalized so
+    /// <c>UX_StudentClassifications_Student_Axis</c> can exist, and it is only meaningful while it
+    /// equals the parent's. A fixture that let the two disagree could build a person holding two
+    /// Personnel classifications — a state production cannot reach — and every assertion about "one
+    /// per axis" above it would be passing against a table that does not exist in the wild.
+    /// </para>
+    /// </summary>
+    public static StudentClassification NewStudentClassification(
+        Guid studentId, Classification classification) => new()
+    {
+        StudentId = studentId,
+        ClassificationId = classification.Id,
+        Axis = classification.Axis,
+    };
+
     public static College NewCollege(
         Guid schoolId, string name = "College of Criminal Justice", string? code = "CCJ") => new()
     {

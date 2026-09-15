@@ -3,7 +3,7 @@
 <!-- GENERATED FILE — DO NOT EDIT.
      Source: docs/api/openapi.json. Regenerate: node scripts/generate-endpoint-index.mjs --write -->
 
-**Generated from [`openapi.json`](openapi.json) — do not edit by hand.** 54 operations across 9 controllers, all mounted under `/api/v1`. Routes below are written relative to that mount.
+**Generated from [`openapi.json`](openapi.json) — do not edit by hand.** 61 operations across 10 controllers, all mounted under `/api/v1`. Routes below are written relative to that mount.
 
 This page is a **map, not a contract.** It exists so you can find an endpoint; payload shapes, field types and outcome tokens live in [`openapi.json`](openapi.json), which is what you generate a client from. Behaviour a schema cannot state — what your queue does with each outcome, the card-UID and clock rules — is in [`attendance-contract-handoff.md`](attendance-contract-handoff.md).
 
@@ -13,6 +13,7 @@ This page is a **map, not a contract.** It exists so you can find an endpoint; p
 
 - [Academic](#academic) — 9
 - [Auth](#auth) — 5
+- [Classifications](#classifications) — 7
 - [Devices](#devices) — 7
 - [EventManifest](#eventmanifest) — 1
 - [SisImport](#sisimport) — 4
@@ -44,6 +45,18 @@ This page is a **map, not a contract.** It exists so you can find an endpoint; p
 | `POST` | `/auth/logout` | **Bearer** | `401` `403` | End this session. |
 | `GET` | `/auth/me` | **Bearer** | `401` `404` | Who this access token speaks for, and what it may do. |
 | `POST` | `/auth/refresh` | — | `401` `403` `429` | Rotate the session cookie and mint a new access token. |
+
+## Classifications
+
+| Method | Route | Auth | Errors | What it does |
+|---|---|---|---|---|
+| `GET` | `/classifications` | — | *none declared* | The vocabulary, active entries first, then grouped by axis, then by name. |
+| `POST` | `/classifications` | — | `400` `409` | Add a classification to this school's vocabulary. |
+| `DELETE` | `/classifications/{id}` | — | `404` `409` | Remove a classification, but only when nobody holds it, nothing points at it, and it is not itself the record of a merge. |
+| `GET` | `/classifications/{id}` | — | `404` | One entry, retired or not. |
+| `PUT` | `/classifications/{id}` | — | `400` `404` `409` | Rename a classification. |
+| `PATCH` | `/classifications/{id}/active` | — | `400` `404` `409` | Retire a classification, or bring it back. |
+| `POST` | `/classifications/{id}/merge` | — | `400` `404` `409` | Collapse two classifications into one, moving every assignment onto the survivor and deleting nothing. |
 
 ## Devices
 

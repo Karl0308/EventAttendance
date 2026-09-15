@@ -229,6 +229,7 @@ internal static class SeedData
         }
 
         await SeedTermAsync(db, school, ct);
+        await SeedClassificationsAsync(db, school, ct);
 
         // Everything below is the first-run bulk. It stays gated on the school having just been
         // created, because these rows are a coherent fixture — students with cards, events, a kiosk,
@@ -426,5 +427,77 @@ internal static class SeedData
             // school having no term of any kind, so this cannot collide with an operator-created one.
             IsCurrent = true,
         });
+    }
+
+    /// <summary>
+    /// The eight classifications the client's access-control export actually contains
+    /// (<see cref="ClassificationSeedValues.All"/>).
+    ///
+    /// <para>
+    /// <b>Its own guard, per row, and NOT the school guard — this is the single highest-probability
+    /// silent failure in the whole phase.</b> <see cref="InitializeAsync"/> returns early once a
+    /// <c>School</c> row exists, so anything placed below that return runs only on a database nobody
+    /// has. That is not a hypothetical: it is exactly how this project shipped a missing <c>Term</c>,
+    /// and the symptom was a roster-import page with an empty picker on every carried-over machine
+    /// while a freshly dropped database looked perfect. A clean-slate test cannot catch it, so
+    /// <c>DevelopmentSeedClassificationTests</c> boots the host twice against the same database and
+    /// asserts the second boot as well as the first.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>Per row rather than "are there any", which is the difference from <see cref="SeedTermAsync"/>
+    /// and is deliberate.</b> A term is a fixture — one is as good as another, and an operator who
+    /// authored their own does not want a second. The eight classifications are a <em>vocabulary</em>,
+    /// and a database that has seven of them is missing one, not "already seeded": a value added to
+    /// this list in a later release has to reach installations that already ran the earlier one.
+    /// Keying the check on <see cref="Classification.NameKey"/> rather than on
+    /// <see cref="Classification.Name"/> is what makes it safe to re-run after an administrator has
+    /// renamed one — <c>SUPERVISORY/MANAGERIAL</c> edited to <c>Supervisory / Managerial</c> keeps the
+    /// key <c>SUPERVISORYMANAGERIAL</c>, so this does not helpfully re-add the original spelling
+    /// alongside their edit.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>Nothing here updates or reactivates an existing row.</b> A classification an administrator
+    /// retired stays retired across restarts; a name they edited stays edited. The seed's job is to
+    /// make sure the vocabulary <em>exists</em>, not to keep enforcing its opening state against the
+    /// operator — which would make the one feature this phase ships (an editable list) silently
+    /// revert on every deployment.
+    /// </para>
+    /// </summary>
+    private static async Task SeedClassificationsAsync(
+        EamsDbContext db, School school, CancellationToken ct)
+    {
+        // A school added moments ago has no rows to query, so the local check covers the
+        // fresh-database case without a round trip against an unsaved key — same shape as
+        // SeedTermAsync's. IgnoreQueryFilters is not needed: Classifications is tenant-filtered and
+        // the explicit SchoolId predicate is narrower than the filter either way.
+        List<string> existingKeys = db.Entry(school).State == EntityState.Added
+            ? []
+            : await db.Classifications.AsNoTracking()
+                .Where(c => c.SchoolId == school.Id)
+                .Select(c => c.NameKey)
+                .ToListAsync(ct);
+
+        var present = existingKeys.ToHashSet(StringComparer.Ordinal);
+
+        foreach (var (name, axis) in ClassificationSeedValues.All)
+        {
+            var key = ClassificationText.KeyFor(name);
+            if (!present.Add(key)) continue;
+
+            db.Classifications.Add(new Classification
+            {
+                SchoolId = school.Id,
+                Name = name,
+
+                // The axis comes from the seed list, which took it from the column the value appears
+                // in rather than from what the value looks like. See ClassificationSeedValues for the
+                // tally, and for the guess it replaced.
+                Axis = axis,
+                NameKey = key,
+                IsActive = true,
+            });
+        }
     }
 }

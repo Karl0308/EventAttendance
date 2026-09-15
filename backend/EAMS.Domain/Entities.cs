@@ -141,6 +141,21 @@ public class Student : AuditableEntity
     public static readonly IReadOnlyList<string> DerivedAcademicPropertyNames =
         [nameof(Course), nameof(YearLevel), nameof(Section)];
 
+    /// <summary>
+    /// What kind of person this row is, on each of the four category axes the source carries — see
+    /// <see cref="StudentClassification"/>. Not in §4.3; additive, recorded as drift.
+    ///
+    /// <para>
+    /// <b>A collection and not a <c>ClassificationId</c> column, deliberately.</b> Real people hold two
+    /// at once on different axes, and a scalar column would have answered such a person with one of
+    /// them — non-empty, plausible and wrong, exactly as the D-2 section cache does. Empty is the
+    /// ordinary state today: nothing populates it yet, and Phase 1b's import will leave it empty for
+    /// anyone it cannot categorise.
+    /// </para>
+    /// </summary>
+    public ICollection<StudentClassification> Classifications { get; set; } =
+        new List<StudentClassification>();
+
     public ICollection<RfidCard> Cards { get; set; } = new List<RfidCard>();
     public ICollection<Enrollment> Enrollments { get; set; } = new List<Enrollment>();
     public ICollection<StudentTermRecord> TermRecords { get; set; } = new List<StudentTermRecord>();

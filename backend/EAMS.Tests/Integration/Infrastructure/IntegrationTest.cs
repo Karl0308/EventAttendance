@@ -266,6 +266,27 @@ public abstract class IntegrationTest : IAsyncLifetime
         new TermAdminService(db, School, logger);
 
     /// <summary>
+    /// The classification vocabulary's write surface, wired to the same tenant as
+    /// <see cref="NewDbContext()"/> — creating a classification has to decide which school it is filed
+    /// under, the same asymmetry <see cref="StudentsOn"/> and <see cref="TermsOn(EamsDbContext)"/>
+    /// record.
+    /// </summary>
+    internal IClassificationService ClassificationsOn(EamsDbContext db) =>
+        new ClassificationService(db, School, NullLogger<ClassificationService>.Instance);
+
+    /// <summary>
+    /// The same service with a logger a test can read back, for the reason
+    /// <see cref="CapturingLogger{T}"/> exists: losing the duplicate-name race to
+    /// <c>UX_Classifications_SchoolId_NameKey</c>, and losing the delete race to the merge tombstone's
+    /// foreign key, are failures the service <em>recovers from</em> — the caller gets the same tidy 409
+    /// either way, so the log entry is the only observable difference between the pre-check path and
+    /// the database path, and therefore the only way a test can prove which one it exercised.
+    /// </summary>
+    internal IClassificationService ClassificationsOn(
+        EamsDbContext db, CapturingLogger<ClassificationService> logger) =>
+        new ClassificationService(db, School, logger);
+
+    /// <summary>
     /// The §10 import pipeline, wired to the same context the test asserts against.
     ///
     /// <para>

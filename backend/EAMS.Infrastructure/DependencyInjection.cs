@@ -139,6 +139,13 @@ public static class DependencyInjection
         // nothing.
         services.AddScoped<ITermAdminService, TermAdminService>();
 
+        // The classification vocabulary (QA Q2, MDVault #404). It takes an ISchoolContext for the same
+        // reason the term admin above does — a create has to decide which school the classification is
+        // filed under — and it is a write service registered on its own rather than folded into a
+        // reference service, so that "which vocabularies can an administrator edit" stays answerable
+        // from this list.
+        services.AddScoped<IClassificationService, ClassificationService>();
+
         // Resolved per request by the DeviceKey authentication handler, from the request scope — so it
         // gets the same EamsDbContext the rest of the request will use.
         services.AddScoped<IDeviceAuthenticator, DeviceAuthenticator>();

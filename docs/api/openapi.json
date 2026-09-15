@@ -1701,6 +1701,665 @@
         ]
       }
     },
+    "/api/v1/classifications": {
+      "get": {
+        "tags": [
+          "Classifications"
+        ],
+        "summary": "`GET /classifications` — the vocabulary, active entries first, then grouped by axis, then\r\n            by name.",
+        "parameters": [
+          {
+            "name": "includeRetired",
+            "in": "query",
+            "description": "<b>Defaults to false, which is what a picker wants and is the less dangerous default of the\r\n            two.</b> A picker that offered retired categories would let an administrator file new people\r\n            under one that was deliberately withdrawn. A <em>report</em> wants `true`: a retired\r\n            classification still describes everyone who carries it, so a historical count that filtered it\r\n            out would under-report them silently — which is the same class of error as reading\r\n            `students.section` instead of the offerings.",
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "name": "page",
+            "in": "query",
+            "description": "1-based page number, default 1. Out-of-range values are clamped, not refused.",
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          },
+          {
+            "name": "pageSize",
+            "in": "query",
+            "description": "Rows per page. Default 50, maximum 200; a larger value is clamped and the response says so.",
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "One page of classifications, possibly empty.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClassificationDtoPagedResult"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClassificationDtoPagedResult"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClassificationDtoPagedResult"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "Classifications"
+        ],
+        "summary": "`POST /classifications` — add a classification to this school's vocabulary.",
+        "description": "\r\n\r\n  <b>A duplicate name is a 409, not a 500 and not a 400.</b> The payload is well formed and would\r\n             be accepted the moment the classification holding that name is renamed or merged, which is what\r\n             409 is for. The check is made before the insert <em>and</em>`UX_Classifications_SchoolId_NameKey` is caught behind it, because those are two statements\r\n             and a second administrator creating the same name in the same second is decided by the index.\r\n             \r\n\r\n\r\n  <b>Names collide on their normalized key, not on their text.</b>\r\n  `USA FRIARS`,\r\n             `USA-Friars` and `usafriars` are one classification; the refusal names the row that\r\n             holds the key, and says so when that row is retired — a name reported as taken by something\r\n             invisible in every picker is a dead end otherwise.\r\n             ",
+        "requestBody": {
+          "description": "The display name.",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ClassificationCreateRequest"
+              }
+            },
+            "text/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ClassificationCreateRequest"
+              }
+            },
+            "application/*+json": {
+              "schema": {
+                "$ref": "#/components/schemas/ClassificationCreateRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "The created classification, active. `Location` names it.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClassificationDto"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClassificationDto"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClassificationDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The name is blank, over-length, whitespace-padded, or has no letter or digit.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "That name's key is already in use here, or no school could be resolved.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/classifications/{id}": {
+      "get": {
+        "tags": [
+          "Classifications"
+        ],
+        "summary": "`GET /classifications/{id}` — one entry, retired or not.",
+        "description": "Unlike `GET /academic/terms`, this family has a by-id read, and it earns its place: the\r\n201 from a create needs a `Location` that resolves, and a client that holds an id it read\r\noff a person needs to be able to render the name even when the classification has since been\r\nretired.",
+        "operationId": "GetClassification",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The classification.",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The classification.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClassificationDto"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClassificationDto"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClassificationDto"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such classification in this school.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "Classifications"
+        ],
+        "summary": "`PUT /classifications/{id}` — rename a classification.",
+        "description": "\r\n\r\n  <b>This is the operation the table exists for, and it reassigns nobody.</b> A person's\r\n             classification is held by id, so correcting `SUPERVISORY/MANAGERIAL` to\r\n             `Supervisory / Managerial` changes one row. Had the vocabulary been a string column on the\r\n             roster, this would have been a mass `UPDATE` over every person carrying it, with nothing\r\n             to roll back to.\r\n             \r\n\r\n\r\n  <b>Renaming onto a name another classification already holds is a 409, not a merge.</b> The two\r\n             are different intentions and only one of them moves people: combining two categories is\r\n             `POST /classifications/{id}/merge`, which is explicit about which one survives and leaves\r\n             a tombstone saying so. A rename that silently absorbed another row would be a merge nobody\r\n             asked for, and no record that it happened.\r\n             \r\n\r\n\r\n             A retired classification can be renamed — the people filed under it still have to be described\r\n             correctly in a report — and renaming does not bring it back into pickers. That is\r\n             `PATCH /classifications/{id}/active`.\r\n             ",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The classification.",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "The new display name.",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ClassificationRenameRequest"
+              }
+            },
+            "text/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ClassificationRenameRequest"
+              }
+            },
+            "application/*+json": {
+              "schema": {
+                "$ref": "#/components/schemas/ClassificationRenameRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The renamed classification.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClassificationDto"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClassificationDto"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClassificationDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The name is blank, over-length, whitespace-padded, or has no letter or digit.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such classification.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Another classification in this school already holds that name's key.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "Classifications"
+        ],
+        "summary": "`DELETE /classifications/{id}` — remove a classification, but only when nobody holds it,\r\n             nothing points at it, and it is not itself the record of a merge.",
+        "description": "\r\n\r\n  <b>A referenced classification is a 409 and stays exactly where it is.</b> The two ways to make\r\n             this verb \"succeed\" anyway are a cascade and a null-out, and both destroy assignments the\r\n             operator never asked to destroy — a data-loss migration issued one HTTP request at a time. The\r\n             refusal names the two operations that do what they actually wanted: retire it, which keeps every\r\n             assignment, or merge it, which moves them.\r\n             \r\n\r\n\r\n  <b>A merged-away classification is refused too, and it is the case that looks safest.</b> After\r\n             a merge the losing row holds nobody and nothing points at it, so a guard written only as \"does\r\n             anything reference this\" would delete it happily — and with it the only record that those\r\n             people were ever somewhere else. Deleting it makes them indistinguishable from people who were\r\n             always on the survivor, and makes the merge unexplainable.\r\n             \r\n\r\n\r\n  <b>Why a delete exists here when `/academic/terms` deliberately has none.</b> A term always\r\n             has an import behind it. A classification typo'd into the vocabulary thirty seconds ago has\r\n             nothing behind it, and retiring it would leave permanent clutter in a list of eight real\r\n             categories that every picker then has to filter. The unreferenced case is the only case where\r\n             deleting destroys nothing, so it is the only case allowed.\r\n             \r\n\r\n\r\n  <b>200 with the deleted row rather than 204.</b> The body is the last description of something\r\n             that no longer exists — an administrator who deleted the wrong row can re-create it from the\r\n             response without going to a backup, and a 204 would have thrown that away to save a few bytes.\r\n             ",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The classification.",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The deleted classification, as it was.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClassificationDto"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClassificationDto"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClassificationDto"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such classification.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Somebody holds it, something points at it, or it is a merged-away classification whose row is\r\nthe only record that the merge happened. It was not deleted.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/classifications/{id}/active": {
+      "patch": {
+        "tags": [
+          "Classifications"
+        ],
+        "summary": "`PATCH /classifications/{id}/active` — retire a classification, or bring it back.",
+        "description": "\r\n\r\n  <b>Retiring is the safe half of \"delete\" and is always available.</b> The classification stops\r\n             being offered for new assignments; <b>everyone already filed under it keeps it</b>. That is the\r\n             acceptance criterion in one sentence, and it is why this route exists separately from\r\n             `DELETE`: the two differ in exactly one respect — whether the row survives — and only one\r\n             of them is safe when anything references it.\r\n             \r\n\r\n\r\n  <b>\r\n    `isActive` is required, and omitting it is a 400 rather than a default.</b> A missing\r\n             JSON member binds to `false` and would quietly withdraw a category from every picker. The\r\n             same refusal, for the same reason, as `PATCH /academic/terms/{id}/current`.\r\n             \r\n\r\n\r\n             Idempotent. A classification that was merged away cannot be reactivated — its population moved\r\n             to the survivor, so bringing it back would offer an empty category under a familiar name — and\r\n             answers 409.\r\n             ",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The classification.",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "`{\"isActive\": false}` to retire, `{\"isActive\": true}` to restore.",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ClassificationActiveRequest"
+              }
+            },
+            "text/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ClassificationActiveRequest"
+              }
+            },
+            "application/*+json": {
+              "schema": {
+                "$ref": "#/components/schemas/ClassificationActiveRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The classification, with its new flag.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClassificationDto"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClassificationDto"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClassificationDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`isActive` was not supplied.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such classification.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "It was merged into another classification and cannot be reactivated.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/classifications/{id}/merge": {
+      "post": {
+        "tags": [
+          "Classifications"
+        ],
+        "summary": "`POST /classifications/{id}/merge` — collapse two classifications into one, moving every\r\n             assignment onto the survivor and deleting nothing.",
+        "description": "\r\n\r\n  <b>This is what an administrator reaches for when the delete is refused, and the seeded\r\n             vocabulary guarantees they will.</b> The eight starting values came out of an access-control\r\n             export that spells things inconsistently, so the first duplicate is a matter of time — and\r\n             without a merge the only recoveries are \"retire one and leave the population split across two\r\n             rows\" or \"delete it\", which the guard correctly refuses.\r\n             \r\n\r\n\r\n  `{id}` is the classification being collapsed and `intoClassificationId` is the one\r\n             that survives. Both halves come back in the response, because the operator needs to see both:\r\n             the survivor is what the population is filed under now, and the retired row is the tombstone\r\n             proving nothing was thrown away.\r\n             \r\n\r\n\r\n  <b>Refused when it would build a chain or strand a population:</b> merging into a retired\r\n             classification, into one that has itself been merged away, or merging a row that is already a\r\n             tombstone. Merging a classification into itself is a 400 — no state of the database makes that\r\n             request meaningful.\r\n             ",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The classification to collapse. It ends up retired and tombstoned.",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "The surviving classification's id.",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ClassificationMergeRequest"
+              }
+            },
+            "text/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ClassificationMergeRequest"
+              }
+            },
+            "application/*+json": {
+              "schema": {
+                "$ref": "#/components/schemas/ClassificationMergeRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The survivor and the retired row.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClassificationMergeResult"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClassificationMergeResult"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClassificationMergeResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`intoClassificationId` was not supplied, or named the same row.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "One of the two ids names no classification in this school.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The merge would strand a population or build a chain of tombstones.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/devices": {
       "get": {
         "tags": [
@@ -5151,6 +5810,159 @@
         "additionalProperties": false,
         "description": "The body of `POST /auth/change-password`."
       },
+      "ClassificationActiveRequest": {
+        "type": "object",
+        "properties": {
+          "isActive": {
+            "type": "boolean",
+            "description": "<b>Nullable, and an omitted member is a 400 rather than a default.</b> A missing JSON member binds\r\n            to `false`, and on this route `false` retires a category — the same reasoning\r\n            `PATCH /academic/terms/{id}/current` records, and the same hazard.",
+            "nullable": true
+          }
+        },
+        "additionalProperties": false,
+        "description": "The body of `PATCH /classifications/{id}/active`."
+      },
+      "ClassificationCreateRequest": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "The display name. Required, 100 characters or fewer, no leading or trailing whitespace (refused\r\nrather than trimmed), and it must contain at least one letter or digit so it has a normalized key."
+          },
+          "axis": {
+            "type": "string",
+            "description": "`Student`, `Personnel`, `Friars` or `Special`. Required, matched\r\n             case-insensitively and stored canonically.\r\n            \r\n             \r\n<b>There is no default, and that is the decision.</b>`Student` would be the obvious one —\r\n             20,861 of the 21,497 sampled rows carry it — and it would be wrong silently: a personnel category\r\n             created without an axis would land on the student axis, where it competes for the one slot a person\r\n             has there, and nothing would say so until somebody noticed a member of staff had stopped being a\r\n             student. Being asked is cheap; the wrong axis is not editable afterwards.\r\n             ",
+            "nullable": true
+          }
+        },
+        "additionalProperties": false,
+        "description": "The body of `POST /classifications`."
+      },
+      "ClassificationDto": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "The stable identity. <b>This is what a student row holds</b>, so it survives every rename — which is\r\nthe whole reason the vocabulary is a table rather than a string column.",
+            "format": "uuid"
+          },
+          "name": {
+            "type": "string",
+            "description": "The display form, exactly as authored — `SUPERVISORY/MANAGERIAL`, slash and all."
+          },
+          "nameKey": {
+            "type": "string",
+            "description": "The normalized key the uniqueness index is built on (letters and digits, upper-cased). Published\r\nfor the reason `CourseOfferingDto.sectionKey` is: it is what a duplicate is decided on, so an\r\nadministrator told \"that name is taken\" by a row that does not look taken can see why, and Phase\r\n1b's importer matches the roster's own category strings against this value rather than the display\r\nname."
+          },
+          "axis": {
+            "type": "string",
+            "description": "Which of the source's four category columns this value belongs to — `Student`,\r\n`Personnel`, `Friars` or `Special`. Set at creation and never afterwards.\r\n            \r\n\r\n<b>A picker needs it, not merely an admin screen.</b> A person holds at most one classification per\r\naxis and may hold several axes, so \"which classifications may I give this person\" is a question\r\nabout axes — a flat list with no axis on it cannot be grouped, and a client would have to guess\r\nwhich selections are mutually exclusive.\r\n"
+          },
+          "isActive": {
+            "type": "boolean",
+            "description": "`false` is retired: it is not offered for new assignments and <b>every student already\r\n            carrying it still carries it</b>. Pickers filter on this; reports must not."
+          },
+          "retiredAt": {
+            "type": "string",
+            "description": "When it was last retired, or null while active.",
+            "format": "date-time",
+            "nullable": true
+          },
+          "mergedIntoClassificationId": {
+            "type": "string",
+            "description": "The classification that absorbed this one, if any. Always accompanied by\r\nIsActive`false` — a merged row is a tombstone explaining a retirement, not\r\na redirect anything resolves through.",
+            "format": "uuid",
+            "nullable": true
+          },
+          "studentCount": {
+            "type": "integer",
+            "description": "How many people currently hold this classification. <b>It is what makes a refusal actionable</b>:\r\n\"this cannot be deleted\" is an instruction to argue with, and \"271 people are filed under this —\r\nretire it or merge it into another\" is one to act on. Counted against the same tenant filter as the\r\nrow itself.",
+            "format": "int32"
+          }
+        },
+        "additionalProperties": false,
+        "description": "One entry in the institution's classification vocabulary."
+      },
+      "ClassificationDtoPagedResult": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ClassificationDto"
+            },
+            "description": "This page's rows, in the endpoint's documented order. Empty is an ordinary answer — for an empty\r\nfilter and for a page past the end alike."
+          },
+          "page": {
+            "type": "integer",
+            "description": "The 1-based page actually served, which is <em>not</em> necessarily the one requested: an\r\nout-of-range `?page=` is clamped and this is where a client sees that it was.",
+            "format": "int32"
+          },
+          "pageSize": {
+            "type": "integer",
+            "description": "The page size actually applied, after the EAMS.Application.Dtos.Paging.MaxPageSize clamp. The field that\r\nmakes clamping discoverable rather than silent.",
+            "format": "int32"
+          },
+          "total": {
+            "type": "integer",
+            "description": "Rows matching the filter across every page, counted in the database against the same filter that\r\nproduced Items. This is what a grid needs to render a page count; without it a\r\ncaller can only discover the end by walking into it.",
+            "format": "int32"
+          },
+          "hasMore": {
+            "type": "boolean",
+            "description": "Whether another page exists after this one.\r\n            \r\n\r\n<b>Derived here rather than left to the client, because the client gets it wrong.</b>`page * pageSize < total` is right and `items.Count == pageSize` is the version\r\npeople write — which reports a further page whenever the last page happens to be exactly full,\r\nso a paging loop makes one extra request every time the total is a multiple of the page size.\r\nComputing it once, on the side that already holds the total, is a byte on the wire against a\r\nclass of off-by-one nobody finds in review.\r\n",
+            "readOnly": true
+          }
+        },
+        "additionalProperties": false,
+        "description": "One page of an admin list read, plus what the caller needs to ask for the next one.\r\n            \r\n\r\n<b>Every §6.2/§6.3 admin list returns this; `GET /attendance/live/{eventId}` deliberately does\r\nnot.</b> That endpoint pages by cursor (`since`/`cursor`/`hasMore`) because it is a\r\npolling delta rather than a list — a client asks \"what changed after this point\", not \"give me rows\r\n40 to 60\" — and its shape is frozen published contract under D-29/D-30/D-42. Offset paging over a\r\nlive feed also drops rows: an insert below the cursor shifts every subsequent row up by one and the\r\nnext page skips it. The two mechanisms coexisting is correct, not an inconsistency to tidy.\r\n"
+      },
+      "ClassificationMergeRequest": {
+        "type": "object",
+        "properties": {
+          "intoClassificationId": {
+            "type": "string",
+            "description": "The survivor. Nullable for the reason EAMS.Application.Dtos.ClassificationActiveRequest.IsActive is: an\r\nomitted member would bind to `Guid.Empty`, which is indistinguishable from a caller who meant\r\nit, and the refusal for \"you did not say what to merge into\" should not read as \"no such\r\nclassification\".",
+            "format": "uuid",
+            "nullable": true
+          }
+        },
+        "additionalProperties": false,
+        "description": "The body of `POST /classifications/{id}/merge` — `{id}` is the classification being\r\ncollapsed, this names the one that absorbs it."
+      },
+      "ClassificationMergeResult": {
+        "type": "object",
+        "properties": {
+          "survivor": {
+            "$ref": "#/components/schemas/ClassificationDto"
+          },
+          "merged": {
+            "$ref": "#/components/schemas/ClassificationDto"
+          },
+          "studentsRepointed": {
+            "type": "integer",
+            "description": "How many assignments moved onto the survivor. <b>The number that lets an operator catch a merge\r\nthey cannot undo</b> — \"moved 271 people\" against an expectation of three names the wrong pair\r\nwhile they still remember what they clicked.",
+            "format": "int32"
+          },
+          "message": {
+            "type": "string",
+            "description": "What happened, in a sentence an administrator can read."
+          }
+        },
+        "additionalProperties": false,
+        "description": "The body of a successful merge: both rows, and the sentence describing what happened."
+      },
+      "ClassificationRenameRequest": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "The new display name. Same rules as on creation."
+          }
+        },
+        "additionalProperties": false,
+        "description": "The body of `PUT /classifications/{id}`."
+      },
       "CollegeDto": {
         "type": "object",
         "properties": {
@@ -7014,6 +7826,10 @@
     {
       "name": "Auth",
       "description": "Technical Plan §6.1 / §11 — human authentication (Phase 6b).\r\n            \r\n\r\n<b>This is the first and only surface in the API that a person authenticates against, and adding\r\nit changes nothing about any other endpoint.</b> ADR-001 D-6's staged cutover is unchanged: every\r\nroute outside `/auth` is still open and unauthenticated, `[HasPermissionNotEnforced]`\r\nstill enforces nothing, and `[assembly: AuthorizationNotEnforced]` is still present. Turning\r\nthose on is a later phase, and `AuthStagedCutoverTests` asserts the invariant rather than\r\nleaving it to be assumed.\r\n\r\n<b>Two credentials now reach this host and they never mix.</b> A kiosk sends\r\n`Authorization: DeviceKey …` and is scoped to `attendance.capture`; a person sends\r\n`Authorization: Bearer …` and holds whatever their roles grant. Both emit the same claim\r\n<em>types</em> (EAMS.Api.Authorization.EamsClaimTypes), so the authorization layer cannot tell them apart —\r\nwhich is exactly what `DeviceKeyHandler` was built for and why this phase is additive.\r\n\r\n<b>Where the tokens live.</b> The access token is returned in the body and held in memory by the\r\nSPA; the refresh token is an `httpOnly` cookie the browser stores and this API never reads\r\nfrom a body. That is drift from §6.1 and the reasoning is in EAMS.Api.Authentication.AuthCookies.\r\n"
+    },
+    {
+      "name": "Classifications",
+      "description": "The institution's classification vocabulary — `STUDENT`, `NAP`, `ACAD` and the five\r\nother values the client's access-control export carries — as a list an administrator edits."
     },
     {
       "name": "Devices",

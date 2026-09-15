@@ -67,6 +67,19 @@ internal class EamsDbContext : DbContext
     public DbSet<StudentTermRecord> StudentTermRecords => Set<StudentTermRecord>();
 
     /// <summary>
+    /// The administrator-owned classification vocabulary (QA Q2, MDVault #404). Additive; nothing
+    /// above changes shape because of it, and nothing above references it — assignment is a separate,
+    /// separately ruled change. See <see cref="Classification"/>.
+    /// </summary>
+    public DbSet<Classification> Classifications => Set<Classification>();
+
+    /// <summary>
+    /// Who holds which classification, one row per person per axis. Replaces the scalar
+    /// <c>Students.ClassificationId</c> that was never built — see <see cref="StudentClassification"/>.
+    /// </summary>
+    public DbSet<StudentClassification> StudentClassifications => Set<StudentClassification>();
+
+    /// <summary>
     /// Every <c>DateTime</c> in the model round-trips as UTC. Applied as a convention rather than
     /// per property so entities added later (the ADR-001 D-1 academic layer) inherit it by default
     /// instead of by remembering — the failure mode this closes is silent and invisible in the
@@ -210,6 +223,7 @@ internal class EamsDbContext : DbContext
         ConfigureSisImport(b);
         ConfigureSystem(b);
         ConfigureAcademicStructure(b);
+        ConfigureClassifications(b);
         ConfigureSchoolIdQueryFilters(b);
 
         // Hard deletes are never issued by the application (§4 uses IsDeleted soft delete), and an
@@ -364,6 +378,20 @@ internal class EamsDbContext : DbContext
         b.Entity<Enrollment>().HasQueryFilter(
             x => _school.CurrentSchoolId == null || x.Student!.SchoolId == _school.CurrentSchoolId);
         b.Entity<StudentTermRecord>().HasQueryFilter(
+            x => _school.CurrentSchoolId == null || x.Student!.SchoolId == _school.CurrentSchoolId);
+
+        // The classification vocabulary owns a SchoolId directly. Filtered like every other owner —
+        // an institution's categories are a description of its people, and "this table is only eight
+        // rows" is not a reason to let a second tenant read them.
+        b.Entity<Classification>().HasQueryFilter(
+            x => _school.CurrentSchoolId == null || x.SchoolId == _school.CurrentSchoolId);
+
+        // The assignment reaches a school through its Student, which owns a SchoolId directly — the
+        // same one-join path Enrollments and StudentTermRecords take, and for the same reason. It is
+        // not left unfiltered: who is classified as what is a description of a tenant's people, and a
+        // partial tenant filter over a roster is the "looks installed, leaks the sensitive rows"
+        // failure this whole block exists to avoid.
+        b.Entity<StudentClassification>().HasQueryFilter(
             x => _school.CurrentSchoolId == null || x.Student!.SchoolId == _school.CurrentSchoolId);
     }
 
@@ -554,6 +582,167 @@ internal class EamsDbContext : DbContext
             e.HasIndex(x => x.TermId).HasDatabaseName("IX_StudentTermRecords_TermId");
         });
     }
+
+    /// <summary>
+    /// The classification vocabulary. Not a §4 table — additive, recorded as drift.
+    ///
+    /// <para>
+    /// <b>Two check constraints, because both invariants are cheap to state and expensive to discover
+    /// broken.</b> A row merged into itself is a cycle of length one that every "what absorbed this"
+    /// read would follow forever, and a merged row that is still active would be offered in a picker
+    /// while its population lives somewhere else — a category that looks available and silently is not
+    /// the one people mean. The service refuses both; these are the second, independent refusal, for
+    /// the reason <c>CK_Instructors_NoSelfMerge</c> exists one table over.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>The name index is unfiltered, unlike <c>UX_RfidCards_SchoolId_CardUid_Active</c>.</b> A card
+    /// serial is re-issuable — the physical card is gone and the old row survives only to explain past
+    /// taps — so uniqueness there has to be scoped to the live ones. A classification name is not
+    /// re-issuable: a retired <c>NAP</c> still describes the 292 people filed under it, and a second
+    /// live row with the same key would split that population between two rows nobody can tell apart.
+    /// So the retired row keeps its name, and bringing it back is
+    /// <c>PATCH /classifications/{id}/active</c> rather than creating a duplicate.
+    /// </para>
+    /// </summary>
+    private static void ConfigureClassifications(ModelBuilder b)
+    {
+        b.Entity<Classification>(e =>
+        {
+            e.ToTable("Classifications", t =>
+            {
+                t.HasCheckConstraint(
+                    "CK_Classifications_NoSelfMerge",
+                    "[MergedIntoClassificationId] IS NULL OR [MergedIntoClassificationId] <> [Id]");
+
+                t.HasCheckConstraint(
+                    "CK_Classifications_MergedIsRetired",
+                    "[MergedIntoClassificationId] IS NULL OR [IsActive] = 0");
+
+                // A string column with a CHECK rather than a database enum, exactly as the project's
+                // own rule prescribes: adding a fifth axis stays an additive migration instead of an
+                // ALTER TYPE. Spelled out as literals because a CHECK cannot reference C# constants;
+                // ClassificationMigrationTests.The_axis_check_constraint_admits_exactly_the_declared_axes
+                // compares these four against ClassificationAxis.All in both directions, because a
+                // fifth axis added on one side only is accepted by the service and refused by SQL
+                // Server with error 547 — which nothing on that path catches, so it ships as a 500.
+                t.HasCheckConstraint(
+                    "CK_Classifications_Axis",
+                    "[Axis] IN ('Student', 'Personnel', 'Friars', 'Special')");
+            });
+
+            e.Property(x => x.Name).HasMaxLength(ClassificationText.NameMaxLength).IsRequired();
+            e.Property(x => x.NameKey).HasMaxLength(AcademicKey.MaxLength).IsRequired();
+            e.Property(x => x.Axis).HasMaxLength(ClassificationText.AxisMaxLength).IsRequired();
+            e.Property(x => x.IsActive).HasDefaultValue(true).ValueGeneratedNever();
+
+            e.HasOne(x => x.School).WithMany().HasForeignKey(x => x.SchoolId).IsRequired();
+
+            // Restrict, like every other FK in this model (the loop in OnModelCreating). It is what
+            // makes the delete guard belt-and-braces: a survivor row cannot be deleted out from under
+            // the tombstone that names it, whether or not the service remembered to check.
+            e.HasOne(x => x.MergedIntoClassification).WithMany()
+                .HasForeignKey(x => x.MergedIntoClassificationId);
+
+            // Deliberately school-wide rather than (SchoolId, Axis, NameKey), and the arrival of Axis
+            // did not loosen it. All eight seeded names are distinct across all four axes, so the
+            // stricter rule is still true of the real data — and a name that means two different
+            // things on two axes is a vocabulary problem to raise, not one to make expressible.
+            // Relaxing it later is an index change someone has to ask for.
+            e.HasIndex(x => new { x.SchoolId, x.NameKey }).IsUnique()
+                .HasFilter(null)
+                .HasDatabaseName("UX_Classifications_SchoolId_NameKey");
+
+            // The target of StudentClassifications' composite foreign key. Redundant as a uniqueness
+            // claim — Id is already the primary key, so (Id, Axis) cannot repeat — and that is exactly
+            // what makes it safe: it adds no rule, it only gives the child table something to point a
+            // two-column reference at. See ConfigureStudentClassifications for what that buys.
+            e.HasAlternateKey(x => new { x.Id, x.Axis })
+                .HasName("AK_Classifications_Id_Axis");
+
+            // The delete guard and the merge both ask "does anything point at this row", and the
+            // picker read filters on IsActive. Eight rows today makes the index free and pointless in
+            // equal measure; it is here because "this table is small today" is a property of the data
+            // rather than of the schema, and the two lists on this project argued unbounded on exactly
+            // that reasoning are the two that grew.
+            e.HasIndex(x => x.MergedIntoClassificationId)
+                .HasDatabaseName("IX_Classifications_MergedIntoClassificationId");
+        });
+
+        ConfigureStudentClassifications(b);
+    }
+
+    /// <summary>
+    /// Who holds which classification. One row per person per axis.
+    ///
+    /// <para>
+    /// <b><c>UX_StudentClassifications_Student_Axis</c> is the entire point of this table's shape.</b>
+    /// It says a person holds at most one classification on any given axis while leaving them free to
+    /// hold several axes at once — which is what the source data actually contains, and what a scalar
+    /// <c>Students.ClassificationId</c> could not have expressed. The <c>Axis</c> column is
+    /// denormalized from the parent so that the index can exist at all: a unique index cannot reach
+    /// through a foreign key to read <c>Classifications.Axis</c>. Same reasoning, and the same standing
+    /// obligation to keep the two equal, as <c>RfidCards.SchoolId</c> under ADR-001 D-3.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>The foreign key is composite — <c>(ClassificationId, Axis)</c> against
+    /// <c>Classifications(Id, Axis)</c> — and that is what actually enforces the denormalization.</b>
+    /// A junction row whose <c>Axis</c> disagrees with its parent's is not merely wrong, it is
+    /// <em>unwritable</em>: there is no row in <c>Classifications</c> for the pair to reference. A
+    /// single-column reference plus a convention would have left the invariant resting on every future
+    /// writer remembering it, which for a denormalized column is the same as not having one.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>What the cross-axis merge refusal buys, stated correctly.</b> It is <em>not</em> what makes
+    /// the repoint collision-free — the repoint writes only <c>ClassificationId</c>, so
+    /// <c>(StudentId, Axis)</c> is bit-identical before and after and cannot collide with that index
+    /// whether the axes match or not. What the refusal buys is this invariant: moving an assignment to
+    /// a classification on a different axis would leave the row's <c>Axis</c> describing the old
+    /// parent, and the composite key above now refuses exactly that. The two guards say the same thing
+    /// at different layers rather than one implying the other.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>The trap this wording replaces.</b> The earlier comment claimed the axis guard was what kept
+    /// the repoint from colliding — from which a maintainer could reasonably conclude "so I may allow
+    /// cross-axis merges as long as I also write <c>SetProperty(sc => sc.Axis, survivorAxis)</c>, and
+    /// the unique index will catch anything I got wrong". That rewrite can genuinely collide with
+    /// <c>UX_StudentClassifications_Student_Axis</c> — a person holding both axes ends up with two rows
+    /// on one — and it surfaces as a raw 2601 through <c>MergeAsync</c>, which has no unique-violation
+    /// handler, i.e. a 500.
+    /// </para>
+    /// </summary>
+    private static void ConfigureStudentClassifications(ModelBuilder b) =>
+        b.Entity<StudentClassification>(e =>
+        {
+            e.ToTable("StudentClassifications", t => t.HasCheckConstraint(
+                "CK_StudentClassifications_Axis",
+                "[Axis] IN ('Student', 'Personnel', 'Friars', 'Special')"));
+
+            e.Property(x => x.Axis).HasMaxLength(ClassificationText.AxisMaxLength).IsRequired();
+
+            e.HasOne(x => x.Student).WithMany(s => s.Classifications)
+                .HasForeignKey(x => x.StudentId).IsRequired();
+
+            // Composite, against the alternate key — see the remarks. Restrict, like every FK here,
+            // which is also what makes the delete guard real: a classification somebody holds cannot
+            // be removed, whatever the service believes.
+            e.HasOne(x => x.Classification).WithMany()
+                .HasForeignKey(x => new { x.ClassificationId, x.Axis })
+                .HasPrincipalKey(c => new { c.Id, c.Axis })
+                .IsRequired();
+
+            e.HasIndex(x => new { x.StudentId, x.Axis }).IsUnique()
+                .HasFilter(null)
+                .HasDatabaseName("UX_StudentClassifications_Student_Axis");
+
+            // "Who holds this classification" — the delete guard's count and the merge's repoint, both
+            // of which scan by classification rather than by person.
+            e.HasIndex(x => x.ClassificationId)
+                .HasDatabaseName("IX_StudentClassifications_ClassificationId");
+        });
 
     // §4.2 Schools
     private static void ConfigureSchools(ModelBuilder b) => b.Entity<School>(e =>
