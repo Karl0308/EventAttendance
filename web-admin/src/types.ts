@@ -28,6 +28,102 @@ export interface Card {
   isActive: boolean;
 }
 
+/**
+ * `CardMatchDto` — one row of `GET /cards?cardUid=`, the admin's "whose card is this?" lookup.
+ *
+ * Deliberately its own type rather than `Card` plus a bolted-on student: the card is the subject of
+ * this search and the student is a field on it (ADR-001 D-3), which is the opposite of every other
+ * read on this API. `cardId` is what a caller would act on (it is `DELETE
+ * /students/{id}/cards/{cardId}`'s id); `studentId` is what `GET /students/{id}` takes.
+ */
+export interface CardMatch {
+  cardId: string;
+  cardUid: string;
+  label?: string;
+  /** `false` is **deactivated**, not "not a match" — QA Q5: a withdrawn card must still resolve. */
+  isActive: boolean;
+  issuedAt: string;
+  /** When it was withdrawn, or unset while active. */
+  deactivatedAt?: string;
+  studentId: string;
+  studentNumber: string;
+  fullName: string;
+  studentStatus: string;
+}
+
+/**
+ * One page of `GET /cards?cardUid=`. Kept as an envelope, like `StudentPage`, rather than unwrapped at
+ * the seam: a UID can legitimately match far more cards than a lookup dialog should hold in memory at
+ * once (a re-issued serial, a multi-campus install), so the caller needs `total`/`hasMore` to say so
+ * rather than silently showing a partial answer as if it were complete.
+ */
+export interface CardSearchPage {
+  cards: CardMatch[];
+  page: number;
+  pageSize: number;
+  total: number;
+}
+
+/**
+ * `StudentClassificationDto` — one classification a person holds, on one axis.
+ *
+ * `isActive` is the *classification's* state, not the assignment's: `false` means the vocabulary
+ * entry has been retired since this person was filed under it, and per the contract it **must still
+ * be rendered** — retiring a category leaves every existing assignment standing, so a picker that
+ * dropped it would blank it on the next save. It is read-only here for the same reason `Student.cards`
+ * is: this is what `GET /students/{studentId}/classifications` and every write on that surface return,
+ * not something this client can construct.
+ */
+export interface StudentClassification {
+  classificationId: string;
+  name: string;
+  /** `Student`, `Personnel`, `Friars` or `Special` — see `CLASSIFICATION_AXES`. `string` on the wire. */
+  axis: string;
+  isActive: boolean;
+  assignedAt: string;
+}
+
+/**
+ * `ClassificationDto` — one entry in the institution's classification vocabulary, as `GET
+ * /classifications` lists it. What a picker is built from; not what a student holds — see
+ * `StudentClassification` for that.
+ */
+export interface Classification {
+  id: string;
+  /** The display form, exactly as authored — `SUPERVISORY/MANAGERIAL`, slash and all. */
+  name: string;
+  nameKey: string;
+  axis: string;
+  /** `false` is retired: not offered for new assignments, but still held by whoever already has it. */
+  isActive: boolean;
+  retiredAt?: string;
+  mergedIntoClassificationId?: string;
+  studentCount: number;
+}
+
+/**
+ * The body of a successful `PUT`/`DELETE /students/{studentId}/classifications/{classificationId}` —
+ * `StudentClassificationWriteResult`. Both writes answer with the person's **whole** set after the
+ * change, not just the row that moved, which is what lets a caller see that the other axes were left
+ * alone.
+ */
+export interface StudentClassificationWriteResult {
+  studentId: string;
+  classifications: StudentClassification[];
+  /** What this assignment displaced on its axis, or unset if the slot was empty. `PUT` only. */
+  replacedClassificationId?: string;
+  message: string;
+}
+
+/**
+ * §4's four classification axes, verified against `ClassificationAxis` in
+ * `EAMS.Domain/ClassificationEntities.cs`. A person holds at most one classification per axis and may
+ * hold several axes at once (QA Q2) — this is the set a picker is built one-per-axis from.
+ */
+export const CLASSIFICATION_AXES = ["Student", "Personnel", "Friars", "Special"] as const;
+
+export type ClassificationAxisName = (typeof CLASSIFICATION_AXES)[number];
+
 export interface Student {
   id: string;
   studentNumber: string;
@@ -70,6 +166,17 @@ export interface Student {
    * does this student tap with" must filter on `isActive`, not take `cards[0]`.
    */
   cards: Card[];
+  /**
+   * What this person is classified as — a collection, because a person holds at most one
+   * classification per axis and may hold several axes at once (QA Q2). Read-only, like `cards`:
+   * assignment is `PUT`/`DELETE /students/{studentId}/classifications/{classificationId}`, one call
+   * per axis, never a field of `StudentWriteRequest` — sending it back on `PUT /students/{id}` is
+   * ignored exactly as `id` is.
+   *
+   * Empty is an ordinary state, not a null to guard against: most people hold exactly one, three
+   * people in the sampled roster hold two, and 34 hold none.
+   */
+  classifications: StudentClassification[];
 }
 
 /**

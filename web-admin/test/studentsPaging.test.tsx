@@ -67,6 +67,7 @@ const studentJson = (n: number) => ({
   section: "A",
   status: "Active",
   cards: [],
+  classifications: [],
 });
 
 /** Every URL this screen asked for, in order, so the assertions can be about the request. */

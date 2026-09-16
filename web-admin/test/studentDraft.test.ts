@@ -131,6 +131,7 @@ const serverStudent = (overrides: Partial<Student> = {}): Student => ({
   section: "BSCS 2-A",
   status: "Active",
   cards: [aCard()],
+  classifications: [],
   ...overrides,
 });
 

@@ -10,14 +10,16 @@ import {
   TextField,
   Typography,
 } from "@mui/material";
-import { DataGrid, type GridColDef } from "@mui/x-data-grid";
+import { DataGrid, type GridColDef, type GridRowHeightParams } from "@mui/x-data-grid";
 import { Link as RouterLink } from "react-router-dom";
 import AddIcon from "@mui/icons-material/Add";
 import UploadFileIcon from "@mui/icons-material/UploadFile";
 import EditIcon from "@mui/icons-material/Edit";
 import CreditCardIcon from "@mui/icons-material/CreditCard";
+import CategoryIcon from "@mui/icons-material/Category";
+import PersonSearchIcon from "@mui/icons-material/PersonSearch";
 import DeleteOutlineIcon from "@mui/icons-material/DeleteOutline";
-import { api, describeApiError } from "../api";
+import { ApiError, api, describeApiError } from "../api";
 import { useApiResource } from "../useApiResource";
 import { useApiMutation } from "../useApiMutation";
 import { useDebounced } from "../useDebounced";
@@ -26,11 +28,15 @@ import NewStudentDialog from "../components/NewStudentDialog";
 import EditStudentDialog from "../components/EditStudentDialog";
 import DeleteStudentDialog from "../components/DeleteStudentDialog";
 import StudentCardsDialog from "../components/StudentCardsDialog";
+import StudentClassificationsDialog from "../components/StudentClassificationsDialog";
+import CardLookupDialog from "../components/CardLookupDialog";
 import { knownStatus } from "../studentDraft";
 import { STUDENT_STATUS } from "../types";
 import type {
   Card,
+  Classification,
   Student,
+  StudentClassification,
   StudentPage,
   StudentCardRequest,
   StudentWriteRequest,
@@ -86,6 +92,14 @@ const DEFAULT_PAGE_SIZE = PAGE_SIZES[0];
 
 /** What a column reads as when the student has no value for it. */
 const NO_VALUE = "—";
+
+/**
+ * The `code` `StudentClassificationsController.Failure` stamps on the 404 a clear answers when the
+ * axis is already unassigned — reachable when a second operator clears it first. Branched on because
+ * `title`/`detail` are prose the server rewords freely; this token is what
+ * `StudentClassificationWriteOutcome.NotAssigned` promises stays fixed.
+ */
+const CLASSIFICATION_NOT_ASSIGNED_CODE = "NotAssigned";
 
 /** What the Snackbar is currently saying, and how loudly. As `Events.tsx`, for the same reasons. */
 interface Notice {
@@ -270,6 +284,12 @@ export default function Students() {
   const detach = useApiMutation((studentId: string, cardId: string) =>
     api.removeStudentCard(studentId, cardId),
   );
+  const assignClassification = useApiMutation((studentId: string, classificationId: string) =>
+    api.assignClassification(studentId, classificationId),
+  );
+  const clearClassification = useApiMutation((studentId: string, classificationId: string) =>
+    api.clearClassification(studentId, classificationId),
+  );
 
   // Mounting a dialog only while it is open is what keeps its form honest: every open starts from an
   // empty or freshly-filled draft with no leftover text.
@@ -283,6 +303,14 @@ export default function Students() {
   const [detaching, setDetaching] = useState<Card | undefined>(undefined);
   /** Successful attaches on the open dialog — keys the attach form, so a success empties it. */
   const [attached, setAttached] = useState(0);
+
+  /** The student whose classifications are open, captured when the dialog opens. See `managing`. */
+  const [classifyingFor, setClassifyingFor] = useState<Student | undefined>(undefined);
+  /** Which axis's control started the classification write in flight — for a per-axis "Saving…". */
+  const [actingAxis, setActingAxis] = useState<string | undefined>(undefined);
+
+  /** Task 2: the "find a person by card" lookup, open or not. */
+  const [lookingUpCard, setLookingUpCard] = useState(false);
 
   /** The students on the page in view. Not the roster — see the paging note at the top of this file. */
   const rows = shown?.students;
@@ -300,6 +328,12 @@ export default function Students() {
   const managing =
     cardsFor === undefined ? undefined : (rows?.find((s) => s.id === cardsFor.id) ?? cardsFor);
 
+  /** Same "follow the latest read, fall back to the snapshot" rule as `managing`, for classifications. */
+  const managingClassifications =
+    classifyingFor === undefined
+      ? undefined
+      : (rows?.find((s) => s.id === classifyingFor.id) ?? classifyingFor);
+
   /**
    * Whether each dialog is on screen, read at the moment a write *settles* rather than from the
    * closure that started it. The state captured there is a render old, and the interesting case is
@@ -311,6 +345,7 @@ export default function Students() {
   const deleteOpen = useRef(deleting !== undefined);
   const attachOpen = useRef(cardsFor !== undefined && detaching === undefined);
   const detachOpen = useRef(cardsFor !== undefined && detaching !== undefined);
+  const classifyOpen = useRef(classifyingFor !== undefined);
   useLayoutEffect(() => {
     createOpen.current = creating;
     editOpen.current = editing !== undefined;
@@ -323,6 +358,7 @@ export default function Students() {
     // the dialog and loses the outcome for good.
     attachOpen.current = cardsFor !== undefined && detaching === undefined;
     detachOpen.current = cardsFor !== undefined && detaching !== undefined;
+    classifyOpen.current = classifyingFor !== undefined;
   });
 
   // Two pieces rather than one `Notice | undefined` driving both, as `Events.tsx` records: MUI keeps a
@@ -384,6 +420,18 @@ export default function Students() {
     // Cleared with the dialog, or reopening it would land on a confirmation for a card the user has
     // since stopped thinking about.
     setDetaching(undefined);
+  };
+
+  const openClassifications = (student: Student) => {
+    assignClassification.reset();
+    clearClassification.reset();
+    setActingAxis(undefined);
+    setClassifyingFor(student);
+  };
+
+  const closeClassifications = () => {
+    setClassifyingFor(undefined);
+    setActingAxis(undefined);
   };
 
   // ------------------------------------------------------------------------------------ settling
@@ -498,6 +546,71 @@ export default function Students() {
     });
   };
 
+  /**
+   * `target` and `previous` come from the dialog rather than being looked up here from the write's
+   * own reply, so the announcement can name both without re-deriving "what was there before" from a
+   * response that only ever carries the set *after* the change.
+   */
+  const submitAssignClassification = (
+    studentId: string,
+    target: Classification,
+    previous: StudentClassification | undefined,
+  ) => {
+    setActingAxis(target.axis);
+    void assignClassification.run(studentId, target.id).then((settled) => {
+      if (settled.outcome === "ignored") return;
+      students.reload();
+
+      if (settled.outcome === "succeeded") {
+        announce({
+          severity: "success",
+          text:
+            previous === undefined
+              ? `Assigned "${target.name}" (${target.axis}).`
+              : `Assigned "${target.name}" (${target.axis}), replacing "${previous.name}".`,
+        });
+        return;
+      }
+
+      if (!classifyOpen.current) {
+        announce({ severity: "error", text: describeApiError(settled.error) });
+      }
+    });
+  };
+
+  const submitClearClassification = (studentId: string, previous: StudentClassification) => {
+    setActingAxis(previous.axis);
+    void clearClassification.run(studentId, previous.classificationId).then((settled) => {
+      if (settled.outcome === "ignored") return;
+      students.reload();
+
+      if (settled.outcome === "succeeded") {
+        announce({ severity: "success", text: `Cleared "${previous.name}" (${previous.axis}).` });
+        return;
+      }
+
+      // A second operator clearing the same axis first lands here as a 404 `NotAssigned`, not a
+      // failure: by the time this DELETE reached the server there was nothing left to remove. The
+      // reload above has already shown the axis empty, which is what this operator asked for — so it
+      // is announced as the success it is rather than the generic write-failure text, which would say
+      // the clear was refused at the exact moment the screen shows it went through. `reset()` clears
+      // the mutation's own failure state too, so a still-open dialog does not render `WriteFailureAlert`
+      // on top of this.
+      if (settled.error instanceof ApiError && settled.error.code === CLASSIFICATION_NOT_ASSIGNED_CODE) {
+        clearClassification.reset();
+        announce({
+          severity: "success",
+          text: `"${previous.name}" (${previous.axis}) was already cleared.`,
+        });
+        return;
+      }
+
+      if (!classifyOpen.current) {
+        announce({ severity: "error", text: describeApiError(settled.error) });
+      }
+    });
+  };
+
   // --------------------------------------------------------------------------------------- grid
 
   const cols: GridColDef<Student>[] = [
@@ -524,6 +637,34 @@ export default function Students() {
       valueGetter: (_v, row) => activeCardSummary(row.cards),
     },
     {
+      field: "classifications",
+      headerName: "Classification",
+      width: 220,
+      sortable: false,
+      // A row can hold several axes at once (QA Q2) — every chip is shown rather than a count, so
+      // "which ones" never costs opening the row. A retired-but-held entry still renders (per the
+      // contract, and per this column's own reason for existing) with its own outlined style, so it
+      // reads as "held, but no longer offered" rather than looking identical to a live one.
+      renderCell: (p) =>
+        p.row.classifications.length === 0 ? (
+          <Typography variant="body2" color="text.secondary">
+            {NO_VALUE}
+          </Typography>
+        ) : (
+          <Stack direction="row" spacing={0.5} flexWrap="wrap" useFlexGap sx={{ py: 0.5 }}>
+            {p.row.classifications.map((c) => (
+              <Chip
+                key={c.classificationId}
+                size="small"
+                label={c.name}
+                variant={c.isActive ? "filled" : "outlined"}
+                title={c.isActive ? c.name : `${c.name} (retired)`}
+              />
+            ))}
+          </Stack>
+        ),
+    },
+    {
       field: "status",
       headerName: "Status",
       width: 120,
@@ -534,11 +675,19 @@ export default function Students() {
     {
       field: "actions",
       headerName: "Actions",
-      width: 150,
+      width: 190,
       sortable: false,
       filterable: false,
       disableColumnMenu: true,
-      renderCell: (p) => <RowActions student={p.row} onEdit={openEdit} onCards={openCards} onDelete={openDelete} />,
+      renderCell: (p) => (
+        <RowActions
+          student={p.row}
+          onEdit={openEdit}
+          onCards={openCards}
+          onClassify={openClassifications}
+          onDelete={openDelete}
+        />
+      ),
     },
   ];
 
@@ -577,6 +726,13 @@ export default function Students() {
           onChange={(e) => changeSearch(e.target.value)}
           sx={{ width: 320 }}
         />
+        {/* Task 2, as its own control rather than folded into the field above — see
+            `CardLookupDialog`'s own header comment for why a fragment search over cards needs a
+            different *answer shape* than this box gives (which card matched, and whether it is one
+            of possibly several), not just a different label on the same field. */}
+        <Button size="small" startIcon={<PersonSearchIcon />} onClick={() => setLookingUpCard(true)}>
+          Find by card
+        </Button>
         {/* Mounted whether or not a re-read is running, so the live region exists in the DOM
             before anything is put into it — a region inserted and populated in the same commit is
             announced unreliably. */}
@@ -635,6 +791,26 @@ export default function Students() {
               // looking like they operated on the roster. See the paging note at the top of the file.
               disableColumnSorting
               disableColumnFilter
+              // The Classification column wraps to a second line once a chip as wide as
+              // "SUPERVISORY/MANAGERIAL" sits beside another axis's chip — precisely the two-axis case
+              // the column exists to show (its own comment: every chip renders, never a count). A fixed
+              // 52px row clips that second chip below the fold with nothing on screen to say it is
+              // there.
+              //
+              // Returning `"auto"` for EVERY row would fix that and quietly change the whole grid:
+              // MUI marks such a row dynamic, which drops `minHeight` to `auto` (no 52px floor, so
+              // chipless rows shrink to their tallest remaining cell) and replaces the base cell's
+              // `white-space: nowrap` / `text-overflow: ellipsis` with `white-space: initial` — so a
+              // long name would wrap to three lines instead of ellipsising, on 21,493 rows, for a
+              // reason having nothing to do with chips. Returning `null` instead leaves a row on the
+              // default height entirely, so the dynamic treatment reaches only the rows that need it.
+              getRowHeight={({ model }: GridRowHeightParams) => {
+                // `model` is the grid's own row type, which is not generic over `Student` here, so
+                // this reads the one field it needs through `unknown` and narrows rather than
+                // asserting the row is a Student.
+                const held: unknown = (model as { classifications?: unknown }).classifications;
+                return Array.isArray(held) && held.length > 1 ? "auto" : null;
+              }}
             />
           </div>
         ))}
@@ -693,6 +869,34 @@ export default function Students() {
         />
       )}
 
+      {managingClassifications !== undefined && (
+        <StudentClassificationsDialog
+          student={managingClassifications}
+          onClose={closeClassifications}
+          actingAxis={actingAxis}
+          assign={{
+            running: assignClassification.status === "running",
+            failure:
+              assignClassification.status === "failed" ? { error: assignClassification.error } : undefined,
+            submit: (target, previous) =>
+              submitAssignClassification(managingClassifications.id, target, previous),
+          }}
+          clear={{
+            running: clearClassification.status === "running",
+            failure:
+              clearClassification.status === "failed" ? { error: clearClassification.error } : undefined,
+            submit: (previous) => submitClearClassification(managingClassifications.id, previous),
+          }}
+        />
+      )}
+
+      {lookingUpCard && (
+        <CardLookupDialog
+          onClose={() => setLookingUpCard(false)}
+          onViewStudent={(studentNumber) => changeSearch(studentNumber)}
+        />
+      )}
+
       {/* Outside the branches on purpose, for the reason `EventDetail` records: a re-read that fails
           replaces the ready branch, and a Snackbar living inside it would take the message it was just
           given down with it — at exactly the moment the message is a failure the user needs to read. */}
@@ -738,18 +942,20 @@ function RowActions({
   student,
   onEdit,
   onCards,
+  onClassify,
   onDelete,
 }: {
   student: Student;
   onEdit: (student: Student) => void;
   onCards: (student: Student) => void;
+  onClassify: (student: Student) => void;
   onDelete: (student: Student) => void;
 }) {
   return (
     <Stack direction="row" spacing={0.5} alignItems="center" sx={{ height: "100%" }}>
       <IconButton
         // 44 × 44, which is the smallest touch target that can be hit reliably; MUI's own default is
-        // 40 and these three sit side by side in a narrow column.
+        // 40 and these four sit side by side in a narrow column.
         sx={{ p: 1.25 }}
         onClick={() => onEdit(student)}
         aria-label={`Edit ${student.fullName}`}
@@ -765,6 +971,15 @@ function RowActions({
         title={`RFID cards for ${student.fullName}`}
       >
         <CreditCardIcon fontSize="small" />
+      </IconButton>
+
+      <IconButton
+        sx={{ p: 1.25 }}
+        onClick={() => onClassify(student)}
+        aria-label={`Classifications for ${student.fullName}`}
+        title={`Classifications for ${student.fullName}`}
+      >
+        <CategoryIcon fontSize="small" />
       </IconButton>
 
       <IconButton

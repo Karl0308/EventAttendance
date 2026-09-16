@@ -14,6 +14,11 @@ import type {
   StudentCardRequest,
   StudentWriteRequest,
   Card,
+  CardMatch,
+  CardSearchPage,
+  Classification,
+  StudentClassification,
+  StudentClassificationWriteResult,
   Device,
   DeviceKeyIssued,
   IssuedKeyDevice,
@@ -1226,6 +1231,73 @@ function toCard(row: Row, what: string): Card {
   };
 }
 
+/**
+ * `StudentClassificationDto` — one classification a person holds, on one axis.
+ *
+ * `isActive` is `reqBool` deliberately: it is the classification's own retired flag and the contract
+ * says it must be rendered, not filtered, so a drift that dropped it would be silently un-showable —
+ * exactly the failure `StudentDto.classifications`'s own note warns an empty-filtered read is.
+ */
+function toStudentClassification(row: Row, what: string): StudentClassification {
+  return {
+    classificationId: reqStr(row, "classificationId", what),
+    name: reqStr(row, "name", what),
+    axis: reqStr(row, "axis", what),
+    isActive: reqBool(row, "isActive", what),
+    assignedAt: reqStr(row, "assignedAt", what),
+  };
+}
+
+/** `ClassificationDto` — one entry in the vocabulary `GET /classifications` lists. */
+function toClassification(row: Row, what: string): Classification {
+  return {
+    id: reqStr(row, "id", what),
+    name: reqStr(row, "name", what),
+    nameKey: reqStr(row, "nameKey", what),
+    axis: reqStr(row, "axis", what),
+    isActive: reqBool(row, "isActive", what),
+    retiredAt: optStr(row.retiredAt),
+    mergedIntoClassificationId: optStr(row.mergedIntoClassificationId),
+    studentCount: reqNum(row, "studentCount", what),
+  };
+}
+
+/**
+ * `StudentClassificationWriteResult` — the body of a successful assign or clear. `replacedClassificationId`
+ * is `optStr`: `PUT` sends it when it displaced something and `DELETE` never does, and both are
+ * ordinary, not drift.
+ */
+function toStudentClassificationWriteResult(row: Row, what: string): StudentClassificationWriteResult {
+  return {
+    studentId: reqStr(row, "studentId", what),
+    classifications: asRows(row.classifications, `${what}.classifications`).map((item, i) =>
+      toStudentClassification(item, `${what}.classifications[${i}]`),
+    ),
+    replacedClassificationId: optStr(row.replacedClassificationId),
+    message: reqStr(row, "message", what),
+  };
+}
+
+/**
+ * `CardMatchDto` — one row of `GET /cards?cardUid=`. `isActive`/`deactivatedAt` are read the same way
+ * `Card.isActive` is: `false` is an ordinary, expected match (QA Q5), not an error state, so nothing
+ * here treats it specially.
+ */
+function toCardMatch(row: Row, what: string): CardMatch {
+  return {
+    cardId: reqStr(row, "cardId", what),
+    cardUid: reqStr(row, "cardUid", what),
+    label: optStr(row.label),
+    isActive: reqBool(row, "isActive", what),
+    issuedAt: reqStr(row, "issuedAt", what),
+    deactivatedAt: optStr(row.deactivatedAt),
+    studentId: reqStr(row, "studentId", what),
+    studentNumber: reqStr(row, "studentNumber", what),
+    fullName: reqStr(row, "fullName", what),
+    studentStatus: reqStr(row, "studentStatus", what),
+  };
+}
+
 function toStudent(row: Row, what: string): Student {
   return {
     id: reqStr(row, "id", what),
@@ -1253,6 +1325,13 @@ function toStudent(row: Row, what: string): Student {
     section: optStr(row.section),
     status: reqStr(row, "status", what),
     cards: asRows(row.cards, `${what}.cards`).map((card, i) => toCard(card, `${what}.cards[${i}]`)),
+    // Read for the same reason `cards` is: `StudentDto.classifications` is populated on every read
+    // that returns a student, per the contract, and an edit form opened from a row that read `[]`
+    // here would have nothing to fall back on to tell "no classifications" from "this build dropped
+    // them" apart. Empty is an ordinary answer (34 of the sampled roster), not a missing key.
+    classifications: asRows(row.classifications, `${what}.classifications`).map((item, i) =>
+      toStudentClassification(item, `${what}.classifications[${i}]`),
+    ),
   };
 }
 
@@ -1803,6 +1882,105 @@ async function removeStudentCard(id: string, cardId: string): Promise<void> {
     "DELETE /students/{id}/cards/{cardId}",
     `/students/${encodeURIComponent(id)}/cards/${encodeURIComponent(cardId)}`,
     { method: "DELETE" },
+  );
+}
+
+/**
+ * `GET /cards?cardUid=` — "whose card is this?", the admin lookup Task 2 is built on.
+ *
+ * **Deliberately not routed through `GET /students?search=`.** That filter matches a card fragment
+ * too (`StudentService.ListAsync`), but it answers with *students* — `StudentDto.cards` holds every
+ * card that student has ever carried, not the one the fragment actually matched, so a UID search
+ * through it cannot say which card matched or that a match was a withdrawn one without an extra guess.
+ * This endpoint's whole shape is built to answer that: one row per matching *card*, active or not, with
+ * `isActive`/`deactivatedAt` on it directly (QA Q5), and it stays multi-valued on purpose — ADR-001
+ * D-3 leaves inactive `CardUid`s unconstrained, so a withdrawn serial can legitimately name several
+ * cards across several students and none of them is nominated as "the" answer.
+ *
+ * **A page, not `listAll`.** A fragment search has no ceiling the way a roster listing does — a
+ * re-issued serial or a short fragment can widen the result past what a lookup dialog should hold in
+ * memory — so the caller gets `total`/`hasMore` and decides whether to say "narrow your search" rather
+ * than this seam silently loading everything or refusing outright.
+ *
+ * **The 400 is not "no results".** An empty-after-normalization fragment (`-`, `::`) is refused with
+ * `code: "FragmentUnusable"` rather than answered with an empty page, because an empty page would read
+ * as "no such card" — a fact about the roster — when this is a fact about the request: `Contains("")`
+ * is true of every row, so treating it as an ordinary search would hand back the entire card registry
+ * looking like a match. The caller is expected to branch on `ApiError.code` and show it as a message
+ * about what was typed, not route it through the empty-list UI.
+ */
+async function searchCards(cardUid: string, page: number, pageSize: number): Promise<CardSearchPage> {
+  const read = await getPage("GET /cards", "/cards", { cardUid }, page, pageSize, toCardMatch);
+  // Renamed, not spread — as `listStudentsPage`: `PageOf` is internal, and `hasMore` answers "is there
+  // a page after this one" where this dialog needs "how many matches are there in total".
+  return { cards: read.items, page: read.page, pageSize: read.pageSize, total: read.total };
+}
+
+/**
+ * `GET /classifications` — the vocabulary a per-axis picker is built from.
+ *
+ * `listAll` rather than `getPage`: the seeded vocabulary is eight rows and a picker needs the whole
+ * set to group by axis, not a page of it. `includeRetired` defaults to `false` here too — matching the
+ * contract's own default — because a picker offering a retired category would let an administrator
+ * file someone new under one deliberately withdrawn; a caller wanting the retired ones for a report
+ * passes `true` explicitly.
+ */
+async function listClassifications(includeRetired?: boolean): Promise<Classification[]> {
+  return listAll(
+    "GET /classifications",
+    "/classifications",
+    { includeRetired: includeRetired === undefined ? undefined : String(includeRetired) },
+    toClassification,
+  );
+}
+
+/**
+ * `PUT /students/{studentId}/classifications/{classificationId}` — give this person this
+ * classification, replacing whatever this axis already held.
+ *
+ * No request body: both ids are already in the URL and the contract defines none, so `payload: {}` is
+ * sent rather than nothing — ASP.NET does not bind a body for this action, and a bodyless `PUT` is the
+ * shape `RequestBody`'s union exists to make unrepresentable (`DELETE` is the only member allowed no
+ * payload; see the type's own note). An empty object is inert either way.
+ *
+ * **409** when the classification is retired or was merged away, or when somebody else changed this
+ * axis at the same instant — nothing is written either way, and `advise()` reads a non-401/403/429/5xx
+ * `http` failure as `retryable: "safe"`, so the form is free to offer the same call again once the
+ * cause has cleared.
+ */
+async function assignClassification(
+  studentId: string,
+  classificationId: string,
+): Promise<StudentClassificationWriteResult> {
+  return writeJson(
+    "PUT /students/{studentId}/classifications/{classificationId}",
+    `/students/${encodeURIComponent(studentId)}/classifications/${encodeURIComponent(classificationId)}`,
+    { method: "PUT", payload: {} },
+    "The classification was assigned",
+    toStudentClassificationWriteResult,
+  );
+}
+
+/**
+ * `DELETE /students/{studentId}/classifications/{classificationId}` — take this classification off
+ * this person. Routed through `writeJson`, not `writeNoContent`: unlike most deletes on this API, this
+ * one answers **200** with the person's remaining classifications rather than 204, precisely so a
+ * caller can see the other axes survived.
+ *
+ * The classification itself is never touched — only the assignment row. **409** when another request
+ * is changing this person's classifications at the same instant; nothing is removed, and re-sending is
+ * safe for the same reason it is on the assign side.
+ */
+async function clearClassification(
+  studentId: string,
+  classificationId: string,
+): Promise<StudentClassificationWriteResult> {
+  return writeJson(
+    "DELETE /students/{studentId}/classifications/{classificationId}",
+    `/students/${encodeURIComponent(studentId)}/classifications/${encodeURIComponent(classificationId)}`,
+    { method: "DELETE" },
+    "The classification was cleared",
+    toStudentClassificationWriteResult,
   );
 }
 
@@ -2915,6 +3093,10 @@ export const api = {
   deleteStudent,
   addStudentCard,
   removeStudentCard,
+  searchCards,
+  listClassifications,
+  assignClassification,
+  clearClassification,
   listEvents,
   createEvent,
   updateEvent,
