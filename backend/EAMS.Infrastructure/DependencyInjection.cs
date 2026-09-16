@@ -146,6 +146,13 @@ public static class DependencyInjection
         // from this list.
         services.AddScoped<IClassificationService, ClassificationService>();
 
+        // The other half of classification: who holds which entry. Registered separately from the
+        // vocabulary above rather than folded into it, because the two are different subjects with
+        // different lifecycles — a category outlives everybody filed under it — and because this one
+        // takes no ISchoolContext: it never creates a row that has to be filed under a school, it joins
+        // two rows that already carry one, so what it decides is that the two must agree.
+        services.AddScoped<IStudentClassificationService, StudentClassificationService>();
+
         // Resolved per request by the DeviceKey authentication handler, from the request scope — so it
         // gets the same EamsDbContext the rest of the request will use.
         services.AddScoped<IDeviceAuthenticator, DeviceAuthenticator>();

@@ -231,6 +231,12 @@ public class PaginationTests : IntegrationTest
             // read it cannot catch.
             ("GET /classifications", "Classifications",
                 () => ClassificationsOn(db).ListAsync(false, page)),
+            // The eleventh, and the one most exposed to this defect: several cards can share a serial
+            // (ADR-001 D-3 constrains only the active ones), so IsActive and IssuedAt are both tied
+            // across exactly the rows this read exists to return. Without the ThenBy(Id) a UID reissued
+            // across two students could be served twice on page 1 and never on page 2.
+            ("GET /cards", "RfidCards",
+                () => StudentsOn(db).SearchCardsAsync("0012503326", page)),
         };
 
         foreach (var read in reads)

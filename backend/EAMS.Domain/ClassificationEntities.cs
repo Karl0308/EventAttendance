@@ -249,6 +249,73 @@ public class StudentClassification : AuditableEntity
 }
 
 /// <summary>
+/// <b>The two rules every writer of <c>StudentClassifications</c> obeys, in one place because there is
+/// about to be more than one writer.</b>
+///
+/// <para>
+/// Today the writers are <c>StudentClassificationService</c> (the Add/Edit form) and the test fixtures.
+/// Phase 1b's roster importer is the third, and it cannot reuse the <em>service</em> — it resolves
+/// thousands of rows and saves once, where the service reads and saves per person. What it can and must
+/// reuse is the two decisions below, which are the whole of the invariant; everything else about the two
+/// paths differs legitimately.
+/// </para>
+///
+/// <para>
+/// <b>In the domain rather than in the service for the reason <see cref="TermText"/> and
+/// <see cref="ClassificationText"/> are: the next writer that is not an HTTP request inherits the rules
+/// instead of re-deriving them.</b> A second writer that re-derived <see cref="For"/> and got the axis
+/// from somewhere other than the parent would be refused by the composite foreign key — loudly, as a
+/// 547 — which is the good outcome; a second writer that re-derived <see cref="IsAssignable"/> and
+/// forgot the merge tombstone would silently file new people under a category nobody can see.
+/// </para>
+/// </summary>
+public static class ClassificationAssignment
+{
+    /// <summary>
+    /// A junction row for this pair, with <see cref="StudentClassification.Axis"/> <b>copied from the
+    /// parent and never supplied by a caller</b>.
+    ///
+    /// <para>
+    /// That is the denormalization <c>UX_StudentClassifications_Student_Axis</c> rests on, and it is
+    /// also backed by the composite foreign key <c>(ClassificationId, Axis)</c> →
+    /// <c>Classifications(Id, Axis)</c>, so a row whose axis disagrees with its parent is not merely
+    /// wrong but unwritable. This function exists so that no writer ever has to be the one that
+    /// remembers — the invariant is established by construction rather than checked afterwards.
+    /// </para>
+    /// </summary>
+    public static StudentClassification For(Guid studentId, Classification classification) => new()
+    {
+        StudentId = studentId,
+        ClassificationId = classification.Id,
+        Axis = classification.Axis,
+    };
+
+    /// <summary>
+    /// Whether a classification may receive a <b>new</b> assignment.
+    ///
+    /// <para>
+    /// Two states say no and they are not the same refusal, which is why callers branch on the two
+    /// columns rather than on this predicate alone: a <em>retired</em> classification is withdrawn from
+    /// pickers and the remedy is to reactivate it or pick another, while a <em>merged</em> one has had
+    /// its population moved to a survivor and the remedy is to assign that survivor instead. Both are
+    /// covered here because both are "not offered", and a writer that checked only
+    /// <see cref="Classification.IsActive"/> would in fact be correct today —
+    /// <c>CK_Classifications_MergedIsRetired</c> guarantees a merged row is retired — which is exactly
+    /// the kind of accidental correctness that stops being true when somebody relaxes the constraint.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>It says nothing about a person who already holds the classification.</b> Re-sending an
+    /// assignment somebody already has must stay a no-op even when the row has since been retired, or a
+    /// form that round-trips what it read would start failing on people the retirement never touched.
+    /// Callers check "already held" before they consult this.
+    /// </para>
+    /// </summary>
+    public static bool IsAssignable(Classification classification) =>
+        classification.IsActive && classification.MergedIntoClassificationId is null;
+}
+
+/// <summary>
 /// The <c>Classifications</c> column rules, in the domain for the reason <see cref="TermText"/> is:
 /// the next writer that is not an HTTP request — Phase 1b's importer, a repair script — inherits them
 /// instead of re-deriving them.

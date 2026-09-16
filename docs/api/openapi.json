@@ -1701,6 +1701,85 @@
         ]
       }
     },
+    "/api/v1/cards": {
+      "get": {
+        "tags": [
+          "Cards"
+        ],
+        "summary": "`GET /cards?cardUid=` — find every card whose serial contains a fragment, and who holds it.",
+        "description": "\r\n\r\n  <b>Partial matches, by design.</b> QA answered Q6 that typing `2503` must surface\r\n             `0012503326`, so this is a substring search rather than a lookup. The fragment is normalized\r\n             the way stored serials are — uppercase, separators stripped — before it is compared, so\r\n             `25-03`, `25:03` and `2503` are one search.\r\n             \r\n\r\n\r\n  <b>Leading zeros are significant.</b> The CICSS export writes card numbers as decimal digits, so\r\n             `0012503326` and `12503326` are two different cards; nothing here trims either.\r\n             Searching for the shorter one does surface the longer, because it is contained in it — that is\r\n             the substring rule working, not the zeros being lost.\r\n             \r\n\r\n\r\n  <b>Every match is returned, active or not, and none is nominated as the answer.</b> Read\r\n             `isActive` and `deactivatedAt` on each row. The page order — active first, then most\r\n             recently issued — is a convenience for a human reading a list, not a ranking.\r\n             ",
+        "parameters": [
+          {
+            "name": "cardUid",
+            "in": "query",
+            "description": "A whole serial or any part of one, in any reader format. Required.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "page",
+            "in": "query",
+            "description": "1-based page number, default 1. Out-of-range values are clamped, not refused.",
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          },
+          {
+            "name": "pageSize",
+            "in": "query",
+            "description": "Rows per page. Default 50, maximum 200; a larger value is clamped and the response says so.",
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "One page of matching cards, possibly empty.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/CardMatchDtoPagedResult"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CardMatchDtoPagedResult"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CardMatchDtoPagedResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`cardUid` was missing, or contained no letter or digit — which normalizes to an empty\r\n             fragment and would match every card in the school rather than none.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/classifications": {
       "get": {
         "tags": [
@@ -4590,6 +4669,253 @@
         }
       }
     },
+    "/api/v1/students/{studentId}/classifications": {
+      "get": {
+        "tags": [
+          "StudentClassifications"
+        ],
+        "summary": "`GET /students/{studentId}/classifications` — everything this person is classified as.",
+        "description": "\r\n\r\n  <b>Retired classifications are included and must be rendered.</b> Retiring a category withdraws\r\n            it from pickers and leaves every existing assignment standing, so a person can hold a withdrawn\r\n            one indefinitely — and a form that filtered it out of its own display would blank it on the next\r\n            save. Each entry carries `isActive` so a picker can show it as held-but-not-offered.\r\n            ",
+        "parameters": [
+          {
+            "name": "studentId",
+            "in": "path",
+            "description": "The student.",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The person's classifications, ordered by axis then name. Possibly empty.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/StudentClassificationsDto"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StudentClassificationsDto"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StudentClassificationsDto"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such student.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/students/{studentId}/classifications/{classificationId}": {
+      "put": {
+        "tags": [
+          "StudentClassifications"
+        ],
+        "summary": "`PUT /students/{studentId}/classifications/{classificationId}` — give this person this\r\n             classification.",
+        "description": "\r\n\r\n  <b>Idempotent, and a no-op is a 200.</b> Assigning a classification somebody already holds\r\n             changes nothing and does not bump an audit column, so a double-submitted form is safe — and so is\r\n             re-sending a set that a retirement has touched since it was read, which is why the \"already\r\n             holds it\" case is decided before the retired one.\r\n             \r\n\r\n\r\n  <b>It replaces within the classification's axis.</b> A person holds at most one classification\r\n             per axis, so this displaces whatever was in that slot and leaves every other axis alone. The\r\n             response returns their whole set, so a client can see that the other axes really were untouched,\r\n             and `replacedClassificationId` names the displaced one.\r\n             \r\n\r\n\r\n  <b>A retired classification is a 409 and a merged-away one is a different 409.</b> The two have\r\n             different remedies — reactivate it or pick another, versus assign the survivor it was merged into\r\n             — so they carry different `code` tokens and the merged one names the survivor's id in its\r\n             message.\r\n             ",
+        "parameters": [
+          {
+            "name": "studentId",
+            "in": "path",
+            "description": "The student.",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "classificationId",
+            "in": "path",
+            "description": "The classification to give them.",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The person's classifications after the write, and what was replaced.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/StudentClassificationWriteResult"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StudentClassificationWriteResult"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StudentClassificationWriteResult"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such student, no such classification, or the two belong to different schools.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The classification is retired or was merged away, or somebody else set this person's\r\nclassification on the same axis at the same moment. Nothing was changed.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "StudentClassifications"
+        ],
+        "summary": "`DELETE /students/{studentId}/classifications/{classificationId}` — take this classification\r\n             off this person.",
+        "description": "\r\n\r\n  <b>The classification itself is untouched.</b> It is shared by everybody filed under it, so a\r\n             clear that reached it would uncategorise every one of them — the data-loss shape\r\n             `DELETE /classifications/{id}` is guarded against, and it would be no better arriving one\r\n             student at a time. Only the assignment row goes.\r\n             \r\n\r\n\r\n  <b>200 with the remaining classifications rather than 204</b>, matching what `PUT` returns:\r\n             the axes are the point of this surface, and the one thing a client needs to see after clearing\r\n             one is that the others survived. A 204 would have forced a second round trip to find that out.\r\n             \r\n\r\n\r\n             The classification's own state is irrelevant here — a retired or merged-away category can always\r\n             be cleared, or somebody could be permanently stuck holding one.\r\n             \r\n\r\n\r\n  <b>It can answer 409, which a `DELETE` usually cannot.</b> Clearing takes locks on the same\r\n             row an assignment does, by a different index — the clear filters\r\n             `(StudentId, ClassificationId)` while an assign uses\r\n             `UX_StudentClassifications_Student_Axis` — so the two can deadlock, and the victim is\r\n             answered as the conflict it is rather than as a server fault. Nothing was removed when that\r\n             happens; the request can simply be repeated.\r\n             ",
+        "parameters": [
+          {
+            "name": "studentId",
+            "in": "path",
+            "description": "The student.",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "classificationId",
+            "in": "path",
+            "description": "The classification to take off them.",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The person's remaining classifications.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/StudentClassificationWriteResult"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StudentClassificationWriteResult"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StudentClassificationWriteResult"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such student, or this person does not hold that classification — including on a second delete.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Another request was changing this person's classifications at the same moment and this one was\r\nrolled back to break the tie. Nothing was removed; re-read and try again.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/student-groups": {
       "get": {
         "tags": [
@@ -5794,6 +6120,93 @@
           }
         },
         "additionalProperties": false
+      },
+      "CardMatchDto": {
+        "type": "object",
+        "properties": {
+          "cardId": {
+            "type": "string",
+            "description": "The card row. <b>This is the identity a caller acts on</b> — it is what\r\n`DELETE /students/{studentId}/cards/{cardId}` takes, so a match is directly actionable rather\r\nthan something to go and look up again by UID (which is the lookup that is ambiguous).",
+            "format": "uuid"
+          },
+          "cardUid": {
+            "type": "string",
+            "description": "The stored, normalized serial — uppercase with separators stripped. <b>Leading zeros are\r\nsignificant and are never trimmed:</b> the CICSS export writes card numbers as decimal digits\r\n(`0012503326`), so `0012503326` and `12503326` are two different cards and both can\r\nexist at once."
+          },
+          "label": {
+            "type": "string",
+            "description": "Whatever the issuing operator wrote on the card, if anything.",
+            "nullable": true
+          },
+          "isActive": {
+            "type": "boolean",
+            "description": "`false` is <b>deactivated</b>: the card has been withdrawn and cannot record attendance, but it\r\n            still names the student it was issued to. QA's answer to Q5 is that this case must resolve — \"so\r\n            admin can still be able to track the card's association with the student\" — so a deactivated card is\r\n            returned as a match rather than hidden, and this flag plus\r\n            DeactivatedAt is what stops a client mistaking it for a live one."
+          },
+          "issuedAt": {
+            "type": "string",
+            "description": "When the card was assigned to this student.",
+            "format": "date-time"
+          },
+          "deactivatedAt": {
+            "type": "string",
+            "description": "When it was withdrawn, or null while it is active. Present because \"this card is not in use\" and\r\n\"this card stopped being in use last September\" are different answers to the person holding a card\r\nthey found on the floor.",
+            "format": "date-time",
+            "nullable": true
+          },
+          "studentId": {
+            "type": "string",
+            "description": "The holder's primary key — what `GET /students/{id}` takes.",
+            "format": "uuid"
+          },
+          "studentNumber": {
+            "type": "string",
+            "description": "The registrar's number, verbatim. Not the card serial: separate columns, separate rules."
+          },
+          "fullName": {
+            "type": "string",
+            "description": "The holder's display name."
+          },
+          "studentStatus": {
+            "type": "string",
+            "description": "The holder's §4.3 status — `Active`, `Inactive` or `Graduated`. A card found on the\r\nfloor very often belongs to somebody who has already left, and the status is what says so without a\r\nsecond request."
+          }
+        },
+        "additionalProperties": false,
+        "description": "<b>One card that matched a search, and the person who holds it.</b> The row type of\r\n             `GET /cards?cardUid=`.\r\n            \r\n             \r\n<b>The card is the subject and the student is an attribute of it, which is the opposite of every\r\n             other read on this API and is the whole design.</b> ADR-001 D-3 scopes card uniqueness to\r\n             `UNIQUE(SchoolId, CardUid) WHERE IsActive = 1` — deliberately leaving <em>inactive</em> rows\r\n             unconstrained, because a serial that is revoked today may be re-encoded and issued to somebody else\r\n             tomorrow and the old row has to survive to explain the taps it produced. A lookup that reaches\r\n             inactive cards is therefore multi-valued by construction: one UID can legitimately name several\r\n             cards across several students, and none of them is \"the\" answer. A shape with a single\r\n             `student` on it could not have said so.\r\n             "
+      },
+      "CardMatchDtoPagedResult": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CardMatchDto"
+            },
+            "description": "This page's rows, in the endpoint's documented order. Empty is an ordinary answer — for an empty\r\nfilter and for a page past the end alike."
+          },
+          "page": {
+            "type": "integer",
+            "description": "The 1-based page actually served, which is <em>not</em> necessarily the one requested: an\r\nout-of-range `?page=` is clamped and this is where a client sees that it was.",
+            "format": "int32"
+          },
+          "pageSize": {
+            "type": "integer",
+            "description": "The page size actually applied, after the EAMS.Application.Dtos.Paging.MaxPageSize clamp. The field that\r\nmakes clamping discoverable rather than silent.",
+            "format": "int32"
+          },
+          "total": {
+            "type": "integer",
+            "description": "Rows matching the filter across every page, counted in the database against the same filter that\r\nproduced Items. This is what a grid needs to render a page count; without it a\r\ncaller can only discover the end by walking into it.",
+            "format": "int32"
+          },
+          "hasMore": {
+            "type": "boolean",
+            "description": "Whether another page exists after this one.\r\n            \r\n\r\n<b>Derived here rather than left to the client, because the client gets it wrong.</b>`page * pageSize < total` is right and `items.Count == pageSize` is the version\r\npeople write — which reports a further page whenever the last page happens to be exactly full,\r\nso a paging loop makes one extra request every time the total is a multiple of the page size.\r\nComputing it once, on the side that already holds the total, is a byte on the wire against a\r\nclass of off-by-one nobody finds in review.\r\n",
+            "readOnly": true
+          }
+        },
+        "additionalProperties": false,
+        "description": "One page of an admin list read, plus what the caller needs to ask for the next one.\r\n            \r\n\r\n<b>Every §6.2/§6.3 admin list returns this; `GET /attendance/live/{eventId}` deliberately does\r\nnot.</b> That endpoint pages by cursor (`since`/`cursor`/`hasMore`) because it is a\r\npolling delta rather than a list — a client asks \"what changed after this point\", not \"give me rows\r\n40 to 60\" — and its shape is frozen published contract under D-29/D-30/D-42. Offset paging over a\r\nlive feed also drops rows: an insert below the cursor shifts every subsequent row up by one and the\r\nnext page skips it. The two mechanisms coexisting is correct, not an inconsistency to tidy.\r\n"
       },
       "ChangePasswordRequest": {
         "type": "object",
@@ -7225,6 +7638,83 @@
         "additionalProperties": false,
         "description": "The body of `POST /students/{id}/cards` — §6.2's `{cardUid, label}`.\r\n            \r\n\r\n\r\nThe UID is normalized before anything is compared or stored (`CardUid.Normalize`): readers\r\nemit `04:a7:b8:c9`, `04-A7-B8-C9` and `04 a7 b8 c9` for one card, and the stored form\r\nis the only one the filtered unique index can defend.\r\n"
       },
+      "StudentClassificationDto": {
+        "type": "object",
+        "properties": {
+          "classificationId": {
+            "type": "string",
+            "description": "The vocabulary entry. <b>Identity is the GUID, never the name</b> — that is the whole reason the\r\nvocabulary is a table, and it is why renaming `SUPERVISORY/MANAGERIAL` reassigns nobody.",
+            "format": "uuid"
+          },
+          "name": {
+            "type": "string",
+            "description": "The display form, exactly as authored — slash, spacing and capitalisation intact."
+          },
+          "axis": {
+            "type": "string",
+            "description": "Which of the source export's four category columns this classification came from — `Student`,\r\n`Personnel`, `Friars` or `Special`.\r\n            \r\n\r\n<b>It is the slot, not a label.</b>`UX_StudentClassifications_Student_Axis` caps a person at\r\none classification per axis while leaving them free to hold several axes at once, so assigning a\r\nsecond `Personnel` value <em>replaces</em> the first and assigning a `Friars` value does\r\nnot. A picker that does not group on this cannot tell a client which of its choices are mutually\r\nexclusive.\r\n"
+          },
+          "isActive": {
+            "type": "boolean",
+            "description": "Whether the classification is still offered for <em>new</em> assignments. <b>`false` here is\r\nordinary and must be rendered, not filtered.</b> Retiring a classification deliberately leaves every\r\nexisting assignment standing, so a person can hold a withdrawn category indefinitely — and an edit\r\nform that dropped it from its own display would blank it on the next save."
+          },
+          "assignedAt": {
+            "type": "string",
+            "description": "<b>When this person was filed under <em>this</em> classification on this axis — not when they first\r\n             acquired the axis.</b>\r\n\r\n\r\n             Replacing a classification within an axis re-points the existing row and <b>resets this stamp</b>, so\r\n             it always describes the assignment that is actually there. The alternative was live for one gate\r\n             round and was wrong in a way nothing would have caught: the replace wrote `ClassificationId` and\r\n             left `CreatedAt` alone, so somebody who had been `NAP` since 2024 and was made `ACAD`\r\n             this morning reported `assignedAt: 2024-03-01` for a category that had touched them minutes\r\n             earlier — a plausible, non-empty, wrong date.\r\n             \r\n\r\n\r\n  <b>What it is therefore not: a history.</b> The previous classification's dates are gone, because\r\n             there is no assignment history table and this column is not a stand-in for one. Who changed it and\r\n             when belongs in `AuditLogs`, where the operator can be recorded too.\r\n             ",
+            "format": "date-time"
+          }
+        },
+        "additionalProperties": false,
+        "description": "<b>One classification a person holds, on one axis.</b>"
+      },
+      "StudentClassificationWriteResult": {
+        "type": "object",
+        "properties": {
+          "studentId": {
+            "type": "string",
+            "description": "The person.",
+            "format": "uuid"
+          },
+          "classifications": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/StudentClassificationDto"
+            },
+            "description": "Their full set after the write, ordered by axis then name. <b>All of it, not just the row that\r\nchanged</b> — the point of the axes is that a write to one leaves the others alone, and this is the\r\nonly way a client can see that it did."
+          },
+          "replacedClassificationId": {
+            "type": "string",
+            "description": "What this assignment displaced on its axis, or null if the slot was empty or nothing was written.\r\n<b>Present because the replacement is otherwise silent:</b> an operator who thought they were adding\r\na second personnel category needs to see which one went.",
+            "format": "uuid",
+            "nullable": true
+          },
+          "message": {
+            "type": "string",
+            "description": "What happened, in a sentence an administrator can read."
+          }
+        },
+        "additionalProperties": false,
+        "description": "The body of a successful assign or clear: what the person is classified as now, and what the write\r\ndisplaced."
+      },
+      "StudentClassificationsDto": {
+        "type": "object",
+        "properties": {
+          "studentId": {
+            "type": "string",
+            "description": "The person.",
+            "format": "uuid"
+          },
+          "classifications": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/StudentClassificationDto"
+            },
+            "description": "What they hold, ordered by axis then by name. Empty is an ordinary answer — most people will hold\r\nexactly one until Phase 1b's import runs."
+          }
+        },
+        "additionalProperties": false,
+        "description": "<b>Everything one person is classified as.</b> The body of\r\n            `GET /students/{studentId}/classifications`, and the payload every write on that surface returns."
+      },
       "StudentDto": {
         "type": "object",
         "properties": {
@@ -7283,6 +7773,13 @@
             "items": {
               "$ref": "#/components/schemas/CardDto"
             }
+          },
+          "classifications": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/StudentClassificationDto"
+            },
+            "description": "<b>What this person is classified as — a collection, because a person holds one classification per\r\n             axis and may hold several axes at once</b> (QA Q2). Ordered by axis then display name, so the same\r\n             person's categories never reshuffle between requests.\r\n            \r\n             \r\n<b>Empty is an ordinary state, not a null to guard against.</b> Thirty-four people in the sampled\r\n             roster carry no category at all, most carry exactly one, and three carry two. A scalar field could\r\n             have described only the middle case — answering the two-axis people with one of their two values,\r\n             non-empty and plausible and wrong, which is the failure ADR-001 D-2 documents for\r\n             Course and Section right above.\r\n             \r\n<b>It is populated on every read that returns a student, and that is deliberate rather than\r\n             thorough.</b> A field that came back `[]` on the detail read while the grid showed two\r\n             categories would be the same silently-wrong answer in a new place — and worse here, because the edit\r\n             form opens from a grid row and would save the empty version back.\r\n             \r\n\r\n             Read-only on this DTO. Assignment is\r\n             `PUT /students/{studentId}/classifications/{classificationId}`; sending this collection back on\r\n             a `PUT /students/{id}` is ignored exactly as `id` and `cards` are, because a\r\n             classification is not a column of the student row.\r\n             "
           }
         },
         "additionalProperties": false,
@@ -7828,6 +8325,10 @@
       "description": "Technical Plan §6.1 / §11 — human authentication (Phase 6b).\r\n            \r\n\r\n<b>This is the first and only surface in the API that a person authenticates against, and adding\r\nit changes nothing about any other endpoint.</b> ADR-001 D-6's staged cutover is unchanged: every\r\nroute outside `/auth` is still open and unauthenticated, `[HasPermissionNotEnforced]`\r\nstill enforces nothing, and `[assembly: AuthorizationNotEnforced]` is still present. Turning\r\nthose on is a later phase, and `AuthStagedCutoverTests` asserts the invariant rather than\r\nleaving it to be assumed.\r\n\r\n<b>Two credentials now reach this host and they never mix.</b> A kiosk sends\r\n`Authorization: DeviceKey …` and is scoped to `attendance.capture`; a person sends\r\n`Authorization: Bearer …` and holds whatever their roles grant. Both emit the same claim\r\n<em>types</em> (EAMS.Api.Authorization.EamsClaimTypes), so the authorization layer cannot tell them apart —\r\nwhich is exactly what `DeviceKeyHandler` was built for and why this phase is additive.\r\n\r\n<b>Where the tokens live.</b> The access token is returned in the body and held in memory by the\r\nSPA; the refresh token is an `httpOnly` cookie the browser stores and this API never reads\r\nfrom a body. That is drift from §6.1 and the reasoning is in EAMS.Api.Authentication.AuthCookies.\r\n"
     },
     {
+      "name": "Cards",
+      "description": "<b>The card registry, searched by serial.</b> \"Whose card is this?\" — including when the honest\r\n             answer is more than one person."
+    },
+    {
       "name": "Classifications",
       "description": "The institution's classification vocabulary — `STUDENT`, `NAP`, `ACAD` and the five\r\nother values the client's access-control export carries — as a list an administrator edits."
     },
@@ -7842,6 +8343,10 @@
     {
       "name": "SisImport",
       "description": "Technical Plan §10 — the school-year roster import.\r\n            \r\n\r\n<b>Every endpoint is decorated `sis.import` and every endpoint is open.</b>EAMS.Api.Authorization.HasPermissionNotEnforcedAttribute enforces nothing (ADR-001 D-6); the decoration\r\nrecords what Phase 6 must demand. That matters more here than anywhere else in this API: these four\r\nendpoints read and write the full roster of every student in the institution, including their names\r\nand institutional e-mail addresses, and the upload endpoint writes to the academic tables. This\r\nsystem must not be exposed beyond local/development use until §11 lands.\r\n"
+    },
+    {
+      "name": "StudentClassifications",
+      "description": "<b>Who is classified as what.</b> The Add/Edit form's classification field, and the write surface the\r\n             vocabulary phase deliberately shipped without."
     },
     {
       "name": "StudentGroups",

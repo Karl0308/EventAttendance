@@ -189,14 +189,17 @@ internal static class TestData
     /// Personnel classifications — a state production cannot reach — and every assertion about "one
     /// per axis" above it would be passing against a table that does not exist in the wild.
     /// </para>
+    ///
+    /// <para>
+    /// <b>Delegated to <see cref="ClassificationAssignment.For"/> rather than repeating the initializer</b>,
+    /// so the fixture and the production write path establish that invariant through the same function.
+    /// A fixture with its own copy of the rule is precisely how a suite ends up proving something about
+    /// rows the application cannot produce.
+    /// </para>
     /// </summary>
     public static StudentClassification NewStudentClassification(
-        Guid studentId, Classification classification) => new()
-    {
-        StudentId = studentId,
-        ClassificationId = classification.Id,
-        Axis = classification.Axis,
-    };
+        Guid studentId, Classification classification) =>
+        ClassificationAssignment.For(studentId, classification);
 
     public static College NewCollege(
         Guid schoolId, string name = "College of Criminal Justice", string? code = "CCJ") => new()

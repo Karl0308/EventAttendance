@@ -81,6 +81,43 @@ public enum StudentWriteOutcome
 /// <summary>The result of a write against one student. <paramref name="Student"/> is null unless it saved.</summary>
 public record StudentWriteResponse(StudentWriteOutcome Outcome, string Message, StudentDto? Student);
 
+/// <summary>
+/// Why <see cref="IStudentService.SearchCardsAsync"/> answers with an outcome rather than an empty page:
+/// "no card matched" and "that is not a fragment anything could match" are different answers and only
+/// one of them is a 200.
+/// </summary>
+public enum CardSearchOutcome
+{
+    /// <summary>The search ran. The page may still be empty — that is an ordinary answer.</summary>
+    Matched,
+
+    /// <summary>
+    /// <b>The fragment carries no letter or digit, so it normalizes to the empty string.</b> 400.
+    ///
+    /// <para>
+    /// It is refused rather than run, and the reason is not tidiness. Stored UIDs are normalized, so a
+    /// search has to normalize before it compares (CLAUDE.md's rule) — and the normalized form of
+    /// <c>'-'</c>, <c>'::'</c> or <c>'   '</c> is <c>""</c>, which <c>LIKE '%%'</c> matches for
+    /// <em>every card in the school</em>. A caller who typed a separator by accident would be handed
+    /// the entire card registry, one page at a time, as if it were a result.
+    /// </para>
+    /// </summary>
+    FragmentUnusable,
+}
+
+/// <summary>
+/// The result of a card lookup. <paramref name="Matches"/> is null unless the search actually ran.
+/// </summary>
+/// <param name="Matches">
+/// <b>A page of matches, never a single card, and that is load-bearing rather than defensive.</b> See
+/// <see cref="CardMatchDto"/>: inactive cards are deliberately outside
+/// <c>UX_RfidCards_SchoolId_CardUid_Active</c>, so one UID can name several cards held by several
+/// people. A caller that wants "the current holder" filters on <c>isActive</c>; the API does not pick
+/// for them.
+/// </param>
+public record CardSearchResponse(
+    CardSearchOutcome Outcome, string Message, PagedResult<CardMatchDto>? Matches);
+
 /// <summary>The result of a write against one card. <paramref name="Card"/> is null unless it saved.</summary>
 public record StudentCardResponse(StudentWriteOutcome Outcome, string Message, CardDto? Card);
 
@@ -93,6 +130,18 @@ public interface IStudentService
     /// what stops two students sharing a surname from swapping places between page 1 and page 2 and
     /// being served twice or not at all.
     /// </summary>
+    /// <param name="search">
+    /// Matches first name, last name, student number <b>or any card serial the student holds</b>,
+    /// active or not.
+    ///
+    /// <para>
+    /// <b>The card arm normalizes the fragment before it compares and the name arms do not</b>, because
+    /// the two columns store different things: <c>RfidCards.CardUid</c> holds the uppercased,
+    /// punctuation-stripped form, so <c>25-03</c> has to become <c>2503</c> to find <c>0012503326</c>
+    /// (QA Q6), while <c>StudentNumber</c> holds the registrar's value verbatim and normalizing it would
+    /// stop <c>2023-0001</c> matching itself.
+    /// </para>
+    /// </param>
     Task<PagedResult<StudentDto>> ListAsync(
         string? search, string? course, string? status, PageRequest page,
         CancellationToken ct = default);
@@ -101,6 +150,36 @@ public interface IStudentService
 
     /// <summary>UID→student resolution for the mobile scan screen. Normalizes <paramref name="cardUid"/> first.</summary>
     Task<StudentDto?> GetByCardUidAsync(string cardUid, CancellationToken ct = default);
+
+    /// <summary>
+    /// <c>GET /cards?cardUid=</c> — <b>"whose card is this?", answered honestly when the answer is more
+    /// than one person.</b>
+    ///
+    /// <para>
+    /// <b>It is not a variant of <see cref="GetByCardUidAsync"/> and must not be folded into one.</b>
+    /// That method serves the kiosk: it resolves a whole UID to the one student who may tap with it
+    /// right now, so it filters <c>IsActive</c> and a single student is the correct shape. This one
+    /// serves an administrator holding a card, and QA answered (Q5) that a <em>withdrawn</em> card must
+    /// still name its student. The moment inactive rows are in scope the answer is multi-valued by
+    /// construction — ADR-001 D-3 constrains only the active ones — so this returns a page of
+    /// <see cref="CardMatchDto"/> and lets the caller see which matched and what state each is in.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>Substring, not equality</b> (QA Q6: typing <c>2503</c> must surface <c>0012503326</c>), and
+    /// therefore a <c>LIKE '%fragment%'</c>, which no index can seek — see the implementation for what
+    /// that costs and why it is accepted at this volume.
+    /// </para>
+    /// </summary>
+    /// <param name="cardUid">
+    /// A whole serial or any fragment of one, in any reader format. Normalized before comparison, so
+    /// <c>25-03</c>, <c>25:03</c> and <c>2503</c> are one search. A fragment that normalizes to nothing
+    /// is <see cref="CardSearchOutcome.FragmentUnusable"/> rather than a match-everything.
+    /// </param>
+    /// <param name="page">Paged like every other admin list read.</param>
+    /// <param name="ct">Cancellation token.</param>
+    Task<CardSearchResponse> SearchCardsAsync(
+        string? cardUid, PageRequest page, CancellationToken ct = default);
 
     /// <summary>
     /// §6.2 <c>POST /students</c>. The student is created in the resolved tenant's school; the request

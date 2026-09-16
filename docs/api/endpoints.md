@@ -3,7 +3,7 @@
 <!-- GENERATED FILE — DO NOT EDIT.
      Source: docs/api/openapi.json. Regenerate: node scripts/generate-endpoint-index.mjs --write -->
 
-**Generated from [`openapi.json`](openapi.json) — do not edit by hand.** 61 operations across 10 controllers, all mounted under `/api/v1`. Routes below are written relative to that mount.
+**Generated from [`openapi.json`](openapi.json) — do not edit by hand.** 65 operations across 12 controllers, all mounted under `/api/v1`. Routes below are written relative to that mount.
 
 This page is a **map, not a contract.** It exists so you can find an endpoint; payload shapes, field types and outcome tokens live in [`openapi.json`](openapi.json), which is what you generate a client from. Behaviour a schema cannot state — what your queue does with each outcome, the card-UID and clock rules — is in [`attendance-contract-handoff.md`](attendance-contract-handoff.md).
 
@@ -13,10 +13,12 @@ This page is a **map, not a contract.** It exists so you can find an endpoint; p
 
 - [Academic](#academic) — 9
 - [Auth](#auth) — 5
+- [Cards](#cards) — 1
 - [Classifications](#classifications) — 7
 - [Devices](#devices) — 7
 - [EventManifest](#eventmanifest) — 1
 - [SisImport](#sisimport) — 4
+- [StudentClassifications](#studentclassifications) — 3
 - [StudentGroups](#studentgroups) — 1
 - [Attendance](#attendance) — 5
 - [Events](#events) — 14
@@ -45,6 +47,12 @@ This page is a **map, not a contract.** It exists so you can find an endpoint; p
 | `POST` | `/auth/logout` | **Bearer** | `401` `403` | End this session. |
 | `GET` | `/auth/me` | **Bearer** | `401` `404` | Who this access token speaks for, and what it may do. |
 | `POST` | `/auth/refresh` | — | `401` `403` `429` | Rotate the session cookie and mint a new access token. |
+
+## Cards
+
+| Method | Route | Auth | Errors | What it does |
+|---|---|---|---|---|
+| `GET` | `/cards` | — | `400` | Find every card whose serial contains a fragment, and who holds it. |
 
 ## Classifications
 
@@ -84,6 +92,14 @@ This page is a **map, not a contract.** It exists so you can find an endpoint; p
 | `GET` | `/sis/import/{batchId}/rows` | — | *none declared* | A batch's staged rows, optionally narrowed to one outcome — `?result=Failed` is the query an operator runs after every import. |
 | `POST` | `/sis/import/{batchId}/run` | — | `404` `409` | Runs a staged batch. |
 | `POST` | `/sis/import/upload` | — | `400` `422` | Stages a workbook and returns what is in it. |
+
+## StudentClassifications
+
+| Method | Route | Auth | Errors | What it does |
+|---|---|---|---|---|
+| `GET` | `/students/{studentId}/classifications` | — | `404` | Everything this person is classified as. |
+| `DELETE` | `/students/{studentId}/classifications/{classificationId}` | — | `404` `409` | Take this classification off this person. |
+| `PUT` | `/students/{studentId}/classifications/{classificationId}` | — | `404` `409` | Give this person this classification. |
 
 ## StudentGroups
 

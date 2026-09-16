@@ -287,6 +287,33 @@ public abstract class IntegrationTest : IAsyncLifetime
         new ClassificationService(db, School, logger);
 
     /// <summary>
+    /// The assignment surface — who holds which classification.
+    ///
+    /// <para>
+    /// <b>No <see cref="School"/> argument, unlike <see cref="ClassificationsOn(EamsDbContext)"/>
+    /// beside it, and that asymmetry is the thing to notice.</b> Creating a classification has to decide
+    /// which school it is filed under; assigning one joins two rows that already carry a tenant, so what
+    /// this service decides instead is that the two <em>agree</em> — which it checks on the rows rather
+    /// than against a context. A tenancy test therefore arranges two schools and asserts the refusal,
+    /// rather than pinning the service.
+    /// </para>
+    /// </summary>
+    internal IStudentClassificationService StudentClassificationsOn(EamsDbContext db) =>
+        new StudentClassificationService(db, NullLogger<StudentClassificationService>.Instance);
+
+    /// <summary>
+    /// The same service with a logger a test can read back, for the reason
+    /// <see cref="CapturingLogger{T}"/> exists: losing the axis-slot race to
+    /// <c>UX_StudentClassifications_Student_Axis</c> is a failure the service <em>recovers from</em> —
+    /// a caller who lost to somebody assigning the <em>same</em> classification is answered 200, exactly
+    /// as if nothing had raced — so the log entry is the only observable difference between the
+    /// pre-check path and the index path.
+    /// </summary>
+    internal IStudentClassificationService StudentClassificationsOn(
+        EamsDbContext db, CapturingLogger<StudentClassificationService> logger) =>
+        new StudentClassificationService(db, logger);
+
+    /// <summary>
     /// The §10 import pipeline, wired to the same context the test asserts against.
     ///
     /// <para>

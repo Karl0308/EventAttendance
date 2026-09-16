@@ -54,12 +54,27 @@ internal sealed class StudentService : IStudentService
         _logger = logger;
     }
 
-    internal static StudentDto ToDto(Student s) => new(
+    /// <summary>
+    /// <b><paramref name="classifications"/> is a required argument and has no default, which is the
+    /// point of the signature.</b>
+    ///
+    /// <para>
+    /// Every path that produces a <see cref="StudentDto"/> has to say where this person's categories
+    /// came from. A defaulted empty list would have let a caller forget — and forgetting produces
+    /// <c>classifications: []</c>, which does not read as "nobody asked", it reads as "this person has
+    /// none". That is true of thirty-four people in the roster and false of the rest, and nothing
+    /// anywhere would have said which. It is the exact failure ADR-001 D-2 records for the
+    /// <c>Course</c>/<c>Section</c> cache, and the compiler is what stops it recurring here.
+    /// </para>
+    /// </summary>
+    internal static StudentDto ToDto(
+        Student s, IReadOnlyList<StudentClassificationDto> classifications) => new(
         s.Id, s.StudentNumber, s.FullName,
         s.FirstName, s.MiddleName, s.LastName,
         s.Email, s.Gender, s.PhotoUrl,
         s.Course, s.YearLevel, s.Section, s.Status,
-        s.Cards.Select(ToDto).ToList());
+        s.Cards.Select(ToDto).ToList(),
+        classifications);
 
     internal static CardDto ToDto(RfidCard c) => new(c.Id, c.CardUid, c.Label, c.IsActive);
 
@@ -69,25 +84,72 @@ internal sealed class StudentService : IStudentService
     /// <inheritdoc cref="IStudentService.ListAsync" path="/summary"/>
     /// </summary>
     /// <remarks>
+    /// <para>
     /// Counted and paged through <see cref="PagedQuery.ToPageAsync{TEntity, TDto}(IQueryable{TEntity},
     /// Func{IQueryable{TEntity}, IQueryable{TEntity}}, Func{TEntity, TDto}, PageRequest,
     /// CancellationToken)"/>, which is the single seam all nine admin lists share — a total built from
     /// a filter that has drifted from the one that produced the rows is the paging bug that never
     /// looks like one, and having one implementation of the pairing is what removes the chance.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>The classifications column is one extra query for the whole page, issued after the page is
+    /// known and keyed by the ids actually served.</b> Three properties matter and this shape has all
+    /// three: it is never a query per row, it never runs for the rows the <c>COUNT</c> discards, and it
+    /// does not touch the paged query at all — so the <c>ORDER BY</c>
+    /// <c>PaginationTests.Every_paged_list_query_orders_by_a_unique_column</c> asserts on is byte for
+    /// byte what it was.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>Why not the correlated subquery <c>ClassificationService.ListAsync</c> uses.</b> That one
+    /// projects a scalar <c>COUNT</c> inside a DTO built in SQL. This read cannot build its DTO in SQL —
+    /// <c>Student.FullName</c> is computed in the domain and <c>Ignore</c>d by the model, and
+    /// <c>Cards</c> is a materialized navigation — so it uses the entity-mapping overload, where there
+    /// is no SQL projection for a subquery to sit in. The available alternative was a second collection
+    /// <c>Include</c> beside <c>Cards</c>, and that multiplies rows: a student with three cards and two
+    /// classifications returns six. Two collection <c>Include</c>s on one page query is the cartesian
+    /// blow-up EF warns about by name, and it would have been paid on the roster's busiest read.
+    /// </para>
     /// </remarks>
-    public Task<PagedResult<StudentDto>> ListAsync(
+    public async Task<PagedResult<StudentDto>> ListAsync(
         string? search, string? course, string? status, PageRequest page,
         CancellationToken ct = default)
     {
         var q = _db.Students.Where(s => !s.IsDeleted);
 
         if (!string.IsNullOrWhiteSpace(search))
-            q = q.Where(s => s.FirstName.Contains(search) || s.LastName.Contains(search)
-                          || s.StudentNumber.Contains(search));
+        {
+            // Normalize first, compare second (CLAUDE.md) — but only for the card arm. The stored
+            // CardUid is uppercase with separators stripped, so '25-03' has to become '2503' before it
+            // can find '0012503326' (QA Q6). StudentNumber is the opposite: it holds the registrar's
+            // value verbatim, and normalizing the fragment would stop '2023-0001' matching itself.
+            //
+            // The empty case is branched on rather than expressed as `uid != ""` inside the predicate,
+            // because Contains("") is true of every row: a search for '-' would otherwise return every
+            // student who holds any card at all, which looks like a working search and is not one.
+            var uid = CardUid.Normalize(search);
+
+            // Cards are matched regardless of IsActive. QA Q5: an old card must still find its student,
+            // "so admin can still be able to track the card's association with the student". The grid
+            // renders every card in StudentDto.Cards with its own isActive, so the row that matched is
+            // visible rather than merely counted.
+            q = uid.Length == 0
+                ? q.Where(s => s.FirstName.Contains(search) || s.LastName.Contains(search)
+                            || s.StudentNumber.Contains(search))
+                : q.Where(s => s.FirstName.Contains(search) || s.LastName.Contains(search)
+                            || s.StudentNumber.Contains(search)
+                            || s.Cards.Any(c => c.CardUid.Contains(uid)));
+        }
+
         if (!string.IsNullOrWhiteSpace(course)) q = q.Where(s => s.Course == course);
         if (!string.IsNullOrWhiteSpace(status)) q = q.Where(s => s.Status == status);
 
-        return q.ToPageAsync(
+        // Mapped to the entity rather than to the DTO here, because the DTO needs a value this query
+        // does not have yet. Still through ToPageAsync, so the count and the page are still built from
+        // one queryable — that guarantee is the reason the helper exists and is not worth trading for a
+        // shorter method.
+        var students = await q.ToPageAsync(
             // Include here rather than on the filter, so the join lands on the page and not on the
             // COUNT. ThenBy(Id) is the total order: surnames are not unique — a roster of fifty-two
             // has several — and SQL Server may return equal keys in a different order on every
@@ -96,14 +158,39 @@ internal sealed class StudentService : IStudentService
             ordered => ordered
                 .Include(s => s.Cards)
                 .OrderBy(s => s.LastName).ThenBy(s => s.Id),
-            ToDto, page, ct);
+            s => s, page, ct);
+
+        // One query for the page's classifications, keyed by the ids actually served — never one per
+        // row, and never for a row the COUNT discarded.
+        var held = await StudentClassificationReads.ForStudentsAsync(
+            _db, students.Items.Select(s => s.Id).ToList(), ct);
+
+        return new PagedResult<StudentDto>(
+            students.Items.Select(s => ToDto(s, Held(held, s.Id))).ToList(),
+            students.Page, students.PageSize, students.Total);
     }
+
+    /// <summary>
+    /// This student's row out of the page's lookup, or none.
+    ///
+    /// <para>
+    /// A student who holds nothing is absent from the dictionary rather than present with an empty
+    /// list, so the miss is the ordinary case and not an anomaly — thirty-four people in the sampled
+    /// roster are uncategorised.
+    /// </para>
+    /// </summary>
+    private static IReadOnlyList<StudentClassificationDto> Held(
+        IReadOnlyDictionary<Guid, IReadOnlyList<StudentClassificationDto>> page, Guid studentId) =>
+        page.TryGetValue(studentId, out var held) ? held : [];
 
     public async Task<StudentDto?> GetAsync(Guid id, CancellationToken ct = default)
     {
         var s = await _db.Students.Include(x => x.Cards)
             .FirstOrDefaultAsync(x => x.Id == id && !x.IsDeleted, ct);
-        return s is null ? null : ToDto(s);
+
+        return s is null
+            ? null
+            : ToDto(s, await StudentClassificationReads.ForStudentAsync(_db, s.Id, ct));
     }
 
     /// <summary>
@@ -134,7 +221,112 @@ internal sealed class StudentService : IStudentService
         var uid = CardUid.Normalize(cardUid);
         var card = await _db.RfidCards.Include(c => c.Student!).ThenInclude(s => s.Cards)
             .FirstOrDefaultAsync(c => c.CardUid == uid && c.IsActive && !c.Student!.IsDeleted, ct);
-        return card?.Student is null ? null : ToDto(card.Student);
+        if (card?.Student is null) return null;
+
+        // The scan screen gets the same truthful collection every other student read returns. It is one
+        // indexed seek — UX_StudentClassifications_Student_Axis leads on StudentId — and the alternative
+        // was publishing a field that is always empty on this one route, which reads as "this person has
+        // no classifications" rather than as "this endpoint does not answer that".
+        return ToDto(
+            card.Student,
+            await StudentClassificationReads.ForStudentAsync(_db, card.Student.Id, ct));
+    }
+
+    /// <summary>
+    /// <inheritdoc cref="IStudentService.SearchCardsAsync" path="/summary"/>
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b><c>LIKE '%fragment%'</c> cannot use an index, and that is stated here rather than left to be
+    /// discovered.</b> A leading wildcard makes <c>UX_RfidCards_SchoolId_CardUid_Active</c> unseekable,
+    /// so this read is a scan of the card table for the tenant. It is accepted: one row per card per
+    /// student, an admin-only lookup typed by a human, and the page is bounded by
+    /// <see cref="Paging.MaxPageSize"/>. What would change the answer is volume — a multi-campus
+    /// install, or a habit of re-issuing cards — and the fix then is a prefix search (<c>LIKE
+    /// 'fragment%'</c>, which seeks) or a reversed-serial computed column, not a bigger page.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>Scoped by the global <c>SchoolId</c> query filter rather than an explicit predicate</b>, like
+    /// every other read in this class and unlike the writes. The filter is inert while no tenant is
+    /// pinned (ADR-001 D-6), which is the pre-auth build's known state and the same exposure
+    /// <c>GET /students</c> already has; adding a predicate here alone would imply this one read is
+    /// tenant-safe when its neighbour is not.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>Soft-deleted students are excluded</b>, matching all three of this class's other reads —
+    /// including <see cref="GetByCardUidAsync"/>, whose comment records what it cost when this one
+    /// predicate was the odd one out.
+    /// </para>
+    /// </remarks>
+    public async Task<CardSearchResponse> SearchCardsAsync(
+        string? cardUid, PageRequest page, CancellationToken ct = default)
+    {
+        // Normalize first, compare second. The refusal below is the whole reason this method has an
+        // outcome rather than returning a page directly: `Contains("")` is true of every row, so a
+        // search for '-' would hand back the entire card registry looking exactly like a result.
+        var uid = CardUid.Normalize(cardUid ?? "");
+
+        if (uid.Length == 0)
+        {
+            return new CardSearchResponse(
+                CardSearchOutcome.FragmentUnusable,
+                $"'{cardUid}' contains no letter or digit, so there is nothing to search for. Card " +
+                "serials are stored uppercase with separators stripped, so a search is normalized the " +
+                "same way before it is compared — and the normalized form of this one is empty, which " +
+                "would match every card in the school rather than none. Send a whole serial or any " +
+                "part of one; '25-03', '25:03' and '2503' are the same search.",
+                null);
+        }
+
+        // Every card whose stored serial contains the fragment, ACTIVE OR NOT (QA Q5). The filter is
+        // the queryable PagedQuery both counts and pages, so the total cannot describe a different
+        // search than the rows.
+        var filtered = _db.RfidCards.Where(c => c.CardUid.Contains(uid) && !c.Student!.IsDeleted);
+
+        var matches = await filtered.ToPageAsync(
+            // Active first, then most recently issued, then Id. The Id is the total order that keeps
+            // OFFSET/FETCH from repeating one row and skipping another between pages — several cards
+            // can share a UID and an IsActive, which is precisely the case this endpoint exists for.
+            //
+            // The order is a convenience, NOT a ranking: it does not nominate items[0] as the answer.
+            // ADR-001 D-3 leaves inactive rows unconstrained on purpose, so a UID reissued across two
+            // students genuinely has two answers and each match carries its own isActive/deactivatedAt
+            // for the caller to judge.
+            ordered => ordered
+                .Include(c => c.Student!)
+                .OrderByDescending(c => c.IsActive)
+                .ThenByDescending(c => c.IssuedAt)
+                .ThenBy(c => c.Id),
+            ToMatchDto, page, ct);
+
+        return new CardSearchResponse(
+            CardSearchOutcome.Matched,
+            matches.Total == 1
+                ? "One card matches."
+                : $"{matches.Total} cards match '{uid}'. A serial can name more than one card: " +
+                  "uniqueness is scoped to the active ones (ADR-001 D-3), so a card that was withdrawn " +
+                  "and its replacement — or a serial re-issued to a different student — are all real " +
+                  "matches. Read isActive on each rather than taking the first.",
+            matches);
+    }
+
+    /// <summary>
+    /// A card and its holder. The student navigation is asserted present rather than null-forgiven: the
+    /// foreign key is required and the query <c>Include</c>s it, so a null here would be a modelling
+    /// surprise and is reported as one instead of becoming a <c>NullReferenceException</c> mid-page.
+    /// </summary>
+    private static CardMatchDto ToMatchDto(RfidCard card)
+    {
+        var student = card.Student
+            ?? throw new InvalidOperationException(
+                $"Card {card.Id} materialized without its student. RfidCards.StudentId is required and " +
+                "the search Includes the navigation, so this cannot happen without the model changing.");
+
+        return new CardMatchDto(
+            card.Id, card.CardUid, card.Label, card.IsActive, card.IssuedAt, card.DeactivatedAt,
+            student.Id, student.StudentNumber, student.FullName, student.Status);
     }
 
     // ----------------------------------------------------------------------------- create/edit
@@ -190,7 +382,7 @@ internal sealed class StudentService : IStudentService
             return DerivedGuardTripped(ex);
         }
 
-        return Saved(student, "Student created.");
+        return await SavedAsync(student, "Student created.", ct);
     }
 
     public async Task<StudentWriteResponse> UpdateAsync(
@@ -234,7 +426,7 @@ internal sealed class StudentService : IStudentService
             return DerivedGuardTripped(ex);
         }
 
-        return Saved(student, "Student updated.");
+        return await SavedAsync(student, "Student updated.", ct);
     }
 
     /// <summary>
@@ -277,7 +469,7 @@ internal sealed class StudentService : IStudentService
             return DerivedGuardTripped(ex);
         }
 
-        return Saved(student, "Student deleted.");
+        return await SavedAsync(student, "Student deleted.", ct);
     }
 
     // ---------------------------------------------------------------------------------- cards
@@ -658,8 +850,21 @@ internal sealed class StudentService : IStudentService
         return clash is null ? null : Duplicate(number, clash.IsDeleted);
     }
 
-    private static StudentWriteResponse Saved(Student student, string message) =>
-        new(StudentWriteOutcome.Saved, message, ToDto(student));
+    /// <summary>
+    /// A saved student, with the classifications they actually hold.
+    ///
+    /// <para>
+    /// <b>Async, and it costs a query these three write paths did not use to pay.</b> The alternative
+    /// was answering a <c>PUT /students/{id}</c> with <c>classifications: []</c> for somebody who holds
+    /// two — a response that contradicts the <c>GET</c> the client just made, on the exact round trip an
+    /// edit form uses to refresh itself. A create genuinely holds none and reads the empty result
+    /// honestly; nothing here writes the junction table either way.
+    /// </para>
+    /// </summary>
+    private async Task<StudentWriteResponse> SavedAsync(
+        Student student, string message, CancellationToken ct) =>
+        new(StudentWriteOutcome.Saved, message,
+            ToDto(student, await StudentClassificationReads.ForStudentAsync(_db, student.Id, ct)));
 
     private static StudentWriteResponse NotFound() =>
         new(StudentWriteOutcome.NotFound, "Student not found.", null);

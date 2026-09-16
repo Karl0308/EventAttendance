@@ -20,12 +20,40 @@ namespace EAMS.Application.Dtos;
 /// </param>
 /// <param name="YearLevel"><inheritdoc cref="Course"/></param>
 /// <param name="Section"><inheritdoc cref="Course"/></param>
+/// <param name="Classifications">
+/// <b>What this person is classified as — a collection, because a person holds one classification per
+/// axis and may hold several axes at once</b> (QA Q2). Ordered by axis then display name, so the same
+/// person's categories never reshuffle between requests.
+///
+/// <para>
+/// <b>Empty is an ordinary state, not a null to guard against.</b> Thirty-four people in the sampled
+/// roster carry no category at all, most carry exactly one, and three carry two. A scalar field could
+/// have described only the middle case — answering the two-axis people with one of their two values,
+/// non-empty and plausible and wrong, which is the failure ADR-001 D-2 documents for
+/// <paramref name="Course"/> and <paramref name="Section"/> right above.
+/// </para>
+///
+/// <para>
+/// <b>It is populated on every read that returns a student, and that is deliberate rather than
+/// thorough.</b> A field that came back <c>[]</c> on the detail read while the grid showed two
+/// categories would be the same silently-wrong answer in a new place — and worse here, because the edit
+/// form opens from a grid row and would save the empty version back.
+/// </para>
+///
+/// <para>
+/// Read-only on this DTO. Assignment is
+/// <c>PUT /students/{studentId}/classifications/{classificationId}</c>; sending this collection back on
+/// a <c>PUT /students/{id}</c> is ignored exactly as <c>id</c> and <c>cards</c> are, because a
+/// classification is not a column of the student row.
+/// </para>
+/// </param>
 public record StudentDto(
     Guid Id, string StudentNumber, string FullName,
     string FirstName, string? MiddleName, string LastName,
     string? Email, string? Gender, string? PhotoUrl,
     string? Course, string? YearLevel, string? Section, string Status,
-    IEnumerable<CardDto> Cards);
+    IEnumerable<CardDto> Cards,
+    IReadOnlyList<StudentClassificationDto> Classifications);
 
 public record CardDto(Guid Id, string CardUid, string? Label, bool IsActive);
 
