@@ -1,5 +1,6 @@
 using System.Net;
 using System.Text.Json;
+using EAMS.Application.Abstractions;
 using EAMS.Domain;
 using EAMS.Infrastructure.Data;
 using EAMS.Tests.Integration.Infrastructure;
@@ -292,5 +293,71 @@ public class DevelopmentSeedClassificationTests : IntegrationTest
                 $"GET /classifications did not publish '{expected}' on a freshly seeded Development " +
                 $"host. Published: [{string.Join(", ", published)}].");
         }
+    }
+
+    // ---------------------------------------------------------------------- delete is refused, durably
+
+    /// <summary>
+    /// <b>The durability half of the seed-protection guard.</b> A carried-over database — a school
+    /// already present, exactly the arrangement the rest of this file exists to force — refuses to
+    /// delete one of the eight seeded classifications, and a SECOND boot afterwards does not revive the
+    /// question: the row is exactly where the first boot's refusal left it, deleted by nobody, because
+    /// nobody's delete ever got past the guard.
+    ///
+    /// <para>
+    /// This is the fact <c>ClassificationSeedProtectedDeleteTests</c> cannot reach on its own —
+    /// <see cref="EamsApiFactory"/> never boots the seed, so it can only prove the guard fires against a
+    /// row that merely happens to share a seeded <c>NameKey</c>. Here the row IS the seeded row, on a
+    /// host that actually runs <c>SeedData.SeedClassificationsAsync</c>, and the second boot is what
+    /// would have silently undone a delete the first cut of this guard let through.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public async Task A_seeded_classification_cannot_be_deleted_and_the_refusal_survives_a_second_boot()
+    {
+        var schoolId = await ArrangeCarriedOverDatabaseAsync();
+
+        using (var first = new DevelopmentApiFactory(Sql.ConnectionString)) Boot(first);
+
+        Guid napId;
+        await using (var db = NewDbContext())
+        {
+            napId = await db.Classifications
+                .Where(c => c.SchoolId == schoolId && c.Name == "NAP")
+                .Select(c => c.Id)
+                .SingleAsync();
+
+            var deletion = await ClassificationsOn(db).DeleteAsync(napId);
+
+            Assert.Equal(ClassificationWriteOutcome.SeedProtected, deletion.Outcome);
+        }
+
+        await using (var read = NewDbContext())
+        {
+            Assert.True(
+                await read.Classifications.AsNoTracking().AnyAsync(c => c.Id == napId),
+                "DeleteAsync answered SeedProtected but the row is gone before a second boot even ran.");
+        }
+
+        using (var second = new DevelopmentApiFactory(Sql.ConnectionString)) Boot(second);
+
+        var names = await NamesAsync(schoolId);
+
+        Assert.Contains("NAP", names);
+        Assert.Equal(
+            ClassificationSeedValues.Names.Count,
+            names.Count(n => ClassificationSeedValues.Names.Contains(n)));
+
+        await using var afterSecondBoot = NewDbContext();
+        var napRow = await afterSecondBoot.Classifications
+            .AsNoTracking()
+            .SingleAsync(c => c.Id == napId);
+
+        Assert.True(
+            napRow.IsActive,
+            "The row survived, but the second boot's seed guard treated the refused delete as a gap " +
+            "and reseeded a SECOND NAP row instead of leaving this one alone — Booting_twice_seeds_" +
+            "each_classification_once would also have caught a duplicate; this pins that the SAME row, " +
+            "by id, is what is left both before and after the second boot.");
     }
 }

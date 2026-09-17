@@ -166,6 +166,48 @@ internal static class SyntheticRoster
     /// <summary>The middle-name placeholder. 200 of the real file's 536 rows carry it.</summary>
     public const string MiddleNamePlaceholder = "-";
 
+    // ------------------------------------------------------------------ Task 5: the category columns
+
+    /// <summary>The <see cref="ClassificationAxis.Student"/> value. 20,861 of the real 21,497 rows.</summary>
+    public const string StudentCategory = "STUDENT";
+
+    /// <summary>
+    /// The <see cref="ClassificationAxis.Personnel"/> value carried by <see cref="PedroRegNo"/>, whose
+    /// registration number is <c>2021005781</c> — <b>no <c>720000</c> prefix</b>.
+    ///
+    /// <para>
+    /// <b>That pairing is the regression this fixture exists to hold.</b> QA's Q3 says personnel are
+    /// recognised by a <c>720000XXXX</c> registration number; 21 of the real export's 292 NAP staff
+    /// carry numbers like <c>0020255</c> and <c>0000000</c> instead, so a derivation that read the
+    /// prefix rather than the column would misfile every one of them — silently, as students. Pedro is
+    /// the fixture's copy of those 21.
+    /// </para>
+    /// </summary>
+    public const string PersonnelCategory = "NAP";
+
+    /// <summary>
+    /// The <see cref="ClassificationAxis.Special"/> value <see cref="AnaRegNo"/> carries <em>alongside</em>
+    /// <see cref="StudentCategory"/> — the fixture's copy of the real export's <c>0020242</c>, who is
+    /// STUDENT and C2B2 at once. Two columns could not have said so; four can.
+    /// </summary>
+    public const string SpecialCategory = "C2B2";
+
+    /// <summary>
+    /// The <see cref="ClassificationAxis.Special"/> value <see cref="RosaRegNo"/> carries on her
+    /// <em>second</em> row, where her <see cref="StudentCategory"/> is on her first — the cross-row
+    /// axis case. Distinct from <see cref="SpecialCategory"/> so a test cannot pass by confusing Rosa's
+    /// categories with Ana's.
+    /// </summary>
+    public const string SecondSpecialCategory = "CFI";
+
+    /// <summary>
+    /// The one seeded value containing a slash, and the one most likely to break a naive slug, route or
+    /// key assumption. It reaches the importer through
+    /// <c>SisImportClassificationTests.Every_seeded_vocabulary_value_survives_the_importer</c> rather
+    /// than through a fixture row, so the twelve rows stay the shape of the real roster.
+    /// </summary>
+    public const string SupervisoryCategory = "SUPERVISORY/MANAGERIAL";
+
     /// <summary>A genuine middle initial, which must survive — it is not a placeholder.</summary>
     public const string MiddleInitial = "E.";
 
@@ -228,20 +270,28 @@ internal static class SyntheticRoster
             PrimaryProgram, PrimarySectionName, ElectiveCourseCode, ElectiveTitleAlias,
             PrimaryTeacherFullName, "THERESA", "NAVARRO", "Ms.", "College of Law"),
 
-        // Row 7 — a real middle initial, which must not be mistaken for the placeholder.
+        // Row 7 — a real middle initial, which must not be mistaken for the placeholder. Also the
+        // fixture's two-axis person: STUDENT and C2B2 at once, like the real export's 0020242. Both
+        // must survive, which is the whole argument for four columns rather than QA's two.
         Row(AnaRegNo, AnaRfid, "Ana", MiddleInitial, "Reyes",
             "ana.reyes@gmail.com", "ana.reyes@usa.edu.ph",
             PrimaryProgram, PrimarySectionName, RizalCourseCode, "Life and Works of Rizal",
-            PrimaryTeacherFullName, "THERESA", "NAVARRO", "Ms.", "College of Law"),
+            PrimaryTeacherFullName, "THERESA", "NAVARRO", "Ms.", "College of Law",
+            specialCategory: SpecialCategory),
 
         // Row 8 — the legacy numeric REGNO, on a row whose only teacher is the placeholder. Unlike row
         // 3 this one is the *only* row for its enrollment, so it must import rather than skip: the
         // placeholder suppresses the instructor, never the enrollment.
+        //
+        // It is also the fixture's NAP staff member WITHOUT a 720000 registration number — see
+        // PersonnelCategory. Not a student, so the student column is blank: this row proves the
+        // category column is read rather than assumed, in both directions at once.
         Row(PedroRegNo, PedroRfid, "Pedro", MiddleNamePlaceholder, "Lim",
             "pedro.lim@gmail.com", "pedro.lim@usa.edu.ph",
             PrimaryProgram, PrimarySectionName, RizalCourseCode, "Life and Works of Rizal",
             TeacherPlaceholder, TeacherPlaceholder, TeacherPlaceholder, TeacherPlaceholder,
-            TeacherPlaceholder),
+            TeacherPlaceholder,
+            studentCategory: "", personnelCategory: PersonnelCategory),
 
         // Rows 9 and 10 — one student under two section keys, which §4.3's single Section column cannot
         // represent and which is the entire reason the academic layer exists.
@@ -250,10 +300,20 @@ internal static class SyntheticRoster
             PrimaryProgram, PrimarySectionName, RizalCourseCode, "Life and Works of Rizal",
             PrimaryTeacherFullName, "THERESA", "NAVARRO", "Ms.", "College of Law"),
 
+        // Rosa's second row is also the fixture's CROSS-ROW AXIS case, and it is two cells rather than
+        // a whole scenario: her STUDENT flag is on row 9 and her CFI flag is here on row 10, with each
+        // row blank where the other speaks.
+        //
+        // A course roster's grain is the enrollment, so a person's category columns are filled in on
+        // whichever row the registrar's report happened to carry them — and taking one row's set
+        // entire silently drops every axis the other rows named. Before this, both of the fixture's
+        // multi-axis people carried both axes on a SINGLE row, so replacing the per-axis union with
+        // `group.First.Categories.Categories` left the whole suite green. It does not now.
         Row(RosaRegNo, RosaRfid, "Rosa", MiddleNamePlaceholder, "Tan",
             "rosa.tan@gmail.com", "rosa.tan@usa.edu.ph",
             PrimaryProgram, RotcSectionName, "MS 32", "Military Science 32",
-            SecondTeacherFullName, "ANTONIO", "QUIZON", "Mr.", "College of Technology"),
+            SecondTeacherFullName, "ANTONIO", "QUIZON", "Mr.", "College of Technology",
+            studentCategory: "", specialCategory: SecondSpecialCategory),
 
         // Row 11 — invisible characters in the first name (leading BOM), the last name (trailing
         // zero-width space) and the section (a non-breaking space instead of a space). All three must
@@ -323,6 +383,49 @@ internal static class SyntheticRoster
     /// </summary>
     public static readonly IReadOnlyList<string> ColumnsWithoutRfid =
         SisRosterColumns.All.Where(c => c != SisRosterColumns.RfidCardSerial).ToList();
+
+    /// <summary>
+    /// The columns of a workbook carrying <b>none of the four Task 5 category columns</b> — which is
+    /// every roster file that existed before the template changed, and therefore the shape the pipeline
+    /// has to import in complete silence: no classification assigned, and <b>no warning</b>, because a
+    /// warning on 100% of the rows of every legacy batch would make <c>CompletedWithWarnings</c> the
+    /// permanent status of every import.
+    ///
+    /// <para>
+    /// A column list rather than blanked-out cells, for the reason <see cref="ColumnsWithoutRfid"/>
+    /// gives: an absent column and a present-but-empty one reach the parse by different routes, and here
+    /// they deliberately produce <em>different</em> outcomes — silence versus
+    /// <c>ClassificationMissing</c> — so a fixture that conflated them could not tell the two apart.
+    /// </para>
+    /// </summary>
+    public static readonly IReadOnlyList<string> ColumnsWithoutCategories = SisRosterColumns.All
+        .Where(c => SisRosterColumns.ClassificationColumns.All(x => x.Column != c))
+        .ToList();
+
+    /// <summary>
+    /// The index of one column inside a <see cref="Rows"/> array, so a test can change a single cell
+    /// and prove what the import does about it. Rows stay parallel to
+    /// <see cref="SisRosterColumns.All"/> whichever column list a workbook is built from.
+    /// </summary>
+    public static int ColumnIndex(string column) => IndexOf(column);
+
+    /// <summary>
+    /// <see cref="Rows"/> with every category cell on every row cleared — a file that <b>carries</b> the
+    /// four columns and fills none of them. The tier-3 case, twelve times over.
+    /// </summary>
+    public static List<string[]> RowsWithoutCategories()
+    {
+        var rows = Rows();
+        foreach (var row in rows)
+            foreach (var (_, column) in SisRosterColumns.ClassificationColumns)
+                row[IndexOf(column)] = "";
+
+        return rows;
+    }
+
+    /// <summary>Builds the roster as it existed before Task 5: all columns except the four categories.</summary>
+    public static MemoryStream BuildWithoutCategoryColumns() =>
+        Build(Rows(), ColumnsWithoutCategories);
 
     /// <summary>Builds the default workbook: all eighteen columns, every student carrying a serial.</summary>
     public static MemoryStream Build() => Build(Rows());
@@ -414,12 +517,19 @@ internal static class SyntheticRoster
     /// real export, and the full name is derived, so spelling either at each call site would be twelve
     /// chances to make them disagree with the parts.
     /// </summary>
+    /// <param name="studentCategory">
+    /// Defaults to <see cref="StudentCategory"/> because 20,861 of the real export's 21,497 rows carry
+    /// it and a fixture whose every row were uncategorised would make the warning path, not the
+    /// ordinary one, the thing under test. Pass <c>""</c> for a row that is not a student.
+    /// </param>
     private static string[] Row(
         string regNo, string rfid, string firstName, string middleName, string lastName,
         string personalEmail, string institutionalEmail,
         string program, string sectionName, string courseCode, string courseName,
         string teacherFullName, string teacherFirstName, string teacherLastName,
-        string teacherSuffix, string teacherCollege) =>
+        string teacherSuffix, string teacherCollege,
+        string studentCategory = StudentCategory, string personnelCategory = "",
+        string friarsCategory = "", string specialCategory = "") =>
     [
         regNo, rfid, firstName, middleName, lastName,
         string.Join(' ', new[] { firstName, middleName, lastName }
@@ -427,5 +537,6 @@ internal static class SyntheticRoster
         personalEmail, institutionalEmail,
         CollegeName, program, sectionName, courseCode, courseName,
         teacherFullName, teacherFirstName, teacherLastName, teacherSuffix, teacherCollege,
+        studentCategory, personnelCategory, friarsCategory, specialCategory,
     ];
 }

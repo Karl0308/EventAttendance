@@ -36,6 +36,11 @@ public class SisImportApiTests : IntegrationTest
         db.Schools.Add(school);
         var term = TestData.NewTerm(school.Id);
         db.Terms.Add(term);
+
+        // The vocabulary a booted host seeds and InitializeAsync deletes. The fixture's rows carry
+        // category columns, so without it every row would report ClassificationUnavailable.
+        db.Classifications.AddRange(TestData.ClassificationVocabulary(school.Id));
+
         await db.SaveChangesAsync();
         return new World(school.Id, term.Id);
     }

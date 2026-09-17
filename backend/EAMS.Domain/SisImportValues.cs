@@ -366,11 +366,155 @@ public static class SisImportWarningCode
     /// </summary>
     public const string RfidCardFromLegacyMapping = "RfidCardFromLegacyMapping";
 
+    /// <summary>
+    /// A category column named a value this school's vocabulary cannot assign: it is not in
+    /// <c>Classifications</c> at all, or it is there but retired or merged away. The person imported and
+    /// is <b>not</b> classified on that axis.
+    ///
+    /// <para>
+    /// <b>The importer does not create the classification, and that asymmetry with colleges and
+    /// programmes is deliberate.</b> Every other dimension in this pipeline is minted from the file
+    /// because nobody else owns it. The vocabulary is different on both counts: QA's Q2 says an
+    /// administrator edits the list, and <c>UX_Classifications_SchoolId_NameKey</c> makes a row created
+    /// from a mis-keyed cell permanent — there is no delete while anything references it, only a merge
+    /// somebody has to perform. A roster whose <c>STUDENT_CATEGORY</c> column is filled with
+    /// <c>'NA'</c>, which is exactly what a hastily generated export does, would otherwise mint a
+    /// category called NA and file 21,497 people under it. Reporting costs one warning; minting costs an
+    /// administrator a merge and leaves the population mis-filed in the meantime.
+    /// </para>
+    ///
+    /// <para>
+    /// A <em>retired</em> value reports here too, rather than reactivating: retiring is a decision a
+    /// person made, and the roster does not get to reverse it — the same rule
+    /// <see cref="RfidCardRevoked"/> applies to a revoked card.
+    /// </para>
+    /// </summary>
+    public const string ClassificationUnavailable = "ClassificationUnavailable";
+
+    /// <summary>
+    /// The file names a classification on an axis where this person already holds a <em>different</em>
+    /// one. <b>The stored assignment is kept and the file's value is not applied.</b>
+    ///
+    /// <para>
+    /// <b>Why the import yields to what is already there.</b> A classification can now be set by hand
+    /// (<c>PUT /students/{id}/classifications/{id}</c>), and nothing on the junction row records which
+    /// writer put it there — so "overwrite unless a human set it" is not a rule this schema can express.
+    /// Of the two rules it can express, import-wins silently reverts every manual correction on the next
+    /// run, for ever, which makes the back-office surface a formality. First-write-wins instead leaves a
+    /// genuine source correction unapplied — a real cost, and the reason it is not silent: this warning
+    /// names both values so an operator can see the disagreement and settle it. Stale and visible beats
+    /// fresh and destructive.
+    /// </para>
+    ///
+    /// <para>
+    /// It cannot fire on an ordinary re-import. A person holding the value the file names is
+    /// <c>Unchanged</c>, not a conflict — see <c>SisImportService.ResolveClassifications</c>.
+    /// </para>
+    /// </summary>
+    public const string ClassificationConflict = "ClassificationConflict";
+
+    /// <summary>
+    /// The row carried no category in any of the four columns, and its registration number does not
+    /// carry <see cref="RosterClassification.PersonnelNumberPrefix"/>. <b>No classification was
+    /// assigned and none was guessed.</b>
+    ///
+    /// <para>
+    /// 30 of the sample's 34 uncategorised rows: 4 junk (<c>Personnel No</c> equal to <c>Last Name</c>,
+    /// first name literally <c>STUDENT</c>) and 26 that look like students whose flag was never set, two
+    /// of those with a malformed number. Defaulting them to <c>STUDENT</c> would be right about roughly
+    /// 26 and would invent the rest, with nothing downstream able to tell the invented from the stated —
+    /// which is why the rule is that a classification is read, never inferred.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>It cannot fire on a file that carries no category column at all</b>, which is today's roster:
+    /// a warning on 100% of every batch's rows would make <c>CompletedWithWarnings</c> the permanent
+    /// status of every import and bury the genuine warnings, exactly as <c>SisImportService.ParseRows</c>
+    /// records for a missing RFID column. Silence about a column that is not there is the honest report.
+    /// </para>
+    /// </summary>
+    public const string ClassificationMissing = "ClassificationMissing";
+
+    /// <summary>
+    /// The row carried no category in any column, but its registration number starts with
+    /// <see cref="RosterClassification.PersonnelNumberPrefix"/> — so it is very probably personnel.
+    /// <b>Still no classification was assigned.</b>
+    ///
+    /// <para>
+    /// <b>Separate from <see cref="ClassificationMissing"/> because the follow-up is different.</b> This
+    /// is a personnel record whose category column the registrar left blank — 4 rows in the sample, all
+    /// fixable at source. <see cref="ClassificationMissing"/> is mostly students whose flag was never
+    /// set. An operator filtering the batch by code gets the two piles separately, which is the whole
+    /// reason a code exists beside the message.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>Why it does not simply assign a personnel category.</b> The prefix narrows the answer to one
+    /// of <c>NAP</c>, <c>ACAD</c>, <c>ANT</c>, <c>SUPERVISORY/MANAGERIAL</c> — and, on 12 sample rows,
+    /// <c>USA FRIARS</c> — and picking among them is a guess stored where a fact is expected. See
+    /// <see cref="RosterClassification.Outcome.PersonnelNumberOnly"/>.
+    /// </para>
+    /// </summary>
+    public const string ClassificationRegNoSuggestsPersonnel = "ClassificationRegNoSuggestsPersonnel";
+
+    /// <summary>
+    /// This batch's import profile maps a source column to a category target whose axis is not one of
+    /// the four — <c>StudentClassification.Faculty</c>, say, or a target that is the prefix and nothing
+    /// after it. <b>That column was not read, and nobody in this batch is classified on the axis the
+    /// operator was naming.</b>
+    ///
+    /// <para>
+    /// <b>It carries a second, narrower fault under the same code: a target whose axis is real but
+    /// whose profile row names no readable source column</b> — neither a source column name nor a
+    /// source key — and which no later row for that axis rescues. The message says which of the two it
+    /// is; the code does not distinguish them because nothing an operator does with it differs. Both
+    /// are one profile row that reads nothing and files nobody, and both are repaired by correcting
+    /// that row and running the batch again. A second code would split one pile in the batch report
+    /// for a distinction that changes no action.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>This is an operator's typo rather than a fact about the data, and it was the one fault in this
+    /// pipeline that was silent in both directions.</b> The unrecognised target is skipped, so no column
+    /// is read for it; and because <c>SisImportService.ParseRows</c> sets <c>CategoryColumnsPresent</c>
+    /// only from a column that <em>was</em> read, <see cref="ClassificationMissing"/> could not fire for
+    /// it either — to the importer the file looks exactly like one that never carried the column. A
+    /// batch authored against <c>Faculty</c> therefore finished <c>Completed</c>, clean, with 21,497
+    /// people unclassified on the axis the whole mapping existed to read. That is the cost of encoding
+    /// the axis in a string (<c>SisImportProfileTemplate.ClassificationTargetPrefix</c>), and this code
+    /// is the price paid back.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>Why it warns rather than refusing the run.</b> ADR-001 D-4 makes a batch execute the mapping it
+    /// was uploaded under, and <see cref="RfidCardFromLegacyMapping"/> has already settled what to do
+    /// with a mapping this system disagrees with: let it run, and stop being quiet about it. Refusing
+    /// would spend an entire roster — every student, offering and enrollment in the file — on one
+    /// mistyped word in a supplementary column, and it would turn the re-run of a historical batch into
+    /// a failure, which is the one thing D-4 exists to prevent.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>Why every row carries it, where <see cref="ClassificationMissing"/> deliberately does not.</b>
+    /// The standing objection to a warning on 100% of a batch's rows — it makes
+    /// <c>CompletedWithWarnings</c> the permanent status of every import and buries the genuine
+    /// warnings — is an objection about a condition that is the <em>normal</em> case. This one cannot
+    /// arise from a correctly authored profile at all, so every batch it fires on is a batch that needs
+    /// looking at. And the fault is a property of the batch rather than of any row, which is exactly why
+    /// it is said on all of them: <c>WarningRows == TotalRows</c> is the signature that says "this is
+    /// the mapping, not the data" from the batch counters alone. It is the batch-level report this
+    /// schema has nowhere else to put — <c>SisImportBatch.FailureReason</c> is meaningful only on a run
+    /// that did not finish, and a batch-level warning column would be a migration for one sentence.
+    /// </para>
+    /// </summary>
+    public const string ClassificationAxisUnknown = "ClassificationAxisUnknown";
+
     public static readonly IReadOnlyList<string> All =
     [
         CourseTitleAlias, CourseCollegeAdopted, InstructorPlaceholder,
         SectionSpansPrograms, SectionUnspecified, StudentIdentityConflict, RfidCardRevoked,
-        RfidCardFromLegacyMapping,
+        RfidCardFromLegacyMapping, ClassificationUnavailable, ClassificationConflict,
+        ClassificationMissing, ClassificationRegNoSuggestsPersonnel, ClassificationAxisUnknown,
     ];
 }
 
@@ -512,10 +656,16 @@ public static class SisImportEntityType
     public const string Enrollment = "Enrollment";
     public const string StudentTermRecord = "StudentTermRecord";
 
+    /// <summary>
+    /// A row of the <c>StudentClassifications</c> junction — one person's category on one axis. A source
+    /// row can touch several, because a person holds several: 3 of the sample's 21,497 carry two.
+    /// </summary>
+    public const string StudentClassification = "StudentClassification";
+
     public static readonly IReadOnlyList<string> All =
     [
         College, Program, Course, Instructor, CourseOffering, CourseOfferingInstructor,
-        Student, RfidCard, Enrollment, StudentTermRecord,
+        Student, RfidCard, Enrollment, StudentTermRecord, StudentClassification,
     ];
 }
 
@@ -595,17 +745,75 @@ public static class SisRosterColumns
     public const string TeacherSuffix = "TEACHER SUFFIX";
     public const string TeacherCollege = "TEACHER COLLEGE";
 
+    // ------------------------------------------------------------------ Task 5: the category columns
+    //
+    // Four columns, one per ClassificationAxis, mirroring the four the client's access-control export
+    // already carries (STUDENTTEMP / PERSONNEL / FRIARS / SPECIAL in Personnel.xlsx).
+    //
+    // FOUR, and not the two QA's Q3 described. A person holds at most one value per axis and several
+    // axes at once — 3 of the sample's 21,497 rows carry two categories — and two columns cannot say
+    // so without one of the two silently winning. That is the identical failure ADR-001 D-2 documents
+    // for the single-valued section cache, and it is the reason StudentClassifications is a junction
+    // rather than a column on Students; carrying the same shape through the file is what keeps the two
+    // people who are two things two things.
+    //
+    // NAMED BY US, not copied from the export, because these ship in the import TEMPLATE the client
+    // fills in — so '_CATEGORY' reads as a category everywhere, where 'STUDENTTEMP' is an internal
+    // spelling nobody outside their access-control system can explain. A client who bolts their own
+    // column names on instead is not stuck: header matching is by AcademicKey, and the profile
+    // (ADR-001 D-4) resolves the source column per batch, so a different header is a new profile
+    // version rather than a code change — exactly the seam RfidCardSerial documents.
+    //
+    // NONE of them is in Required, and that is load-bearing: every roster file that exists today lacks
+    // all four, and a required addition would reject the only file anyone has.
+
+    /// <summary><see cref="ClassificationAxis.Student"/>. Holds <c>STUDENT</c> — 20,861 sample rows.</summary>
+    public const string StudentCategory = "STUDENT_CATEGORY";
+
     /// <summary>
-    /// All eighteen, in the order the export writes them — with <see cref="RfidCardSerial"/> placed
+    /// <see cref="ClassificationAxis.Personnel"/>. Holds <c>NAP</c> (292), <c>ACAD</c> (271),
+    /// <c>ANT</c> (7) and <c>SUPERVISORY/MANAGERIAL</c> (1).
+    /// </summary>
+    public const string PersonnelCategory = "PERSONNEL_CATEGORY";
+
+    /// <summary><see cref="ClassificationAxis.Friars"/>. Holds <c>USA FRIARS</c> — 13 rows.</summary>
+    public const string FriarsCategory = "FRIARS_CATEGORY";
+
+    /// <summary><see cref="ClassificationAxis.Special"/>. Holds <c>C2B2</c> (16) and <c>CFI</c> (5).</summary>
+    public const string SpecialCategory = "SPECIAL_CATEGORY";
+
+    /// <summary>
+    /// Which column carries which axis, in <see cref="ClassificationAxis.All"/> order. Named once
+    /// because three places must agree: this list, the built-in profile's rows, and the parse that
+    /// reads the cells.
+    /// </summary>
+    public static readonly IReadOnlyList<(string Axis, string Column)> ClassificationColumns =
+    [
+        (ClassificationAxis.Student, StudentCategory),
+        (ClassificationAxis.Personnel, PersonnelCategory),
+        (ClassificationAxis.Friars, FriarsCategory),
+        (ClassificationAxis.Special, SpecialCategory),
+    ];
+
+    /// <summary>
+    /// All twenty-two, in the order the export writes them — with <see cref="RfidCardSerial"/> placed
     /// beside <see cref="RegNo"/> because the two are the row's identity columns and nothing more
     /// specific is known: no export carrying an RFID column has been seen, so its real position is a
     /// guess and only the fixture and the upload preview read this order at all.
+    ///
+    /// <para>
+    /// The four category columns are <b>appended</b> rather than grouped with the identity columns they
+    /// describe. Nothing reads this list positionally except the fixture, but an existing file's columns
+    /// keep their ordinals this way, so the template's diff is additive in the same sense the profile
+    /// version bump is.
+    /// </para>
     /// </summary>
     public static readonly IReadOnlyList<string> All =
     [
         RegNo, RfidCardSerial, StudentFirstName, StudentMiddleName, StudentLastName, FullName,
         EmailId, UsaEmail, CollegeName, Program, SectionName, CourseCode, CourseName,
         TeacherFullName, TeacherFirstName, TeacherLastName, TeacherSuffix, TeacherCollege,
+        StudentCategory, PersonnelCategory, FriarsCategory, SpecialCategory,
     ];
 
     /// <summary>

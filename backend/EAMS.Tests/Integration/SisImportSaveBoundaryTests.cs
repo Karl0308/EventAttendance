@@ -51,16 +51,31 @@ public class SisImportSaveBoundaryTests : IntegrationTest
 
     /// <summary>
     /// How many fan-out rows one clean roster row produces: College, Program, Course, CourseOffering,
-    /// Student, RfidCard, StudentTermRecord, Instructor, CourseOfferingInstructor, Enrollment.
+    /// Student, RfidCard, StudentTermRecord, Instructor, CourseOfferingInstructor, Enrollment — and,
+    /// since Task 5, the person's <c>StudentClassification</c>.
     ///
     /// <para>
-    /// Ten regardless of whether those entities were created or merely referenced — an <c>Unchanged</c>
-    /// touch is still a touch — which is what makes the fan-out of an <c>n</c>-row clean roster exactly
-    /// <c>n * 10</c> and therefore something a chunk-boundary test can check against arithmetic rather
-    /// than against whatever the implementation happened to write.
+    /// Eleven regardless of whether those entities were created or merely referenced — an
+    /// <c>Unchanged</c> touch is still a touch — which is what makes the fan-out of an <c>n</c>-row
+    /// clean roster exactly <c>n * 11</c> and therefore something a chunk-boundary test can check
+    /// against arithmetic rather than against whatever the implementation happened to write.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>One classification and not four</b>, because a clean row here is a student: it carries
+    /// <c>STUDENT_CATEGORY</c> and leaves the other three category columns blank, which is the shape of
+    /// 20,857 of the export's 21,497 rows. The ceiling is four, and
+    /// <c>RowLedger.ApplyInChunks</c>'s bound is written against that rather than against this.
     /// </para>
     /// </summary>
-    private const int FanOutRowsPerCleanRow = 10;
+    private const int FanOutRowsPerCleanRow = 11;
+
+    /// <summary>
+    /// The most clean source rows whose fan-out fits inside one save. <c>ApplyInChunks</c> never splits
+    /// a source row, so this is a floor division rather than a ratio — at 500 and 11 it is 45 rows
+    /// (495 fan-out entries), and the 46th crosses.
+    /// </summary>
+    private const int RowsPerChunk = ExpectedFanOutChunkSize / FanOutRowsPerCleanRow;
 
     /// <summary>
     /// The §4.12 progress columns, by name rather than by string literal so a rename cannot leave this
@@ -83,6 +98,11 @@ public class SisImportSaveBoundaryTests : IntegrationTest
         db.Schools.Add(school);
         var term = TestData.NewTerm(school.Id);
         db.Terms.Add(term);
+
+        // The vocabulary a booted host seeds and InitializeAsync deletes. The fixture's rows carry
+        // category columns, so without it every row would report ClassificationUnavailable.
+        db.Classifications.AddRange(TestData.ClassificationVocabulary(school.Id));
+
         await db.SaveChangesAsync();
         return term.Id;
     }
@@ -206,27 +226,40 @@ public class SisImportSaveBoundaryTests : IntegrationTest
     /// one would.
     ///
     /// <para>
-    /// <b>The sizes are chosen so the fan-out straddles the boundary, not the row count.</b> The chunk
-    /// is counted in fan-out rows and a clean roster row produces
-    /// <see cref="FanOutRowsPerCleanRow"/> of them, so fifty rows fill a chunk exactly: 499 rows is the
-    /// last size that is short of a boundary by a whole row, 500 lands on one, 501 is one row past it,
-    /// and 1001 is one past the twentieth. Off-by-one lives at exactly these four places, and none of
-    /// them is reachable through <see cref="SyntheticRoster"/>'s twelve-row default — which is why this
-    /// test builds its own roster rather than reusing it.
+    /// <b>The sizes straddle the boundary in fan-out rows, not in source rows, and they are
+    /// <em>derived</em> rather than written out.</b> The chunk is counted in fan-out rows and a clean
+    /// roster row produces <see cref="FanOutRowsPerCleanRow"/> of them, so
+    /// <see cref="RowsPerChunk"/> rows are the most that fit and the next one crosses:
+    /// <c>RowsPerChunk - 1</c> is short of a boundary by a whole row, <c>RowsPerChunk</c> is the last
+    /// that fits, <c>+ 1</c> is one past it, and <c>* 2 + 1</c> is one past the second. Off-by-one
+    /// lives at exactly those four places, and none of them is reachable through
+    /// <see cref="SyntheticRoster"/>'s twelve-row default — which is why this test builds its own
+    /// roster rather than reusing it. The last size is a plain volume case: enough rows for twenty-odd
+    /// chunks, so a defect that only appears after several is not out of reach.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>Derived because the literals silently stopped straddling anything.</b> They were 499 / 500 /
+    /// 501 / 1001, correct while a row produced ten fan-out entries; Task 5 made it eleven and every
+    /// one of them landed mid-chunk. The <em>arithmetic</em> assertion below still failed, loudly, so
+    /// the change was caught — but had the count moved without the product changing, four boundary
+    /// cases would have quietly become four ordinary ones with nothing going red. Tying them to the
+    /// constants is what keeps the property rather than the numbers.
     /// </para>
     ///
     /// <para>
     /// The expectation is arithmetic rather than a recorded golden value: <c>n</c> clean rows insert
-    /// <c>n</c> students and produce <c>n * 10</c> fan-out rows whatever the saves were grouped into. A
-    /// chunk boundary that dropped, duplicated or reordered a row breaks that product, and the counters
-    /// — which <c>Tally</c> derives from the in-memory staged list rather than from the database —
-    /// would disagree with the rows actually on disk.
+    /// <c>n</c> students and produce <c>n * FanOutRowsPerCleanRow</c> fan-out rows whatever the saves
+    /// were grouped into. A chunk boundary that dropped, duplicated or reordered a row breaks that
+    /// product, and the counters — which <c>Tally</c> derives from the in-memory staged list rather
+    /// than from the database — would disagree with the rows actually on disk.
     /// </para>
     /// </summary>
     [Theory]
-    [InlineData(499)]
-    [InlineData(500)]
-    [InlineData(501)]
+    [InlineData(RowsPerChunk - 1)]
+    [InlineData(RowsPerChunk)]
+    [InlineData(RowsPerChunk + 1)]
+    [InlineData(RowsPerChunk * 2 + 1)]
     [InlineData(1001)]
     public async Task A_roster_straddling_the_chunk_boundary_imports_what_an_unchunked_one_would(int rows)
     {

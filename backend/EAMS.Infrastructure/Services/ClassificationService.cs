@@ -321,6 +321,13 @@ internal sealed class ClassificationService : IClassificationService
     /// answered as the conflict it is — the same "check first, catch anyway" the duplicate-name path
     /// uses, for the same reason.
     /// </para>
+    ///
+    /// <para>
+    /// <b>A third refusal is not about references at all: one of the eight seeded names cannot be
+    /// deleted, because the startup seed would put it back.</b> It is the last guard rather than the
+    /// first, so an operator who is told to retire a seeded row is not also holding a reference they
+    /// have not been told about. The reasoning is on the branch itself.
+    /// </para>
     /// </remarks>
     public async Task<ClassificationWriteResponse> DeleteAsync(Guid id, CancellationToken ct = default)
     {
@@ -360,6 +367,48 @@ internal sealed class ClassificationService : IClassificationService
         var assigned = await AssignmentCountAsync(row.Id, ct);
         var tombstones = await TombstoneCountAsync(row.Id, ct);
         if (assigned > 0 || tombstones > 0) return InUse(row, assigned, tombstones);
+
+        // A SEEDED NAME IS RETIRED, NOT DELETED — and this refusal is here because the alternative is
+        // a delete that undoes itself while nobody is watching.
+        //
+        // SeedData.SeedClassificationsAsync guards per NameKey: a database missing one of the eight is
+        // missing it, so the seed adds it back on the next start. That guard is right, and D-57's
+        // reasoning for it — the seed makes the vocabulary exist rather than enforcing its opening
+        // state against the operator — is right too. What neither noticed is that a DELETE *is* an
+        // operator state change, and it is the one the seed silently reverts: an administrator who
+        // deletes USA FRIARS because the school has no friars finds it in the picker again after the
+        // next restart, with nothing anywhere explaining why. On this project's own deployment that is
+        // not a development-only curiosity — the VM runs in Development, so the seed runs there.
+        //
+        // Three shapes were on the table: let the delete stand and say in the response that it will
+        // come back; accept the resurrection and record it; or refuse and point at retire. THE FIRST
+        // TWO LEAVE THE PRODUCT DOING SOMETHING NOBODY WANTS and merely narrate it — the operator still
+        // has to remember, for the life of the installation, that one of the eight names cannot be got
+        // rid of. The refusal is the only one where their intent actually holds, and it costs them
+        // nothing: retiring withdraws the row from every picker, refuses every new assignment, keeps
+        // the people already filed under it, and the seed leaves a retired row alone (that is D-57's
+        // third paragraph, unchanged). Retire is what "delete this from the list" already means here.
+        //
+        // Not answered as InUse, which is the near neighbour: nothing references this row — that is
+        // precisely why it got this far — so "still in use" would send the operator hunting for a
+        // holder that does not exist.
+        //
+        // Deliberately NOT gated on whether the seed will actually run on this host. The service has no
+        // business reading the hosting environment, and a delete that is permanent on one host and
+        // temporary on another is a worse contract than one that behaves the same everywhere.
+        if (ClassificationSeedValues.IsSeededKey(row.NameKey))
+        {
+            return new ClassificationWriteResponse(
+                ClassificationWriteOutcome.SeedProtected,
+                $"'{row.Name}' is one of the {ClassificationSeedValues.All.Count} classifications this " +
+                "installation seeds, so deleting it would not stick: the next start finds the value " +
+                "missing and adds it back, and the row would reappear in the picker with nothing to " +
+                "explain it. Retire it instead " +
+                $"(PATCH /classifications/{row.Id}/active with isActive false) — a retired " +
+                "classification is withdrawn from the pickers and accepts no new assignments, and the " +
+                "seed leaves it alone, so it stays gone.",
+                ToDto(row, assigned));
+        }
 
         _db.Classifications.Remove(row);
 
@@ -617,11 +666,27 @@ internal sealed class ClassificationService : IClassificationService
             // allow cross-axis merges and add SetProperty(sc => sc.Axis, survivorAxis) here — and THAT
             // statement can genuinely collide, for a person holding both axes, surfacing as a raw 2601
             // through a method with no unique-violation handler.
+            //
+            // ReportedRosterValue IS written, to NULL, for the reason its own remarks give: "reset
+            // whenever the assignment itself changes". A merge changes it by exactly the measure
+            // StudentClassificationService.ReplaceAsync uses — a different ClassificationId on the same
+            // row — so this is the same one line, and leaving it out loses a warning rather than
+            // corrupting a record.
+            //
+            // The lost warning, every step of which the product invites: the roster says NAP, an
+            // administrator puts Pedro on ACAD, the next import reports the disagreement and remembers
+            // "NAP". The administrator then merges ACAD into ANT — same axis, legal, and the remedy
+            // ClassificationUnavailable's own message recommends. Pedro now holds ANT while the file
+            // still says NAP, which nobody has ever been told; but the stale "NAP" matches the file, so
+            // the importer's warn-once check suppresses the one announcement that matters. The record
+            // stays correct and the report goes quiet, which is precisely the failure the warn-once
+            // ruling exists to make impossible.
             repointed = await _db.StudentClassifications
                 .Where(sc => sc.ClassificationId == id)
                 .ExecuteUpdateAsync(
                     u => u.SetProperty(sc => sc.ClassificationId, survivorId)
-                          .SetProperty(sc => sc.UpdatedAt, now),
+                          .SetProperty(sc => sc.UpdatedAt, now)
+                          .SetProperty(sc => sc.ReportedRosterValue, (string?)null),
                     ct);
 
             // 2. Retire the loser and record what absorbed it, in one untracked statement. Never a

@@ -308,8 +308,9 @@ public class ClassificationsController : ControllerBase
     /// <response code="200">The deleted classification, as it was.</response>
     /// <response code="404">No such classification.</response>
     /// <response code="409">
-    /// Somebody holds it, something points at it, or it is a merged-away classification whose row is
-    /// the only record that the merge happened. It was not deleted.
+    /// Somebody holds it, something points at it, it is a merged-away classification whose row is the
+    /// only record that the merge happened, or it is one of the eight seeded values, which the startup
+    /// seed would re-create — retire those instead. It was not deleted.
     /// </response>
     [HttpDelete("{id:guid}")]
     [HasPermissionNotEnforced(EamsPermissions.StudentsWrite)]
@@ -429,7 +430,8 @@ public class ClassificationsController : ControllerBase
             or ClassificationWriteOutcome.NoSchoolResolved
             or ClassificationWriteOutcome.InUse
             or ClassificationWriteOutcome.NotMergeable
-            or ClassificationWriteOutcome.CrossAxis => StatusCodes.Status409Conflict,
+            or ClassificationWriteOutcome.CrossAxis
+            or ClassificationWriteOutcome.SeedProtected => StatusCodes.Status409Conflict,
 
         _ => throw new ArgumentOutOfRangeException(
             nameof(outcome), outcome,
@@ -466,6 +468,7 @@ public class ClassificationsController : ControllerBase
         ClassificationWriteOutcome.InUse => "That classification is still in use.",
         ClassificationWriteOutcome.NotMergeable => "Those classifications cannot be merged.",
         ClassificationWriteOutcome.CrossAxis => "Those classifications are on different axes.",
+        ClassificationWriteOutcome.SeedProtected => "That classification is part of the seeded vocabulary.",
         _ => "The request could not be processed.",
     };
 }

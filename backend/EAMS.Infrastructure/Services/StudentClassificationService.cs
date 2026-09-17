@@ -304,7 +304,15 @@ internal sealed class StudentClassificationService : IStudentClassificationServi
                 .ExecuteUpdateAsync(
                     u => u.SetProperty(sc => sc.ClassificationId, classification.Id)
                           .SetProperty(sc => sc.CreatedAt, now)
-                          .SetProperty(sc => sc.UpdatedAt, now),
+                          .SetProperty(sc => sc.UpdatedAt, now)
+                          // Cleared in the same statement that re-points the row. The value records
+                          // which roster disagreement has already been reported against THIS
+                          // assignment (see StudentClassification.ReportedRosterValue); once the
+                          // assignment is a different one, nothing has been reported about it yet, and
+                          // an administrator who has just re-classified somebody should hear from the
+                          // next import if the file still disagrees. Carrying it over would suppress
+                          // exactly the announcement they need.
+                          .SetProperty(sc => sc.ReportedRosterValue, (string?)null),
                     ct);
         }
         catch (Exception ex) when (SqlServerErrors.IsConstraintConflict(ex))

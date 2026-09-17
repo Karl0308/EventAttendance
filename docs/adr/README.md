@@ -17,15 +17,19 @@ it creates one hazard this file exists to close:
 | [002](ADR-002-phase-1-2-schema-and-import-decisions.md) | Phase 1–2 schema and import decisions | **Accepted** (2026-07-28) | D-7…D-11. Amends ADR-001 by reference; closes four of its follow-ups. **Now immutable** |
 | [003](ADR-003-phase-3a-event-audience-and-close-freeze.md) | Phase 3a — the event audience and the close-time freeze | **Accepted** (2026-07-29) | D-12…D-21. Amends 001 and 002 by reference; closes GAP 6. The first ADR about *behaviour* rather than schema. **Now immutable** |
 | [004](ADR-004-detaching-the-roster-import-run.md) | Detaching the roster import run from the HTTP request | **Accepted** (2026-08-27) | **D-54** and its eight parts (D-54.1…D-54.8). Amends 001/002/003 by reference. **Not the consolidation** — see the note at the bottom of this file. **Now immutable** |
+| [005](ADR-005-classifying-the-roster.md) | Classifying the roster — what kind of person each row is | **Proposed** (2026-09-17) | **D-55…D-68**. Amends 001/002/003/004 by reference. **Also not the consolidation** — see the note directly below. Freely editable while `Proposed`. D-68 was added *after* the review gate, which is why it sits apart from D-55…D-67 in the document |
 
 Decision numbers run continuously across documents, so `D-9` is unambiguous without naming the ADR.
 
-> **⚠ ADR-004 took the number the consolidation was reserved for.** ADR-002 anticipated a consolidating
-> ADR "around ADR-004" and ADR-003's follow-up list calls for it *at* ADR-004. That is no longer where
-> it lands: JJ's call was that a large consolidation must not be a precondition for a production defect
-> fix. **The consolidation is now due at ADR-005.** ADR-003 is `Accepted` and immutable, so its
-> follow-up box still says ADR-004 and always will — this index is the amendment, which is the hazard
-> the top of this file describes, arriving for the second time.
+> **⚠ ADR-004 took the number the consolidation was reserved for, and ADR-005 has now taken the next
+> one. This is the THIRD deferral.** ADR-002 anticipated a consolidating ADR "around ADR-004";
+> ADR-003's follow-up list calls for it *at* ADR-004; ADR-004 took 004 for a production defect fix and
+> moved it to 005; **ADR-005 has taken 005 for the classification slice and JJ's call is that the
+> consolidation moves to ADR-006.** It is said plainly here and in ADR-005's own header rather than
+> quietly — three deferrals of one document is a fact about the practice, not a scheduling accident.
+> ADR-003 and ADR-004 are `Accepted` and immutable, so their follow-up boxes still say ADR-004 and
+> ADR-005 and always will. **This index is the amendment**, which is the hazard the top of this file
+> describes, arriving for the **third** time.
 
 ## Decided, but not yet registered
 
@@ -38,7 +42,7 @@ all unwritten.** Twenty of them are cited by number in shipped production code, 
 > **⚠ D-43 reverses a fact ADR-001 still asserts, and ADR-001 cannot say so itself.** ADR-001 is
 > `Accepted` and therefore immutable — it goes on stating that REGNO *is* the card UID at its lines 19,
 > 124–125 and 254, and roughly a dozen comments in the codebase now cite ADR-001 for the opposite.
-> **This row is the amendment** until the ADR-005 consolidation absorbs it. It is the exact hazard the
+> **This row is the amendment** until the ADR-006 consolidation absorbs it. It is the exact hazard the
 > top of this file describes, so it is recorded here rather than by editing an accepted document.
 
 | Pending | Decision | Status | Lives only in |
@@ -69,7 +73,7 @@ all unwritten.** Twenty of them are cited by number in shipped production code, 
 | **D-45** | **`GET /student-groups` declares `students.read`, and `groups.read` is deleted outright.** Technical Plan §7.1 line 500 already assigns `students.read` to the frontend's `/groups` page; 3b-2 minted a second code without reading it. The plan is source of truth for the permission map, so the minted code was a contradiction. **Not kept as a synonym** — two codes for one page is the drift the registry exists to stop, and a synonym has to be granted twice by every role Phase 6 writes. Pinned by absence, so re-minting it fails a test rather than passing review | pending gate | `EamsPermissions.StudentsRead`, `StudentGroupsController`, `The_groups_read_code_D_45_deleted_has_not_come_back` |
 | **D-46** | **`GET /events/{id}/manifest` — the offline capture cache**, on its own device-authenticated controller rather than as one more action on `EventsController`, because every action there is open under ADR-001 D-6 and this one carries `attendance.capture`. Four choices inside it are the load-bearing ones. **It is the invitation, not the roster**: no attendance state, because a manifest carrying it would read as authoritative on the device. **Offline validation against it is display-only and never gating** — an unknown card must still be queued, or "the cache is stale" becomes "the attendance never happened". **The version is a SHA-256 content hash over the whole published body**, not `max(UpdatedAt)` plus counts: deletes, bulk SQL (the SIS import is exactly that shape) and card deactivations all leave a watermark unmoved, and a hash cannot miss a change because the thing that changed *is* the thing hashed — never `GetHashCode`, which is per-process randomized and looks correct in a single-process dev run. **Never truncated and never paged** — over `MaxAttendees` (20,000) it is a loud `413 ManifestTooLarge`, because a short list is indistinguishable from a small event. Reuses `attendance.capture` rather than minting `events.manifest` (avoiding D-45's shape) and gets a **third rate-limit policy** partitioned by device id, so a cache refresh can never spend a kiosk's tap budget | pending gate | `EventManifestController`, `EventManifestDto`, `EventManifestVersion`, `EventManifestLimits`, `EventService` manifest region, `ConditionalGetOperationFilter`, `CaptureRateLimiting.ManifestPolicyName`, `EventManifestTests` / `EventManifestVersionMovementTests`, `docs/api/attendance-contract-handoff.md` |
 
-Deferred to the ADR-005 consolidation at JJ's direction, not forgotten.
+Deferred to the ADR-006 consolidation at JJ's direction, not forgotten.
 
 > **What D-43 does NOT close.** The import layer is corrected; the **binding question is still open** —
 > the roster in hand has no RFID column, so every student currently imports with no card and every tap
@@ -117,6 +121,15 @@ Deferred to the ADR-005 consolidation at JJ's direction, not forgotten.
 | The event status transition matrix | ADR-003 **D-18** |
 | What `Expected` / `AttendanceRate` mean, and why a walk-in is not blocked | ADR-003 **D-19/D-20** |
 | Why the freeze is not the plan's Hangfire batch job | ADR-003 **D-21** |
+| **Why a person's classification is a junction and not a column** | ADR-005 **D-55** (ADR-001 **D-2**'s reasoning, second application) |
+| Why the `720000` RegNo prefix is a fallback and not the rule | ADR-005 **D-56** ⚠ (deviates from a written QA answer) |
+| Why the classification seed runs **above** `SeedData`'s early return | ADR-005 **D-57** ⚠ |
+| Why the vocabulary has no hard delete, and what a tombstone is for | ADR-005 **D-58** ⚠ |
+| Why a batch on profile version ≤ 2 classifies nobody and says nothing | ADR-005 **D-59** (ADR-001 **D-4** working) |
+| **Why an import never overwrites a classification somebody set by hand** | ADR-005 **D-60** ⚠ (first-write-wins) |
+| Why one warning remembers what it already said | ADR-005 **D-61** ⚠ (and the open defect in its seam) |
+| Why `GET /cards` pages cards rather than students | ADR-005 **D-64** (ADR-001 **D-3** made visible) |
+| Why no `cards.read` / `classifications.read` code was minted | ADR-005 **D-65** (D-45 applied prospectively) |
 | Why the **import** *is* background work when the freeze is not | ADR-004 **D-54.1** ⚠ (read with D-21 or D-21 looks like a policy) |
 | Why `POST /sis/import/{id}/run` returns `202`, and how a batch is claimed | ADR-004 **D-54**, **D-54.4** |
 | Why there is no `Queued` import status | ADR-004 **D-54.2** ⚠ |
@@ -184,11 +197,79 @@ right. Its corollary is that adding a status (`Queued` was the tempting one) mak
 render as a completed run with five zero counters and a red "counters do not add up" alert. Additive
 `nvarchar` value, both predicates changed in the same commit, shipped with a release — or not at all.
 
+### ADR-005 D-61 — a warning suppressed by durable state, with an **open** crash window
+
+`StudentClassification.ReportedRosterValue` makes `ClassificationConflict` warn once per disagreement
+instead of on every run. It is the **first warning in this pipeline whose emission is gated by stored
+state**, and the failure mode of that gate is silence.
+
+**The window is open in the tree as of 2026-09-17.** The memory is written in the fact pass and flushed
+by the fact-pass save; the warning it gates is written by `RowLedger.ApplyInChunks` in later saves
+(ADR-004 **D-54.8**'s deliberate split). A process death between them leaves the memory durable with
+**no warning written anywhere**; D-54.5's sweep marks the batch `Failed`, and the retry rebuilds
+`SisImportRowEntities` but **never touches `StudentClassifications`** — so the disagreement is reported
+**zero** times, for ever, while the batch reports `Completed`.
+
+**D-54.8's own defence does not reach this.** Its "the inconsistency is cosmetic" comment is about
+`SisImportRow.Result`/`WarningCode`, which the retry *does* rebuild. This is a different table.
+
+Reproduced by `SisImportClassificationCrashRecoveryTests` with a passing negative control.
+
+**FIXED (2026-09-17).** `RowLedger.DeferUntilStaged` holds the memory write until the row is staged, so
+it flushes in the **same transaction** as that row's `WarningCode`. A crash now leaves neither written
+and the next run announces.
+
+> **⚠ The fix prevents; it does not recover — and the reason it is allowed to stop there expires on
+> release.** A row that already carries an orphaned memory stays silent for ever and cannot be detected:
+> `StudentClassification` holds only `StudentId`, `ClassificationId`, `Axis` and `ReportedRosterValue`
+> plus audit stamps, the memory write does not bump `UpdatedAt`, and so the post-crash state is
+> **byte-identical** to the state after a disagreement correctly reported once — which must stay silent.
+> No read can tell them apart. That was judged acceptable **only** because no database has ever run this
+> code (no classification migration on `main`, slice uncommitted at the time), so no orphaned memory can
+> exist. **Once this ships, that argument is dead**: any future crash in the same shape becomes
+> permanently unrecoverable. Recovery needs a second durable signal — the cheapest honest shape is an
+> additive nullable `ReportedBySisImportBatchId` honoured only for a batch that reached a terminal
+> status. **Whoever ships this slice to production owns deciding whether to build it first.**
+
+### ADR-005 D-63 — three mapping faults, only one of which speaks
+
+The axis of a category column rides in a `TargetField` **string** (`StudentClassification.Personnel`),
+so an operator can mistype it. All three of the following skip work behind a guard clause.
+
+- **`ClassificationAxisUnknown` — fixed.** A mistyped axis, or a real axis whose profile row names no
+  readable source column and which no later row rescues, now warns on **every row of the batch** and
+  ranks **first** in precedence. Before this, a batch authored against `StudentClassification.Faculty`
+  finished `Completed`, clean, with 21,497 people unclassified on the axis the mapping existed to read
+  — and `ClassificationMissing` could not fire either, because `CategoryColumnsPresent` is only set
+  from a column that *was* read.
+- **The RFID column collapsing to `null` — LOGGED, NOT FIXED.** A misconfigured card mapping is
+  indistinguishable from the ordinary, universal case of a file with no RFID column. JJ's call: out of
+  slice scope, it touches the tap path. Recorded so the next finder knows it was seen.
+- **A second profile column claiming an axis a first one took — DEFERRED.** Skipped silently; the axis
+  still works via the first column by ordinal, so the batch is *incomplete rather than wrong*.
+  Reachable by design, because the profile's unique index permits one target on two source columns.
+
+### ADR-005 D-58 — the classification name-key hedge (recoverable, unlike D-11)
+
+`UX_Classifications_SchoolId_NameKey` is keyed `(SchoolId, NameKey)` rather than
+`(SchoolId, Axis, NameKey)` — **exactly the ADR-002 D-11 shape**: it assumes no two axes ever need the
+same word, which is true of all eight seeded values. Unlike D-11 the widening is a **re-index** rather
+than a split, so it does not carry D-11's unrecoverable tail — but it has **the same one-question
+retirement path**: ask the registrar whether a category name can legitimately mean two different things
+on two different axes. One question, and it has been open the same way.
+
 ## Proposed, not yet decided
 
 **D-47 … D-53** are *proposed* in
 [`../PHASE-5-YEAR-LEVEL-AND-TERM-ADMIN.md`](../PHASE-5-YEAR-LEVEL-AND-TERM-ADMIN.md) and are listed
 here so the numbering stays unambiguous — nothing in code may cite them until they are accepted.
+
+> **⚠ That rule is already broken for D-47, and it predates ADR-005.** `D-47` is cited by name in
+> shipped Phase-5 code — `YearLevels`, `AudienceField`, `AcademicEntities`, `DomainValues` — while it
+> is still only *proposed* here. **Incidental, not caused by the classification slice, and deliberately
+> not "fixed" by it**: silently deleting the citations would lose the reasoning, and accepting D-47 to
+> match the code is a decision JJ has not made. Noted so that the next reader meets a recorded
+> inconsistency rather than an undiscovered one; the ADR-006 consolidation is where it resolves.
 
 | Pending | Decision |
 |---|---|
@@ -201,12 +282,15 @@ here so the numbering stays unambiguous — nothing in code may cite them until 
 | **D-53** | Terms get an admin write surface; the rest of `/academic` stays read-only because the importer owns those tables |
 
 That document is the plan for the next slice, not an ADR. On implementation these fold into the
-ADR-005 consolidation alongside the unwritten D-22…D-46.
+ADR-006 consolidation alongside the unwritten D-22…D-46.
 
 **D-54 is not in either list above** — it is written, in [ADR-004](ADR-004-detaching-the-roster-import-run.md),
 and is the next number after the proposed block. Its eight parts are numbered `D-54.1`…`D-54.8` rather
-than consuming `D-55`…`D-62`, because they are one decision's parts and none is separable. **A future
-ADR continues from D-55.**
+than consuming `D-55`…`D-62`, because they are one decision's parts and none is separable.
+
+**`D-55`…`D-67` are likewise not in either list** — they are written, in
+[ADR-005](ADR-005-classifying-the-roster.md), and continue from D-54 as ADR-004 said a future ADR
+would. **A future ADR continues from D-69.**
 
 ## Conventions
 
@@ -217,9 +301,14 @@ ADR continues from D-55.**
   failure the practice exists to prevent.
 - A `Proposed` ADR is freely editable. An `Accepted` one is not: supersede it instead, and update this
   index.
-- A consolidating ADR superseding 001–004 is **now due at ADR-005**, and is **overdue rather than due**:
-  ADR-003 already called four documents the point where "read them together" stops being followed, and
-  there are now five. ADR-004 took the 004 number for a production defect fix at JJ's direction — the
-  consolidation is a large document and was not going to gate a fix. The chronology is still
+- A consolidating ADR superseding 001–005 is **now due at ADR-006**, and is **overdue for the third
+  time**: ADR-003 already called four documents the point where "read them together" stops being
+  followed, ADR-004 made it five, and ADR-005 makes it **six**. ADR-004 took the 004 number for a
+  production defect fix at JJ's direction; **ADR-005 took the 005 number for the classification slice
+  at JJ's direction** — in both cases because a large consolidation was not going to gate delivery.
+  Each deferral is recorded where it happened rather than absorbed quietly, because a consolidation
+  that has slipped three times is information about the practice. The chronology is still
   load-bearing, so the consolidation must preserve *when* each decision was made and with what in
-  hand — particularly ADR-003 D-13, which is only comprehensible in the order it happened.
+  hand — particularly ADR-003 D-13, which is only comprehensible in the order it happened, and
+  ADR-005 D-56/D-57, which are only comprehensible if you know the local fixture was in hand and the
+  school's own export was not.

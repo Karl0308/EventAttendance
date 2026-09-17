@@ -723,6 +723,12 @@ internal class EamsDbContext : DbContext
 
             e.Property(x => x.Axis).HasMaxLength(ClassificationText.AxisMaxLength).IsRequired();
 
+            // Task 5's warn-once memory. Nullable and unindexed on purpose: it is only ever read
+            // through a row already located by (StudentId, Axis), and nothing filters or joins on it.
+            // Sized as Classification.Name because that is what it holds a copy of — the roster's
+            // spelling of a category, which the vocabulary caps at the same length.
+            e.Property(x => x.ReportedRosterValue).HasMaxLength(ClassificationText.NameMaxLength);
+
             e.HasOne(x => x.Student).WithMany(s => s.Classifications)
                 .HasForeignKey(x => x.StudentId).IsRequired();
 

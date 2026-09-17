@@ -91,6 +91,25 @@ public enum ClassificationWriteOutcome
     /// </para>
     /// </summary>
     CrossAxis,
+
+    /// <summary>
+    /// <b>The delete was refused because the startup seed would put the row straight back.</b> 409, and
+    /// the caller is told to retire it instead.
+    ///
+    /// <para>
+    /// It is deliberately not <see cref="InUse"/>, which is the near neighbour. Nothing references a
+    /// seeded row an administrator wants gone — that is exactly the case where the delete would have
+    /// succeeded — so "still in use" would send them looking for a holder that does not exist. The
+    /// refusal here is about what happens after the next restart, not about what points at the row
+    /// today, and a client that wants to say so has to be able to tell the two apart.
+    /// </para>
+    ///
+    /// <para>
+    /// The reasoning, and the reason retiring is the answer rather than a consolation, is on
+    /// <c>ClassificationService.DeleteAsync</c>.
+    /// </para>
+    /// </summary>
+    SeedProtected,
 }
 
 /// <summary>The result of a write against one classification. Null unless it saved.</summary>

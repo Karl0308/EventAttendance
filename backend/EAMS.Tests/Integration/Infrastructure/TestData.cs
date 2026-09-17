@@ -179,6 +179,22 @@ internal static class TestData
     };
 
     /// <summary>
+    /// The eight seeded vocabulary rows for a school, from <see cref="ClassificationSeedValues"/> —
+    /// the same list <c>SeedData</c> writes at startup, so an import test resolves its categories
+    /// against production's vocabulary rather than one the test invented.
+    ///
+    /// <para>
+    /// <b>Needed by every roster-import arrange</b>, because <c>IntegrationTest.InitializeAsync</c>
+    /// empties every table before each test — including the reference data a booted host would have
+    /// written. Without it a batch whose file carries category columns would resolve nothing and report
+    /// <c>ClassificationUnavailable</c> on every row, which is a true statement about an empty
+    /// vocabulary and a useless one about the importer.
+    /// </para>
+    /// </summary>
+    public static IReadOnlyList<Classification> ClassificationVocabulary(Guid schoolId) =>
+        [.. ClassificationSeedValues.All.Select(s => NewClassification(schoolId, s.Name, s.Axis))];
+
+    /// <summary>
     /// A person's classification on one axis.
     ///
     /// <para>

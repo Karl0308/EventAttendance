@@ -246,6 +246,101 @@ public class StudentClassification : AuditableEntity
     /// </para>
     /// </summary>
     public string Axis { get; set; } = "";
+
+    /// <summary>
+    /// <b>The roster value last <em>reported</em> as disagreeing with this assignment</b>, or
+    /// <c>null</c> when no disagreement has been reported against it. Written only by the importer, and
+    /// only when it raises <c>SisImportWarningCode.ClassificationConflict</c> — <b>in the same
+    /// transaction as that warning</b>, never before it.
+    ///
+    /// <para>
+    /// <b>"In the same transaction" is load-bearing, not an implementation note.</b> This column is the
+    /// claim that somebody has been told something, and the only evidence for that claim is the warning
+    /// on the import row. The importer decides during its fact pass and writes its warnings in a later,
+    /// separately chunked set of saves, so an assignment made at the point of decision was committed
+    /// first — and a process death in between left the claim standing with nothing to back it. Nothing
+    /// repairs that afterwards: a retried batch rebuilds its own rows and re-derives every outcome on
+    /// them, but it never resets this column, so the next run read the memory back, found the file
+    /// unchanged and stayed silent about a disagreement that had never once been shown to anyone, while
+    /// reporting <c>Completed</c>. <c>SisImportService.ResolveClassificationsAsync</c> therefore hands
+    /// the write to <c>RowLedger.DeferUntilStaged</c> instead of assigning it, so a crash loses both or
+    /// neither. Any future writer of this column owes the same guarantee: losing the memory costs one
+    /// repeated warning, keeping a memory of a warning that was never written costs the warning itself.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>Why a column exists at all.</b> An import never overwrites an assignment somebody set by hand
+    /// (see that warning code), so the file and the record go on disagreeing for as long as the source
+    /// is not fixed — and a warning with no memory re-announces it on every run, for every corrected
+    /// person, for ever. After a few hundred corrections <c>CompletedWithWarnings</c> is the permanent
+    /// status of every import and the genuine warnings — an unknown category, a person with none — are
+    /// buried inside the pile. That is the same failure <c>SisImportService.ParseRows</c> refuses for a
+    /// missing RFID column, and the reason JJ's ruling is warn-once.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>It stores the value, not a flag, because the distinction the rule turns on needs one.</b> A
+    /// boolean can say "already told you" but cannot tell <em>still</em> <c>ACAD</c> from <em>now</em>
+    /// <c>ANT</c> — and the second is a new disagreement an operator has never seen. So: report the
+    /// first time, stay silent while the file keeps saying the same thing, report again the moment it
+    /// says something else.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>Reset to <c>null</c> whenever the assignment itself changes.</b> Clearing deletes the row; a
+    /// replacement re-points it and clears this in the same statement. A fresh assignment has reported
+    /// nothing yet, so a disagreement with it is news again — which is what an administrator who has
+    /// just re-classified somebody would expect the next import to tell them.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>Compared by <see cref="ClassificationText.KeyFor"/> rather than literally</b>, so a source
+    /// that re-spells a category it already reported is not a new disagreement. The display form is
+    /// what is stored, so a warning can quote the cell as the file wrote it.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>Why only the conflict warning got a memory, and the other three Task 5 codes did not.</b> The
+    /// first question a reader asks here is why this is not a general mechanism, and the answer is that
+    /// the four codes differ in whether repeating themselves is a defect. <c>ClassificationUnavailable</c>
+    /// and <c>ClassificationMissing</c> are <em>actionable and self-clearing</em>: add the category, or
+    /// fill the cell in the export, and the warning stops on the next run by itself — so a batch that
+    /// keeps raising them is reporting a problem that genuinely still exists, which is a warning doing
+    /// its job. <c>ClassificationRegNoSuggestsPersonnel</c> is the same shape. The conflict is the one
+    /// that is <b>unresolvable by design</b>: first-write-wins means a correct, deliberate back-office
+    /// decision keeps disagreeing with an unfixed source for ever, and a warning nobody can discharge
+    /// is one that trains an operator to ignore the whole column. The memory exists for that asymmetry
+    /// and should not be extended to a code that can simply be fixed.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>One sub-case of <c>ClassificationUnavailable</c> is neither actionable nor self-clearing, and
+    /// the paragraph above was written without noticing it.</b> When the named category is a
+    /// <em>tombstone</em> — merged away, which is legal, ordinary and the remedy this codebase
+    /// recommends for a duplicate — the two things "add the category" could mean are both refused:
+    /// <c>ClassificationService.SetActiveAsync</c> will not reactivate a merged row, and a fresh row
+    /// under the same name collides with the tombstone under <c>UX_Classifications_SchoolId_NameKey</c>.
+    /// Nothing an administrator can do in the product stops the warning; only editing the source export
+    /// does. <b>The answer is not to extend this memory to it</b> — that would suppress an announcement
+    /// on a state the operator genuinely has to act on, and it would re-open the asymmetry above for a
+    /// second code. The answer is that the warning has to name a remedy that exists, so
+    /// <c>SisImportService.WarnOnUnavailableCategory</c> branches: for a tombstone it names the
+    /// survivor and says to point the export at it. A repeating warning is only a defect when the
+    /// operator has no way to discharge it; telling them the way is what makes this one a warning doing
+    /// its job, like the other three.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>Every writer that re-points a junction row must clear this</b>, not only
+    /// <c>StudentClassificationService.ReplaceAsync</c>. <c>ClassificationService.MergeAsync</c> is the
+    /// other one, and it was missed on the first cut: a merge moves a person onto the survivor by
+    /// exactly the measure a replacement does — a different <c>ClassificationId</c> on the same row —
+    /// so a stale value there suppresses the announcement for a disagreement nobody has been told
+    /// about. Adding, removing and the importer's own insert need nothing, because a new row starts
+    /// null and a deleted one is gone.
+    /// </para>
+    /// </summary>
+    public string? ReportedRosterValue { get; set; }
 }
 
 /// <summary>
@@ -424,4 +519,26 @@ public static class ClassificationSeedValues
 
     /// <summary>The display names alone, for the assertions and reads that do not care about axes.</summary>
     public static IReadOnlyList<string> Names { get; } = [.. All.Select(s => s.Name)];
+
+    private static readonly HashSet<string> Keys =
+        All.Select(s => ClassificationText.KeyFor(s.Name)).ToHashSet(StringComparer.Ordinal);
+
+    /// <summary>
+    /// Whether <paramref name="nameKey"/> is one of the eight the seed puts back.
+    ///
+    /// <para>
+    /// <b>Keyed on <see cref="Classification.NameKey"/> rather than on the display name, because the
+    /// seed's own guard is</b> — so this answers exactly the question "would
+    /// <c>SeedData.SeedClassificationsAsync</c> re-create this row?" and cannot drift from it while
+    /// both read the same list. A name an administrator edited in a way the key survives
+    /// (<c>SUPERVISORY/MANAGERIAL</c> to <c>Supervisory / Managerial</c>) is still seeded and still
+    /// protected; one edited past the key is not, and would come back beside the edit either way.
+    /// </para>
+    ///
+    /// <para>
+    /// <c>ClassificationService.DeleteAsync</c> is the caller, and its refusal is where the reasoning
+    /// lives.
+    /// </para>
+    /// </summary>
+    public static bool IsSeededKey(string nameKey) => Keys.Contains(nameKey);
 }

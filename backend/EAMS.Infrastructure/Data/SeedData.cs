@@ -464,6 +464,20 @@ internal static class SeedData
     /// operator — which would make the one feature this phase ships (an editable list) silently
     /// revert on every deployment.
     /// </para>
+    ///
+    /// <para>
+    /// <b>There is exactly one operator state change this <em>does</em> revert, and it is handled at
+    /// the other end rather than here: a delete.</b> The paragraph above is about retires and renames,
+    /// which leave a row to find; a deleted row is absent, and absent is indistinguishable from never
+    /// seeded, so the guard above re-adds it on the next start and an administrator who removed
+    /// <c>USA FRIARS</c> finds it back in the picker. <b>The seed is not the right place to notice
+    /// that</b> — it would have to remember a deletion, which means storing one, and the vocabulary has
+    /// nowhere to store the absence of a row. So <c>ClassificationService.DeleteAsync</c> refuses to
+    /// delete a seeded <see cref="Classification.NameKey"/> and directs the operator to retire it,
+    /// which this method already honours for ever. The two halves read the same list through
+    /// <c>ClassificationSeedValues.IsSeededKey</c>, so a value added here is protected by the same
+    /// edit.
+    /// </para>
     /// </summary>
     private static async Task SeedClassificationsAsync(
         EamsDbContext db, School school, CancellationToken ct)

@@ -2171,7 +2171,7 @@
             }
           },
           "409": {
-            "description": "Somebody holds it, something points at it, or it is a merged-away classification whose row is\r\nthe only record that the merge happened. It was not deleted.",
+            "description": "Somebody holds it, something points at it, it is a merged-away classification whose row is the\r\nonly record that the merge happened, or it is one of the eight seeded values, which the startup\r\nseed would re-create — retire those instead. It was not deleted.",
             "content": {
               "text/plain": {
                 "schema": {

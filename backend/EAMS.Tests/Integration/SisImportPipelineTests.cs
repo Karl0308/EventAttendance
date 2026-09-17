@@ -50,6 +50,11 @@ public class SisImportPipelineTests : IntegrationTest
         db.Schools.Add(school);
         var term = TestData.NewTerm(school.Id);
         db.Terms.Add(term);
+
+        // The vocabulary a booted host seeds and InitializeAsync deletes. The fixture's rows carry
+        // category columns, so without it every row would report ClassificationUnavailable.
+        db.Classifications.AddRange(TestData.ClassificationVocabulary(school.Id));
+
         await db.SaveChangesAsync();
         return new World(school.Id, term.Id);
     }
@@ -929,9 +934,9 @@ public class SisImportPipelineTests : IntegrationTest
         var rows = await RowsOfAsync(batch.Id);
 
         // Row 2 creates the world: college, programme, course, offering, instructor, assignment,
-        // student, card, term record, enrollment.
+        // student, card, term record, enrollment — and, since Task 5, Maria's STUDENT classification.
         var first = Row(rows, 2);
-        Assert.Equal(10, first.Entities.Count);
+        Assert.Equal(11, first.Entities.Count);
         Assert.All(first.Entities, e => Assert.Equal(SisImportEntityAction.Inserted, e.Action));
         Assert.Contains(first.Entities, e => e.EntityType == SisImportEntityType.Course);
         Assert.Contains(first.Entities, e => e.EntityType == SisImportEntityType.RfidCard);
@@ -1420,19 +1425,28 @@ public class SisImportPipelineTests : IntegrationTest
     /// mapping that names no such column while the file is full of serials.</b>
     ///
     /// <para>
-    /// An operator-authored version 3 is active and simply has no <c>RfidCard.CardUid</c> row. The file
-    /// is the ordinary eighteen-column workbook with every student's serial in it, and not one card is
-    /// issued. That is the ADR-001 D-4 seam doing the job it exists for: when the client's export
+    /// An operator-authored version <em>newer than the built-in one</em> is active and simply has no
+    /// <c>RfidCard.CardUid</c> row. The file is the ordinary workbook with every student's serial in it,
+    /// and not one card is issued. That is the ADR-001 D-4 seam doing the job it exists for: when the client's export
     /// finally arrives calling the column something nobody has guessed, the fix is a profile version and
     /// not a deploy — and the corollary, tested here, is that the constant
     /// <see cref="SisRosterColumns.RfidCardSerial"/> genuinely supplies only the built-in default.
     /// </para>
     ///
     /// <para>
-    /// Version 2 is seeded alongside it, inactive, because that is the state a real database is in once
-    /// an operator has authored version 3: <c>EnsureBuiltInProfileAsync</c> finds its own version
-    /// present, declines to reactivate it, and hands back the live one. Omitting it would instead
-    /// exercise the insert path and re-supersede version 3, which is a different question.
+    /// The built-in version is seeded alongside it, inactive, because that is the state a real database
+    /// is in once an operator has authored a newer one: <c>EnsureBuiltInProfileAsync</c> finds its own
+    /// version present, declines to reactivate it, and hands back the live one. Omitting it would
+    /// instead exercise the insert path and re-supersede the operator's version, which is a different
+    /// question.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>The operator's version is <c>BuiltInVersion + 1</c> rather than a literal</b>, and that is not
+    /// tidiness: written as <c>3</c> it collided with the built-in the moment Task 5 bumped the template
+    /// to version 3, and the test failed on <c>UX_SisImportProfiles_School_Name_Version</c> rather than
+    /// on anything it was asserting. The property under test is "newer than the built-in", so that is
+    /// what it now says.
     /// </para>
     /// </summary>
     [Fact]
@@ -1444,7 +1458,7 @@ public class SisImportPipelineTests : IntegrationTest
             world.SchoolId, SisImportProfileTemplate.BuiltInVersion, isActive: false, BuiltInMapping());
 
         var v3Id = await SeedProfileAsync(
-            world.SchoolId, version: 3, isActive: true,
+            world.SchoolId, SisImportProfileTemplate.BuiltInVersion + 1, isActive: true,
             [.. BuiltInMapping()
                 .Where(m => m.TargetField != SisImportProfileTemplate.RfidCardUidTarget)]);
 
@@ -1520,6 +1534,8 @@ public class SisImportPipelineTests : IntegrationTest
             [SisImportEntityType.Enrollment] = [.. await read.Enrollments.Select(x => x.Id).ToListAsync()],
             [SisImportEntityType.StudentTermRecord] =
                 [.. await read.StudentTermRecords.Select(x => x.Id).ToListAsync()],
+            [SisImportEntityType.StudentClassification] =
+                [.. await read.StudentClassifications.Select(x => x.Id).ToListAsync()],
         };
 
         foreach (var touch in touches)

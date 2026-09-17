@@ -1,4 +1,4 @@
-using System.Text.Json;
+﻿using System.Text.Json;
 using EAMS.Application.Abstractions;
 using EAMS.Application.Dtos;
 using EAMS.Domain;
@@ -381,7 +381,7 @@ internal sealed class SisImportService : ISisImportService
             .ExecuteDeleteAsync(ct);
 
         var ledger = new RowLedger(staged);
-        var parsed = ParseRows(staged, await ResolveRfidColumnKeyAsync(batch, ct), ledger);
+        var parsed = ParseRows(staged, await ResolveMappedColumnsAsync(batch, ct), ledger);
 
         var dimensions = await ResolveDimensionsAsync(term, parsed, ledger, ct);
         await _db.SaveChangesAsync(ct);
@@ -412,6 +412,18 @@ internal sealed class SisImportService : ISisImportService
         // inconsistency is cosmetic and is only ever visible on a batch that already says Failed. Tally
         // is unaffected either way: it counts the in-memory `staged` list, which the fold populates in
         // full however the saves were grouped.
+        //
+        // THE LIMIT OF THAT ARGUMENT, found the hard way. It holds for exactly the columns the sentence
+        // above names, and for one reason: the retry re-derives every one of them. It does NOT hold for
+        // anything a pass writes to a table the rebuild above does not reset — and the classification
+        // warn-once memory was precisely that. StudentClassification.ReportedRosterValue lives on
+        // StudentClassifications, which no ExecuteDelete here touches, and it is an INPUT to the next
+        // run's decision rather than an output the next run recomputes. Written in the fact pass, it
+        // therefore survived a crash that lost the warning it stands for, and suppressed that warning
+        // for ever on a batch that went on to report Completed. So it is no longer written there:
+        // ResolveClassificationsAsync hands it to RowLedger.DeferUntilStaged, which applies it inside
+        // these chunked saves alongside the row it belongs to. Anything else that ever wants to
+        // remember "an operator was told this" belongs on the same side of this boundary.
         foreach (var _ in ledger.ApplyInChunks(_db, FanOutSaveChunkSize))
         {
             await _db.SaveChangesAsync(ct);
@@ -431,48 +443,169 @@ internal sealed class SisImportService : ISisImportService
     }
 
     /// <summary>
-    /// Which source column this batch takes the RFID card serial from, as a
-    /// <see cref="SisRosterColumns.HeaderKey"/> — or <c>null</c> when the mapping does not carry one, in
+    /// The source columns a batch's profile maps, as <see cref="SisRosterColumns.HeaderKey"/>s.
+    /// </summary>
+    /// <param name="RfidKey">
+    /// Where the card serial is read from, or <c>null</c> when the mapping names no such column — in
     /// which case no row in the batch resolves a card.
+    /// </param>
+    /// <param name="ClassificationKeys">
+    /// One entry per <see cref="ClassificationAxis"/> the mapping carries a column for. <b>Empty for
+    /// every batch pinned to profile version 2 or earlier</b>, which is what makes a pre-Task-5 batch
+    /// classify nobody even when re-run against a file that has the columns.
+    /// </param>
+    /// <param name="UnknownAxisTargets">
+    /// The mapping's category rows whose axis is not one of the four, already formatted for an
+    /// operator ("'FACULTY' to 'StudentClassification.Faculty'"). Empty on every correctly authored
+    /// profile; non-empty is a misconfiguration the batch reports on every row — see
+    /// <see cref="SisImportWarningCode.ClassificationAxisUnknown"/>.
+    /// </param>
+    /// <param name="UnreadableAxisTargets">
+    /// The mapping's category rows whose axis <em>is</em> one of the four but whose source column
+    /// cannot be read — neither a source column name nor a source key — and which no later row for the
+    /// same axis rescued, formatted as the target ("'StudentClassification.Personnel'"). The same
+    /// silence as <paramref name="UnknownAxisTargets"/> reached by a different door, so it reports
+    /// under the same code.
+    /// </param>
+    private sealed record MappedColumns(
+        string? RfidKey,
+        IReadOnlyList<(string Axis, string Key)> ClassificationKeys,
+        IReadOnlyList<string> UnknownAxisTargets,
+        IReadOnlyList<string> UnreadableAxisTargets);
+
+    private static readonly MappedColumns NoMappedColumns = new(null, [], [], []);
+
+    /// <summary>
+    /// Which source columns this batch reads, resolved from its own ADR-001 D-4 profile rows rather
+    /// than from <see cref="SisRosterColumns"/>'s constants — and that is the whole point of the seam.
     ///
     /// <para>
-    /// <b>Read from the batch's own ADR-001 D-4 profile rows, not from
-    /// <see cref="SisRosterColumns.RfidCardSerial"/>, and that is the whole point of the seam.</b> We do
-    /// not have the client's export and do not know what they will call the column. The profile is the
-    /// designed venue for exactly that unknown: when the file arrives naming it <c>CARD_SERIAL</c> or
-    /// <c>RFID NO.</c>, an operator authors profile version 3 with that <c>SourceColumn</c> and the
-    /// pipeline reads it with no code change and no redeploy. The constant supplies only the built-in
-    /// version's default. This is genuinely wired — the resolution below is the only thing that decides
-    /// which cell is read — rather than a table written for show.
+    /// <b>The card serial.</b> We do not have the client's export and do not know what they will call
+    /// the column. The profile is the designed venue for exactly that unknown: when the file arrives
+    /// naming it <c>CARD_SERIAL</c> or <c>RFID NO.</c>, an operator authors a new profile version with
+    /// that <c>SourceColumn</c> and the pipeline reads it with no code change and no redeploy. The
+    /// constant supplies only the built-in version's default. This is genuinely wired — the resolution
+    /// below is the only thing that decides which cell is read — rather than a table written for show.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>The four Task 5 category columns, through the same seam and for the same reason.</b> Their
+    /// targets are <c>StudentClassification.&lt;Axis&gt;</c>, so the axis a column feeds is a fact about
+    /// the mapping rather than about the header's spelling — which is what lets a client who ships
+    /// <c>PERSONNEL</c> instead of <c>PERSONNEL_CATEGORY</c> be accommodated by a profile version.
     /// </para>
     ///
     /// <para>
     /// It reads the profile the <em>batch</em> points at, not the currently active one, for the same
     /// reason D-4 exists: a batch re-run after a mapping change must execute the rules it was uploaded
-    /// under, not whatever is live today.
+    /// under, not whatever is live today. That is what makes a version 2 batch classify nobody.
     /// </para>
     /// </summary>
-    private async Task<string?> ResolveRfidColumnKeyAsync(SisImportBatch batch, CancellationToken ct)
+    private async Task<MappedColumns> ResolveMappedColumnsAsync(
+        SisImportBatch batch, CancellationToken ct)
     {
-        if (batch.ImportProfileId is not { } profileId) return null;
+        if (batch.ImportProfileId is not { } profileId) return NoMappedColumns;
 
-        var target = SisImportProfileTemplate.RfidCardUidTarget;
+        var rfidTarget = SisImportProfileTemplate.RfidCardUidTarget;
+        var categoryPrefix = SisImportProfileTemplate.ClassificationTargetPrefix;
 
-        // Ordinal, so a mapping that lists the target twice — which the profile's own unique index
-        // permits across two different source columns — resolves the same way on every run rather than
-        // by whatever order the server returns rows in.
-        var column = await _db.SisImportProfileColumns.IgnoreQueryFilters()
-            .Where(c => c.ProfileId == profileId && c.TargetField == target)
+        // One read for both, ordered by Ordinal — so a mapping that lists a target twice, which the
+        // profile's own unique index permits across two different source columns, resolves the same way
+        // on every run rather than by whatever order the server returns rows in.
+        var columns = await _db.SisImportProfileColumns.IgnoreQueryFilters()
+            .Where(c => c.ProfileId == profileId
+                        && (c.TargetField == rfidTarget || c.TargetField.StartsWith(categoryPrefix)))
             .OrderBy(c => c.Ordinal)
-            .FirstOrDefaultAsync(ct);
+            .ToListAsync(ct);
 
-        if (column is null) return null;
+        string? KeyOf(SisImportProfileColumn column)
+        {
+            var key = column.SourceColumnKey.Length > 0
+                ? column.SourceColumnKey
+                : SisRosterColumns.HeaderKey(column.SourceColumn);
 
-        var key = column.SourceColumnKey.Length > 0
-            ? column.SourceColumnKey
-            : SisRosterColumns.HeaderKey(column.SourceColumn);
+            return key.Length == 0 ? null : key;
+        }
 
-        return key.Length == 0 ? null : key;
+        // FirstOrDefault then KeyOf, deliberately, and NOT "the first column whose key is non-empty".
+        // The two differ only for a mapping whose first RFID row has an unusable source column, where
+        // the second would silently fall through to a later one — a behaviour change on a path this
+        // change was not asked to touch, and one no test distinguishes. The pre-Task-5 rule was "the
+        // first RFID row by ordinal decides, and an empty key means no card"; it is kept exactly.
+        var rfidColumn = columns.FirstOrDefault(c => c.TargetField == rfidTarget);
+        var rfid = rfidColumn is null ? null : KeyOf(rfidColumn);
+
+        var byAxis = new List<(string Axis, string Key)>();
+        var unknownAxes = new List<string>();
+        var unreadable = new List<(string Axis, string Target)>();
+
+        foreach (var column in columns)
+        {
+            if (!column.TargetField.StartsWith(categoryPrefix, StringComparison.Ordinal)) continue;
+
+            // Normalized rather than compared literally, and refused when it is not one of the four.
+            // The axis is the half of the target this code has to trust; a profile row naming
+            // 'StudentClassification.Faculty' is an operator's typo, and silently reading a column
+            // under an axis the vocabulary does not have would file people nowhere while reporting
+            // nothing.
+            //
+            // Refusing it is not enough on its own, and that was the defect. Skipping here reads no
+            // column for the axis, and ParseRows only sets CategoryColumnsPresent from a column it did
+            // read — so ClassificationMissing could not fire for it either, and a batch whose operator
+            // had mistyped one of four targets ran green, classified nobody on that axis, and said
+            // nothing in either direction. The target is collected instead of dropped, and every row
+            // of the batch carries SisImportWarningCode.ClassificationAxisUnknown; that code's remarks
+            // carry the whole argument, including why the report is batch-wide rather than per row and
+            // why the run is allowed to finish.
+            var axisText = column.TargetField[categoryPrefix.Length..];
+            if (!ClassificationAxis.TryNormalize(axisText, out var axis))
+            {
+                // Named by source column as well as by target, because the target is what is wrong and
+                // the source column is how the operator finds the profile row that carries it. Deduped
+                // on the pair: two rows can legitimately repeat one mistake, and saying it twice fills
+                // the 1,000 characters WarningMessage has without adding a word.
+                var reported = $"'{column.SourceColumn}' to '{column.TargetField}'";
+                if (!unknownAxes.Contains(reported, StringComparer.Ordinal)) unknownAxes.Add(reported);
+                continue;
+            }
+
+            // First mapping per axis wins, by Ordinal. Two columns claiming one axis is a malformed
+            // profile, and taking the later one would make the answer depend on row order.
+            if (byAxis.Any(x => x.Axis == axis)) continue;
+
+            // The same silence as an unknown axis, reached by a different door: the axis is real, but
+            // the profile row names no source column and no source key, so there is no cell to read
+            // and the axis classifies nobody — with CategoryColumnsPresent unset, exactly as before,
+            // so ClassificationMissing cannot speak for it either. Collected rather than dropped, and
+            // reported under the same code because the operator's remedy is the same one: fix the
+            // profile row and run the batch again.
+            //
+            // Recorded with its axis rather than reported here, because this loop cannot yet know
+            // whether it is true. Unlike the RFID column above, an unusable row does *not* end the
+            // search — the next mapping for that axis is still considered — so an unusable first row
+            // followed by a usable second one classifies everybody and has nothing to say. The filter
+            // below is where that is known.
+            if (KeyOf(column) is not { } key)
+            {
+                unreadable.Add((axis, column.TargetField));
+                continue;
+            }
+
+            byAxis.Add((axis, key));
+        }
+
+        var unreadableAxes = new List<string>();
+        foreach (var (axis, target) in unreadable)
+        {
+            if (byAxis.Any(x => x.Axis == axis)) continue;
+
+            // Deduped on the target for the reason the unknown-axis list is: one mistake said twice
+            // spends the 1,000 characters WarningMessage has without adding a word.
+            var reported = $"'{target}'";
+            if (!unreadableAxes.Contains(reported, StringComparer.Ordinal)) unreadableAxes.Add(reported);
+        }
+
+        return new MappedColumns(rfid, byAxis, unknownAxes, unreadableAxes);
     }
 
     // =========================================================================== parse (per row)
@@ -505,7 +638,14 @@ internal sealed class SisImportService : ISisImportService
         string CourseKey,
         string? CourseTitle,
         TeacherName Teacher,
-        string? TeacherKey);
+        string? TeacherKey,
+        // What kind of person this row describes, resolved by RosterClassification's three tiers — the
+        // column value first, the registration-number prefix only as a fallback, and never a default.
+        RosterClassification.Resolution Categories,
+        // Whether this row's file carried any of the category columns the profile maps. False is
+        // today's roster, and it is why an uncategorised row from such a file is silent rather than
+        // warned: see SisImportWarningCode.ClassificationMissing.
+        bool CategoryColumnsPresent);
 
     /// <summary>
     /// Interprets the staged rows. <paramref name="rfidColumnKey"/> is the
@@ -530,12 +670,52 @@ internal sealed class SisImportService : ISisImportService
     /// </para>
     /// </summary>
     private List<ParsedRow> ParseRows(
-        IReadOnlyList<SisImportRow> staged, string? rfidColumnKey, RowLedger ledger)
+        IReadOnlyList<SisImportRow> staged, MappedColumns columns, RowLedger ledger)
     {
         var parsed = new List<ParsedRow>(staged.Count);
+        var rfidColumnKey = columns.RfidKey;
+
+        // Composed once, outside the loop, because it is one fact about the batch's profile rather than
+        // twenty thousand facts about rows — the string is identical on every row it is written to.
+        //
+        // Two clauses, each emitted only when it has something to say and each carrying its own closing
+        // remedy rather than sharing one at the end. That repeats a sentence when both fire, and the
+        // repetition is bought deliberately: it is what makes a batch with only one kind of fault
+        // produce a message that does not depend on whether the other kind exists. A shared tail would
+        // re-word both clauses every time a third is added, and the codes are asserted on by text.
+        var clauses = new List<string>(2);
+
+        if (columns.UnknownAxisTargets.Count > 0)
+            clauses.Add(
+                "This batch's import profile maps " + string.Join(", ", columns.UnknownAxisTargets) +
+                $", and the part after '{SisImportProfileTemplate.ClassificationTargetPrefix}' is not " +
+                $"one of the four classification axes ({string.Join(", ", ClassificationAxis.All)}). " +
+                "That column was not read and nobody in this batch is classified on the axis it was " +
+                "meant to fill. Author a corrected profile version and run the batch again.");
+
+        if (columns.UnreadableAxisTargets.Count > 0)
+            clauses.Add(
+                "This batch's import profile maps " + string.Join(", ", columns.UnreadableAxisTargets) +
+                " with no source column it can read: the profile row names neither a source column nor " +
+                "a source key, so that column was not read and nobody in this batch is classified on " +
+                "the axis it was meant to fill. Author a corrected profile version and run the batch " +
+                "again.");
+
+        var unknownAxisWarning = clauses.Count == 0 ? null : string.Join(" ", clauses);
 
         foreach (var row in staged)
         {
+            // Written before the row is read at all, and therefore to every row including one that goes
+            // on to fail its own REGNO check. The misconfiguration is a property of the batch — it is
+            // equally true of every row and is the same sentence on each — so this is a batch-level
+            // report carried on the only column this schema gives a non-fatal note. Writing it on all
+            // of them is what makes WarningRows == TotalRows, the one signature that reads as "the
+            // mapping is wrong" rather than "some rows are odd" from the batch counters alone; warning
+            // a single representative row instead would be indistinguishable from a data anomaly, and
+            // which row that was would be an arbitrary choice.
+            if (unknownAxisWarning is not null)
+                ledger.Warn(row, SisImportWarningCode.ClassificationAxisUnknown, unknownAxisWarning);
+
             var cells = ReadCells(row);
             string Raw(string column) =>
                 cells.TryGetValue(SisRosterColumns.HeaderKey(column), out var v) ? v : "";
@@ -603,6 +783,21 @@ internal sealed class SisImportService : ISisImportService
 
             var cardUid = ReadCardUid(rfidColumnKey, cells);
 
+            // Read here, with the rest of the row, so there is exactly one place a cell becomes a
+            // value. The three absences an RFID serial can have are the same three a category can —
+            // the profile maps no column, the file has no such column, the cell is blank — and only
+            // the last two are distinguished, because the first two mean "this file does not classify
+            // anyone" and the third means "this file does, and says nothing about this person".
+            var categoryColumnsPresent = false;
+            var categoryCells = new Dictionary<string, string?>(StringComparer.Ordinal);
+            foreach (var (axis, key) in columns.ClassificationKeys)
+            {
+                if (!cells.TryGetValue(key, out var cell)) continue;
+
+                categoryColumnsPresent = true;
+                categoryCells[axis] = cell;
+            }
+
             // A pre-2026-07-30 profile maps the card UID out of REGNO, and D-4 requires that mapping to
             // go on running for the batches pinned to it. Allowed, but no longer silent: without this the
             // only trace that a re-run minted student-number cards is the serials themselves.
@@ -638,7 +833,9 @@ internal sealed class SisImportService : ISisImportService
                 Teacher: teacher,
                 TeacherKey: teacher.DisplayName is null
                     ? null
-                    : AcademicKey.NormalizeOrUnspecified(teacher.DisplayName)));
+                    : AcademicKey.NormalizeOrUnspecified(teacher.DisplayName),
+                Categories: RosterClassification.Resolve(regNo, categoryCells),
+                CategoryColumnsPresent: categoryColumnsPresent));
 
             if (sectionName is null)
                 ledger.Warn(row, SisImportWarningCode.SectionUnspecified,
@@ -1185,6 +1382,8 @@ internal sealed class SisImportService : ISisImportService
         var resolvedStudents = ResolveStudents(schoolId, live, students, ledger);
         var resolvedCards = ResolveCards(schoolId, live, resolvedStudents, cards, ledger);
         var resolvedRecords = ResolveTermRecords(term, live, dimensions, resolvedStudents, termRecords);
+        var resolvedCategories =
+            await ResolveClassificationsAsync(schoolId, live, resolvedStudents, ledger, ct);
 
         foreach (var row in live)
         {
@@ -1219,6 +1418,15 @@ internal sealed class SisImportService : ISisImportService
 
             ledger.Touch(row.Staged, SisImportEntityType.StudentTermRecord,
                 resolvedRecords[row.RegNo].Entity.Id, resolvedRecords[row.RegNo].ActionFor(rowNumber));
+
+            // Up to four, because a person can hold one classification per axis and 3 of the sample's
+            // 21,497 hold two. Absent entirely for a row whose person resolved to none — which, exactly
+            // like the card case above, is the honest trail: this row touched no classification. The
+            // warning already says why.
+            if (resolvedCategories.TryGetValue(row.RegNo, out var held))
+                foreach (var assignment in held)
+                    ledger.Touch(row.Staged, SisImportEntityType.StudentClassification,
+                        assignment.Entity.Id, assignment.ActionFor(rowNumber));
 
             // §4.12's own StudentId link, kept because it is the one entity a human looks for.
             row.Staged.StudentId = student.Entity.Id;
@@ -1435,10 +1643,394 @@ internal sealed class SisImportService : ISisImportService
     }
 
     /// <summary>
+    /// <b>Task 5 — what kind of person each row describes, written to <c>StudentClassifications</c>.</b>
+    /// Returns the assignments each REGNO ended up holding, keyed by REGNO, so the fact loop can record
+    /// a fan-out entry per row that named the person.
+    ///
+    /// <para>
+    /// <b>It reuses <see cref="ClassificationAssignment.For"/> and not
+    /// <c>StudentClassificationService</c>, and that split is deliberate rather than a duplication.</b>
+    /// The service reads and saves per person, which is right for a form and is 21,497 round trips here;
+    /// this pass resolves every person against one prefetched vocabulary and saves once with the rest of
+    /// the fact pass. What the two must share is the invariant, not the plumbing — so the junction row
+    /// is built by the domain helper, which copies the axis off the parent and makes an axis-mismatched
+    /// row unwritable rather than merely unwritten.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>Nothing here ever deletes or moves an assignment.</b> A blank category cell on a later import
+    /// means "this file does not say", never "clear what is stored" — the
+    /// <see cref="AssignIfPresent"/> rule, which matters more here than on a middle name because the
+    /// back office can now set a classification by hand. A person holding a value the file disagrees
+    /// with keeps it and the disagreement is reported
+    /// (<see cref="SisImportWarningCode.ClassificationConflict"/>).
+    /// </para>
+    ///
+    /// <para>
+    /// <b>Per axis, the first row of the person's group that carries a value wins.</b> Not the first
+    /// row's whole set: a person named on four course rows may carry <c>STUDENT</c> on one and
+    /// <c>NAP</c> on another, and taking one row's set entire would drop the second axis for somebody
+    /// who genuinely holds both. Two <em>different</em> values on one axis is a source contradiction and
+    /// is reported by <see cref="WarnOnIdentityConflicts"/>, which already owns "these rows describe one
+    /// REGNO differently and the first was kept".
+    /// </para>
+    /// </summary>
+    private async Task<Dictionary<string, List<Touched<StudentClassification>>>>
+        ResolveClassificationsAsync(
+            Guid schoolId, IReadOnlyList<ParsedRow> live,
+            IReadOnlyDictionary<string, Touched<Student>> students,
+            RowLedger ledger, CancellationToken ct)
+    {
+        var resolved = new Dictionary<string, List<Touched<StudentClassification>>>(
+            StringComparer.Ordinal);
+
+        // No category column in this batch — either the profile predates Task 5 or the file has none.
+        // Nothing is read, nothing is written and NOTHING IS WARNED, which is the whole of why the
+        // flag is carried on the row rather than inferred from the cells being blank. Today's roster is
+        // this case, and a warning on 100% of its rows would make CompletedWithWarnings the permanent
+        // status of every import.
+        if (!live.Any(r => r.CategoryColumnsPresent)) return resolved;
+
+        // The whole vocabulary, retired and merged rows included. Filtered to IsActive, a retired
+        // classification the roster still names would look absent, and the two need different messages:
+        // one asks an administrator to add a category, the other to un-retire the one they withdrew.
+        var vocabulary = await _db.Classifications.IgnoreQueryFilters()
+            .Where(c => c.SchoolId == schoolId)
+            .ToDictionaryAsync(c => c.NameKey, StringComparer.Ordinal, ct);
+
+        // The same rows keyed the other way, built once per batch, so a conflict warning can name the
+        // classification a person actually holds instead of quoting its GUID at an operator. The id is
+        // where the answer is looked up; it is not the answer.
+        var heldNames = vocabulary.Values.ToDictionary(c => c.Id, c => c.Name);
+
+        // Students this run CREATED are excluded, and that is not a micro-optimization.
+        //
+        // DependencyInjection pins SqlServerCompatibilityLevel because the deployed SQL Server 2012
+        // has no OPENJSON, so EF must NOT emit it — which means a parameterized .Contains(collection)
+        // is INLINED AS LITERALS, one GUID per element (see the remarks on StudentClassificationReads
+        // for the same trade taken knowingly on the admin grid). At full roster that is ~21,500 GUID
+        // literals in a single statement, and a row this run just inserted provably holds nothing, so
+        // asking about it is a guaranteed miss paid for in SQL text and its own cached plan.
+        //
+        // On a first import every student is new, so the statement is skipped outright; on a
+        // re-import — the steady state — it asks only about people who could answer. That does not
+        // make the remaining lists cheap: this pass is one of four inlined IN lists the importer
+        // already issues at roster scale, and none of them has been measured against the real
+        // 21,497-row file.
+        var studentIds = students.Values
+            .Where(s => s.Action != SisImportEntityAction.Inserted)
+            .Select(s => s.Entity.Id)
+            .Distinct()
+            .ToList();
+
+        // Keyed by (student, axis) because that is what UX_StudentClassifications_Student_Axis keys,
+        // so "does this person already hold something on this axis?" is one lookup and the answer is
+        // the row the index would collide with.
+        var existing = studentIds.Count == 0
+            ? []
+            : (await _db.StudentClassifications.IgnoreQueryFilters()
+                    .Where(a => studentIds.Contains(a.StudentId))
+                    .ToListAsync(ct))
+                .ToDictionary(a => (a.StudentId, a.Axis), a => a);
+
+        foreach (var group in GroupRows(live, r => r.RegNo))
+        {
+            var studentId = students[group.First.RegNo].Entity.Id;
+            var held = new List<Touched<StudentClassification>>();
+            resolved[group.First.RegNo] = held;
+
+            // Per axis, the first row of the group that named anything — and the row that named it,
+            // which is the row credited with the insert. Worksheet order is preserved by GroupRows, so
+            // two runs over one file never disagree about which row that is.
+            var firstNaming = new Dictionary<string, (ParsedRow Row, RosterClassification.Category Category)>(
+                StringComparer.Ordinal);
+
+            foreach (var row in group.All)
+                foreach (var category in row.Categories.Categories)
+                    firstNaming.TryAdd(category.Axis, (row, category));
+
+            if (firstNaming.Count == 0)
+            {
+                // Silent when the person is ALREADY classified, and this is the guard the first cut of
+                // this method was missing.
+                //
+                // The scenario is not exotic, it is the second import: the registrar adds the four
+                // columns to their report and ships it before anyone populates them. Every row then
+                // names no category — and without this, every row warns that a correctly classified
+                // person "holds NO classification", which is false about the database and turns
+                // CompletedWithWarnings into the permanent status of every batch. That is the precise
+                // outcome ParseRows rejects for a missing RFID column, arriving through a different
+                // door: a blank cell says "this file does not say", never "clear what you have", so
+                // there is nothing to report about a person the file is simply silent on.
+                //
+                // No touch is recorded either, for the reason a row naming no card serial records no
+                // RfidCard touch: this row referenced no classification, which is a different
+                // statement from referencing one and changing nothing.
+                if (!ClassificationAxis.All.Any(a => existing.ContainsKey((studentId, a))))
+                    WarnOnNoCategory(group, ledger);
+
+                continue;
+            }
+
+            // Iterated over the canonical axis order rather than over the dictionary, so a person's
+            // assignments are created in the same order on every run — which is what keeps the fan-out
+            // of a re-import comparable with the fan-out of the first.
+            foreach (var axis in ClassificationAxis.All)
+            {
+                if (!firstNaming.TryGetValue(axis, out var naming)) continue;
+
+                var (namingRow, category) = naming;
+                var key = ClassificationText.KeyFor(category.Value);
+
+                vocabulary.TryGetValue(key, out var classification);
+                existing.TryGetValue((studentId, axis), out var already);
+
+                // "Already holds exactly this" is asked FIRST, before the row's availability, and the
+                // ordering is required rather than incidental — ClassificationAssignment.IsAssignable's
+                // own remarks say so: "Re-sending an assignment somebody already has must stay a no-op
+                // even when the row has since been retired. Callers check 'already held' before they
+                // consult this."
+                //
+                // The first cut of this method asked in the other order, and the case it got wrong is
+                // ordinary: somebody holds NAP, an administrator retires NAP (every holder keeps it, by
+                // design), and the next import of the unchanged file reported that person as not
+                // classified on that axis. They were, and nothing had changed. A no-op is a no-op.
+                if (classification is not null && already?.ClassificationId == classification.Id)
+                {
+                    // Recorded as a touch rather than omitted, because "this row referenced this
+                    // assignment and changed nothing" is what proves a second import is a no-op.
+                    held.Add(new Touched<StudentClassification>(
+                        already, SisImportEntityAction.Unchanged, namingRow.Staged.RowNumber));
+                    continue;
+                }
+
+                if (classification is null || !ClassificationAssignment.IsAssignable(classification))
+                {
+                    // The survivor is resolved here rather than inside the warning, for the reason the
+                    // held classification's name is: the whole vocabulary is already in this scope, and
+                    // a tombstone's survivor is always in it because the merge wrote both rows. The
+                    // warning needs the name — the remedy it prints is "point the export at this
+                    // instead", and a GUID is not something anyone can type into an export.
+                    string? survivorName = null;
+                    if (classification?.MergedIntoClassificationId is { } absorbedBy)
+                        heldNames.TryGetValue(absorbedBy, out survivorName);
+
+                    WarnOnUnavailableCategory(
+                        group, category, classification, already, survivorName, ledger);
+                    continue;
+                }
+
+                if (already is not null)
+                {
+                    // WARN ONCE PER DISAGREEMENT (JJ, this phase). The file and the record disagree,
+                    // first-write-wins keeps the record — unchanged — but the announcement is not
+                    // repeated while the file keeps saying the same thing.
+                    //
+                    // Without the memory this fires on every run for every manually corrected person,
+                    // for ever: a few hundred corrections and CompletedWithWarnings is the permanent
+                    // status of every import, with the genuine warnings buried inside it. Compared by
+                    // key rather than literally, so a re-spelling of a category already reported is not
+                    // a new disagreement; a DIFFERENT category is, and says so again.
+                    var reportedKey = already.ReportedRosterValue is { } reported
+                        ? ClassificationText.KeyFor(reported)
+                        : null;
+
+                    if (!string.Equals(reportedKey, key, StringComparison.Ordinal))
+                    {
+                        // The held classification itself, not just its id — see WarnOnCategoryConflict.
+                        // Resolved from the vocabulary already in memory, so naming it costs no query.
+                        heldNames.TryGetValue(already.ClassificationId, out var heldName);
+                        WarnOnCategoryConflict(group, category, already, heldName, ledger);
+
+                        // Deliberately outside any `changed` flag, and it bumps neither UpdatedAt nor a
+                        // row outcome — the same reasoning as Student.LastSyncedAt. This records what
+                        // an operator has been told, not a change to who the person is, and counting it
+                        // as work would make a re-import report updates it did not make.
+                        //
+                        // HANDED TO THE LEDGER RATHER THAN ASSIGNED HERE, and the difference is not
+                        // stylistic. `already` is tracked, so assigning it in the fact pass put the
+                        // memory in the fact pass's SaveChanges — several transactions before the
+                        // fan-out that writes the warning this memory gates. A process death in that
+                        // window left "an operator has been told" on disk with nothing anywhere to show
+                        // for it, and unlike the row's own Result and WarningCode, a retry does not
+                        // re-derive it: the rebuild in ExecuteAsync deletes SisImportRowEntities, never
+                        // StudentClassifications. The next run therefore read back a memory of an
+                        // announcement that was never made, matched it against the unchanged file, and
+                        // went quiet for ever about a disagreement nobody had ever seen.
+                        //
+                        // Deferred, both land in one transaction, so a crash leaves NEITHER: the next
+                        // run finds a null memory and announces. That is the safe direction — the worst
+                        // case is telling an operator once more about a disagreement they may already
+                        // have seen, against a warning that silently ceases to exist.
+                        //
+                        // The naming row is the anchor because it is the row credited with the decision
+                        // and it is the one GroupRows guarantees is the same on every run. The rest of
+                        // the group carries the same message and may be staged by a later chunk; that
+                        // is the ordinary part-written fan-out the comment on the saves in ExecuteAsync
+                        // already accounts for, and it cannot leave the memory unaccompanied.
+                        StudentClassification heldAssignment = already;
+                        var reportedValue = category.Value;
+
+                        ledger.DeferUntilStaged(
+                            namingRow.Staged,
+                            () => heldAssignment.ReportedRosterValue = reportedValue);
+                    }
+
+                    continue;
+                }
+
+                var assignment = ClassificationAssignment.For(studentId, classification);
+                _db.StudentClassifications.Add(assignment);
+
+                // Remembered so a later group cannot re-insert it. Groups are keyed by REGNO and a
+                // REGNO is one student, so this cannot fire twice today — it is here because the day it
+                // can, the alternative is a unique-index violation that takes the whole batch down.
+                existing[(studentId, axis)] = assignment;
+                held.Add(new Touched<StudentClassification>(
+                    assignment, SisImportEntityAction.Inserted, namingRow.Staged.RowNumber));
+            }
+        }
+
+        return resolved;
+    }
+
+    private static void WarnOnNoCategory(RowGroup group, RowLedger ledger)
+    {
+        var regNo = group.First.RegNo;
+
+        // Two codes rather than one, because the two piles have different fixes: a personnel record
+        // whose category column the registrar left blank is fixable at source, where a student whose
+        // flag was never set may simply never have had one.
+        var (code, why) = RosterClassification.SuggestsPersonnel(regNo)
+            ? (SisImportWarningCode.ClassificationRegNoSuggestsPersonnel,
+                $"its registration number starts with '{RosterClassification.PersonnelNumberPrefix}', " +
+                "which QA's Q3 gives as the personnel marker. That narrows the answer to one of the " +
+                "four personnel categories — and, on 12 rows of the sampled export, to USA FRIARS — so " +
+                "it is not an answer, and choosing among them would store a guess where a fact is " +
+                "expected. The prefix is a fallback here and nothing more: 21 of the 292 NAP staff " +
+                "carry numbers like '0020255', and one row carrying this prefix is flagged STUDENT.")
+            : (SisImportWarningCode.ClassificationMissing,
+                "and its registration number carries no personnel prefix either.");
+
+        foreach (var row in group.All)
+            ledger.Warn(row.Staged, code,
+                $"REGNO {regNo} names no category in any of the four category columns, {why} The " +
+                "person was imported and enrolled normally and holds NO classification — deliberately, " +
+                "because defaulting to STUDENT would invent one. Assign it in the back office " +
+                "(PUT /students/{id}/classifications/{classificationId}) or fix the export and " +
+                "re-import; a later import will fill an empty axis and never overwrite what is set.");
+    }
+
+    /// <summary>
+    /// <paramref name="already"/> is what the person currently holds on that axis, or <c>null</c> when
+    /// they hold nothing — and it is a parameter rather than an assumption because <b>the first cut of
+    /// this message asserted "is NOT classified on that axis" without ever looking</b>. Someone holding
+    /// NAP, whose file names a value retired since the last run, was told they were unclassified while
+    /// still carrying NAP. A warning that states a fact about the database has to have read it.
+    ///
+    /// <para>
+    /// <b><paramref name="survivorName"/> is what the merged-away case is told to type</b>, and it is
+    /// why the closing remedy is branched rather than one sentence. See the comment on that branch: the
+    /// general advice is an instruction the product refuses, on the one sub-case where this warning
+    /// cannot clear itself. <c>null</c> for every other state, and a tolerated <c>null</c> here falls
+    /// back to the id for the reason <c>WarnOnCategoryConflict</c>'s does — a truthful last resort, not
+    /// an expected branch.
+    /// </para>
+    /// </summary>
+    private static void WarnOnUnavailableCategory(
+        RowGroup group, RosterClassification.Category category, Classification? found,
+        StudentClassification? already, string? survivorName, RowLedger ledger)
+    {
+        var mergedInto = found?.MergedIntoClassificationId;
+        var survivor = survivorName ?? mergedInto?.ToString();
+
+        var state = found is null
+            ? "is not in this school's classification vocabulary at all"
+            : mergedInto is not null
+                ? $"was merged into '{survivor}' and is a tombstone"
+                : "is retired, so it is withdrawn from pickers and accepts no new assignments";
+
+        var outcome = already is null
+            ? "The person imported and is NOT classified on that axis."
+            : $"The person imported and KEEPS the classification they already hold on that axis " +
+              $"(ClassificationId {already.ClassificationId}) — nothing was removed.";
+
+        // THE REMEDY IS BRANCHED, because for a tombstone the general one names two doors that are
+        // both locked. ClassificationService.SetActiveAsync refuses to reactivate a merged row (and
+        // CK_Classifications_MergedIsRetired says the same at the database), while creating a
+        // replacement under the old name collides with the tombstone under
+        // UX_Classifications_SchoolId_NameKey — which is the very index the sentence after this one
+        // cites as a reason not to mint rows. So "add or reactivate it and re-import" sent an operator
+        // to a page that would turn them away twice, on every row of this person's group, on every run,
+        // for ever: merging is legal, ordinary, and the remedy this same message recommends elsewhere,
+        // so a roster that goes on naming the loser is the expected aftermath rather than an oddity.
+        // Editing the source to name the survivor is the only thing that discharges it, and the
+        // warning now says so instead of implying otherwise.
+        var remedy = mergedInto is not null
+            ? $"Point the export at '{survivor}' — the category this one was merged into — and " +
+              "re-import. Reactivating it is refused (a merged classification cannot come back, and a " +
+              "new one under the same name collides with it), so correcting the source is the only " +
+              "thing that clears this; until then it repeats on every run."
+            : "Add or reactivate it under /classifications and re-import.";
+
+        foreach (var row in group.All)
+            ledger.Warn(row.Staged, SisImportWarningCode.ClassificationUnavailable,
+                $"REGNO {group.First.RegNo} is filed as '{category.Value}' on the {category.Axis} " +
+                $"axis, but that category {state}. {outcome} The import deliberately does not create " +
+                "the category: the vocabulary is administrator-owned (QA Q2), " +
+                "UX_Classifications_SchoolId_NameKey makes a row minted from a mis-keyed cell " +
+                "permanent, and a column filled with a placeholder such as 'NA' would otherwise file " +
+                $"the whole roster under a category nobody chose. {remedy}");
+    }
+
+    /// <summary>
+    /// <paramref name="already"/> is never <c>null</c> here — a conflict is by definition something the
+    /// person holds — and it is passed so the message can name it. An operator told only what the file
+    /// says has to go and look up the other half of the disagreement.
+    ///
+    /// <para>
+    /// <b><paramref name="heldName"/> is what actually discharges that</b>, and the first cut of this
+    /// method did not: it took <paramref name="already"/> for exactly this reason and then printed
+    /// <c>ClassificationId 7f3e8c21-…</c>, which is the lookup an operator has to perform rather than
+    /// the answer. It falls back to the id only when the held classification is not in this school's
+    /// vocabulary — a state the composite foreign key makes unreachable, so the fallback is a
+    /// truthful last resort rather than an expected branch.
+    /// </para>
+    /// </summary>
+    private static void WarnOnCategoryConflict(
+        RowGroup group, RosterClassification.Category category,
+        StudentClassification already, string? heldName, RowLedger ledger)
+    {
+        var held = heldName is null
+            ? $"ClassificationId {already.ClassificationId}"
+            : $"'{heldName}'";
+
+        foreach (var row in group.All)
+            ledger.Warn(row.Staged, SisImportWarningCode.ClassificationConflict,
+                $"REGNO {group.First.RegNo} is filed as '{category.Value}' on the {category.Axis} " +
+                $"axis in this file, but already holds {held} on " +
+                "that axis. THE STORED ONE WAS KEPT and the file's value was not applied. Nothing on " +
+                "the junction row records whether a person or an import last wrote it, so an import " +
+                "that overwrote would silently revert every back-office correction on every run; " +
+                "yielding instead leaves a genuine source correction unapplied, which is why it is " +
+                "reported here rather than absorbed. Settle it under /students/{id}/classifications — " +
+                "one classification per axis is what UX_StudentClassifications_Student_Axis enforces, " +
+                "so the two cannot both stand.");
+    }
+
+    /// <summary>
     /// REGNO functionally determines the student's name and both e-mail addresses across all 536 sample
     /// rows, with zero violations — so the first row for a REGNO can be taken as that student's
     /// identity. This is what says so out loud if it ever stops being true, rather than the later rows
     /// being dropped without a word.
+    ///
+    /// <para>
+    /// <b>The category columns are compared here too</b>, per axis, because they are identity in the
+    /// same sense a name is: they describe the person rather than the enrollment, so two rows for one
+    /// REGNO disagreeing about an axis is the same class of source defect. Only a <em>contradiction</em>
+    /// counts — one row naming <c>NAP</c> where another is blank is the ordinary shape of a file whose
+    /// grain is the enrollment, and treating it as a conflict would warn on most of the roster.
+    /// </para>
     /// </summary>
     private static void WarnOnIdentityConflicts(RowGroup group, RowLedger ledger)
     {
@@ -1456,6 +2048,19 @@ internal sealed class SisImportService : ISisImportService
             if (!string.Equals(row.Email, first.Email, StringComparison.Ordinal))
                 differences.Add($"institutional e-mail '{row.Email}' vs '{first.Email}'");
 
+            // Per axis, and only where BOTH rows name something. A blank is "this row does not say" —
+            // see AssignIfPresent — and one row of a course roster carrying the category while the
+            // others leave it empty is the file's ordinary shape, not a contradiction.
+            foreach (var axis in ClassificationAxis.All)
+            {
+                var here = CategoryOn(row, axis);
+                var there = CategoryOn(first, axis);
+                if (here is null || there is null) continue;
+                if (string.Equals(here, there, StringComparison.Ordinal)) continue;
+
+                differences.Add($"{axis} category '{here}' vs '{there}'");
+            }
+
             if (differences.Count == 0) continue;
 
             ledger.Warn(row.Staged, SisImportWarningCode.StudentIdentityConflict,
@@ -1464,6 +2069,15 @@ internal sealed class SisImportService : ISisImportService
                 "were kept.");
         }
     }
+
+    /// <summary>
+    /// This row's category on one axis, or <c>null</c> when it named none. Deliberately <em>not</em> a
+    /// dictionary on <see cref="ParsedRow"/>: at most four entries, and the axis order that matters is
+    /// <see cref="ClassificationAxis.All"/>'s rather than insertion order.
+    /// </summary>
+    private static string? CategoryOn(ParsedRow row, string axis) =>
+        row.Categories.Categories
+            .FirstOrDefault(c => string.Equals(c.Axis, axis, StringComparison.Ordinal))?.Value;
 
     /// <summary>
     /// Resolves the card behind each RFID serial named in the batch, and <b>never moves or resurrects
