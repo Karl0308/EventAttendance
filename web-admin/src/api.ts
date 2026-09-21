@@ -34,6 +34,7 @@ import type {
   EventStatusName,
   EventWriteRequest,
   AttendanceRecord,
+  AttendanceFilters,
   EventSummary,
   SisImportBatch,
   SisImportPreview,
@@ -2105,11 +2106,33 @@ async function getEvent(id: string): Promise<EventItem | undefined> {
   return body === undefined ? undefined : toEvent(asRow(body, what), what);
 }
 
-async function listAttendance(eventId: string): Promise<AttendanceRecord[]> {
+/**
+ * `filters` is Live Attendance's search (client QA Q7): `studentNumber`, `studentName` and `cardUid`,
+ * each an optional fragment the server AND-combines with `eventId` and with each other. Omitted
+ * entirely on the unfiltered call `eventDetail()` makes for the roster/summary computation below, so
+ * that walk is never accidentally narrowed by a filter meant only for the grid.
+ *
+ * Blank strings are sent through unchanged — `buildUrl` already drops `undefined` and `""` query
+ * values — so a caller does not need to turn "" into `undefined` itself.
+ */
+async function listAttendance(
+  eventId: string,
+  filters?: AttendanceFilters,
+): Promise<AttendanceRecord[]> {
   // Unwrapped at the seam. `EventDetail.tsx` prints `Live attendance ({records.length})` next to the
   // grid, so a partial page would render a count that contradicts the event summary beside it.
   const what = "GET /attendance";
-  return listAll(what, "/attendance", { eventId }, toAttendance);
+  return listAll(
+    what,
+    "/attendance",
+    {
+      eventId,
+      studentNumber: filters?.studentNumber,
+      studentName: filters?.studentName,
+      cardUid: filters?.cardUid,
+    },
+    toAttendance,
+  );
 }
 
 async function eventSummary(eventId: string): Promise<EventSummary | undefined> {

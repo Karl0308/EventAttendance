@@ -593,6 +593,19 @@ export interface AttendanceRecord {
   captureMethod: string; // Rfid/Manual/Import
 }
 
+/**
+ * Live Attendance's search (client QA Q7), matching `GET /attendance`'s three optional query
+ * parameters exactly. Each is a fragment — a "contains" match — and all three combine with AND; a
+ * blank or absent field applies no filter for that column. `cardUid` is sent exactly as the operator
+ * typed it: the server normalizes serials itself (uppercase, separators stripped), so normalizing it
+ * here too would just be a second, possibly-diverging opinion of what the server already does.
+ */
+export interface AttendanceFilters {
+  studentNumber?: string;
+  studentName?: string;
+  cardUid?: string;
+}
+
 // ---------------------------------------------------------------------------------------------
 // Devices — §4.10 / §6.6, and the one DTO in this file that carries a credential
 // ---------------------------------------------------------------------------------------------

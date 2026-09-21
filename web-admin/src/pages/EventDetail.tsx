@@ -26,6 +26,7 @@ import { api, describeApiError } from "../api";
 import { advise } from "../apiGuidance";
 import { useApiResource } from "../useApiResource";
 import { useApiMutation } from "../useApiMutation";
+import { useDebounced } from "../useDebounced";
 import { EmptyState, ErrorState, LoadingState } from "../components/ResourceStates";
 import EditEventDialog from "../components/EditEventDialog";
 import DeleteEventDialog from "../components/DeleteEventDialog";
@@ -257,6 +258,39 @@ function RosterUnavailable({ error, onRetry }: { error: unknown; onRetry: () => 
 /** The one mode whose grid gets a Time Out column — a named constant so a typo here is a type error. */
 const TIME_IN_OUT: AttendanceMode = "TimeInOut";
 
+// ---------------------------------------------------------------------------------------------
+// Live attendance filters (client QA Q7) — student number, name and the card that tapped
+// ---------------------------------------------------------------------------------------------
+//
+// A read of its own, deliberately separate from `detail`. `eventDetail()` uses its *unfiltered*
+// `listAttendance` to compute `roster.cards` (`untappedFrom`, in `api.ts`) — a student who hasn't
+// tapped must keep appearing in the tap simulator's picker no matter what the operator has typed into
+// these three boxes, so the picker's roster and the grid's rows cannot share one read. The server
+// already guarantees a student with no row never appears through these filters (they narrow, never
+// invent, rows) — nothing here re-filters that guarantee away or duplicates it.
+
+/** Same settle time as the Students search box (`Students.tsx`'s `SEARCH_SETTLE_MS`) — one keystroke
+ *  pause is long enough to collapse a typed word into one request without reading as lag. */
+const FILTER_SETTLE_MS = 300;
+
+const NO_TAPS_YET = "No taps recorded for this event yet.";
+const NO_TAPS_MATCH = "No taps match these filters.";
+
+// The server's own limits (`docs/api/openapi.json`'s `GET /attendance`, mirroring
+// `AttendanceListSearch` in `EAMS.Application/Dtos`), restated here so a fragment too long to ever
+// match anything is refused by the box itself rather than round-tripping to a 400 that names no
+// field — the same reasoning `deviceKey.ts`'s token-shape check gives for validating on the way in.
+/** `AttendanceListSearch.StudentNumberMaxLength` — `StudentText.StudentNumberMaxLength`, the column's
+ *  own width: a longer fragment cannot be contained in any stored value. */
+const STUDENT_NUMBER_FILTER_MAX_LENGTH = 50;
+/** `AttendanceListSearch.StudentNameMaxLength` — three name parts at `StudentText.NameMaxLength`
+ *  (100) joined by the two spaces of the display form: 3 × 100 + 2. */
+const STUDENT_NAME_FILTER_MAX_LENGTH = 302;
+/** `AttendanceListSearch.CardUidMaxLength` — twice `RfidCardText.CardUidMaxLength` (128), because a
+ *  reader format spends a separator per byte (`04:A7:B8:C9` is 11 characters for 8 stored ones) and
+ *  this is measured before normalization, on what was actually typed. */
+const CARD_UID_FILTER_MAX_LENGTH = 256;
+
 const statusChipColor = (s: string) =>
   s === "Present" ? "success" : s === "Late" ? "warning" : s === "Excused" ? "info" : "error";
 
@@ -295,6 +329,64 @@ export default function EventDetail() {
    * combined read would let an expired session hide attendance that loaded perfectly well.
    */
   const scans = useApiResource(() => api.getEventScans(id), [id]);
+
+  /**
+   * What the operator has typed into the three filter boxes, and what the read below actually uses —
+   * kept apart the same way the Students search box keeps `search` and `query` apart, and for the same
+   * reason: a keystroke must not spend a request.
+   *
+   * `cardUid` is debounced but never trimmed. `studentNumber`/`studentName` are trimmed before the
+   * debounce settles, matching the Students precedent, but the card fragment is sent to the server
+   * exactly as typed — the server normalizes it (uppercase, separators stripped), and trimming it here
+   * as well would be a second, possibly-diverging opinion of what counts as the same fragment.
+   */
+  const [studentNumberFilter, setStudentNumberFilter] = useState("");
+  const [studentNameFilter, setStudentNameFilter] = useState("");
+  const [cardUidFilter, setCardUidFilter] = useState("");
+
+  const studentNumberQuery = useDebounced(studentNumberFilter.trim(), FILTER_SETTLE_MS);
+  const studentNameQuery = useDebounced(studentNameFilter.trim(), FILTER_SETTLE_MS);
+  const cardUidQuery = useDebounced(cardUidFilter, FILTER_SETTLE_MS);
+
+  /**
+   * `cardUidQuery` is checked trimmed here even though it is sent untrimmed below — the server treats
+   * a whitespace-only fragment as no filter at all (`IsNullOrWhiteSpace`, same as the two text fields
+   * above are trimmed before this point), so a header reading "3 of 3" for a box holding only spaces
+   * would be reporting a filter the server never actually applied.
+   */
+  const hasFilters =
+    studentNumberQuery !== "" || studentNameQuery !== "" || cardUidQuery.trim() !== "";
+
+  /** What Clear Filters returns focus to — the alternative is focus falling to `document.body` the
+   *  instant the button it was on disables itself or (in the two empty states) unmounts. */
+  const studentNumberInputRef = useRef<HTMLInputElement>(null);
+
+  const clearFilters = () => {
+    setStudentNumberFilter("");
+    setStudentNameFilter("");
+    setCardUidFilter("");
+    studentNumberInputRef.current?.focus();
+  };
+
+  /**
+   * The Live Attendance grid's own read, over the same rows `detail` walks unfiltered for the roster
+   * and the summary — see the comment above this section for why the two must not share one read.
+   *
+   * The filter object is built *inside* the closure, from the three settled values already in `deps`
+   * below — the same shape `Students.tsx` uses for its own query object, and for the same reason: a
+   * `filters` variable built outside and merely referenced here would be a fresh object every render,
+   * so `useApiResource`'s dependency array would have to name it directly, and every other render's
+   * object would be `!==` the last even when every field inside it was unchanged.
+   */
+  const attendance = useApiResource(
+    () =>
+      api.listAttendance(id, {
+        studentNumber: studentNumberQuery === "" ? undefined : studentNumberQuery,
+        studentName: studentNameQuery === "" ? undefined : studentNameQuery,
+        cardUid: cardUidQuery === "" ? undefined : cardUidQuery,
+      }),
+    [id, studentNumberQuery, studentNameQuery, cardUidQuery],
+  );
 
   /**
    * Both writes live here rather than inside the dialogs that start them, which is D1a's shape and
@@ -448,6 +540,11 @@ export default function EventDetail() {
     // screen should not be left asserting the state from before it. Since `reload` now keeps the
     // rendered data in place while it runs, this costs a refresh rather than the whole screen.
     detail.reload();
+    // The grid's own read, alongside the roster/summary one above — a tap is the one write that adds
+    // a row to exactly what this read shows, and `reload()` re-runs it with whatever filters are
+    // currently in the three boxes. The state those boxes hold is untouched by any of this, which is
+    // what makes the filters survive the refresh: nothing here clears `studentNumberFilter` etc.
+    attendance.reload();
   };
 
   const openEdit = (event: EventItem) => {
@@ -515,6 +612,9 @@ export default function EventDetail() {
       // may still have been applied, and a screen that goes on asserting the previous status is how
       // someone presses it a second time.
       detail.reload();
+      // A close freezes every unresolved row to Absent — rows the grid's own filtered read has to
+      // catch up on too, with whatever the operator currently has typed into the three boxes.
+      attendance.reload();
 
       if (settled.outcome === "succeeded") {
         setChanging(undefined);
@@ -892,17 +992,72 @@ export default function EventDetail() {
               </Card>
             )}
 
+            {/* `data.records` (unfiltered, from `detail`) is what says whether the event has any taps
+                at all — the fact `NO_TAPS_YET` versus `NO_TAPS_MATCH` turns on. It must not itself be
+                filtered, or a typed-but-unmatched filter would misreport "no taps yet" for an event
+                that in fact has plenty, just none matching. */}
+            <Stack direction="row" spacing={2} flexWrap="wrap" alignItems="flex-end" sx={{ mb: 2 }}>
+              <TextField
+                size="small"
+                label="Student number"
+                helperText="Matches a fragment of the student number"
+                placeholder="e.g. 2023-00"
+                value={studentNumberFilter}
+                onChange={(e) => setStudentNumberFilter(e.target.value)}
+                sx={{ minWidth: 200 }}
+                inputRef={studentNumberInputRef}
+                inputProps={{ maxLength: STUDENT_NUMBER_FILTER_MAX_LENGTH }}
+              />
+              <TextField
+                size="small"
+                label="Name"
+                helperText="Matches a fragment of the student's name"
+                placeholder="e.g. Maria Santos"
+                value={studentNameFilter}
+                onChange={(e) => setStudentNameFilter(e.target.value)}
+                sx={{ minWidth: 220 }}
+                inputProps={{ maxLength: STUDENT_NAME_FILTER_MAX_LENGTH }}
+              />
+              <TextField
+                size="small"
+                label="Card serial"
+                helperText="Matches the card that made the tap, as printed"
+                placeholder="e.g. 2503"
+                value={cardUidFilter}
+                onChange={(e) => setCardUidFilter(e.target.value)}
+                sx={{ minWidth: 200 }}
+                inputProps={{ maxLength: CARD_UID_FILTER_MAX_LENGTH }}
+              />
+              <Button
+                size="small"
+                onClick={clearFilters}
+                disabled={studentNumberFilter === "" && studentNameFilter === "" && cardUidFilter === ""}
+              >
+                Clear filters
+              </Button>
+            </Stack>
+
             <Stack direction="row" spacing={2} alignItems="center" sx={{ mb: 1 }}>
-              <Typography variant="h6">Live attendance ({data.records.length})</Typography>
+              <Typography variant="h6">
+                Live attendance (
+                {attendance.status === "ready"
+                  ? hasFilters
+                    ? `${attendance.data.length} of ${data.records.length}`
+                    : attendance.data.length
+                  : data.records.length}
+                )
+              </Typography>
               {/* Mounted whether or not a re-read is running, so the live region exists in the DOM
                   before anything is put into it — a region inserted and populated in the same commit
                   is announced unreliably. Fixed height so the grid below does not shift when the
-                  message appears. */}
+                  message appears. Reads `attendance.refreshing` too: a settled filter re-fetches this
+                  read independently of `detail`, and that re-fetch deserves the same "Refreshing…"
+                  as any other. */}
               <Box
                 role="status"
                 sx={{ display: "flex", alignItems: "center", gap: 1, minHeight: 24 }}
               >
-                {detail.refreshing && (
+                {(detail.refreshing || attendance.refreshing) && (
                   <>
                     <CircularProgress size={16} aria-hidden />
                     <Typography variant="body2" color="text.secondary">
@@ -912,16 +1067,58 @@ export default function EventDetail() {
                 )}
               </Box>
             </Stack>
-            <div style={{ height: 420, width: "100%" }}>
-              <DataGrid
-                rows={data.records}
-                columns={cols}
-                getRowId={(r) => r.id}
-                disableRowSelectionOnClick
-                pageSizeOptions={[10, 25]}
-                initialState={{ pagination: { paginationModel: { pageSize: 10 } } }}
-              />
-            </div>
+
+            {attendance.status === "loading" && <LoadingState label="Loading attendance…" />}
+
+            {attendance.status === "error" && (
+              <Alert severity="error" role="alert" sx={{ mb: 2 }}>
+                {/* Titled by whether a filter is in play, not just by the failure: with none typed
+                    this is the whole grid failing to load, and "this filter" would name a filter that
+                    does not exist. Retry is unconditional — every request this alert can be about is a
+                    `GET`, so a second attempt is always `advise()`'s "safe" arm — and Clear Filters is
+                    additional rather than instead of it: clearing does not retry, and a failure that
+                    would recur even with an empty box needs Retry regardless of what is typed. */}
+                <AlertTitle>
+                  {hasFilters
+                    ? "This filter could not be applied"
+                    : "Live attendance could not be loaded"}
+                </AlertTitle>
+                <Typography variant="body2">{describeApiError(attendance.error)}</Typography>
+                <Stack direction="row" spacing={1} sx={{ mt: 1 }}>
+                  <Button size="small" onClick={attendance.reload}>
+                    Retry
+                  </Button>
+                  {hasFilters && (
+                    <Button size="small" onClick={clearFilters}>
+                      Clear filters
+                    </Button>
+                  )}
+                </Stack>
+              </Alert>
+            )}
+
+            {attendance.status === "ready" &&
+              (data.records.length === 0 ? (
+                <EmptyState message={NO_TAPS_YET} />
+              ) : attendance.data.length === 0 ? (
+                <Box role="status" sx={{ py: 4, textAlign: "center" }}>
+                  <Typography color="text.secondary">{NO_TAPS_MATCH}</Typography>
+                  <Button size="small" onClick={clearFilters} sx={{ mt: 1 }}>
+                    Clear filters
+                  </Button>
+                </Box>
+              ) : (
+                <div style={{ height: 420, width: "100%" }}>
+                  <DataGrid
+                    rows={attendance.data}
+                    columns={cols}
+                    getRowId={(r) => r.id}
+                    disableRowSelectionOnClick
+                    pageSizeOptions={[10, 25]}
+                    initialState={{ pagination: { paginationModel: { pageSize: 10 } } }}
+                  />
+                </div>
+              ))}
           </>
         ))}
 
