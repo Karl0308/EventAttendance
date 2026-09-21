@@ -5,6 +5,7 @@ using EAMS.Application.Abstractions;
 using EAMS.Application.Dtos;
 using EAMS.Domain;
 using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.RateLimiting;
 
@@ -96,6 +97,7 @@ public class AttendanceController : ControllerBase
     /// <param name="ct">Cancellation token.</param>
     /// <response code="200">One page of matching rows, possibly empty. Never a 404 for an empty filter.</response>
     [HttpGet]
+    [Authorize(AuthenticationSchemes = JwtBearerDefaults.AuthenticationScheme, Policy = EamsPermissions.AttendanceRead)]
     [HasPermissionNotEnforced(EamsPermissions.AttendanceRead)]
     [ProducesResponseType(typeof(PagedResult<AttendanceDto>), StatusCodes.Status200OK)]
     public async Task<ActionResult<PagedResult<AttendanceDto>>> List(
@@ -156,13 +158,11 @@ public class AttendanceController : ControllerBase
     /// <response code="429">Capture rate limit. Honour <c>Retry-After</c>.</response>
     // The workflow lives in IAttendanceService; this maps its outcome to an HTTP status.
     //
-    // One of the four endpoints a device key gates (Phase 4a design, D-28). [HasPermissionNotEnforced]
-    // stays alongside [Authorize] deliberately: the inert attribute is the audit trail Phase 6's rename
-    // walks, and removing it here because "this one is real now" would put a hole in exactly the list
-    // ADR-001 D-6 created the attribute to keep complete. AuthorizationSeamTests asserts the two never
-    // disagree about which permission this endpoint demands, and that a gated endpoint always names a
-    // policy — a bare [Authorize] would fall back to RequireAuthenticatedUser(), which a revoked key
-    // satisfies by design.
+    // One of the five endpoints a device key gates (Phase 4a design, D-28). [HasPermissionNotEnforced]
+    // stays alongside [Authorize] because PermissionRegistryTests reads the permission from it on every
+    // action. AuthorizationCoverageTests asserts the two never disagree about which permission this
+    // endpoint demands, and that a gated endpoint always names a policy — a bare [Authorize] would fall
+    // back to RequireAuthenticatedUser(), which a revoked key satisfies by design.
     [HttpPost("tap")]
     [Authorize(AuthenticationSchemes = DeviceKey.AuthenticationScheme, Policy = EamsPermissions.AttendanceCapture)]
     [EnableRateLimiting(CaptureRateLimiting.PolicyName)]
@@ -191,13 +191,12 @@ public class AttendanceController : ControllerBase
     /// </para>
     ///
     /// <para>
-    /// <b>The fourth and last endpoint a device key gates</b> (D-28). <c>[HasPermissionNotEnforced]</c>
-    /// stays alongside <c>[Authorize]</c> for the reason the tap endpoint records: the inert attribute is
-    /// the list Phase 6's rename walks, and the enforced-first endpoints are the ones a reader is least
-    /// likely to check. The <c>Policy</c> is named rather than left to the default — a bare
-    /// <c>[Authorize]</c> falls back to <c>RequireAuthenticatedUser()</c>, which a revoked key and a
-    /// deactivated device both satisfy by design, so it would admit exactly the credentials the 403
-    /// exists to refuse. <c>AuthorizationSeamTests</c> fails the build on either mistake.
+    /// <b>A device-key endpoint</b> (D-28). <c>[HasPermissionNotEnforced]</c> stays alongside
+    /// <c>[Authorize]</c> for the reason the tap endpoint records. The <c>Policy</c> is named rather than
+    /// left to the default — a bare <c>[Authorize]</c> falls back to <c>RequireAuthenticatedUser()</c>,
+    /// which a revoked key and a deactivated device both satisfy by design, so it would admit exactly the
+    /// credentials the 403 exists to refuse. <c>AuthorizationCoverageTests</c> fails the build on either
+    /// mistake.
     /// </para>
     ///
     /// <para>
@@ -300,15 +299,11 @@ public class AttendanceController : ControllerBase
     /// </summary>
     /// <remarks>
     /// <para>
-    /// <b>The permission is <c>attendance.read</c> and there is deliberately no <c>[Authorize]</c>.</b>
-    /// This is a dashboard read, not a capture, and the only authentication scheme that exists today is
-    /// the device key — which §11 scopes to <c>attendance.capture</c> and nothing else. Gating this
-    /// endpoint with it would force the admin SPA to hold a capture-scoped credential in a browser in
-    /// order to <em>watch</em> attendance, which inverts the split §6.4 draws between capturing and
-    /// reading and would hand a page that can only display data a key that can write it. It stays open
-    /// under ADR-001 D-6 with the rest of the admin surface, declares the permission Phase 6 will
-    /// enforce, and is listed alongside <c>GET /attendance</c> — the endpoint it is a live view of —
-    /// rather than alongside the tap.
+    /// <b>The permission is <c>attendance.read</c>, and the scheme is Bearer rather than the device
+    /// key.</b> This is a dashboard read, not a capture: gating it with the device key would force the
+    /// admin SPA to hold a capture-scoped credential in a browser in order to <em>watch</em> attendance,
+    /// which inverts the split §6.4 draws between capturing and reading. It is listed alongside
+    /// <c>GET /attendance</c> — the endpoint it is a live view of — rather than alongside the tap.
     /// </para>
     ///
     /// <para>
@@ -353,6 +348,7 @@ public class AttendanceController : ControllerBase
     /// </response>
     [HttpGet("live/{eventId:guid}")]
     [EnableRateLimiting(CaptureRateLimiting.LivePolicyName)]
+    [Authorize(AuthenticationSchemes = JwtBearerDefaults.AuthenticationScheme, Policy = EamsPermissions.AttendanceRead)]
     [HasPermissionNotEnforced(EamsPermissions.AttendanceRead)]
     [ProducesResponseType(typeof(AttendanceLiveDto), StatusCodes.Status200OK)]
     [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status400BadRequest)]
@@ -442,6 +438,7 @@ public class AttendanceController : ControllerBase
     /// </response>
     /// <response code="404"><c>EventNotFound</c> or <c>StudentNotFound</c>, same body shape.</response>
     [HttpPost("manual")]
+    [Authorize(AuthenticationSchemes = JwtBearerDefaults.AuthenticationScheme, Policy = EamsPermissions.AttendanceWrite)]
     [HasPermissionNotEnforced(EamsPermissions.AttendanceWrite)]
     // Without these the document infers TapResult for every status this action produces, which 4c made
     // untrue: a generated client would deserialize a problem body into TapResult and read `success` off

@@ -1,6 +1,8 @@
 using EAMS.Api.Authorization;
 using EAMS.Application.Abstractions;
 using EAMS.Application.Dtos;
+using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.Infrastructure;
 
@@ -93,6 +95,7 @@ public class CardsController : ControllerBase
     /// fragment and would match every card in the school rather than none.
     /// </response>
     [HttpGet]
+    [Authorize(AuthenticationSchemes = JwtBearerDefaults.AuthenticationScheme, Policy = EamsPermissions.StudentsRead)]
     [HasPermissionNotEnforced(EamsPermissions.StudentsRead)]
     [ProducesResponseType(typeof(PagedResult<CardMatchDto>), StatusCodes.Status200OK)]
     [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status400BadRequest)]

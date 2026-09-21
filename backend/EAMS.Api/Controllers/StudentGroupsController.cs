@@ -1,6 +1,8 @@
 using EAMS.Api.Authorization;
 using EAMS.Application.Abstractions;
 using EAMS.Application.Dtos;
+using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 
 namespace EAMS.Api.Controllers;
@@ -104,6 +106,7 @@ public class StudentGroupsController : ControllerBase
     /// <param name="ct">Cancellation token.</param>
     /// <response code="200">One page of matching groups, possibly empty.</response>
     [HttpGet]
+    [Authorize(AuthenticationSchemes = JwtBearerDefaults.AuthenticationScheme, Policy = EamsPermissions.StudentsRead)]
     [HasPermissionNotEnforced(EamsPermissions.StudentsRead)]
     [ProducesResponseType(typeof(PagedResult<StudentGroupDto>), StatusCodes.Status200OK)]
     public async Task<ActionResult<PagedResult<StudentGroupDto>>> List(

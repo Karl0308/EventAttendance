@@ -505,7 +505,7 @@ public class EventAudienceReadTests : IntegrationTest
                 world.EventId, new EventAudienceRequest([world.GroupA], [world.OnlyInB]));
 
         using var factory = new EamsApiFactory(Sql.ConnectionString);
-        using var client = factory.CreateClient();
+        using var client = await SignedInClientAsync(factory);
 
         var response = await client.GetAsync($"/api/v1/events/{world.EventId}/attendees");
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
@@ -530,8 +530,14 @@ public class EventAudienceReadTests : IntegrationTest
     [Fact]
     public async Task An_unknown_event_is_404_over_http()
     {
+        await using (var db = NewDbContext())
+        {
+            db.Schools.Add(TestData.NewSchool());
+            await db.SaveChangesAsync();
+        }
+
         using var factory = new EamsApiFactory(Sql.ConnectionString);
-        using var client = factory.CreateClient();
+        using var client = await SignedInClientAsync(factory);
 
         var response = await client.GetAsync($"/api/v1/events/{Guid.NewGuid()}/attendees");
 

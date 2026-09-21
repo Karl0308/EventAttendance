@@ -7,6 +7,30 @@ matching has its own page: [`mobile-card-matching.md`](mobile-card-matching.md).
 
 ---
 
+## 2026-09-17
+
+### An app that is already set up needs no release
+
+Authorization is now enforced across the API. **A device that already holds its key keeps working
+exactly as it does**: tap, batch, manifest, card lookup, heartbeat and your event picker's
+`GET /events` all take the same device key and return the same bodies. The full walkthrough is
+[`mobile-auth-handoff.md`](mobile-auth-handoff.md).
+
+Two things to know:
+
+**1. `GET /events` now requires your device key**, where it used to answer without one. If the picker's
+request already carries `Authorization: DeviceKey …`, as your other calls do, nothing changes. A device
+is answered with its own school's `Open` events only, whatever `status` it sends.
+
+**2. A new device no longer enrols itself.** `POST /devices` and `POST /devices/{id}/regenerate-key`
+need an administrator. This affects only a fresh install or a lost key: an administrator creates the
+device on the admin Devices page and gives you its **key and device ID**, once. The `GET /events/open`
+announced under *Planned* below was not needed and was not built.
+
+`cachedCardMatch` is still only a possibility; nothing about `localOutcome` has changed.
+
+---
+
 ## 2026-08-25
 
 ### Nothing here requires you to release

@@ -1,54 +1,29 @@
-﻿using EAMS.Api.Authorization;
-
-// Assembly-level marker. Machine-readable proof that nothing in EAMS.Api enforces authorization —
-// a test, a startup check, or a deployment gate can assert its absence before allowing a
-// non-development environment, without relying on anyone having read a comment.
-[assembly: AuthorizationNotEnforced]
-
-namespace EAMS.Api.Authorization;
+﻿namespace EAMS.Api.Authorization;
 
 /// <summary>
-/// <b>THIS ATTRIBUTE ENFORCES NOTHING. A METHOD MARKED WITH IT IS PUBLIC AND UNAUTHENTICATED.</b>
+/// <b>This attribute enforces nothing by itself.</b> The <c>[Authorize(AuthenticationSchemes = …,
+/// Policy = …)]</c> beside it on every action is what refuses a request; this one records the same
+/// permission code in a form the registry tests can read.
 ///
 /// <para>
-/// It is a placeholder for Technical Plan §11's permission-based RBAC, deferred by ADR-001 D-6 until
-/// the data layer settles. Its only job is to record which permission code an endpoint <em>will</em>
-/// require, so Phase 6 wires enforcement instead of auditing every controller to work out what each
-/// endpoint should have demanded.
+/// It began as the placeholder for Technical Plan §11's permission-based RBAC, deferred by ADR-001
+/// D-6, so that enforcement could be wired onto a list of already-declared codes instead of an audit
+/// of every controller. That is what happened: every action that carries it now also carries a real
+/// <c>[Authorize]</c> naming the same code as its policy.
 /// </para>
 ///
 /// <para>
-/// <b>Why the name is so ugly.</b> ADR-001 D-6 calls out the hazard directly: a no-op
-/// <c>[HasPermission]</c> is indistinguishable at a glance from a real one, so a reviewer reads a
-/// decorated endpoint as protected and it ships open. The state therefore lives in the name — at the
-/// call site this reads <c>[HasPermissionNotEnforced("students.read")]</c>, and there is no way to
-/// see that in a diff and believe it guards anything. Renaming it to <c>[HasPermission]</c> is
-/// Phase 6's job, and the rename is a feature: the compiler will point at every decorated endpoint
-/// so each one is looked at on the day enforcement becomes real.
+/// <b>The two must agree, and a test holds them to it.</b> An <c>[Authorize(Policy = "x")]</c> over a
+/// <c>[HasPermissionNotEnforced("y")]</c> would enforce one permission while documenting another.
+/// <c>AuthorizationCoverageTests</c> fails the build on that, and on any action outside the anonymous
+/// <c>/auth</c> pair that declares a permission without enforcing it.
 /// </para>
 ///
 /// <para>
-/// <b>It is also structurally incapable of enforcing anything.</b> It derives from
-/// <see cref="Attribute"/> and implements no ASP.NET Core interface — not <c>IAuthorizationFilter</c>,
-/// not <c>IAsyncAuthorizationFilter</c>, not <c>IFilterMetadata</c>, not <c>IAuthorizeData</c>. The
-/// MVC filter pipeline never sees it, so it cannot short-circuit a request even by accident. The
-/// inertness is a property of the type, not a promise in a comment.
-/// </para>
-///
-/// <para>
-/// <b>Phase 4b gated three endpoints with a real <c>[Authorize]</c>, and this attribute stays on them
-/// as well.</b> That looks redundant and is not: the attribute is the audit trail D-6 created — the
-/// list Phase 6's rename walks so that every endpoint is looked at on the day enforcement becomes
-/// real — and dropping it from the endpoints that happen to be enforced first would put a hole in
-/// exactly that list. Where both are present they must name the same permission, which
-/// <c>AuthorizationSeamTests.Every_gated_action_declares_the_same_permission_through_the_inert_attribute</c>
-/// asserts.
-/// </para>
-///
-/// <para>
-/// Everything else in this API is open. Per ADR-001 D-6 this system must not be exposed beyond
-/// local/development use until §11 lands in full — narrowing the open surface to four capture
-/// endpoints does not change that.
+/// <b>It is structurally incapable of enforcing anything.</b> It derives from <see cref="Attribute"/>
+/// and implements no ASP.NET Core interface, so the MVC filter pipeline never sees it. Collapsing the
+/// pair into one enforcing <c>[HasPermission]</c> — the name §11 uses — is a rename worth doing, and
+/// the coverage test is what makes it safe to do mechanically.
 /// </para>
 /// </summary>
 [AttributeUsage(
@@ -58,20 +33,11 @@ namespace EAMS.Api.Authorization;
 public sealed class HasPermissionNotEnforcedAttribute : Attribute
 {
     /// <param name="permission">
-    /// The §4.11 permission code this endpoint will require once §11 is implemented — e.g.
-    /// <c>students.read</c>, <c>events.write</c>, <c>attendance.capture</c>.
+    /// The §4.11 permission code the adjacent <c>[Authorize]</c> enforces — e.g. <c>students.read</c>,
+    /// <c>events.write</c>, <c>attendance.capture</c>.
     /// </param>
     public HasPermissionNotEnforcedAttribute(string permission) => Permission = permission;
 
-    /// <summary>Declared intent only. Nothing reads this to make a decision.</summary>
+    /// <summary>Declared only. The policy on the adjacent <c>[Authorize]</c> is what decides.</summary>
     public string Permission { get; }
-}
-
-/// <summary>
-/// Applied to an assembly whose authorization is a placeholder (ADR-001 D-6). Present on EAMS.Api
-/// today; removing it is part of Phase 6's definition of done.
-/// </summary>
-[AttributeUsage(AttributeTargets.Assembly, AllowMultiple = false)]
-public sealed class AuthorizationNotEnforcedAttribute : Attribute
-{
 }

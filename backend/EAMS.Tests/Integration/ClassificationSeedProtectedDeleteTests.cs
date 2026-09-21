@@ -92,7 +92,7 @@ public class ClassificationSeedProtectedDeleteTests : IntegrationTest
         var id = await ArrangeClassificationAsync(schoolId, seededName, axis);
 
         using var factory = new EamsApiFactory(Sql.ConnectionString);
-        using var client = factory.CreateClient();
+        using var client = await SignedInClientAsync(factory);
 
         var response = await client.DeleteAsync($"{Route}/{id}");
 
@@ -123,7 +123,7 @@ public class ClassificationSeedProtectedDeleteTests : IntegrationTest
         var id = await ArrangeClassificationAsync(schoolId, "TYPOO");
 
         using var factory = new EamsApiFactory(Sql.ConnectionString);
-        using var client = factory.CreateClient();
+        using var client = await SignedInClientAsync(factory);
 
         var response = await client.DeleteAsync($"{Route}/{id}");
 
@@ -145,7 +145,7 @@ public class ClassificationSeedProtectedDeleteTests : IntegrationTest
         var loserId = await ArrangeClassificationAsync(schoolId, "SOME OTHER PERSONNEL CATEGORY");
 
         using var factory = new EamsApiFactory(Sql.ConnectionString);
-        using var client = factory.CreateClient();
+        using var client = await SignedInClientAsync(factory);
 
         Assert.Equal(
             HttpStatusCode.OK,
@@ -174,7 +174,7 @@ public class ClassificationSeedProtectedDeleteTests : IntegrationTest
         var loserId = await ArrangeClassificationAsync(schoolId, "ACAD"); // also a seeded key
 
         using var factory = new EamsApiFactory(Sql.ConnectionString);
-        using var client = factory.CreateClient();
+        using var client = await SignedInClientAsync(factory);
 
         Assert.Equal(
             HttpStatusCode.OK,

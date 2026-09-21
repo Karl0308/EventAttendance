@@ -77,7 +77,7 @@ public class EventsApiTests : IntegrationTest
     {
         await ArrangeSchoolAsync();
         using var factory = new EamsApiFactory(Sql.ConnectionString);
-        using var client = factory.CreateClient();
+        using var client = await SignedInClientAsync(factory);
 
         var response = await client.PostAsJsonAsync(Route, ValidEvent());
 
@@ -104,7 +104,7 @@ public class EventsApiTests : IntegrationTest
     {
         await ArrangeSchoolAsync();
         using var factory = new EamsApiFactory(Sql.ConnectionString);
-        using var client = factory.CreateClient();
+        using var client = await SignedInClientAsync(factory);
 
         var response = await client.PostAsJsonAsync(Route, ValidEvent(name: ""));
 
@@ -125,7 +125,7 @@ public class EventsApiTests : IntegrationTest
     {
         await ArrangeSchoolAsync();
         using var factory = new EamsApiFactory(Sql.ConnectionString);
-        using var client = factory.CreateClient();
+        using var client = await SignedInClientAsync(factory);
 
         var created = await client.PostAsJsonAsync(Route, ValidEvent());
         var id = await CreatedIdAsync(created);
@@ -149,7 +149,7 @@ public class EventsApiTests : IntegrationTest
     {
         await ArrangeSchoolAsync();
         using var factory = new EamsApiFactory(Sql.ConnectionString);
-        using var client = factory.CreateClient();
+        using var client = await SignedInClientAsync(factory);
 
         var created = await client.PostAsJsonAsync(Route, ValidEvent());
         var id = await CreatedIdAsync(created);
@@ -169,7 +169,7 @@ public class EventsApiTests : IntegrationTest
     {
         await ArrangeSchoolAsync();
         using var factory = new EamsApiFactory(Sql.ConnectionString);
-        using var client = factory.CreateClient();
+        using var client = await SignedInClientAsync(factory);
 
         var created = await client.PostAsJsonAsync(Route, ValidEvent());
         var id = await CreatedIdAsync(created);
@@ -193,7 +193,7 @@ public class EventsApiTests : IntegrationTest
     {
         await ArrangeSchoolAsync();
         using var factory = new EamsApiFactory(Sql.ConnectionString);
-        using var client = factory.CreateClient();
+        using var client = await SignedInClientAsync(factory);
 
         var created = await client.PostAsJsonAsync(Route, ValidEvent());
         var id = await CreatedIdAsync(created);
@@ -226,7 +226,7 @@ public class EventsApiTests : IntegrationTest
     {
         await ArrangeSchoolAsync();
         using var factory = new EamsApiFactory(Sql.ConnectionString);
-        using var client = factory.CreateClient();
+        using var client = await SignedInClientAsync(factory);
 
         var created = await client.PostAsJsonAsync(Route, ValidEvent());
         var id = await CreatedIdAsync(created);
@@ -243,7 +243,7 @@ public class EventsApiTests : IntegrationTest
     {
         await ArrangeSchoolAsync();
         using var factory = new EamsApiFactory(Sql.ConnectionString);
-        using var client = factory.CreateClient();
+        using var client = await SignedInClientAsync(factory);
 
         var created = await client.PostAsJsonAsync(Route, ValidEvent());
         var id = await CreatedIdAsync(created);
@@ -293,12 +293,13 @@ public class EventsApiTests : IntegrationTest
                 .Select(g => g.Id).SingleAsync();
         }
 
-        // The one tap in this flow goes through a gated endpoint (D-28). Everything else here — create,
-        // attach, status, roster, summary — is still open.
+        // Two principals, as in production: an operator creates, attaches, moves status and reads the
+        // roster; a device posts the one tap. Neither credential opens the other's routes.
         var apiKey = await IssueDeviceKeyAsync(schoolId);
 
         using var factory = new EamsApiFactory(Sql.ConnectionString);
-        using var client = factory.CreateClient().WithDeviceKey(apiKey);
+        using var client = await SignedInClientAsync(factory, schoolId);
+        using var device = factory.CreateClient().WithDeviceKey(apiKey);
 
         var created = await client.PostAsJsonAsync(Route, ValidEvent(graceMinutes: 0, live: true));
         var id = await CreatedIdAsync(created);
@@ -316,7 +317,7 @@ public class EventsApiTests : IntegrationTest
 
         await client.PatchAsJsonAsync($"{Route}/{id}/status", new { status = "Open" });
 
-        var tap = await client.PostAsJsonAsync(
+        var tap = await device.PostAsJsonAsync(
             "/api/v1/attendance/tap", new { eventId = id, cardUid = "04A7B8C9" });
         tap.EnsureSuccessStatusCode();
 
@@ -339,7 +340,7 @@ public class EventsApiTests : IntegrationTest
     {
         await ArrangeSchoolAsync();
         using var factory = new EamsApiFactory(Sql.ConnectionString);
-        using var client = factory.CreateClient();
+        using var client = await SignedInClientAsync(factory);
 
         var created = await client.PostAsJsonAsync(Route, ValidEvent());
         var id = await CreatedIdAsync(created);
@@ -370,7 +371,7 @@ public class EventsApiTests : IntegrationTest
         }
 
         using var factory = new EamsApiFactory(Sql.ConnectionString);
-        using var client = factory.CreateClient();
+        using var client = await SignedInClientAsync(factory);
 
         var created = await client.PostAsJsonAsync(Route, ValidEvent());
         var id = await CreatedIdAsync(created);
@@ -395,7 +396,7 @@ public class EventsApiTests : IntegrationTest
     {
         await ArrangeSchoolAsync();
         using var factory = new EamsApiFactory(Sql.ConnectionString);
-        using var client = factory.CreateClient();
+        using var client = await SignedInClientAsync(factory);
 
         Assert.Equal(HttpStatusCode.NotFound,
             (await client.GetAsync($"{Route}/{Guid.NewGuid()}/roster")).StatusCode);

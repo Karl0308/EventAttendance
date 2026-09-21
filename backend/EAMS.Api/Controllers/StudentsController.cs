@@ -4,16 +4,16 @@ using EAMS.Application.Abstractions;
 using EAMS.Application.Dtos;
 using EAMS.Domain;
 using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.Infrastructure;
 using Microsoft.AspNetCore.RateLimiting;
 
 namespace EAMS.Api.Controllers;
 
-// Permission codes are Technical Plan §6.2's, action for action. ADR-001 D-6's bargain was that
-// endpoints get decorated as they are written so Phase 6 wires enforcement rather than re-deriving
-// what each endpoint should have demanded — and the attribute enforces nothing, so this is a
-// declaration of intent and not a change in behaviour. See HasPermissionNotEnforcedAttribute.
+// Permission codes are Technical Plan §6.2's, action for action. The [Authorize] on each action
+// enforces the code; the [HasPermissionNotEnforced] beside it records the same code for the registry
+// tests, and AuthorizationCoverageTests fails if the two disagree.
 [ApiController]
 [Route("api/v1/students")]
 public class StudentsController : ControllerBase
@@ -55,6 +55,7 @@ public class StudentsController : ControllerBase
     /// <param name="ct">Cancellation token.</param>
     /// <response code="200">One page of matching students, possibly empty.</response>
     [HttpGet]
+    [Authorize(AuthenticationSchemes = JwtBearerDefaults.AuthenticationScheme, Policy = EamsPermissions.StudentsRead)]
     [HasPermissionNotEnforced(EamsPermissions.StudentsRead)]
     [ProducesResponseType(typeof(PagedResult<StudentDto>), StatusCodes.Status200OK)]
     public async Task<ActionResult<PagedResult<StudentDto>>> List(
@@ -75,6 +76,7 @@ public class StudentsController : ControllerBase
     /// <response code="200">The student.</response>
     /// <response code="404">No such student.</response>
     [HttpGet("{id:guid}")]
+    [Authorize(AuthenticationSchemes = JwtBearerDefaults.AuthenticationScheme, Policy = EamsPermissions.StudentsRead)]
     [HasPermissionNotEnforced(EamsPermissions.StudentsRead)]
     [ProducesResponseType(typeof(StudentDto), StatusCodes.Status200OK)]
     [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status404NotFound)]
@@ -150,6 +152,7 @@ public class StudentsController : ControllerBase
     /// §6.2 <c>POST /students</c> — manual roster entry, alongside the §10 bulk import.
     /// </summary>
     [HttpPost]
+    [Authorize(AuthenticationSchemes = JwtBearerDefaults.AuthenticationScheme, Policy = EamsPermissions.StudentsWrite)]
     [HasPermissionNotEnforced(EamsPermissions.StudentsWrite)]
     [ProducesResponseType(typeof(StudentDto), StatusCodes.Status201Created)]
     [ProducesResponseType(StatusCodes.Status400BadRequest)]
@@ -173,6 +176,7 @@ public class StudentsController : ControllerBase
     /// </para>
     /// </summary>
     [HttpPut("{id:guid}")]
+    [Authorize(AuthenticationSchemes = JwtBearerDefaults.AuthenticationScheme, Policy = EamsPermissions.StudentsWrite)]
     [HasPermissionNotEnforced(EamsPermissions.StudentsWrite)]
     [ProducesResponseType(typeof(StudentDto), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status400BadRequest)]
@@ -187,6 +191,7 @@ public class StudentsController : ControllerBase
 
     /// <summary>§6.2 <c>DELETE /students/{id}</c> — soft (§4.3 <c>IsDeleted</c>).</summary>
     [HttpDelete("{id:guid}")]
+    [Authorize(AuthenticationSchemes = JwtBearerDefaults.AuthenticationScheme, Policy = EamsPermissions.StudentsWrite)]
     [HasPermissionNotEnforced(EamsPermissions.StudentsWrite)]
     [ProducesResponseType(StatusCodes.Status204NoContent)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
@@ -208,6 +213,7 @@ public class StudentsController : ControllerBase
     /// </para>
     /// </summary>
     [HttpPost("{id:guid}/cards")]
+    [Authorize(AuthenticationSchemes = JwtBearerDefaults.AuthenticationScheme, Policy = EamsPermissions.StudentsWrite)]
     [HasPermissionNotEnforced(EamsPermissions.StudentsWrite)]
     [ProducesResponseType(typeof(CardDto), StatusCodes.Status201Created)]
     [ProducesResponseType(StatusCodes.Status400BadRequest)]
@@ -234,6 +240,7 @@ public class StudentsController : ControllerBase
     /// </para>
     /// </summary>
     [HttpDelete("{id:guid}/cards/{cardId:guid}")]
+    [Authorize(AuthenticationSchemes = JwtBearerDefaults.AuthenticationScheme, Policy = EamsPermissions.StudentsWrite)]
     [HasPermissionNotEnforced(EamsPermissions.StudentsWrite)]
     [ProducesResponseType(StatusCodes.Status204NoContent)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]

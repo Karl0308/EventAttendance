@@ -29,10 +29,10 @@ namespace EAMS.Api.Authentication;
 /// </para>
 ///
 /// <para>
-/// <b>D-6's operational constraint stays in force verbatim: this system must not be exposed beyond
-/// local/development use until §11 lands in full.</b> Four endpoints are now gated. Every other
-/// endpoint in the API — the entire roster, every event, the import pipeline — is still open and
-/// unauthenticated. This is a narrowing of the open surface, not a rollout.
+/// <b>This scheme gates the five capture routes, plus the event list through
+/// <see cref="DeviceKeyOrBearer"/>.</b> Every other admin route names the Bearer scheme in its
+/// <c>[Authorize]</c>, so a device key never satisfies one of them — not even a key whose permission
+/// claim happened to match.
 /// </para>
 ///
 /// <para>
@@ -84,9 +84,9 @@ internal sealed class DeviceKeyHandler : AuthenticationHandler<DeviceKeyOptions>
     protected override async Task<AuthenticateResult> HandleAuthenticateAsync()
     {
         // NoResult, not Fail: "this request carries no device key" must stay distinct from "this
-        // request carries a bad one". Every endpoint except the four gated ones is still open, and
-        // failing here would make an anonymous GET /students look like a rejected credential in the
-        // logs of a system where the overwhelming majority of requests legitimately carry none.
+        // request carries a bad one". This is the default scheme, so it runs on every request, and
+        // every admin request legitimately carries a Bearer token instead — failing here would log
+        // each of them as a rejected device credential.
         if (!TryReadToken(out var token))
             return AuthenticateResult.NoResult();
 

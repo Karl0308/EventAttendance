@@ -404,7 +404,7 @@ public class StudentListClassificationTests : IntegrationTest
         var world = await ArrangeAsync();
 
         using var factory = new EamsApiFactory(Sql.ConnectionString);
-        using var client = factory.CreateClient();
+        using var client = await SignedInClientAsync(factory);
 
         using var body = JsonDocument.Parse(
             await (await client.GetAsync("/api/v1/students")).Content.ReadAsStringAsync());

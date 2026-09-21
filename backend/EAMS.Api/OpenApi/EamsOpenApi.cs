@@ -22,8 +22,7 @@ namespace EAMS.Api.OpenApi;
 /// <para>
 /// <b>The UI stays Development-only; the document does not.</b> <c>Program.cs</c> gates
 /// <c>UseSwagger</c>/<c>UseSwaggerUI</c> on <c>IsDevelopment()</c> because an unauthenticated, complete
-/// description of an API whose admin surface is open (ADR-001 D-6) hands an attacker the map as well as
-/// the door. The <em>generator</em> is registered unconditionally, so client tooling can still resolve
+/// description of the API hands an attacker the map. The <em>generator</em> is registered unconditionally, so client tooling can still resolve
 /// <c>ISwaggerProvider</c> and build the document in any environment —
 /// <c>OpenApiDocumentTests.The_document_generates_in_production_even_though_it_is_not_served</c> is
 /// what keeps those two halves from collapsing into one.
@@ -125,12 +124,9 @@ public static class EamsOpenApi
             "  human-readable `title` or `detail`, which are reworded freely.",
             "- **Capture endpoints require a device key** (`DeviceKey` below).",
             "- **The `/auth` endpoints sign a person in** and issue a `Bearer` access token (`Bearer`",
-            "  below). Three of them require one.",
-            "- **Everything else is still open.** A login existing is not the same as authorization",
-            "  being enforced: the roster, the events, the import pipeline and the dashboard accept",
-            "  an uncredentialed request today. Enforcing permissions across that surface is a later",
-            "  phase (ADR-001 D-6), so **an endpoint with no `Auth` marked is not a public endpoint,",
-            "  it is an unprotected one** — this API must stay on a local or trusted network.",
+            "  below). `login` and `refresh` are the only operations that need no credential.",
+            "- **Everything else requires a `Bearer` token** carrying the §4.11 permission the",
+            "  operation names: `401` without a valid token, `403` when the token lacks the permission.",
             "",
             "See the `TapOutcomeCode`, `ManualOutcomeCode` and `LiveOutcomeCode` schemas for the frozen",
             "token tables.",

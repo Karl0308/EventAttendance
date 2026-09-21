@@ -31,7 +31,7 @@ public class HostPipelineTests : IntegrationTest
     /// failures came out of that, and this covers both: in Production the response was a 500 with an
     /// <em>empty body</em> — nothing for a client to branch on and no handle for an operator to
     /// search logs by — and in Development the same path returned a full stack trace, on endpoints
-    /// that are deliberately open to anyone who can reach the port (ADR-001 D-6).
+    /// that were then open to anyone who could reach the port (ADR-001 D-6).
     /// </summary>
     [Fact]
     public async Task An_unhandled_exception_becomes_a_problem_details_body()
@@ -97,8 +97,14 @@ public class HostPipelineTests : IntegrationTest
     [Fact]
     public async Task The_exception_handler_leaves_successful_responses_alone()
     {
+        await using (var db = NewDbContext())
+        {
+            db.Schools.Add(TestData.NewSchool());
+            await db.SaveChangesAsync();
+        }
+
         using var factory = new EamsApiFactory(Sql.ConnectionString);
-        using var client = factory.CreateClient();
+        using var client = await SignedInClientAsync(factory);
 
         var response = await client.GetAsync("/api/v1/students");
 

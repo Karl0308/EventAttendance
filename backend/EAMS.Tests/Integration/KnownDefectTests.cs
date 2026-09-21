@@ -629,7 +629,7 @@ public class KnownDefectTests : IntegrationTest
     /// <para>
     /// <b>CLOSED.</b> All nine actions across the three controllers now carry the attribute, with the
     /// §6 code for that action. Nothing about the runtime changed — the attribute still implements no
-    /// interface and denies nothing (<c>AuthorizationSeamTests</c> proves that structurally, and
+    /// interface and denies nothing (<c>AuthorizationCoverageTests</c> proves that structurally, and
     /// <c>ApiContractTests</c> proves it over HTTP) — but the audit D-6 was written to avoid is now
     /// paid off, and this test is what keeps it that way: a tenth action added without a declared
     /// permission fails the build's test gate instead of being noticed in Phase 6.

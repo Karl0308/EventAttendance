@@ -133,7 +133,7 @@ public class AcademicApiTests : IntegrationTest
     {
         await ArrangeSchoolAsync();
         using var factory = new EamsApiFactory(Sql.ConnectionString);
-        using var client = factory.CreateClient();
+        using var client = await SignedInClientAsync(factory);
 
         Assert.NotEqual(0, (await ArrayAsync(client, route)).GetArrayLength());
     }
@@ -148,7 +148,7 @@ public class AcademicApiTests : IntegrationTest
     {
         await ArrangeSchoolAsync();
         using var factory = new EamsApiFactory(Sql.ConnectionString);
-        using var client = factory.CreateClient();
+        using var client = await SignedInClientAsync(factory);
 
         var offerings = await ArrayAsync(client, $"{Academic}/course-offerings");
 
@@ -177,7 +177,7 @@ public class AcademicApiTests : IntegrationTest
     {
         await ArrangeSchoolAsync();
         using var factory = new EamsApiFactory(Sql.ConnectionString);
-        using var client = factory.CreateClient();
+        using var client = await SignedInClientAsync(factory);
 
         var groups = await ArrayAsync(client, Groups);
 
@@ -214,7 +214,7 @@ public class AcademicApiTests : IntegrationTest
         // Programme-shaped, so D-47's anchor fires and the term has a year-level group to filter to.
         await ArrangeSchoolAsync(section: "BSCRIM 2-A");
         using var factory = new EamsApiFactory(Sql.ConnectionString);
-        using var client = factory.CreateClient();
+        using var client = await SignedInClientAsync(factory);
 
         var everything = await ArrayAsync(client, Groups);
         Assert.True(everything.GetArrayLength() > 1);
@@ -253,7 +253,7 @@ public class AcademicApiTests : IntegrationTest
         }
 
         using var factory = new EamsApiFactory(Sql.ConnectionString);
-        using var client = factory.CreateClient();
+        using var client = await SignedInClientAsync(factory);
 
         var published = (await ArrayAsync(client, $"{Academic}/terms"))[0];
 
@@ -268,7 +268,7 @@ public class AcademicApiTests : IntegrationTest
     {
         await ArrangeSchoolAsync();
         using var factory = new EamsApiFactory(Sql.ConnectionString);
-        using var client = factory.CreateClient();
+        using var client = await SignedInClientAsync(factory);
 
         var response = await client.GetAsync($"{Academic}/terms/current");
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
@@ -299,7 +299,7 @@ public class AcademicApiTests : IntegrationTest
         }
 
         using var factory = new EamsApiFactory(Sql.ConnectionString);
-        using var client = factory.CreateClient();
+        using var client = await SignedInClientAsync(factory);
 
         var response = await client.GetAsync($"{Academic}/terms/current");
 
@@ -337,7 +337,7 @@ public class AcademicApiTests : IntegrationTest
         }
 
         using var factory = new EamsApiFactory(Sql.ConnectionString);
-        using var client = factory.CreateClient();
+        using var client = await SignedInClientAsync(factory);
 
         Assert.NotEqual(0, (await ArrayAsync(client, $"{Academic}/programs?collegeId={collegeId}")).GetArrayLength());
         Assert.Equal(0, (await ArrayAsync(client, $"{Academic}/programs?collegeId={Guid.NewGuid()}")).GetArrayLength());
@@ -383,7 +383,7 @@ public class AcademicApiTests : IntegrationTest
         await ArrangeSchoolAsync("ZZZ");
 
         using var factory = new EamsApiFactory(Sql.ConnectionString);
-        using var client = factory.CreateClient();
+        using var client = await SignedInClientAsync(factory);
 
         // One school's worth of everything, not two.
         Assert.Single((await ArrayAsync(client, $"{Academic}/terms")).EnumerateArray());
@@ -441,7 +441,7 @@ public class AcademicApiTests : IntegrationTest
     {
         await ArrangeSchoolAsync();
         using var factory = new EamsApiFactory(Sql.ConnectionString);
-        using var client = factory.CreateClient();
+        using var client = await SignedInClientAsync(factory);
 
         var rows = await ArrayAsync(client, route);
         Assert.NotEqual(0, rows.GetArrayLength());

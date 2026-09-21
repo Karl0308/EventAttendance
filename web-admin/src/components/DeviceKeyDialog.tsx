@@ -246,6 +246,17 @@ export default function DeviceKeyDialog({ issued, replaced, onClose }: DeviceKey
           </Box>
         </Stack>
 
+        {/* The device id travels with the key, because the handset can no longer learn it for itself:
+            it used to read it off its own POST /devices reply, and enrolment is an administrator's act
+            now. Heartbeat is POST /devices/{id}/heartbeat and answers 404 for any id but the key's own
+            device. Not a secret, so a plain selectable value rather than a second guarded field. */}
+        <DialogContentText sx={{ mt: 2 }}>
+          Device ID — enter this on the device as well:{" "}
+          <Box component="code" sx={{ fontFamily: "monospace", userSelect: "all" }}>
+            {issued.device.id}
+          </Box>
+        </DialogContentText>
+
         <DialogContentText sx={{ mt: 2 }}>{WHAT_TO_DO}</DialogContentText>
         <DialogContentText sx={{ mt: 1 }}>{IF_YOU_LOSE_IT}</DialogContentText>
 

@@ -53,7 +53,7 @@ all unwritten.** Twenty of them are cited by number in shipped production code, 
 | **D-25** | Key lifecycle: plaintext shown exactly once; hard-cut rotation, no overlap window; `ApiKeyRevokedAt` (burn credential) distinct from `IsActive` (retire device); no key caching | shipped 4b | `DeviceService`, `DeviceLifecycleTests` |
 | **D-26** | Device identity comes from the authenticated principal via `IDeviceContext`, never from `TapRequest.DeviceId`. Body field retained as a cross-check; mismatch is `400 DeviceMismatch`, never a silent ignore | shipped 4b | `AttendanceService.TapAsync` |
 | **D-27** | An explicit `device.SchoolId == event.SchoolId` check reported as the existing `DeviceNotRegistered` → 404 — no cross-tenant existence disclosure, no wire change. **Closed the cross-school tap defect** | shipped 4b | `AttendanceService`, `KnownDefectTests` |
-| **D-28** | Enforcement narrowed to the capture endpoints only; `[HasPermissionNotEnforced]` stays alongside `[Authorize]`; no config off-switch; a Development-seeded device supplies the local key. **ADR-001 D-6's do-not-expose constraint stays in force** | shipped 4b | `Program.cs`, `AuthorizationSeamTests` |
+| **D-28** | Enforcement narrowed to the capture endpoints only; `[HasPermissionNotEnforced]` stays alongside `[Authorize]`; no config off-switch; a Development-seeded device supplies the local key. **ADR-001 D-6's do-not-expose constraint stays in force** — *superseded 2026-09-17: every admin route is now Bearer-gated, see "What is decided where"* | shipped 4b | `Program.cs`, `AuthorizationCoverageTests` |
 | **D-29** | Live attendance is a cursor-delta polling endpoint. The SignalR hub of §5/§6.4 is **deferred** behind a delta DTO that is a superset of §6.4's declared payload | shipped 4d | `EventService.GetLiveAttendanceAsync`, `AttendanceService.TapBatchAsync` |
 | **D-30** | A `rowversion` cursor on `AttendanceRecords`, mapped **non-concurrency** so write semantics are unchanged | shipped 4d | `EventService.GetLiveAttendanceAsync`, `AttendanceService.TapBatchAsync` |
 | **D-31** | `POST /attendance/tap/batch`: per-row results correlated by index **and** `deviceTapId`; always HTTP 200 for a well-formed batch, never 207. **Retrying a whole batch after a `5xx` is safe because every row is idempotent — not because the batch is atomic.** Rows are committed individually (D-32), so a partial failure leaves earlier rows written | shipped 4d | `AttendanceService.TapBatchAsync`, `TapBatchRequest`/`TapBatchResult` schemas (D-38) |
@@ -110,7 +110,8 @@ Deferred to the ADR-006 consolidation at JJ's direction, not forgotten.
 | Which enrollment that cache shows | ADR-002 **D-9** |
 | Why `RfidCards.CardUid` uniqueness was rescoped | ADR-001 **D-3** |
 | Import mapping config, warning-vs-status semantics | ADR-001 **D-4/D-5**, refined by ADR-002 **D-10** |
-| Why auth is deferred and what makes that safe | ADR-001 **D-6** |
+| Why auth is deferred and what makes that safe | ADR-001 **D-6** — the deferral ended 2026-09-17 |
+| **How §11 is enforced, and why a device no longer enrols itself** ⚠ gated routes take their tenant from the token, not the pin | Not yet an ADR (2026-09-17). `Program.cs` (a Bearer policy per permission), `AuthorizationCoverageTests`, `AuthEnforcementTests`; `GET /events` shared with device keys (drift from §6.3, open events only) in `DeviceKeyOrBearer`; `docs/api/mobile-changes.md` 2026-09-17 |
 | Two email columns | ADR-002 **D-7** |
 | **The two natural-key hedges — and their expiry** | ADR-002 **D-11** ⚠ |
 | Why `EventGroups` has two filtered unique indexes | ADR-003 **D-12** ⚠ (one of them is denominator arithmetic) |

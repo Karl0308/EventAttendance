@@ -275,7 +275,7 @@ public class DevelopmentSeedClassificationTests : IntegrationTest
         await ArrangeCarriedOverDatabaseAsync();
 
         using var factory = new DevelopmentApiFactory(Sql.ConnectionString);
-        using var client = factory.CreateClient();
+        using var client = await SignedInClientAsync(factory);
 
         var response = await client.GetAsync("/api/v1/classifications");
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);

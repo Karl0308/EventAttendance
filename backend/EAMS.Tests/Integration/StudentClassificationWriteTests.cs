@@ -584,7 +584,7 @@ public class StudentClassificationWriteTests : IntegrationTest
         var world = await ArrangeAsync();
 
         using var factory = new EamsApiFactory(Sql.ConnectionString);
-        using var client = factory.CreateClient();
+        using var client = await SignedInClientAsync(factory);
 
         var assigned = await client.PutAsync($"{Route(world.StudentId)}/{world.NapId}", null);
         Assert.Equal(HttpStatusCode.OK, assigned.StatusCode);
@@ -663,7 +663,7 @@ public class StudentClassificationWriteTests : IntegrationTest
         }
 
         using var factory = new EamsApiFactory(Sql.ConnectionString);
-        using var client = factory.CreateClient();
+        using var client = await SignedInClientAsync(factory);
 
         var retired = await client.PutAsync($"{Route(world.StudentId)}/{world.NapId}", null);
 

@@ -1,7 +1,11 @@
 # EAMS API — start here (mobile / APK developer)
 
+> **2026-09-17 — sign-in is now enforced.** An app that already holds its device key keeps working
+> unchanged; a new device gets its key from an administrator instead of enrolling itself. Details in
+> [`mobile-auth-handoff.md`](mobile-auth-handoff.md).
+>
 > **What changed recently:** [`mobile-changes.md`](mobile-changes.md). Read the top entry before
-> a release - it says whether anything needs to change on your side, and today the answer is no.
+> a release - it says whether anything needs to change on your side.
 
 The backend is ready for a capture app. This page is a **cover sheet**: what to read, in what
 order, and what to ask us for. It restates nothing — every shape and rule lives in one of the
@@ -13,17 +17,18 @@ three files below, and duplicating them here is how a handoff goes stale.
 |---|---|---|
 | 1 | [`attendance-contract-handoff.md`](attendance-contract-handoff.md) | **The one to actually read.** Written for you. How to enrol a device, test card serials, what your queue does with each outcome code, the clock and card-UID rules, manifest caching. |
 | 2 | [`openapi.json`](openapi.json) | **The contract.** Generate your client from this. Every endpoint, payload, error shape and enum. Exported from a running build, so it cannot disagree with the API. |
-| 3 | [`endpoints.md`](endpoints.md) | A one-page index of all 44 routes — a map for finding your way around #2. No field-level detail by design. |
+| 3 | [`endpoints.md`](endpoints.md) | A one-page index of all 55 routes — a map for finding your way around #2. No field-level detail by design. |
 
 If #2 and the running API ever disagree, the API is right and the file is stale — tell us.
 
 ## The endpoints your app uses
 
-All under `/api/v1`. Everything below except enrolment requires a device key.
+All under `/api/v1`. Everything below requires a device key, which an administrator issues to you —
+a device no longer enrols itself.
 
 | Method | Route | Purpose |
 |---|---|---|
-| `POST` | `/devices` | Enrol this device, receive `apiKey` **once**. No key needed — this is the bootstrap. |
+| `GET` | `/events` | Your school's open events, for the event picker. |
 | `GET` | `/events/{id}/manifest` | Offline cache: who is expected, which card resolves to whom. Supports `If-None-Match`. |
 | `GET` | `/students/by-card/{cardUid}` | Live UID → student, for the scan screen. |
 | `POST` | `/attendance/tap` | One tap. |
@@ -55,22 +60,22 @@ Each is explained properly in the handoff; this is the index so you know what to
   network-security-config exception for the dev host, or set `usesCleartextTraffic` on a dev build.
   This is our most common false "your API is broken" report.
 - **Store the device key in Android Keystore / `expo-secure-store`.** Never `AsyncStorage`, never a
-  committed file. The server keeps only a hash and cannot re-issue it — lost means
-  `POST /devices/{id}/regenerate-key`.
+  committed file. The server keeps only a hash and cannot re-issue it — lost means asking an
+  administrator to regenerate it.
 
 ## What to ask us for
 
 - **The dev host IP.** It is DHCP and moves, so it is deliberately not written down here.
 - **An open event's `eventId`.** A tap needs one, and `tappedAt` must fall inside its window.
 
-Enrol your **own** device rather than sharing ours — every tap is attributed to the device that
+Ask for a key for your **own** device rather than sharing ours — every tap is attributed to the device that
 sent it, so a shared key makes your traffic and ours indistinguishable in the record.
 
 ## What is not built
 
 | Item | Status |
 |---|---|
-| Human authentication (JWT + RBAC) | Phase 6. Every non-capture endpoint is open until then — keep this API on a trusted network. |
+| Human authentication (JWT + RBAC) | **Built and enforced.** Every route outside sign-in needs a credential; yours is the device key. |
 | Card binding (bulk or in-the-field) | **Decided — bulk, from the roster export. No scope on your side.** See below. |
 | Reports | Phase 5 |
 

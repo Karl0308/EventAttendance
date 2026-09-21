@@ -301,7 +301,7 @@ public class EventAudienceResolveTests : IntegrationTest
         var world = await ArrangeAsync();
 
         using var factory = new EamsApiFactory(Sql.ConnectionString);
-        using var client = factory.CreateClient();
+        using var client = await SignedInClientAsync(factory);
 
         var firstYears = await ResolveAsync(client, Body(null, Filter("Section", FirstYearSection)));
         var secondYears = await ResolveAsync(client, Body(null, Filter("Section", SecondYearSection)));
@@ -335,7 +335,7 @@ public class EventAudienceResolveTests : IntegrationTest
         var world = await ArrangeAsync();
 
         using var factory = new EamsApiFactory(Sql.ConnectionString);
-        using var client = factory.CreateClient();
+        using var client = await SignedInClientAsync(factory);
 
         var criminology = await ResolveAsync(
             client, Body(null, Filter("College", world.CriminologyCollegeId.ToString())));
@@ -358,7 +358,7 @@ public class EventAudienceResolveTests : IntegrationTest
         var world = await ArrangeAsync();
 
         using var factory = new EamsApiFactory(Sql.ConnectionString);
-        using var client = factory.CreateClient();
+        using var client = await SignedInClientAsync(factory);
 
         var criminology = await ResolveAsync(
             client, Body(null, Filter("Program", world.CriminologyProgramId.ToString())));
@@ -412,7 +412,7 @@ public class EventAudienceResolveTests : IntegrationTest
         var world = await ArrangeAsync();
 
         using var factory = new EamsApiFactory(Sql.ConnectionString);
-        using var client = factory.CreateClient();
+        using var client = await SignedInClientAsync(factory);
 
         var first = await ResolveAsync(client, Body(null, Filter("YearLevel", "1")));
         AssertResolvesTo(first, [.. world.FirstYears, .. world.Nurses]);
@@ -454,7 +454,7 @@ public class EventAudienceResolveTests : IntegrationTest
         var world = await ArrangeAsync();
 
         using var factory = new EamsApiFactory(Sql.ConnectionString);
-        using var client = factory.CreateClient();
+        using var client = await SignedInClientAsync(factory);
 
         var secondYears = await ResolveAsync(
             client, Body(null, Filter("Section", SecondYearSection)));
@@ -485,7 +485,7 @@ public class EventAudienceResolveTests : IntegrationTest
         var world = await ArrangeAsync();
 
         using var factory = new EamsApiFactory(Sql.ConnectionString);
-        using var client = factory.CreateClient();
+        using var client = await SignedInClientAsync(factory);
 
         AssertResolvesTo(
             await ResolveAsync(client, Body(null, Filter("Section", spelling))),
@@ -498,7 +498,7 @@ public class EventAudienceResolveTests : IntegrationTest
         var world = await ArrangeAsync();
 
         using var factory = new EamsApiFactory(Sql.ConnectionString);
-        using var client = factory.CreateClient();
+        using var client = await SignedInClientAsync(factory);
 
         var rizal = await ResolveAsync(
             client, Body(null, Filter("Course", world.SecondYearCourseId.ToString())));
@@ -532,7 +532,7 @@ public class EventAudienceResolveTests : IntegrationTest
         var world = await ArrangeAsync();
 
         using var factory = new EamsApiFactory(Sql.ConnectionString);
-        using var client = factory.CreateClient();
+        using var client = await SignedInClientAsync(factory);
 
         var firstYearCriminology = await ResolveAsync(client, Body(
             null,
@@ -562,7 +562,7 @@ public class EventAudienceResolveTests : IntegrationTest
         var world = await ArrangeAsync();
 
         using var factory = new EamsApiFactory(Sql.ConnectionString);
-        using var client = factory.CreateClient();
+        using var client = await SignedInClientAsync(factory);
 
         AssertResolvesTo(
             await ResolveAsync(client, new { termId = (Guid?)null, filters = Array.Empty<object>() }),
@@ -588,7 +588,7 @@ public class EventAudienceResolveTests : IntegrationTest
         var world = await ArrangeAsync();
 
         using var factory = new EamsApiFactory(Sql.ConnectionString);
-        using var client = factory.CreateClient();
+        using var client = await SignedInClientAsync(factory);
 
         var defaulted = await ResolveAsync(client, Body(null));
         Assert.Equal(world.CurrentTermId, defaulted.TermId);
@@ -640,7 +640,7 @@ public class EventAudienceResolveTests : IntegrationTest
         }
 
         using var factory = new EamsApiFactory(Sql.ConnectionString);
-        using var client = factory.CreateClient();
+        using var client = await SignedInClientAsync(factory);
 
         var resolution = await ResolveAsync(client, Body(null, Filter("YearLevel", "1")));
 
@@ -674,7 +674,7 @@ public class EventAudienceResolveTests : IntegrationTest
         var world = await ArrangeAsync();
 
         using var factory = new EamsApiFactory(Sql.ConnectionString);
-        using var client = factory.CreateClient();
+        using var client = await SignedInClientAsync(factory);
 
         object[] rows =
         [
@@ -720,7 +720,7 @@ public class EventAudienceResolveTests : IntegrationTest
         var world = await ArrangeAsync();
 
         using var factory = new EamsApiFactory(Sql.ConnectionString);
-        using var client = factory.CreateClient();
+        using var client = await SignedInClientAsync(factory);
 
         var section = await ResolveAsync(client, Body(null, Filter("Section", SecondYearSection)));
         Assert.DoesNotContain(world.Karganilla, section.StudentIds);
@@ -757,7 +757,7 @@ public class EventAudienceResolveTests : IntegrationTest
         var world = await ArrangeAsync();
 
         using var factory = new EamsApiFactory(Sql.ConnectionString);
-        using var client = factory.CreateClient();
+        using var client = await SignedInClientAsync(factory);
 
         var resolution = await ResolveAsync(client, Body(null));
 
@@ -866,7 +866,7 @@ public class EventAudienceResolveTests : IntegrationTest
         var (atCeilingCollegeId, overflowStudentId) = await ArrangeCeilingAsync();
 
         using var factory = new EamsApiFactory(Sql.ConnectionString);
-        using var client = factory.CreateClient();
+        using var client = await SignedInClientAsync(factory);
 
         // Exactly the ceiling: a full list is not a truncated one.
         var atCeiling = await ResolveAsync(
@@ -933,7 +933,7 @@ public class EventAudienceResolveTests : IntegrationTest
         await ArrangeAsync();
 
         using var factory = new EamsApiFactory(Sql.ConnectionString);
-        using var client = factory.CreateClient();
+        using var client = await SignedInClientAsync(factory);
 
         var problem = await RefusedAsync(
             client,
@@ -968,7 +968,7 @@ public class EventAudienceResolveTests : IntegrationTest
         await ArrangeAsync();
 
         using var factory = new EamsApiFactory(Sql.ConnectionString);
-        using var client = factory.CreateClient();
+        using var client = await SignedInClientAsync(factory);
 
         var response = await client.PostAsJsonAsync(Route, new
         {
@@ -1009,7 +1009,7 @@ public class EventAudienceResolveTests : IntegrationTest
         }
 
         using var factory = new EamsApiFactory(Sql.ConnectionString);
-        using var client = factory.CreateClient();
+        using var client = await SignedInClientAsync(factory);
 
         // No current term — the happy path here would be an empty 200 — and the field is still refused.
         await RefusedAsync(
@@ -1038,7 +1038,7 @@ public class EventAudienceResolveTests : IntegrationTest
         var world = await ArrangeAsync();
 
         using var factory = new EamsApiFactory(Sql.ConnectionString);
-        using var client = factory.CreateClient();
+        using var client = await SignedInClientAsync(factory);
 
         await RefusedAsync(
             client, Body(null, Filter(field, "not-a-guid")),
@@ -1068,7 +1068,7 @@ public class EventAudienceResolveTests : IntegrationTest
         await ArrangeAsync();
 
         using var factory = new EamsApiFactory(Sql.ConnectionString);
-        using var client = factory.CreateClient();
+        using var client = await SignedInClientAsync(factory);
 
         await RefusedAsync(
             client, Body(null, Filter("YearLevel", value)),
@@ -1113,7 +1113,7 @@ public class EventAudienceResolveTests : IntegrationTest
         await ArrangeAsync();
 
         using var factory = new EamsApiFactory(Sql.ConnectionString);
-        using var client = factory.CreateClient();
+        using var client = await SignedInClientAsync(factory);
 
         var problem = await RefusedAsync(
             client, Body(null, Filter("Section", value)),
@@ -1135,7 +1135,7 @@ public class EventAudienceResolveTests : IntegrationTest
         await ArrangeAsync();
 
         using var factory = new EamsApiFactory(Sql.ConnectionString);
-        using var client = factory.CreateClient();
+        using var client = await SignedInClientAsync(factory);
 
         await RefusedAsync(
             client, Body(null, Filter("Section", SecondYearSection, AcademicKey.Unspecified)),
@@ -1157,7 +1157,7 @@ public class EventAudienceResolveTests : IntegrationTest
         var world = await ArrangeAsync();
 
         using var factory = new EamsApiFactory(Sql.ConnectionString);
-        using var client = factory.CreateClient();
+        using var client = await SignedInClientAsync(factory);
 
         AssertResolvesTo(
             await ResolveAsync(client, Body(null, Filter(field, SecondYearSection))),
@@ -1199,7 +1199,7 @@ public class EventAudienceResolveTests : IntegrationTest
         var world = await ArrangeAsync();
 
         using var factory = new EamsApiFactory(Sql.ConnectionString);
-        using var client = factory.CreateClient();
+        using var client = await SignedInClientAsync(factory);
 
         var resolution = await ResolveAsync(client, Body(
             null,
@@ -1244,7 +1244,7 @@ public class EventAudienceResolveTests : IntegrationTest
         var world = await ArrangeAsync();
 
         using var factory = new EamsApiFactory(Sql.ConnectionString);
-        using var client = factory.CreateClient();
+        using var client = await SignedInClientAsync(factory);
 
         var problem = await RefusedAsync(
             client,
@@ -1291,7 +1291,7 @@ public class EventAudienceResolveTests : IntegrationTest
         }
 
         using var factory = new EamsApiFactory(Sql.ConnectionString);
-        using var client = factory.CreateClient();
+        using var client = await SignedInClientAsync(factory);
 
         await RefusedAsync(
             client,
@@ -1335,7 +1335,7 @@ public class EventAudienceResolveTests : IntegrationTest
         var world = await ArrangeAsync();
 
         using var factory = new EamsApiFactory(Sql.ConnectionString);
-        using var client = factory.CreateClient();
+        using var client = await SignedInClientAsync(factory);
 
         var program = world.CriminologyProgramId.ToString();
 
@@ -1377,7 +1377,7 @@ public class EventAudienceResolveTests : IntegrationTest
         var world = await ArrangeAsync();
 
         using var factory = new EamsApiFactory(Sql.ConnectionString);
-        using var client = factory.CreateClient();
+        using var client = await SignedInClientAsync(factory);
 
         var response = await client.PostAsJsonAsync(
             Route, Body(null, Filter("Section", SecondYearSection)));

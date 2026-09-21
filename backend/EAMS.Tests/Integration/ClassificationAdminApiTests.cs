@@ -102,7 +102,7 @@ public class ClassificationAdminApiTests : IntegrationTest
         await ArrangeSchoolAsync();
 
         using var factory = new EamsApiFactory(Sql.ConnectionString);
-        using var client = factory.CreateClient();
+        using var client = await SignedInClientAsync(factory);
 
         var created = await client.PostAsJsonAsync(Route, new { name = "VISITOR", axis = "Personnel" });
         Assert.Equal(HttpStatusCode.Created, created.StatusCode);
@@ -151,7 +151,7 @@ public class ClassificationAdminApiTests : IntegrationTest
         await ArrangeSchoolAsync();
 
         using var factory = new EamsApiFactory(Sql.ConnectionString);
-        using var client = factory.CreateClient();
+        using var client = await SignedInClientAsync(factory);
 
         var created = await client.PostAsJsonAsync(Route, new { name = Slashed, axis = "Personnel" });
         Assert.Equal(HttpStatusCode.Created, created.StatusCode);
@@ -201,7 +201,7 @@ public class ClassificationAdminApiTests : IntegrationTest
         await ArrangeSchoolAsync();
 
         using var factory = new EamsApiFactory(Sql.ConnectionString);
-        using var client = factory.CreateClient();
+        using var client = await SignedInClientAsync(factory);
 
         Assert.Equal(
             HttpStatusCode.Created,
@@ -228,7 +228,7 @@ public class ClassificationAdminApiTests : IntegrationTest
         await ArrangeSchoolAsync();
 
         using var factory = new EamsApiFactory(Sql.ConnectionString);
-        using var client = factory.CreateClient();
+        using var client = await SignedInClientAsync(factory);
 
         var response = await client.PostAsJsonAsync(Route, new { name, axis = "Personnel" });
 
@@ -267,7 +267,7 @@ public class ClassificationAdminApiTests : IntegrationTest
         await ArrangeSchoolAsync();
 
         using var factory = new EamsApiFactory(Sql.ConnectionString);
-        using var client = factory.CreateClient();
+        using var client = await SignedInClientAsync(factory);
 
         var response = await client.PostAsJsonAsync(Route, new { name = "VISITOR", axis });
 
@@ -298,7 +298,7 @@ public class ClassificationAdminApiTests : IntegrationTest
         await ArrangeSchoolAsync();
 
         using var factory = new EamsApiFactory(Sql.ConnectionString);
-        using var client = factory.CreateClient();
+        using var client = await SignedInClientAsync(factory);
 
         var created = await client.PostAsJsonAsync(Route, new { name = "VISITOR", axis = sent });
         Assert.Equal(HttpStatusCode.Created, created.StatusCode);
@@ -346,7 +346,7 @@ public class ClassificationAdminApiTests : IntegrationTest
         var id = await ArrangeClassificationAsync(schoolId, "NAP", ClassificationAxis.Personnel);
 
         using var factory = new EamsApiFactory(Sql.ConnectionString);
-        using var client = factory.CreateClient();
+        using var client = await SignedInClientAsync(factory);
 
         var renamed = await client.PutAsJsonAsync(
             $"{Route}/{id}",
@@ -390,7 +390,7 @@ public class ClassificationAdminApiTests : IntegrationTest
         var id = await ArrangeClassificationAsync(schoolId, "NAP");
 
         using var factory = new EamsApiFactory(Sql.ConnectionString);
-        using var client = factory.CreateClient();
+        using var client = await SignedInClientAsync(factory);
 
         var response = await client.PatchAsJsonAsync($"{Route}/{id}/active", new { });
 
@@ -426,7 +426,7 @@ public class ClassificationAdminApiTests : IntegrationTest
         await ArrangeClassificationAsync(schoolId, "STUDENT");
 
         using var factory = new EamsApiFactory(Sql.ConnectionString);
-        using var client = factory.CreateClient();
+        using var client = await SignedInClientAsync(factory);
 
         Assert.Equal(
             HttpStatusCode.OK,
@@ -472,7 +472,7 @@ public class ClassificationAdminApiTests : IntegrationTest
         var id = await ArrangeClassificationAsync(schoolId, "NAP");
 
         using var factory = new EamsApiFactory(Sql.ConnectionString);
-        using var client = factory.CreateClient();
+        using var client = await SignedInClientAsync(factory);
 
         for (var i = 0; i < 2; i++)
         {
@@ -507,7 +507,7 @@ public class ClassificationAdminApiTests : IntegrationTest
         var id = await ArrangeClassificationAsync(schoolId, "TYPOO");
 
         using var factory = new EamsApiFactory(Sql.ConnectionString);
-        using var client = factory.CreateClient();
+        using var client = await SignedInClientAsync(factory);
 
         var response = await client.DeleteAsync($"{Route}/{id}");
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
@@ -548,7 +548,7 @@ public class ClassificationAdminApiTests : IntegrationTest
         var loserId = await ArrangeClassificationAsync(schoolId, "ACADEMIC STAFF");
 
         using var factory = new EamsApiFactory(Sql.ConnectionString);
-        using var client = factory.CreateClient();
+        using var client = await SignedInClientAsync(factory);
 
         // Make the survivor referenced, by merging the other row into it.
         Assert.Equal(
@@ -590,7 +590,7 @@ public class ClassificationAdminApiTests : IntegrationTest
         var loserId = await ArrangeClassificationAsync(schoolId, "ACADEMIC STAFF");
 
         using var factory = new EamsApiFactory(Sql.ConnectionString);
-        using var client = factory.CreateClient();
+        using var client = await SignedInClientAsync(factory);
 
         await client.PostAsJsonAsync(
             $"{Route}/{loserId}/merge", new { intoClassificationId = survivorId });
@@ -615,7 +615,7 @@ public class ClassificationAdminApiTests : IntegrationTest
         var missing = Guid.NewGuid();
 
         using var factory = new EamsApiFactory(Sql.ConnectionString);
-        using var client = factory.CreateClient();
+        using var client = await SignedInClientAsync(factory);
 
         Assert.Equal(HttpStatusCode.NotFound, (await client.GetAsync($"{Route}/{missing}")).StatusCode);
         Assert.Equal(

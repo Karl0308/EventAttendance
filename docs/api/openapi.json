@@ -2,7 +2,7 @@
   "openapi": "3.0.1",
   "info": {
     "title": "EAMS API",
-    "description": "Events Attendance Monitoring System — attendance capture and administration.\n\n**This document supersedes `docs/api/attendance-contract-handoff.md` as the contract.**\nIt is generated from the source, so the outcome tokens, status codes and payload shapes\nbelow are what the running build actually does.\n\n- **Base path** `/api/v1`. JSON in and out, camelCase field names.\n- **All timestamps are UTC**, ISO 8601, with an explicit `Z`. A bare or offset-bearing\n  local time misjudges the Present/Late boundary by the server's offset.\n- **Errors are RFC 7807** `application/problem+json`. Every body carries a `traceId` to\n  quote back and, on the attendance surface, a stable `code` to branch on — never the\n  human-readable `title` or `detail`, which are reworded freely.\n- **Capture endpoints require a device key** (`DeviceKey` below).\n- **The `/auth` endpoints sign a person in** and issue a `Bearer` access token (`Bearer`\n  below). Three of them require one.\n- **Everything else is still open.** A login existing is not the same as authorization\n  being enforced: the roster, the events, the import pipeline and the dashboard accept\n  an uncredentialed request today. Enforcing permissions across that surface is a later\n  phase (ADR-001 D-6), so **an endpoint with no `Auth` marked is not a public endpoint,\n  it is an unprotected one** — this API must stay on a local or trusted network.\n\nSee the `TapOutcomeCode`, `ManualOutcomeCode` and `LiveOutcomeCode` schemas for the frozen\ntoken tables.",
+    "description": "Events Attendance Monitoring System — attendance capture and administration.\n\n**This document supersedes `docs/api/attendance-contract-handoff.md` as the contract.**\nIt is generated from the source, so the outcome tokens, status codes and payload shapes\nbelow are what the running build actually does.\n\n- **Base path** `/api/v1`. JSON in and out, camelCase field names.\n- **All timestamps are UTC**, ISO 8601, with an explicit `Z`. A bare or offset-bearing\n  local time misjudges the Present/Late boundary by the server's offset.\n- **Errors are RFC 7807** `application/problem+json`. Every body carries a `traceId` to\n  quote back and, on the attendance surface, a stable `code` to branch on — never the\n  human-readable `title` or `detail`, which are reworded freely.\n- **Capture endpoints require a device key** (`DeviceKey` below).\n- **The `/auth` endpoints sign a person in** and issue a `Bearer` access token (`Bearer`\n  below). `login` and `refresh` are the only operations that need no credential.\n- **Everything else requires a `Bearer` token** carrying the §4.11 permission the\n  operation names: `401` without a valid token, `403` when the token lacks the permission.\n\nSee the `TapOutcomeCode`, `ManualOutcomeCode` and `LiveOutcomeCode` schemas for the frozen\ntoken tables.",
     "version": "v1"
   },
   "paths": {
@@ -54,7 +54,12 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "Bearer": []
+          }
+        ]
       },
       "post": {
         "tags": [
@@ -143,7 +148,12 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "Bearer": []
+          }
+        ]
       }
     },
     "/api/v1/academic/terms/current": {
@@ -194,7 +204,12 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "Bearer": []
+          }
+        ]
       }
     },
     "/api/v1/academic/terms/{id}": {
@@ -317,7 +332,12 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "Bearer": []
+          }
+        ]
       }
     },
     "/api/v1/academic/terms/{id}/current": {
@@ -420,7 +440,12 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "Bearer": []
+          }
+        ]
       }
     },
     "/api/v1/academic/colleges": {
@@ -471,7 +496,12 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "Bearer": []
+          }
+        ]
       }
     },
     "/api/v1/academic/programs": {
@@ -530,7 +560,12 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "Bearer": []
+          }
+        ]
       }
     },
     "/api/v1/academic/courses": {
@@ -597,7 +632,12 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "Bearer": []
+          }
+        ]
       }
     },
     "/api/v1/academic/course-offerings": {
@@ -674,7 +714,12 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "Bearer": []
+          }
+        ]
       }
     },
     "/api/v1/attendance": {
@@ -751,7 +796,12 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "Bearer": []
+          }
+        ]
       }
     },
     "/api/v1/attendance/tap": {
@@ -916,7 +966,7 @@
           "Attendance"
         ],
         "summary": "`POST /attendance/tap/batch` — §8.2's offline queue flush (Phase 4d, D-31).",
-        "description": "\r\n\r\n  <b>A well-formed batch is always 200, never 207.</b> The transport status describes the batch;\r\n             each row's own `status` describes that tap. 207 Multi-Status is handled inconsistently by\r\n             proxies and client libraries, and — the part that bites — a client seeing any non-2xx is liable\r\n             to retry the entire batch, which is safe but pure waste when almost all of it landed.\r\n             \r\n\r\n\r\n  <b>The fourth and last endpoint a device key gates</b> (D-28). `[HasPermissionNotEnforced]`\r\n             stays alongside `[Authorize]` for the reason the tap endpoint records: the inert attribute is\r\n             the list Phase 6's rename walks, and the enforced-first endpoints are the ones a reader is least\r\n             likely to check. The `Policy` is named rather than left to the default — a bare\r\n             `[Authorize]` falls back to `RequireAuthenticatedUser()`, which a revoked key and a\r\n             deactivated device both satisfy by design, so it would admit exactly the credentials the 403\r\n             exists to refuse. `AuthorizationSeamTests` fails the build on either mistake.\r\n             \r\n\r\n\r\n  <b>Two size guards, and neither replaces the other.</b>\r\n  `[RequestSizeLimit]` refuses an\r\n             oversized body before it is buffered; EAMS.Domain.TapBatchLimits.MaxRows is checked in the service\r\n             after deserialization, when the row count is knowable. A body of 200 enormous rows passes the\r\n             first and fails nothing; a body of one row and four megabytes of whitespace passes the second.\r\n             \r\n\r\n\r\n  <b>It shares `/tap`'s rate-limit policy, so one flush of 200 taps spends one permit where\r\n             200 single taps would spend 200. That is intended, and it is recorded because nothing else would\r\n             say so.</b> The limiter's stated purpose is friction and detection against a runaway client, not\r\n             a contractual quota on taps — and a device that batches is being <em>well behaved</em>, so\r\n             charging it per row would penalise the shape §8.2 asks for and make the published\r\n             {PermitsPerWindow}-per-minute figure mean two different things depending on which endpoint was\r\n             used. What it does mean, stated plainly: the effective per-device write ceiling on this endpoint\r\n             is `PermitsPerWindow × MaxRows` — 120,000 taps a minute — so the limiter is not what bounds\r\n             batch write volume. The row cap and the body cap are. If a per-row budget is ever wanted, it\r\n             needs a token-bucket policy that charges by row count, which the fixed-window limiter cannot\r\n             express.\r\n             ",
+        "description": "\r\n\r\n  <b>A well-formed batch is always 200, never 207.</b> The transport status describes the batch;\r\n             each row's own `status` describes that tap. 207 Multi-Status is handled inconsistently by\r\n             proxies and client libraries, and — the part that bites — a client seeing any non-2xx is liable\r\n             to retry the entire batch, which is safe but pure waste when almost all of it landed.\r\n             \r\n\r\n\r\n  <b>A device-key endpoint</b> (D-28). `[HasPermissionNotEnforced]` stays alongside\r\n             `[Authorize]` for the reason the tap endpoint records. The `Policy` is named rather than\r\n             left to the default — a bare `[Authorize]` falls back to `RequireAuthenticatedUser()`,\r\n             which a revoked key and a deactivated device both satisfy by design, so it would admit exactly the\r\n             credentials the 403 exists to refuse. `AuthorizationCoverageTests` fails the build on either\r\n             mistake.\r\n             \r\n\r\n\r\n  <b>Two size guards, and neither replaces the other.</b>\r\n  `[RequestSizeLimit]` refuses an\r\n             oversized body before it is buffered; EAMS.Domain.TapBatchLimits.MaxRows is checked in the service\r\n             after deserialization, when the row count is knowable. A body of 200 enormous rows passes the\r\n             first and fails nothing; a body of one row and four megabytes of whitespace passes the second.\r\n             \r\n\r\n\r\n  <b>It shares `/tap`'s rate-limit policy, so one flush of 200 taps spends one permit where\r\n             200 single taps would spend 200. That is intended, and it is recorded because nothing else would\r\n             say so.</b> The limiter's stated purpose is friction and detection against a runaway client, not\r\n             a contractual quota on taps — and a device that batches is being <em>well behaved</em>, so\r\n             charging it per row would penalise the shape §8.2 asks for and make the published\r\n             {PermitsPerWindow}-per-minute figure mean two different things depending on which endpoint was\r\n             used. What it does mean, stated plainly: the effective per-device write ceiling on this endpoint\r\n             is `PermitsPerWindow × MaxRows` — 120,000 taps a minute — so the limiter is not what bounds\r\n             batch write volume. The row cap and the body cap are. If a per-row budget is ever wanted, it\r\n             needs a token-bucket policy that charges by row count, which the fixed-window limiter cannot\r\n             express.\r\n             ",
         "requestBody": {
           "description": "The flush. See `TapBatchRequest`.",
           "content": {
@@ -1052,7 +1102,7 @@
           "Attendance"
         ],
         "summary": "`GET /attendance/live/{eventId}` — the D-29 cursor-delta poll that stands in for §5/§6.4's\r\n             SignalR hub. Omit `since` for a snapshot; send back the previous response's `cursor`\r\n             for the changes since it.",
-        "description": "\r\n\r\n  <b>The permission is `attendance.read` and there is deliberately no `[Authorize]`.</b>\r\n             This is a dashboard read, not a capture, and the only authentication scheme that exists today is\r\n             the device key — which §11 scopes to `attendance.capture` and nothing else. Gating this\r\n             endpoint with it would force the admin SPA to hold a capture-scoped credential in a browser in\r\n             order to <em>watch</em> attendance, which inverts the split §6.4 draws between capturing and\r\n             reading and would hand a page that can only display data a key that can write it. It stays open\r\n             under ADR-001 D-6 with the rest of the admin surface, declares the permission Phase 6 will\r\n             enforce, and is listed alongside `GET /attendance` — the endpoint it is a live view of —\r\n             rather than alongside the tap.\r\n             \r\n\r\n\r\n  <b>\r\n    `Cache-Control: no-store`.</b> A cached delta is worse than a slow one: an intermediary\r\n             replaying a 200 for a cursor the client has already advanced past would make the dashboard\r\n             silently stop updating, and the client has no way to tell that from an event where nothing is\r\n             happening. `no-store` rather than `no-cache` because there is nothing here worth\r\n             revalidating — every response is keyed to a cursor that will never be asked for again.\r\n             ",
+        "description": "\r\n\r\n  <b>The permission is `attendance.read`, and the scheme is Bearer rather than the device\r\n             key.</b> This is a dashboard read, not a capture: gating it with the device key would force the\r\n             admin SPA to hold a capture-scoped credential in a browser in order to <em>watch</em> attendance,\r\n             which inverts the split §6.4 draws between capturing and reading. It is listed alongside\r\n             `GET /attendance` — the endpoint it is a live view of — rather than alongside the tap.\r\n             \r\n\r\n\r\n  <b>\r\n    `Cache-Control: no-store`.</b> A cached delta is worse than a slow one: an intermediary\r\n             replaying a 200 for a cursor the client has already advanced past would make the dashboard\r\n             silently stop updating, and the client has no way to tell that from an event where nothing is\r\n             happening. `no-store` rather than `no-cache` because there is nothing here worth\r\n             revalidating — every response is keyed to a cursor that will never be asked for again.\r\n             ",
         "parameters": [
           {
             "name": "eventId",
@@ -1154,7 +1204,12 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "Bearer": []
+          }
+        ]
       }
     },
     "/api/v1/attendance/manual": {
@@ -1264,7 +1319,12 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "Bearer": []
+          }
+        ]
       }
     },
     "/api/v1/auth/login": {
@@ -1777,7 +1837,12 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "Bearer": []
+          }
+        ]
       }
     },
     "/api/v1/classifications": {
@@ -1835,7 +1900,12 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "Bearer": []
+          }
+        ]
       },
       "post": {
         "tags": [
@@ -1924,7 +1994,12 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "Bearer": []
+          }
+        ]
       }
     },
     "/api/v1/classifications/{id}": {
@@ -1988,7 +2063,12 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "Bearer": []
+          }
+        ]
       },
       "put": {
         "tags": [
@@ -2109,7 +2189,12 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "Bearer": []
+          }
+        ]
       },
       "delete": {
         "tags": [
@@ -2190,7 +2275,12 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "Bearer": []
+          }
+        ]
       }
     },
     "/api/v1/classifications/{id}/active": {
@@ -2313,7 +2403,12 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "Bearer": []
+          }
+        ]
       }
     },
     "/api/v1/classifications/{id}/merge": {
@@ -2436,7 +2531,12 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "Bearer": []
+          }
+        ]
       }
     },
     "/api/v1/devices": {
@@ -2476,7 +2576,12 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "Bearer": []
+          }
+        ]
       },
       "post": {
         "tags": [
@@ -2564,7 +2669,12 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "Bearer": []
+          }
+        ]
       }
     },
     "/api/v1/devices/{id}": {
@@ -2627,7 +2737,12 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "Bearer": []
+          }
+        ]
       },
       "put": {
         "tags": [
@@ -2725,7 +2840,12 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "Bearer": []
+          }
+        ]
       }
     },
     "/api/v1/devices/{id}/regenerate-key": {
@@ -2806,7 +2926,12 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "Bearer": []
+          }
+        ]
       }
     },
     "/api/v1/devices/{id}/revoke-key": {
@@ -2868,7 +2993,12 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "Bearer": []
+          }
+        ]
       }
     },
     "/api/v1/devices/{id}/heartbeat": {
@@ -3253,11 +3383,12 @@
           "Events"
         ],
         "summary": "`GET /events` — the event list, optionally filtered by status.",
+        "description": "\r\n\r\n  <b>Two credentials reach this route.</b> A signed-in operator with `events.read` lists any\r\n            status. A capture device lists with its device key, which is what the capture app's event picker\r\n            has always done — and a device is answered with its school's `Open` events <b>only</b>,\r\n            whatever `status` it sends, because those are the only events it can tap for and a stolen\r\n            kiosk key has no business enumerating drafts or history. See `DeviceKeyOrBearer`.\r\n            ",
         "parameters": [
           {
             "name": "status",
             "in": "query",
-            "description": "`Draft`, `Open`, `Closed` or `Cancelled`. A capture client wants\r\n            `?status=Open` — a tap against any other status is `400 EventNotOpen`.",
+            "description": "`Draft`, `Open`, `Closed` or `Cancelled`. A capture client wants\r\n            `?status=Open` — a tap against any other status is `400 EventNotOpen`. Ignored for a\r\n            device key, which always receives `Open`.",
             "schema": {
               "type": "string"
             }
@@ -3301,8 +3432,56 @@
                 }
               }
             }
+          },
+          "401": {
+            "description": "No credential, or an invalid one.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "A token without `events.read`, or a revoked key or inactive device.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
           }
-        }
+        },
+        "security": [
+          {
+            "DeviceKey": []
+          },
+          {
+            "Bearer": []
+          }
+        ]
       },
       "post": {
         "tags": [
@@ -3389,7 +3568,12 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "Bearer": []
+          }
+        ]
       }
     },
     "/api/v1/events/{id}": {
@@ -3452,7 +3636,12 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "Bearer": []
+          }
+        ]
       },
       "put": {
         "tags": [
@@ -3573,7 +3762,12 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "Bearer": []
+          }
+        ]
       },
       "delete": {
         "tags": [
@@ -3615,7 +3809,12 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "Bearer": []
+          }
+        ]
       }
     },
     "/api/v1/events/{id}/summary": {
@@ -3678,7 +3877,12 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "Bearer": []
+          }
+        ]
       }
     },
     "/api/v1/events/{id}/roster": {
@@ -3739,7 +3943,12 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "Bearer": []
+          }
+        ]
       }
     },
     "/api/v1/events/{id}/scans": {
@@ -3748,7 +3957,7 @@
           "Events"
         ],
         "summary": "`GET /events/{id}/scans` - scans at this event that resolved to no student.\r\n            \r\n             \r\n<b>The complement of the roster, and the only place this population appears.</b> A scan whose\r\n             card resolves becomes an attendance row and is reported by `/roster` and the attendance\r\n             list. One that resolves to nobody is a `CardNotFound` rejection - an HTTP response and\r\n             nothing more - so before this report existed, \"nobody scanned\" and \"somebody scanned a card we\r\n             could not place\" were the same absence of evidence. The second is the one worth investigating,\r\n             and it was the one being discarded.\r\n             \r\n`events.read` rather than `attendance.read`: it is read from the event page, beside\r\n             the roster it completes, and a permission split that puts half of one screen behind a second\r\n             grant is a permission split nobody configures correctly.\r\n             ",
-        "description": "<b>The first read in this API that authorization actually enforces, and that is deliberate\r\n             rather than incidental.</b> ADR-001 D-6 left every read open until §11 could be applied to all\r\n             of them at once; this one arrives after the login exists, is consumed by nothing yet, and is\r\n             unreachable by any device key - the mobile surface is five DeviceKey routes and this is not\r\n             among them. So it can be gated without breaking a caller, which makes it the cheapest possible\r\n             place to prove the machinery before the rest of §11 follows.\r\n            \r\n             \r\n<b>Bearer only.</b> A device key is scoped to `attendance.capture` and has no business\r\n             reading a report; binding the policy to a scheme rather than to a claim alone is what stops a\r\n             capture credential satisfying an operator's permission.\r\n             \r\n<b>Tenancy now comes from the token, not the development pin</b> - see ADR-001 D-6 and\r\n             `AuthTenancyReachTests`. It is safe here because the event's existence is checked through\r\n             the ordinary filtered set before any audit row is read, so the scan rows are reached only via\r\n             an event id the caller's tenant already resolved.\r\n             ",
+        "description": "\r\n\r\n  <b>Bearer only</b>, like every other action on this controller. A device key is scoped to\r\n             `attendance.capture` and has no business reading a report; binding the policy to a scheme\r\n             rather than to a claim alone is what stops a capture credential satisfying an operator's\r\n             permission.\r\n             \r\n\r\n\r\n  <b>Tenancy now comes from the token, not the development pin</b> - see ADR-001 D-6 and\r\n             `AuthTenancyReachTests`. It is safe here because the event's existence is checked through\r\n             the ordinary filtered set before any audit row is read, so the scan rows are reached only via\r\n             an event id the caller's tenant already resolved.\r\n             ",
         "parameters": [
           {
             "name": "id",
@@ -3946,7 +4155,12 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "Bearer": []
+          }
+        ]
       }
     },
     "/api/v1/events/audience/resolve": {
@@ -4017,7 +4231,12 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "Bearer": []
+          }
+        ]
       }
     },
     "/api/v1/events/{id}/attendees": {
@@ -4080,7 +4299,12 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "Bearer": []
+          }
+        ]
       },
       "post": {
         "tags": [
@@ -4198,7 +4422,12 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "Bearer": []
+          }
+        ]
       }
     },
     "/api/v1/events/{id}/attendees/groups/{studentGroupId}": {
@@ -4271,7 +4500,12 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "Bearer": []
+          }
+        ]
       }
     },
     "/api/v1/events/{id}/attendees/students/{studentId}": {
@@ -4347,7 +4581,12 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "Bearer": []
+          }
+        ]
       }
     },
     "/api/v1/sis/import/upload": {
@@ -4446,7 +4685,12 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "Bearer": []
+          }
+        ]
       }
     },
     "/api/v1/sis/import/{batchId}/run": {
@@ -4546,7 +4790,12 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "Bearer": []
+          }
+        ]
       }
     },
     "/api/v1/sis/import/{batchId}": {
@@ -4609,7 +4858,12 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "Bearer": []
+          }
+        ]
       }
     },
     "/api/v1/sis/import/{batchId}/rows": {
@@ -4666,7 +4920,12 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "Bearer": []
+          }
+        ]
       }
     },
     "/api/v1/students/{studentId}/classifications": {
@@ -4729,7 +4988,12 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "Bearer": []
+          }
+        ]
       }
     },
     "/api/v1/students/{studentId}/classifications/{classificationId}": {
@@ -4822,7 +5086,12 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "Bearer": []
+          }
+        ]
       },
       "delete": {
         "tags": [
@@ -4913,7 +5182,12 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "Bearer": []
+          }
+        ]
       }
     },
     "/api/v1/student-groups": {
@@ -4997,7 +5271,12 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "Bearer": []
+          }
+        ]
       }
     },
     "/api/v1/students": {
@@ -5071,7 +5350,12 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "Bearer": []
+          }
+        ]
       },
       "post": {
         "tags": [
@@ -5158,7 +5442,12 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "Bearer": []
+          }
+        ]
       }
     },
     "/api/v1/students/{id}": {
@@ -5221,7 +5510,12 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "Bearer": []
+          }
+        ]
       },
       "put": {
         "tags": [
@@ -5339,7 +5633,12 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "Bearer": []
+          }
+        ]
       },
       "delete": {
         "tags": [
@@ -5381,7 +5680,12 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "Bearer": []
+          }
+        ]
       }
     },
     "/api/v1/students/by-card/{cardUid}": {
@@ -5628,7 +5932,12 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "Bearer": []
+          }
+        ]
       }
     },
     "/api/v1/students/{id}/cards/{cardId}": {
@@ -5681,7 +5990,12 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "Bearer": []
+          }
+        ]
       }
     }
   },
@@ -8322,7 +8636,7 @@
     },
     {
       "name": "Auth",
-      "description": "Technical Plan §6.1 / §11 — human authentication (Phase 6b).\r\n            \r\n\r\n<b>This is the first and only surface in the API that a person authenticates against, and adding\r\nit changes nothing about any other endpoint.</b> ADR-001 D-6's staged cutover is unchanged: every\r\nroute outside `/auth` is still open and unauthenticated, `[HasPermissionNotEnforced]`\r\nstill enforces nothing, and `[assembly: AuthorizationNotEnforced]` is still present. Turning\r\nthose on is a later phase, and `AuthStagedCutoverTests` asserts the invariant rather than\r\nleaving it to be assumed.\r\n\r\n<b>Two credentials now reach this host and they never mix.</b> A kiosk sends\r\n`Authorization: DeviceKey …` and is scoped to `attendance.capture`; a person sends\r\n`Authorization: Bearer …` and holds whatever their roles grant. Both emit the same claim\r\n<em>types</em> (EAMS.Api.Authorization.EamsClaimTypes), so the authorization layer cannot tell them apart —\r\nwhich is exactly what `DeviceKeyHandler` was built for and why this phase is additive.\r\n\r\n<b>Where the tokens live.</b> The access token is returned in the body and held in memory by the\r\nSPA; the refresh token is an `httpOnly` cookie the browser stores and this API never reads\r\nfrom a body. That is drift from §6.1 and the reasoning is in EAMS.Api.Authentication.AuthCookies.\r\n"
+      "description": "Technical Plan §6.1 / §11 — human authentication (Phase 6b).\r\n            \r\n\r\n<b>This is the only surface in the API that a person authenticates against.</b>`login` and\r\n`refresh` are the only two actions in the API reachable with no credential at all; every admin\r\nroute demands the Bearer token issued here plus a §4.11 permission, and\r\n`AuthorizationCoverageTests` asserts that rather than leaving it to be assumed.\r\n\r\n<b>Two credentials now reach this host and they never mix.</b> A kiosk sends\r\n`Authorization: DeviceKey …` and is scoped to `attendance.capture`; a person sends\r\n`Authorization: Bearer …` and holds whatever their roles grant. Both emit the same claim\r\n<em>types</em> (EAMS.Api.Authorization.EamsClaimTypes), so the authorization layer cannot tell them apart —\r\nwhich is exactly what `DeviceKeyHandler` was built for and why this phase is additive.\r\n\r\n<b>Where the tokens live.</b> The access token is returned in the body and held in memory by the\r\nSPA; the refresh token is an `httpOnly` cookie the browser stores and this API never reads\r\nfrom a body. That is drift from §6.1 and the reasoning is in EAMS.Api.Authentication.AuthCookies.\r\n"
     },
     {
       "name": "Cards",
@@ -8334,15 +8648,15 @@
     },
     {
       "name": "Devices",
-      "description": "Technical Plan §6.6 — devices (Phase 4a design, D-25).\r\n            \r\n\r\n<b>Only one action on this controller is gated: `heartbeat`.</b> It is the one a device calls\r\nabout itself. Everything else here is an administrator's surface and stays open under ADR-001 D-6\r\nwith a declared-but-inert `devices.*` permission, exactly like students and events — Phase 4b\r\nnarrowed the open surface to four endpoints, it did not roll authorization out.\r\n"
+      "description": "Technical Plan §6.6 — devices (Phase 4a design, D-25).\r\n            \r\n\r\n<b>Two principals reach this controller.</b>`heartbeat` is the one action a device calls\r\nabout itself, with its device key. Everything else is an administrator's surface and demands a\r\nBearer token carrying `devices.read` or `devices.write` — the latter mints capture\r\ncredentials, which makes it the one grant on this API that can create another principal.\r\n"
     },
     {
       "name": "EventManifest",
-      "description": "The device-facing half of the events resource: `GET /events/{id}/manifest`, the offline capture\r\ncache a kiosk or handset pulls before it starts scanning (D-46).\r\n            \r\n\r\n<b>Its own controller rather than one more action on `EventsController`, and that is a\r\ndeliberate split.</b> Every action there is `events.read` or `events.write` and is open\r\nunder ADR-001 D-6; this one authenticates a <em>device</em> and carries\r\n`attendance.capture`. One action with a different principal type in the middle of an\r\nadministrative controller is a review hazard in both directions — a reader skimming\r\n`EventsController` would read the whole file as open, and an action added later to a\r\ncapture-only controller inherits capture auth rather than landing open by accident. The route is\r\nidentical either way; only the file is different.\r\n\r\n<b>`events.read` is rejected outright as the permission for this.</b> A device holding it could\r\nread every event and every roster in the school, which is exactly the blast radius a stolen kiosk\r\nkey must not have. §11 scopes device keys to `attendance.capture` and nothing else, so this\r\nendpoint is already pre-authorized by the credential a capture device holds — and minting an\r\n`events.manifest` code would repeat D-45, forcing Phase 6 to grant two codes for one capability.\r\n"
+      "description": "The device-facing half of the events resource: `GET /events/{id}/manifest`, the offline capture\r\ncache a kiosk or handset pulls before it starts scanning (D-46).\r\n            \r\n\r\n<b>Its own controller rather than one more action on `EventsController`, and that is a\r\ndeliberate split.</b> Every action there is `events.read` or `events.write` for a person's\r\nBearer token — the event list alone also admits a device, for its picker; this one authenticates\r\nonly a <em>device</em> and carries\r\n`attendance.capture`. One action with a different principal type in the middle of an\r\nadministrative controller is a review hazard in both directions — a reader skimming\r\n`EventsController` would assume every action takes the same credential, and an action added\r\nlater to a capture-only controller should inherit capture auth rather than an operator's. The route is\r\nidentical either way; only the file is different.\r\n\r\n<b>`events.read` is rejected outright as the permission for this.</b> A device holding it could\r\nread every event and every roster in the school, which is exactly the blast radius a stolen kiosk\r\nkey must not have. §11 scopes device keys to `attendance.capture` and nothing else, so this\r\nendpoint is already pre-authorized by the credential a capture device holds — and minting an\r\n`events.manifest` code would repeat D-45, forcing Phase 6 to grant two codes for one capability.\r\n"
     },
     {
       "name": "SisImport",
-      "description": "Technical Plan §10 — the school-year roster import.\r\n            \r\n\r\n<b>Every endpoint is decorated `sis.import` and every endpoint is open.</b>EAMS.Api.Authorization.HasPermissionNotEnforcedAttribute enforces nothing (ADR-001 D-6); the decoration\r\nrecords what Phase 6 must demand. That matters more here than anywhere else in this API: these four\r\nendpoints read and write the full roster of every student in the institution, including their names\r\nand institutional e-mail addresses, and the upload endpoint writes to the academic tables. This\r\nsystem must not be exposed beyond local/development use until §11 lands.\r\n"
+      "description": "Technical Plan §10 — the school-year roster import.\r\n            \r\n\r\n<b>Every endpoint demands a Bearer token carrying `sis.import`.</b> That matters more here\r\nthan anywhere else in this API: these four endpoints read and write the full roster of every\r\nstudent in the institution, including their names and institutional e-mail addresses, and the\r\nupload endpoint writes to the academic tables.\r\n"
     },
     {
       "name": "StudentClassifications",

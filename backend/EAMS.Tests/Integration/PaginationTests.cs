@@ -589,7 +589,7 @@ public class PaginationTests : IntegrationTest
         await ArrangeTiedStudentsAsync(count: 12);
 
         using var factory = new EamsApiFactory(Sql.ConnectionString);
-        using var client = factory.CreateClient();
+        using var client = await SignedInClientAsync(factory);
 
         var response = await client.GetAsync("/api/v1/students?page=2&pageSize=5");
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
@@ -612,8 +612,8 @@ public class PaginationTests : IntegrationTest
     /// <para>
     /// The unit theory pins the arithmetic; this pins the consequence. An <c>int</c> multiply of
     /// <c>?page=42949674</c> by the default page size wraps to a negative <c>OFFSET</c>, SQL Server
-    /// refuses it with Msg 10743, and <c>UseExceptionHandler</c> serves a 500 to an unauthenticated
-    /// caller (ADR-001 D-6 leaves the admin surface open). Asserting the status here is what makes the
+    /// refuses it with Msg 10743, and <c>UseExceptionHandler</c> serves a 500 to any caller holding
+    /// <c>students.read</c>. Asserting the status here is what makes the
     /// two halves — saturating in C# and being accepted by the database — one guarantee rather than
     /// two hopes.
     /// </para>
@@ -628,7 +628,7 @@ public class PaginationTests : IntegrationTest
         await ArrangeTiedStudentsAsync(count: 3);
 
         using var factory = new EamsApiFactory(Sql.ConnectionString);
-        using var client = factory.CreateClient();
+        using var client = await SignedInClientAsync(factory);
 
         var response = await client.GetAsync($"/api/v1/students?page={page}&pageSize={pageSize}");
 
@@ -636,8 +636,7 @@ public class PaginationTests : IntegrationTest
             response.StatusCode == HttpStatusCode.OK,
             $"?page={page}&pageSize={pageSize} answered {(int)response.StatusCode}. A 500 here is the " +
             "OFFSET overflow: PageRequest.Skip wrapped negative and SQL Server refused it (Msg " +
-            "10743). Every one of the nine paged reads shares that arithmetic, and the surface is " +
-            "open under ADR-001 D-6.");
+            "10743). Every one of the nine paged reads shares that arithmetic.");
 
         using var body = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
         var root = body.RootElement;
@@ -659,7 +658,7 @@ public class PaginationTests : IntegrationTest
         await ArrangeTiedStudentsAsync(count: 3);
 
         using var factory = new EamsApiFactory(Sql.ConnectionString);
-        using var client = factory.CreateClient();
+        using var client = await SignedInClientAsync(factory);
 
         var response = await client.GetAsync("/api/v1/students?page=0&pageSize=100000");
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
@@ -710,7 +709,7 @@ public class PaginationTests : IntegrationTest
         }
 
         using var factory = new EamsApiFactory(Sql.ConnectionString);
-        using var client = factory.CreateClient();
+        using var client = await SignedInClientAsync(factory);
 
         var response = await client.GetAsync($"/api/v1/attendance/live/{eventId}");
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);

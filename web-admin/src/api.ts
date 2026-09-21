@@ -1643,9 +1643,9 @@ function toImportRowEntity(row: Row, what: string): SisImportRowEntity {
  * `SisImportRowDto` — **minus `rawData`, which is not read**.
  *
  * That is a decision about this surface rather than about this mapper: `rawData` is the source line as
- * the workbook held it, for every student in the institution, and §10 is open (ADR-001 D-6). Not
- * reading it means it cannot be rendered, cannot reach a console line, and is not sitting in a heap
- * snapshot of the tab. The row number is what an operator actually needs — it is the line they open the
+ * the workbook held it, for every student in the institution. `sis.import` gates who may fetch it, not
+ * what a page does with it once fetched; not reading it means it cannot be rendered, cannot reach a
+ * console line, and is not sitting in a heap snapshot of the tab. The row number is what an operator actually needs — it is the line they open the
  * workbook and jump to — and the server's own `errorMessage` / `skipReason` is the *why*.
  */
 function toImportRow(row: Row, what: string): SisImportRow {
@@ -2301,9 +2301,8 @@ function toScanLog(row: Row, what: string): EventScanLog {
  * attendance table structurally cannot hold, because a row there needs a student and these scans
  * have none.
  *
- * **The one endpoint in this API that requires being signed in.** Everything else is still open under
- * ADR-001 D-6. A 401 here therefore means the session expired rather than that the app is
- * misconfigured, and it is the only call where that is currently true.
+ * Signed in, with `events.read`, like every other admin read. A 401 is the session expiring and is
+ * renewed by `send`; a 403 is the role not granting the report.
  */
 async function getEventScans(eventId: string): Promise<EventScanLog | undefined> {
   const what = "GET /events/{id}/scans";

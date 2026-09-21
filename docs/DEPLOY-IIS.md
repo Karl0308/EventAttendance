@@ -16,25 +16,26 @@ Resulting URLs: SPA at `https://dev.iloilosupermart.com/eams/`, API at
 
 ---
 
-## 0. Access — this build has no authentication
+## 0. Access — every endpoint demands a credential
 
-Every endpoint is open except the five device-key capture routes: anyone who reaches `/eamsapi` can
-read every student record, create and delete events, and regenerate device keys. The API logs this on
-every startup, and ADR-001 D-6/D-28 hold it to development use until Technical Plan §11 lands.
+Technical Plan §11 is enforced. Every API endpoint except `POST /auth/login` and `POST /auth/refresh`
+refuses a request that carries no credential: an admin route answers `401` without a Bearer token and
+`403` when the signed-in person lacks that route's permission. The five device-key capture routes
+(tap, tap/batch, by-card, heartbeat, manifest) still take a `DeviceKey`, and `GET /events` accepts
+either — a device sees its own school's `Open` events only.
 
-This host is dev-testing only, which is the environment that constraint assumes. The one thing worth
-checking is whether `dev.iloilosupermart.com` resolves from outside your network — if it does, add an
-IP allow-list (IIS Manager → *IP Address and Domain Restrictions* → deny unlisted, allow your
-office/VPN range), because any real student data loaded for testing is readable by anyone who finds
-the URL. If the name is internal-only, you are already behind that boundary.
+**The first administrator is the way in**, and it must exist before this build is deployed — see
+*Creating the first administrator* below. Devices are no longer able to enrol themselves; an admin
+registers each one on the SPA's Devices page, which shows the key and the device ID once.
 
-Revisit this before the system is used for anything but testing.
-
-> **§11 is now partly built, and this section is still accurate.** The user/RBAC foundation has
-> landed — the tables are seeded with roles and grants, a signing key is required to start, and
-> `dotnet EAMS.Api.dll create-admin` will create the first administrator. **No endpoint enforces any
-> of it yet.** Authentication is not on until the startup warning stops saying it is off; until then
-> the paragraphs above hold in full.
+**An IP allow-list is still required on a `Development` host that resolves from outside your
+network.** Enforcement does not cover what `Development` adds: it seeds a device whose key is a
+constant in the source (`SeedData.DevelopmentKioskApiKey`), and that key passes the real device-key
+check — card lookup (which returns the person), event manifests and taps. It also serves Swagger and
+the full API contract anonymously. So if `dev.iloilosupermart.com` resolves externally, add the
+allow-list (IIS Manager → *IP Address and Domain Restrictions* → deny unlisted, allow your
+office/VPN range), or revoke the seeded kiosk on the Devices page. On a `Production` host, where
+none of that is seeded, the allow-list is defence in depth rather than the only boundary.
 
 ---
 
@@ -146,8 +147,9 @@ gets reset.
 The command does not start the web host or open a port, so it is safe to run while the site is live.
 Each run writes an `auth.admin.created` audit row naming the Windows user and machine that ran it.
 
-> Until §11 enforcement lands there is nothing to log in *to*. Creating the account early is harmless
-> and does not grant anyone access that the open API does not already give them.
+> **Create this account before deploying the enforcing build.** Every admin route now refuses an
+> unauthenticated request, so with no administrator on file nobody can reach the admin UI at all. If
+> users already exist, confirm at least one holds `SchoolAdmin` or `SuperAdmin`.
 
 ### ⚠️ Choosing ASPNETCORE_ENVIRONMENT
 
@@ -194,8 +196,8 @@ login in the connection string needs rights to create the database, or you creat
 and grant `db_owner`.
 
 **Rotate the `sa` password.** It was shared in plain text over chat. Better still, create a dedicated
-login scoped to `EAMS` rather than deploying with `sa` — a SQL injection or config leak in a build
-with no authentication currently reaches the whole instance.
+login scoped to `EAMS` rather than deploying with `sa` — a SQL injection or config leak otherwise
+reaches the whole instance, not just this database.
 
 ---
 

@@ -3,6 +3,7 @@ using System.Net.Http.Json;
 using System.Text.Json;
 using EAMS.Api.Controllers;
 using EAMS.Application.Abstractions;
+using EAMS.Application.Dtos;
 using EAMS.Tests.Integration.Infrastructure;
 using Microsoft.EntityFrameworkCore;
 using Xunit;
@@ -121,7 +122,7 @@ public class TermAdminApiTests : IntegrationTest
         var incumbent = await ArrangeTermAsync(schoolId, "2025-2026-1", isCurrent: true);
 
         using var factory = new EamsApiFactory(Sql.ConnectionString);
-        using var client = factory.CreateClient();
+        using var client = await SignedInClientAsync(factory);
 
         var response = await client.PostAsJsonAsync(Route, Body(code: "2025-2026-2"));
 
@@ -164,7 +165,7 @@ public class TermAdminApiTests : IntegrationTest
         await ArrangeTermAsync(schoolId, "2025-2026-1", isCurrent: true);
 
         using var factory = new EamsApiFactory(Sql.ConnectionString);
-        using var client = factory.CreateClient();
+        using var client = await SignedInClientAsync(factory);
 
         var response = await client.PostAsJsonAsync(Route, Body(code: "2025-2026-1"));
 
@@ -203,7 +204,7 @@ public class TermAdminApiTests : IntegrationTest
         await ArrangeSchoolAsync();
 
         using var factory = new EamsApiFactory(Sql.ConnectionString);
-        using var client = factory.CreateClient();
+        using var client = await SignedInClientAsync(factory);
 
         var response = await client.PostAsJsonAsync(Route, Body(code: code));
 
@@ -227,7 +228,7 @@ public class TermAdminApiTests : IntegrationTest
         await ArrangeSchoolAsync();
 
         using var factory = new EamsApiFactory(Sql.ConnectionString);
-        using var client = factory.CreateClient();
+        using var client = await SignedInClientAsync(factory);
 
         var response = await client.PostAsJsonAsync(Route, Body(
             startsOn: new DateOnly(2025, 12, 20), endsOn: new DateOnly(2025, 8, 11)));
@@ -255,22 +256,26 @@ public class TermAdminApiTests : IntegrationTest
     /// </para>
     ///
     /// <para>
-    /// <b>No arrange step, and that is the arrangement.</b> <see cref="IntegrationTest"/> empties every
-    /// table before each test, so zero <c>Schools</c> rows is where this one starts;
-    /// <c>SchoolResolution</c> answers null for zero candidates exactly as it does for several, which is
-    /// the pre-auth build's whole tenancy story (ADR-001 D-6).
+    /// <b>Asserted on the service, not over HTTP, since the route began demanding a Bearer token.</b> A
+    /// signed-in operator always carries a <c>school_id</c>, so the route can no longer reach this
+    /// outcome; the service still can, with no tenant and zero <c>Schools</c> rows, and the token name the
+    /// SPA branches on is pinned here either way. The controller maps it to <c>409</c> beside the other
+    /// conflicts.
     /// </para>
     /// </summary>
     [Fact]
-    public async Task Posting_a_term_with_no_school_resolvable_is_409_NoSchoolResolved()
+    public async Task Creating_a_term_with_no_school_resolvable_is_NoSchoolResolved()
     {
-        using var factory = new EamsApiFactory(Sql.ConnectionString);
-        using var client = factory.CreateClient();
+        await using (var db = NewDbContext())
+        {
+            var response = await TermsOn(db).CreateAsync(
+                new TermWriteRequest("2025-2026-2", SchoolYear, "2nd Semester", null, null));
 
-        var response = await client.PostAsJsonAsync(Route, Body());
+            Assert.Equal(TermWriteOutcome.NoSchoolResolved, response.Outcome);
+        }
 
-        Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
-        Assert.Equal(nameof(TermWriteOutcome.NoSchoolResolved), await ErrorCodeAsync(response));
+        // The literal the SPA's termDraft.ts matches on.
+        Assert.Equal("NoSchoolResolved", nameof(TermWriteOutcome.NoSchoolResolved));
 
         // Refused before anything was staged: a term filed under no school at all would be a row the
         // §11 query filter can never return and no tenant can ever see.
@@ -298,7 +303,7 @@ public class TermAdminApiTests : IntegrationTest
         var termId = await ArrangeTermAsync(schoolId, "2025-2026-1", isCurrent: true);
 
         using var factory = new EamsApiFactory(Sql.ConnectionString);
-        using var client = factory.CreateClient();
+        using var client = await SignedInClientAsync(factory);
 
         var response = await client.PutAsJsonAsync($"{Route}/{termId}", Body(
             code: "2025-2026-1st", semester: FirstSemester, startsOn: new DateOnly(2025, 8, 11),
@@ -336,7 +341,7 @@ public class TermAdminApiTests : IntegrationTest
         var second = await ArrangeTermAsync(schoolId, "2025-2026-2", isCurrent: false);
 
         using var factory = new EamsApiFactory(Sql.ConnectionString);
-        using var client = factory.CreateClient();
+        using var client = await SignedInClientAsync(factory);
 
         var response = await client.PutAsJsonAsync($"{Route}/{second}", Body(code: "2025-2026-1"));
 
@@ -370,7 +375,7 @@ public class TermAdminApiTests : IntegrationTest
         var challenger = await ArrangeTermAsync(schoolId, "2025-2026-2", isCurrent: false);
 
         using var factory = new EamsApiFactory(Sql.ConnectionString);
-        using var client = factory.CreateClient();
+        using var client = await SignedInClientAsync(factory);
 
         var response = await client.PatchAsJsonAsync(
             $"{Route}/{challenger}/current", new { isCurrent = true });
@@ -418,7 +423,7 @@ public class TermAdminApiTests : IntegrationTest
         var challenger = await ArrangeTermAsync(schoolId, "2025-2026-2", isCurrent: false);
 
         using var factory = new EamsApiFactory(Sql.ConnectionString);
-        using var client = factory.CreateClient();
+        using var client = await SignedInClientAsync(factory);
 
         var route = $"{Route}/{challenger}/current";
 
@@ -494,7 +499,7 @@ public class TermAdminApiTests : IntegrationTest
         var termId = await ArrangeTermAsync(schoolId, "2025-2026-1", isCurrent: true);
 
         using var factory = new EamsApiFactory(Sql.ConnectionString);
-        using var client = factory.CreateClient();
+        using var client = await SignedInClientAsync(factory);
 
         var response = await client.PatchAsJsonAsync($"{Route}/{termId}/current", new { });
 
@@ -531,7 +536,7 @@ public class TermAdminApiTests : IntegrationTest
         var elsewhere = await ArrangeTermAsync(bystander, "2025-2026-1", isCurrent: true);
 
         using var factory = new EamsApiFactory(Sql.ConnectionString);
-        using var client = factory.CreateClient();
+        using var client = await SignedInClientAsync(factory);
 
         var response = await client.PatchAsJsonAsync(
             $"{Route}/{challenger}/current", new { isCurrent = true });
@@ -596,7 +601,7 @@ public class TermAdminApiTests : IntegrationTest
         var unknown = Guid.NewGuid();
 
         using var factory = new EamsApiFactory(Sql.ConnectionString);
-        using var client = factory.CreateClient();
+        using var client = await SignedInClientAsync(factory);
 
         var put = await client.PutAsJsonAsync($"{Route}/{unknown}", Body());
         Assert.Equal(HttpStatusCode.NotFound, put.StatusCode);

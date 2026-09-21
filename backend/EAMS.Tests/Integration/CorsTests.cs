@@ -87,7 +87,7 @@ public class CorsTests : IntegrationTest
     public async Task A_simple_request_from_the_dev_server_carries_the_allow_header()
     {
         using var factory = new DevelopmentApiFactory(Sql.ConnectionString);
-        using var client = factory.CreateClient();
+        using var client = await SignedInClientAsync(factory);
 
         var response = await client.SendAsync(
             From(HttpMethod.Get, "/api/v1/students", LocalDevelopmentCors.ViteDevServerOrigin));
@@ -151,7 +151,7 @@ public class CorsTests : IntegrationTest
         }
 
         using var factory = new DevelopmentApiFactory(Sql.ConnectionString);
-        using var client = factory.CreateClient();
+        using var client = await SignedInClientAsync(factory);
 
         var request = new HttpRequestMessage(HttpMethod.Post, "/api/v1/students")
         {

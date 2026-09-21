@@ -58,7 +58,7 @@ public class StudentsApiTests : IntegrationTest
     {
         await ArrangeSchoolAsync();
         using var factory = new EamsApiFactory(Sql.ConnectionString);
-        using var client = factory.CreateClient();
+        using var client = await SignedInClientAsync(factory);
 
         var response = await client.PostAsJsonAsync(Route, Body());
 
@@ -78,7 +78,7 @@ public class StudentsApiTests : IntegrationTest
         var schoolId = await ArrangeSchoolAsync();
         var studentId = await ArrangeStudentAsync(schoolId);
         using var factory = new EamsApiFactory(Sql.ConnectionString);
-        using var client = factory.CreateClient();
+        using var client = await SignedInClientAsync(factory);
 
         var response = await client.PutAsJsonAsync($"{Route}/{studentId}", Body(
             studentNumber: "2023-0001", firstName: "Maricel"));
@@ -99,7 +99,7 @@ public class StudentsApiTests : IntegrationTest
         var schoolId = await ArrangeSchoolAsync();
         var studentId = await ArrangeStudentAsync(schoolId);
         using var factory = new EamsApiFactory(Sql.ConnectionString);
-        using var client = factory.CreateClient();
+        using var client = await SignedInClientAsync(factory);
 
         using var read = JsonDocument.Parse(
             await (await client.GetAsync($"{Route}/{studentId}")).Content.ReadAsStringAsync());
@@ -132,7 +132,7 @@ public class StudentsApiTests : IntegrationTest
         var schoolId = await ArrangeSchoolAsync();
         var studentId = await ArrangeStudentAsync(schoolId);
         using var factory = new EamsApiFactory(Sql.ConnectionString);
-        using var client = factory.CreateClient();
+        using var client = await SignedInClientAsync(factory);
 
         Assert.Equal(HttpStatusCode.NoContent, (await client.DeleteAsync($"{Route}/{studentId}")).StatusCode);
         Assert.Equal(HttpStatusCode.NotFound, (await client.GetAsync($"{Route}/{studentId}")).StatusCode);
@@ -145,7 +145,7 @@ public class StudentsApiTests : IntegrationTest
         var schoolId = await ArrangeSchoolAsync();
         var studentId = await ArrangeStudentAsync(schoolId);
         using var factory = new EamsApiFactory(Sql.ConnectionString);
-        using var client = factory.CreateClient();
+        using var client = await SignedInClientAsync(factory);
 
         var created = await client.PostAsJsonAsync(
             $"{Route}/{studentId}/cards", new { cardUid = "04:a7:b8:c9", label = "Primary ID" });
@@ -181,7 +181,7 @@ public class StudentsApiTests : IntegrationTest
         var schoolId = await ArrangeSchoolAsync();
         var studentId = await ArrangeStudentAsync(schoolId);
         using var factory = new EamsApiFactory(Sql.ConnectionString);
-        using var client = factory.CreateClient();
+        using var client = await SignedInClientAsync(factory);
 
         var response = await client.PutAsJsonAsync($"{Route}/{studentId}", new
         {
@@ -210,7 +210,7 @@ public class StudentsApiTests : IntegrationTest
         var schoolId = await ArrangeSchoolAsync();
         await ArrangeStudentAsync(schoolId, "2023-0001");
         using var factory = new EamsApiFactory(Sql.ConnectionString);
-        using var client = factory.CreateClient();
+        using var client = await SignedInClientAsync(factory);
 
         var response = await client.PostAsJsonAsync(Route, Body(studentNumber: "2023-0001"));
 
@@ -236,7 +236,7 @@ public class StudentsApiTests : IntegrationTest
         }
 
         using var factory = new EamsApiFactory(Sql.ConnectionString);
-        using var client = factory.CreateClient();
+        using var client = await SignedInClientAsync(factory);
 
         var response = await client.PostAsJsonAsync(
             $"{Route}/{claimantId}/cards", new { cardUid = "04-A7-B8-C9" });
@@ -266,7 +266,7 @@ public class StudentsApiTests : IntegrationTest
         var schoolId = await ArrangeSchoolAsync();
         var studentId = await ArrangeStudentAsync(schoolId);
         using var factory = new EamsApiFactory(Sql.ConnectionString);
-        using var client = factory.CreateClient();
+        using var client = await SignedInClientAsync(factory);
 
         var response = await client.PostAsJsonAsync(
             $"{Route}/{studentId}/cards", new { label = "Primary ID" });
@@ -282,7 +282,7 @@ public class StudentsApiTests : IntegrationTest
     {
         await ArrangeSchoolAsync();
         using var factory = new EamsApiFactory(Sql.ConnectionString);
-        using var client = factory.CreateClient();
+        using var client = await SignedInClientAsync(factory);
 
         var response = await client.PostAsJsonAsync(Route, Body(firstName: "   "));
 
@@ -295,7 +295,7 @@ public class StudentsApiTests : IntegrationTest
         await ArrangeSchoolAsync();
         var unknown = Guid.NewGuid();
         using var factory = new EamsApiFactory(Sql.ConnectionString);
-        using var client = factory.CreateClient();
+        using var client = await SignedInClientAsync(factory);
 
         Assert.Equal(HttpStatusCode.NotFound,
             (await client.PutAsJsonAsync($"{Route}/{unknown}", Body())).StatusCode);

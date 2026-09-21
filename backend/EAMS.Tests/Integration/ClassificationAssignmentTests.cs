@@ -108,7 +108,7 @@ public class ClassificationAssignmentTests : IntegrationTest
         var (_, loserId, _, studentIds) = await ArrangeAsync();
 
         using var factory = new EamsApiFactory(Sql.ConnectionString);
-        using var client = factory.CreateClient();
+        using var client = await SignedInClientAsync(factory);
 
         var retired = await client.PatchAsJsonAsync($"{Route}/{loserId}/active", new { isActive = false });
         Assert.Equal(HttpStatusCode.OK, retired.StatusCode);
@@ -146,7 +146,7 @@ public class ClassificationAssignmentTests : IntegrationTest
         var (_, loserId, _, studentIds) = await ArrangeAsync(holders: 3);
 
         using var factory = new EamsApiFactory(Sql.ConnectionString);
-        using var client = factory.CreateClient();
+        using var client = await SignedInClientAsync(factory);
 
         using var body = JsonDocument.Parse(
             await (await client.GetAsync($"{Route}/{loserId}")).Content.ReadAsStringAsync());
@@ -172,7 +172,7 @@ public class ClassificationAssignmentTests : IntegrationTest
         var (_, loserId, _, studentIds) = await ArrangeAsync();
 
         using var factory = new EamsApiFactory(Sql.ConnectionString);
-        using var client = factory.CreateClient();
+        using var client = await SignedInClientAsync(factory);
 
         var refused = await client.DeleteAsync($"{Route}/{loserId}");
 
@@ -217,7 +217,7 @@ public class ClassificationAssignmentTests : IntegrationTest
         var (_, loserId, survivorId, studentIds) = await ArrangeAsync(holders: 3);
 
         using var factory = new EamsApiFactory(Sql.ConnectionString);
-        using var client = factory.CreateClient();
+        using var client = await SignedInClientAsync(factory);
 
         var response = await client.PostAsJsonAsync(
             $"{Route}/{loserId}/merge", new { intoClassificationId = survivorId });
@@ -377,7 +377,7 @@ public class ClassificationAssignmentTests : IntegrationTest
         // Both classifications report the holder, which is what a scalar column could not have done:
         // one of the two would have had a count of zero and looked empty.
         using var factory = new EamsApiFactory(Sql.ConnectionString);
-        using var client = factory.CreateClient();
+        using var client = await SignedInClientAsync(factory);
 
         foreach (var id in new[] { studentAxisId, personnelAxisId })
         {

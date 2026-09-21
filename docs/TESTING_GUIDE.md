@@ -110,11 +110,15 @@ different things** (client correction 2026-07-30, register D-43).
 
 ## 4. Auth: what is and is not enforced
 
-**Human authentication is not built** — JWT + permission-based RBAC is Technical Plan §11, deferred
-by ADR-001 D-6/D-28. Every non-capture endpoint is open. The assembly carries
-`[assembly: AuthorizationNotEnforced]` and the API logs the fact on every startup, so this is
-asserted rather than merely true. `AuthorizationSeamTests` and `PermissionRegistryTests` hold the
-seam. Do not "fix" it incidentally.
+**Every endpoint except `POST /auth/login` and `POST /auth/refresh` is gated** (Technical Plan §11).
+Admin routes need `Authorization: Bearer <accessToken>` from sign-in, and the token's roles must grant
+the endpoint's permission: no token is `401`, the wrong role is `403`. `AuthorizationCoverageTests`
+fails the build for an action with no gate, and `AuthEnforcementTests` sends an anonymous request to
+every route in the host's route table and expects `401`. `PermissionRegistryTests` keeps the permission
+codes and the declared call sites in step.
+
+To exercise an admin route by hand, sign in first and copy `accessToken` from the response. In an
+integration test, use `SignedInClientAsync`.
 
 **Device-key auth on the five capture routes is real and enforced:**
 

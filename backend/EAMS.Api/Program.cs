@@ -35,7 +35,7 @@ builder.Services.Replace(
 builder.Services.AddEamsOpenApi();
 
 // Plan §6's header declares "Errors: RFC 7807 ProblemDetails", which nothing implemented. Without
-// it an unhandled path returned a full stack trace in Development — on endpoints that are
+// it an unhandled path returned a full stack trace in Development — on endpoints that were then
 // deliberately open (ADR-001 D-6) — and a 500 with an empty body in Production, which tells a
 // client nothing and leaves an operator with no handle to search logs by.
 builder.Services.AddProblemDetails(options => options.CustomizeProblemDetails = context =>
@@ -99,9 +99,10 @@ builder.Services.AddSingleton<AuthAccountLimiter>();
 // emitting exactly the claim types Phase 6's JWT will emit, so Phase 6 adds `.AddJwtBearer("Bearer")`
 // beside this line rather than replacing what is here.
 //
-// D-6's operational constraint is unchanged and still binding: four endpoints are gated; everything
-// else in this API is open and unauthenticated, and this build must not be exposed beyond local or
-// development use until §11 lands in full. See AuthorizationStatus, which says so on every start.
+// The device scheme is the DEFAULT scheme, and that is still right now that every route is gated: the
+// capture routes name it, the admin routes name Bearer explicitly, so which one is the default decides
+// nothing about who may call what — only which handler UseAuthentication runs up front, which the rate
+// limiter below needs to be the device one.
 builder.Services
     .AddAuthentication(DeviceKey.AuthenticationScheme)
     .AddScheme<DeviceKeyOptions, DeviceKeyHandler>(DeviceKey.AuthenticationScheme, _ => { })
@@ -110,9 +111,8 @@ builder.Services
     //
     // Phase 6b, and it is ADDITIVE in the literal sense: this line sits beside the device scheme
     // rather than instead of it, exactly as DeviceKeyHandler's remarks predicted. The device handler
-    // returns NoResult when a request carries no DeviceKey header, so the two never contend, and no
-    // endpoint outside /auth carries [Authorize] for this scheme — every other route behaves exactly
-    // as it did before this line existed. AuthStagedCutoverTests asserts that rather than assuming it.
+    // returns NoResult when a request carries no DeviceKey header, so the two never contend. Every
+    // admin route names this scheme in its [Authorize]; no capture route does.
     .AddJwtBearer(JwtBearerDefaults.AuthenticationScheme, options =>
     {
         // ⚠ THE SHARPEST TRAP IN THIS PHASE. LEAVE THIS FALSE.
@@ -212,7 +212,14 @@ builder.Services
                     });
             },
         };
-    });
+    })
+
+    // GET /events only: the operator's list and the capture app's event picker share the route, and
+    // this forwards each request to the one handler its Authorization header names. See DeviceKeyOrBearer.
+    .AddPolicyScheme(
+        DeviceKeyOrBearer.AuthenticationScheme,
+        "Device key or Bearer token",
+        options => options.ForwardDefaultSelector = DeviceKeyOrBearer.SelectScheme);
 
 // The policy name and the claim value are the same string on purpose: a policy that exists and demands
 // nothing is then not expressible. §11 scopes a device key to `attendance.capture` and nothing else, so
@@ -226,19 +233,24 @@ builder.Services.AddAuthorization(options =>
             .AddAuthenticationSchemes(DeviceKey.AuthenticationScheme)
             .RequireClaim(EamsClaimTypes.Permission, EamsPermissions.AttendanceCapture));
 
-    // The first §11 policy that gates a *read*, and the first one bound to a person rather than a
-    // device. Bearer only, deliberately: a device key is scoped to `attendance.capture` and must not
-    // be able to satisfy an operator's permission by accident, which is what a policy naming no
-    // scheme would allow once several schemes are registered.
+    // One policy per code a person can hold, each named after its code, so every
+    // `[Authorize(Policy = EamsPermissions.X)]` on the admin surface resolves. Derived from the grant
+    // matrix rather than listed, so a code added to the registry has a policy the moment it exists —
+    // an [Authorize] naming a policy that was never registered is a 500 on every request, not a 403.
     //
-    // It gates exactly one action today - GET /events/{id}/scans - because that endpoint is new,
-    // nothing consumes it yet, and no device-key route can reach it. Enforcing the rest of §11 is a
-    // deliberate later step, not something that should follow from this one existing.
-    options.AddPolicy(
-        EamsPermissions.EventsRead,
-        policy => policy
-            .AddAuthenticationSchemes(JwtBearerDefaults.AuthenticationScheme)
-            .RequireClaim(EamsClaimTypes.Permission, EamsPermissions.EventsRead));
+    // Bearer only, deliberately: a device key is scoped to `attendance.capture` and must not be able
+    // to satisfy an operator's permission by accident, which is what a policy naming no scheme would
+    // allow once several schemes are registered.
+    DeviceKeyOrBearer.AddEventsListPolicy(options);
+
+    foreach (var code in EamsRoles.HumanAssignable)
+    {
+        options.AddPolicy(
+            code,
+            policy => policy
+                .AddAuthenticationSchemes(JwtBearerDefaults.AuthenticationScheme)
+                .RequireClaim(EamsClaimTypes.Permission, code));
+    }
 });
 
 // §14: "rate limiting on /auth and /attendance/tap". Partitioned by device_id — see CaptureRateLimiting
@@ -264,11 +276,9 @@ builder.Services.AddScoped<AmbientTenant>();
 builder.Services.Replace(ServiceDescriptor.Scoped<ISchoolContext, ClaimsSchoolContext>());
 builder.Services.Replace(ServiceDescriptor.Scoped<IDeviceContext, ClaimsDeviceContext>());
 
-// The third seam, and the last of the family ADR-001 D-6 created (Phase 6b). It changes nothing about
-// any existing endpoint: no route outside /auth accepts a Bearer token, so there is no principal for
-// it to find on any of them and it answers null exactly as UnauthenticatedCurrentUser did. What it
-// buys is that attribution is correct on the day enforcement arrives — a NULL RecordedByUserId cannot
-// be backfilled afterwards, which is why this seam existed before there was anything to put in it.
+// The third seam, and the last of the family ADR-001 D-6 created (Phase 6b). Every admin route now
+// demands a Bearer token, so the principal it reads is the operator who made the request, and an
+// audited write such as POST /attendance/manual is attributed to them rather than to nobody.
 builder.Services.Replace(ServiceDescriptor.Scoped<ICurrentUser, ClaimsCurrentUser>());
 
 var app = builder.Build();
@@ -334,9 +344,6 @@ app.Logger.LogInformation(
     "browser does not send back means POST {Suffix2}/refresh answers 401 with nothing in any log.",
     AuthCookies.RefreshCookiePathSuffix, AuthCookies.RefreshCookiePathSuffix);
 
-// Said out loud on every start: nothing here is protected (ADR-001 D-6, Technical Plan §11).
-AuthorizationStatus.LogEnforcementState(app.Logger);
-
 // Migrate on start, and seed dev convenience data in Development only. All idempotent: migrations
 // skip what is already applied, seeding returns early once a school row exists. This also pins the
 // development tenant for §11's SchoolId query filter and logs which school won.
@@ -376,10 +383,9 @@ if (CreateAdminCommand.IsRequested(args))
     return await CreateAdminCommand.RunAsync(app.Services, args, Console.Out);
 }
 
-// Development only. Swagger UI is an unauthenticated, complete description of an API whose
-// endpoints are all open (ADR-001 D-6) — publishing it from a production host hands an attacker
-// the map as well as the door. The generator stays registered so the document can still be built
-// for tooling; only the endpoints are gated.
+// Development only. Swagger UI is an unauthenticated, complete description of the API — publishing it
+// from a production host hands an attacker the map, even with every door now locked. The generator
+// stays registered so the document can still be built for tooling; only the endpoints are gated.
 if (app.Environment.IsDevelopment())
 {
     app.UseSwagger();
@@ -397,8 +403,9 @@ if (app.Environment.IsDevelopment())
 // UseRouting would put them all on the wrong side of it.
 app.UseRouting();
 
-// Runs on every request. The DeviceKey handler returns NoResult when the request carries no
-// Authorization header of its scheme, so the open endpoints are entirely unaffected.
+// Runs on every request, and runs the DEFAULT scheme only — the device one. It returns NoResult when
+// the request carries no DeviceKey header. A Bearer token is not read here: it is read by
+// UseAuthorization, for the endpoints whose [Authorize] names Bearer.
 app.UseAuthentication();
 
 // After authentication, not before, and that is deliberate — the partition key is `device_id`, which
@@ -407,9 +414,9 @@ app.UseAuthentication();
 // kiosk behind one campus NAT in a single bucket.
 app.UseRateLimiter();
 
-// Only the endpoints carrying [Authorize] are gated (Phase 4a design, D-28) — three of D-28's four
-// today, because POST /attendance/tap/batch does not exist until 4d. Everything else in this API is
-// still open under ADR-001 D-6.
+// Every route outside /auth/login and /auth/refresh carries an [Authorize] naming its scheme and its
+// permission: a device key on the five capture routes, a Bearer token and a §4.11 permission on the
+// admin surface. AuthorizationCoverageTests fails the build for an action that carries neither.
 app.UseAuthorization();
 
 app.MapControllers();

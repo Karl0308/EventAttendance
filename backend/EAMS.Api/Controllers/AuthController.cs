@@ -14,12 +14,10 @@ namespace EAMS.Api.Controllers;
 /// Technical Plan §6.1 / §11 — human authentication (Phase 6b).
 ///
 /// <para>
-/// <b>This is the first and only surface in the API that a person authenticates against, and adding
-/// it changes nothing about any other endpoint.</b> ADR-001 D-6's staged cutover is unchanged: every
-/// route outside <c>/auth</c> is still open and unauthenticated, <c>[HasPermissionNotEnforced]</c>
-/// still enforces nothing, and <c>[assembly: AuthorizationNotEnforced]</c> is still present. Turning
-/// those on is a later phase, and <c>AuthStagedCutoverTests</c> asserts the invariant rather than
-/// leaving it to be assumed.
+/// <b>This is the only surface in the API that a person authenticates against.</b> <c>login</c> and
+/// <c>refresh</c> are the only two actions in the API reachable with no credential at all; every admin
+/// route demands the Bearer token issued here plus a §4.11 permission, and
+/// <c>AuthorizationCoverageTests</c> asserts that rather than leaving it to be assumed.
 /// </para>
 ///
 /// <para>

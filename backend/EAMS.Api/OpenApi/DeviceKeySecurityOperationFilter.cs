@@ -1,3 +1,4 @@
+using EAMS.Api.Authentication;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.OpenApi.Models;
@@ -14,10 +15,8 @@ namespace EAMS.Api.OpenApi;
 /// <b>Derived from the endpoint's own <c>[Authorize]</c> metadata rather than from a list.</b> The
 /// alternative — <c>options.AddSecurityRequirement(...)</c> at document level, or a hand-kept array of
 /// route names here — publishes a claim about authentication that nothing checks against the pipeline.
-/// D-28 narrowed enforcement to four endpoints and a later phase will widen it again; a document that
-/// says "everything needs a key" while ten endpoints are open is worse than one that says nothing,
-/// because an integrator would build a client that sends a credential it does not hold to endpoints
-/// that would reject it if they ever started looking.
+/// Two schemes gate different routes, so a document-level requirement could only ever be wrong for one
+/// of them.
 /// </para>
 ///
 /// <para>
@@ -27,7 +26,7 @@ namespace EAMS.Api.OpenApi;
 /// device key would tell the mobile developer that a kiosk credential signs a human in, and publishing
 /// the capture routes as accepting a Bearer token would tell the SPA it can tap. Each operation is
 /// therefore marked with exactly the scheme its <c>[Authorize]</c> names — and an operation carrying
-/// neither, which is still most of this API under ADR-001 D-6, is marked with nothing at all.
+/// neither, which is only <c>/auth/login</c> and <c>/auth/refresh</c>, is marked with nothing at all.
 /// </para>
 /// </summary>
 internal sealed class DeviceKeySecurityOperationFilter : IOperationFilter
@@ -51,6 +50,10 @@ internal sealed class DeviceKeySecurityOperationFilter : IOperationFilter
             .OfType<AuthorizeAttribute>()
             .SelectMany(a => (a.AuthenticationSchemes ?? "").Split(
                 ',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+            // The forwarding scheme is not a credential a client sends; the two it forwards to are.
+            .SelectMany(s => s == DeviceKeyOrBearer.AuthenticationScheme
+                ? [DeviceKey.AuthenticationScheme, JwtBearerDefaults.AuthenticationScheme]
+                : new[] { s })
             .Distinct(StringComparer.Ordinal)
             .ToArray();
 

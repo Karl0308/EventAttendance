@@ -301,27 +301,41 @@ public class AuthCrossSchemeTests : IntegrationTest
         Assert.Equal("Bearer", response.Challenge()?.Scheme);
     }
 
-    // -------------------------------------------------------------- the staged cutover, unchanged
+    // ------------------------------------------------------------ the other direction: admin routes
 
-    [Fact]
-    public async Task A_valid_bearer_token_does_not_close_an_endpoint_that_is_still_open()
+    /// <summary>
+    /// <b>A device key does not open an operator's route, and the operator's token does.</b> The mirror
+    /// of the capture tests above. A kiosk key is a credential left on a shared handset in a corridor;
+    /// if it satisfied <c>students.read</c> it would read the whole roster of the school it scans for.
+    /// The admin gates name the Bearer scheme, so the device handler is never consulted for them — a
+    /// key that verifies perfectly still leaves the request anonymous as far as the gate is concerned.
+    /// </summary>
+    [Theory]
+    [InlineData("/api/v1/students")]
+    [InlineData("/api/v1/attendance")]
+    [InlineData("/api/v1/devices")]
+    public async Task A_device_key_is_challenged_on_an_admin_route_that_a_bearer_token_opens(string route)
     {
         var world = await ArrangeAsync();
+        var deviceKey = await IssueDeviceKeyAsync(world.SchoolId);
 
         using var factory = new EamsApiFactory(Sql.ConnectionString);
 
         using var session = new AuthApiClient(factory);
         Assert.Equal(HttpStatusCode.OK, (await session.LoginAsync(Email, Password)).StatusCode);
 
-        using var authenticated = factory.CreateClient().WithBearer(session.AccessToken!);
-        using var anonymous = factory.CreateClient();
+        using var device = factory.CreateClient().WithDeviceKey(deviceKey);
+        using var operatorClient = factory.CreateClient().WithBearer(session.AccessToken!);
 
-        // Both must succeed. AuthStagedCutoverTests proves the anonymous half; this adds the half
-        // that only appears once a Bearer credential exists — presenting one must not start
-        // enforcing anything, because ADR-001 D-6's cutover is a later phase's decision.
-        Assert.True((await anonymous.GetAsync("/api/v1/students")).IsSuccessStatusCode);
-        Assert.True((await authenticated.GetAsync("/api/v1/students")).IsSuccessStatusCode);
+        var asDevice = await device.GetAsync(route);
+        Assert.Equal(HttpStatusCode.Unauthorized, asDevice.StatusCode);
+        Assert.Equal("Bearer", asDevice.Challenge()?.Scheme);
 
-        Assert.NotEqual(Guid.Empty, world.SchoolId);
+        // /devices needs devices.read, which the Organizer role does not hold: a 403 there is the
+        // token being read and refused on its merits, which is the half this test is about.
+        var asOperator = await operatorClient.GetAsync(route);
+        Assert.Equal(
+            route == "/api/v1/devices" ? HttpStatusCode.Forbidden : HttpStatusCode.OK,
+            asOperator.StatusCode);
     }
 }

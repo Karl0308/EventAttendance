@@ -75,28 +75,25 @@ public class OpenApiDocumentTests : IntegrationTest
         (Manifest, "get"),
     ];
 
-    private const string AuthMe = "/api/v1/auth/me";
-    private const string AuthLogout = "/api/v1/auth/logout";
-    private const string AuthChangePassword = "/api/v1/auth/change-password";
+    /// <summary>
+    /// The operation a person and a device both reach: the event list, which is also the capture app's
+    /// event picker. It publishes both requirements, so a generated client sees it may send either.
+    /// </summary>
+    private static readonly (string Path, string Method)[] SharedOperations =
+    [
+        ("/api/v1/events", "get"),
+    ];
 
     /// <summary>
-    /// The operations Phase 6b publishes as requiring a signed-in person. Deliberately separate from
-    /// <see cref="GatedOperations"/>: the two credentials are not interchangeable, and a document that
-    /// blurred them would tell the mobile developer a kiosk key signs a user in.
+    /// The operations a caller holding nothing may reach. Every other operation in the document
+    /// publishes a security requirement: <see cref="GatedOperations"/> a device key, the rest a signed-in
+    /// person's Bearer token. Transcribed for the same reason — an operation that silently stopped
+    /// publishing a requirement would tell an integrator it is public.
     /// </summary>
-    private static readonly (string Path, string Method)[] BearerOperations =
+    private static readonly (string Path, string Method)[] AnonymousOperations =
     [
-        (AuthMe, "get"),
-        (AuthLogout, "post"),
-        (AuthChangePassword, "post"),
-
-        // The first NON-auth operation gated on a person, and the first enforced read anywhere in
-        // this API (the per-event scan log). Listed by hand for the same reason the rest are: this
-        // array is the published record of what a caller must authenticate for, so an operation
-        // arriving here without somebody writing the line is an operation that started demanding a
-        // credential by accident - which a client discovers as a 401 in production rather than as a
-        // failing test here.
-        ("/api/v1/events/{id}/scans", "get"),
+        ("/api/v1/auth/login", "post"),
+        ("/api/v1/auth/refresh", "post"),
     ];
 
     /// <summary>Fetches and parses the served document. Fails loudly if it is not 200 JSON.</summary>
@@ -331,22 +328,22 @@ public class OpenApiDocumentTests : IntegrationTest
     }
 
     /// <summary>
-    /// <b>Exactly the four D-28 endpoints require the key, and no others.</b>
+    /// <b>Every operation but sign-in publishes a requirement, and each names the right scheme.</b>
     ///
     /// <para>
-    /// Both directions matter and they fail differently. Marking too few leaves an integrator building
-    /// a client that sends no credential to an endpoint that will 401 it. Marking too many — which is
-    /// what a document-level <c>AddSecurityRequirement</c> would do — publishes a claim about
-    /// authentication that the pipeline does not make, on an API whose admin surface is deliberately
-    /// open until Phase 6. The second is the more dangerous, because it reads as the safer document.
+    /// Both directions matter and they fail differently. An operation publishing no requirement tells
+    /// an integrator it is public, and they build a client that sends nothing and gets a 401. An
+    /// operation publishing the wrong scheme is worse: DeviceKey on an admin route tells the mobile
+    /// developer a kiosk key reads the roster, and Bearer on a capture route tells the SPA it can tap.
     /// </para>
     /// </summary>
     [Fact]
-    public async Task Exactly_the_gated_operations_require_a_device_key()
+    public async Task Every_operation_but_sign_in_publishes_the_scheme_it_requires()
     {
         using var document = await DocumentAsync();
 
         var required = new List<string>();
+        var published = new List<string>();
 
         foreach (var path in document.RootElement.GetProperty("paths").EnumerateObject())
         {
@@ -358,6 +355,8 @@ public class OpenApiDocumentTests : IntegrationTest
 
             foreach (var operation in path.Value.EnumerateObject())
             {
+                published.Add($"{operation.Name} {path.Name}");
+
                 if (!operation.Value.TryGetProperty("security", out var security)) continue;
                 if (security.GetArrayLength() == 0) continue;
 
@@ -365,10 +364,9 @@ public class OpenApiDocumentTests : IntegrationTest
             }
         }
 
-        var expected = GatedOperations.Concat(BearerOperations)
-            .Select(o => $"{o.Method} {o.Path}").Order().ToList();
+        var anonymous = AnonymousOperations.Select(o => $"{o.Method} {o.Path}").ToList();
 
-        Assert.Equal(expected, required.Order().ToList());
+        Assert.Equal(published.Except(anonymous).Order().ToList(), required.Order().ToList());
 
         // And each names the right scheme. "Some security requirement is published" is the assertion
         // that stops being useful the moment there are two schemes: publishing DeviceKey on /auth/me
@@ -386,12 +384,16 @@ public class OpenApiDocumentTests : IntegrationTest
                     .SelectMany(r => r.EnumerateObject().Select(p => p.Name))
                     .ToList();
 
-                var isBearer = BearerOperations
+                var isDevice = GatedOperations
+                    .Any(o => o.Path == path.Name && o.Method == operation.Name);
+                var isShared = SharedOperations
                     .Any(o => o.Path == path.Name && o.Method == operation.Name);
 
-                Assert.Equal(
-                    [isBearer ? EamsOpenApi.BearerSecuritySchemeId : EamsOpenApi.DeviceKeySecuritySchemeId],
-                    names);
+                string[] expected = isShared
+                    ? [EamsOpenApi.DeviceKeySecuritySchemeId, EamsOpenApi.BearerSecuritySchemeId]
+                    : [isDevice ? EamsOpenApi.DeviceKeySecuritySchemeId : EamsOpenApi.BearerSecuritySchemeId];
+
+                Assert.Equal(expected, names);
             }
         }
     }

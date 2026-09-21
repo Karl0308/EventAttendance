@@ -57,7 +57,7 @@ function blurb(op) {
 }
 
 /**
- * The scheme(s) the operation demands, or open (ADR-001 D-6).
+ * The scheme(s) the operation demands, or open — which is only sign-in and refresh.
  *
  * Read off `op.security`, which the generator derives from each endpoint's own `[Authorize]` — so a
  * scheme added to the API appears here without this file being edited, and one that is *not* in
@@ -125,9 +125,8 @@ function render(doc) {
   out.push('');
   out.push(
     '`Auth` names the credential an endpoint demands: **DeviceKey** for a capture device, ' +
-      '**Bearer** for a signed-in person (`POST /auth/login`). Everything else is still open — ' +
-      'enforcement over the rest of the surface is a later phase (ADR-001 D-6), so an unmarked row ' +
-      'is not a public endpoint, it is an unprotected one.',
+      '**Bearer** for a signed-in person (`POST /auth/login`) holding the permission the endpoint ' +
+      'requires. Only sign-in and refresh are unmarked.',
   );
   out.push('');
 

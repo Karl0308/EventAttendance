@@ -8,14 +8,13 @@ using Xunit;
 namespace EAMS.Tests.Integration;
 
 /// <summary>
-/// <c>GET /events/{id}/scans</c> is the first read in this API that authorization actually enforces.
+/// <c>GET /events/{id}/scans</c> was the first read in this API that authorization enforced, and it is
+/// kept as the worked example of all three answers a gated admin route gives.
 ///
 /// <para>
-/// <b>Why these tests carry more weight than the endpoint's size suggests.</b> Every other read is
-/// still open under ADR-001 D-6, so this is the only route where the §11 machinery - the Bearer
-/// scheme, the permission claim, the policy - is load-bearing rather than recorded. If the gate
-/// silently stops refusing, no other test in the suite notices, because no other route is gated for
-/// it to be compared against.
+/// <c>AuthEnforcementTests</c> proves every route challenges an anonymous caller; this file goes
+/// further on one route, through the Bearer scheme, the permission claim and the policy, including the
+/// 403 a signed-in operator without the grant receives.
 /// </para>
 ///
 /// <para>

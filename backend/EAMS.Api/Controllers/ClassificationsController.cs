@@ -1,6 +1,8 @@
 using EAMS.Api.Authorization;
 using EAMS.Application.Abstractions;
 using EAMS.Application.Dtos;
+using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.Infrastructure;
 
@@ -78,6 +80,7 @@ public class ClassificationsController : ControllerBase
     /// <param name="ct">Cancellation token.</param>
     /// <response code="200">One page of classifications, possibly empty.</response>
     [HttpGet]
+    [Authorize(AuthenticationSchemes = JwtBearerDefaults.AuthenticationScheme, Policy = EamsPermissions.StudentsRead)]
     [HasPermissionNotEnforced(EamsPermissions.StudentsRead)]
     [ProducesResponseType(typeof(PagedResult<ClassificationDto>), StatusCodes.Status200OK)]
     public async Task<ActionResult<PagedResult<ClassificationDto>>> List(
@@ -100,6 +103,7 @@ public class ClassificationsController : ControllerBase
     /// <response code="200">The classification.</response>
     /// <response code="404">No such classification in this school.</response>
     [HttpGet("{id:guid}", Name = nameof(GetClassification))]
+    [Authorize(AuthenticationSchemes = JwtBearerDefaults.AuthenticationScheme, Policy = EamsPermissions.StudentsRead)]
     [HasPermissionNotEnforced(EamsPermissions.StudentsRead)]
     [ProducesResponseType(typeof(ClassificationDto), StatusCodes.Status200OK)]
     [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status404NotFound)]
@@ -140,6 +144,7 @@ public class ClassificationsController : ControllerBase
     /// <response code="400">The name is blank, over-length, whitespace-padded, or has no letter or digit.</response>
     /// <response code="409">That name's key is already in use here, or no school could be resolved.</response>
     [HttpPost]
+    [Authorize(AuthenticationSchemes = JwtBearerDefaults.AuthenticationScheme, Policy = EamsPermissions.StudentsWrite)]
     [HasPermissionNotEnforced(EamsPermissions.StudentsWrite)]
     [ProducesResponseType(typeof(ClassificationDto), StatusCodes.Status201Created)]
     [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status400BadRequest)]
@@ -193,6 +198,7 @@ public class ClassificationsController : ControllerBase
     /// <response code="404">No such classification.</response>
     /// <response code="409">Another classification in this school already holds that name's key.</response>
     [HttpPut("{id:guid}")]
+    [Authorize(AuthenticationSchemes = JwtBearerDefaults.AuthenticationScheme, Policy = EamsPermissions.StudentsWrite)]
     [HasPermissionNotEnforced(EamsPermissions.StudentsWrite)]
     [ProducesResponseType(typeof(ClassificationDto), StatusCodes.Status200OK)]
     [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status400BadRequest)]
@@ -240,6 +246,7 @@ public class ClassificationsController : ControllerBase
     /// <response code="404">No such classification.</response>
     /// <response code="409">It was merged into another classification and cannot be reactivated.</response>
     [HttpPatch("{id:guid}/active")]
+    [Authorize(AuthenticationSchemes = JwtBearerDefaults.AuthenticationScheme, Policy = EamsPermissions.StudentsWrite)]
     [HasPermissionNotEnforced(EamsPermissions.StudentsWrite)]
     [ProducesResponseType(typeof(ClassificationDto), StatusCodes.Status200OK)]
     [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status400BadRequest)]
@@ -313,6 +320,7 @@ public class ClassificationsController : ControllerBase
     /// seed would re-create — retire those instead. It was not deleted.
     /// </response>
     [HttpDelete("{id:guid}")]
+    [Authorize(AuthenticationSchemes = JwtBearerDefaults.AuthenticationScheme, Policy = EamsPermissions.StudentsWrite)]
     [HasPermissionNotEnforced(EamsPermissions.StudentsWrite)]
     [ProducesResponseType(typeof(ClassificationDto), StatusCodes.Status200OK)]
     [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status404NotFound)]
@@ -361,6 +369,7 @@ public class ClassificationsController : ControllerBase
     /// <response code="404">One of the two ids names no classification in this school.</response>
     /// <response code="409">The merge would strand a population or build a chain of tombstones.</response>
     [HttpPost("{id:guid}/merge")]
+    [Authorize(AuthenticationSchemes = JwtBearerDefaults.AuthenticationScheme, Policy = EamsPermissions.StudentsWrite)]
     [HasPermissionNotEnforced(EamsPermissions.StudentsWrite)]
     [ProducesResponseType(typeof(ClassificationMergeResult), StatusCodes.Status200OK)]
     [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status400BadRequest)]

@@ -356,9 +356,9 @@ public class EventManifestTests : IntegrationTest
         using var factory = new EamsApiFactory(Sql.ConnectionString);
         using var device = factory.CreateClient().WithDeviceKey(world.ApiKey);
 
-        // The admin surface is open under ADR-001 D-6, so the dashboard's two reads need no credential
-        // — which is also the point: these are the numbers an operator is looking at.
-        using var admin = factory.CreateClient();
+        // The dashboard's two reads take an operator's token rather than the device's key — which is
+        // also the point: these are the numbers an operator is looking at.
+        using var admin = await SignedInClientAsync(factory);
 
         var manifest = await BodyOf(await device.GetAsync(ManifestRoute(world.EventId)));
         var summary = await BodyOf(await admin.GetAsync($"/api/v1/events/{world.EventId}/summary"));

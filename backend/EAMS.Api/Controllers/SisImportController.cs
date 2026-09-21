@@ -1,6 +1,8 @@
 using EAMS.Api.Authorization;
 using EAMS.Application.Abstractions;
 using EAMS.Application.Dtos;
+using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.Infrastructure;
 
@@ -10,12 +12,10 @@ namespace EAMS.Api.Controllers;
 /// Technical Plan §10 — the school-year roster import.
 ///
 /// <para>
-/// <b>Every endpoint is decorated <c>sis.import</c> and every endpoint is open.</b>
-/// <see cref="HasPermissionNotEnforcedAttribute"/> enforces nothing (ADR-001 D-6); the decoration
-/// records what Phase 6 must demand. That matters more here than anywhere else in this API: these four
-/// endpoints read and write the full roster of every student in the institution, including their names
-/// and institutional e-mail addresses, and the upload endpoint writes to the academic tables. This
-/// system must not be exposed beyond local/development use until §11 lands.
+/// <b>Every endpoint demands a Bearer token carrying <c>sis.import</c>.</b> That matters more here
+/// than anywhere else in this API: these four endpoints read and write the full roster of every
+/// student in the institution, including their names and institutional e-mail addresses, and the
+/// upload endpoint writes to the academic tables.
 /// </para>
 /// </summary>
 [ApiController]
@@ -48,6 +48,7 @@ public class SisImportController : ControllerBase
     /// batch in a way nothing downstream can detect.
     /// </param>
     [HttpPost("upload")]
+    [Authorize(AuthenticationSchemes = JwtBearerDefaults.AuthenticationScheme, Policy = EamsPermissions.SisImport)]
     [HasPermissionNotEnforced(EamsPermissions.SisImport)]
     [RequestSizeLimit(MaxUploadBytes)]
     [ProducesResponseType(typeof(SisImportPreviewDto), StatusCodes.Status201Created)]
@@ -98,6 +99,7 @@ public class SisImportController : ControllerBase
     /// leaves it identical and reports every row <c>Skipped</c>.
     /// </summary>
     [HttpPost("{batchId:guid}/run")]
+    [Authorize(AuthenticationSchemes = JwtBearerDefaults.AuthenticationScheme, Policy = EamsPermissions.SisImport)]
     [HasPermissionNotEnforced(EamsPermissions.SisImport)]
     [ProducesResponseType(typeof(SisImportBatchDto), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
@@ -165,6 +167,7 @@ public class SisImportController : ControllerBase
     /// <response code="200">The batch.</response>
     /// <response code="404">No such batch.</response>
     [HttpGet("{batchId:guid}")]
+    [Authorize(AuthenticationSchemes = JwtBearerDefaults.AuthenticationScheme, Policy = EamsPermissions.SisImport)]
     [HasPermissionNotEnforced(EamsPermissions.SisImport)]
     [ProducesResponseType(typeof(SisImportBatchDto), StatusCodes.Status200OK)]
     [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status404NotFound)]
@@ -179,6 +182,7 @@ public class SisImportController : ControllerBase
     /// <c>?result=Failed</c> is the query an operator runs after every import.
     /// </summary>
     [HttpGet("{batchId:guid}/rows")]
+    [Authorize(AuthenticationSchemes = JwtBearerDefaults.AuthenticationScheme, Policy = EamsPermissions.SisImport)]
     [HasPermissionNotEnforced(EamsPermissions.SisImport)]
     [ProducesResponseType(typeof(IEnumerable<SisImportRowDto>), StatusCodes.Status200OK)]
     public async Task<ActionResult<IEnumerable<SisImportRowDto>>> Rows(

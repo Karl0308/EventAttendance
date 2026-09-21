@@ -161,10 +161,9 @@ public class CorsOriginMatchingTests : IntegrationTest
     /// </para>
     ///
     /// <para>
-    /// Every endpoint in this build is open (ADR-001 D-6), and a reader who takes
-    /// <c>An_origin_that_differs_from_the_allowed_one_in_any_way_is_refused</c> as evidence of access
-    /// control would conclude the API is protected from anything but the admin SPA. It is not, and this
-    /// is what says so. When §11's auth lands, this test is unaffected — which is itself the point:
+    /// A reader who takes <c>An_origin_that_differs_from_the_allowed_one_in_any_way_is_refused</c> as
+    /// evidence of access control would conclude the API is protected from anything but the admin SPA.
+    /// It is not — what protects it is the Bearer token each route demands — and this is what says so:
     /// authorization and CORS are answering different questions and neither substitutes for the other.
     /// </para>
     /// </summary>
@@ -172,7 +171,7 @@ public class CorsOriginMatchingTests : IntegrationTest
     public async Task A_refused_origin_is_a_missing_header_and_not_a_refused_request()
     {
         using var factory = new DevelopmentApiFactory(Sql.ConnectionString);
-        using var client = factory.CreateClient();
+        using var client = await SignedInClientAsync(factory);
 
         var request = new HttpRequestMessage(HttpMethod.Get, Route);
         request.Headers.Add("Origin", "https://not-the-admin-spa.example");

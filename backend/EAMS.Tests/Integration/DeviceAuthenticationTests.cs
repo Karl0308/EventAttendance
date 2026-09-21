@@ -133,32 +133,37 @@ public class DeviceAuthenticationTests : IntegrationTest
     }
 
     /// <summary>
-    /// And the endpoints ADR-001 D-6 leaves open stay open. Phase 4b is a <em>narrowing</em> of the
-    /// open surface, not an authorization rollout, and the difference is only checkable by asserting
-    /// both halves.
+    /// And the device key opens nothing outside the capture surface. The admin routes answer an
+    /// operator's token and challenge the device's key — both halves asserted, because a key that
+    /// quietly opened the roster would pass any test that only checked the operator could get in.
     /// </summary>
     [Fact]
-    public async Task An_endpoint_outside_the_gated_four_is_still_open_without_a_key()
+    public async Task An_admin_route_admits_an_operator_and_challenges_a_device_key()
     {
         var world = await ArrangeAsync();
 
         using var factory = new EamsApiFactory(Sql.ConnectionString);
-        using var client = factory.CreateClient();
+        using var operatorClient = await SignedInClientAsync(factory, world.SchoolId);
+        using var device = factory.CreateClient().WithDeviceKey(world.ApiKey);
 
         foreach (var route in new[]
                  {
                      "/api/v1/students",
                      $"/api/v1/students/{world.StudentId}",
-                     "/api/v1/events",
                      "/api/v1/attendance",
                      "/api/v1/devices",
                  })
         {
-            var response = await client.GetAsync(route);
+            var asOperator = await operatorClient.GetAsync(route);
             Assert.True(
-                response.StatusCode == HttpStatusCode.OK,
-                $"{route} returned {(int)response.StatusCode} without credentials. If this is a 401, " +
-                "the open surface has been narrowed beyond D-28's four endpoints — say so in an ADR.");
+                asOperator.StatusCode == HttpStatusCode.OK,
+                $"{route} answered a signed-in SchoolAdmin with {(int)asOperator.StatusCode}.");
+
+            var asDevice = await device.GetAsync(route);
+            Assert.True(
+                asDevice.StatusCode == HttpStatusCode.Unauthorized,
+                $"{route} answered a device key with {(int)asDevice.StatusCode}. A capture credential " +
+                "must not read the admin surface.");
         }
     }
 

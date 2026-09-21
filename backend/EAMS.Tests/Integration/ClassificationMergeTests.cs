@@ -101,7 +101,7 @@ public class ClassificationMergeTests : IntegrationTest
         var loserId = await ArrangeClassificationAsync(schoolId, "ACADEMIC STAFF");
 
         using var factory = new EamsApiFactory(Sql.ConnectionString);
-        using var client = factory.CreateClient();
+        using var client = await SignedInClientAsync(factory);
 
         var response = await client.PostAsJsonAsync(
             $"{Route}/{loserId}/merge", new { intoClassificationId = survivorId });
@@ -159,7 +159,7 @@ public class ClassificationMergeTests : IntegrationTest
         var loserId = await ArrangeClassificationAsync(schoolId, "ACADEMIC STAFF");
 
         using var factory = new EamsApiFactory(Sql.ConnectionString);
-        using var client = factory.CreateClient();
+        using var client = await SignedInClientAsync(factory);
 
         await client.PostAsJsonAsync(
             $"{Route}/{loserId}/merge", new { intoClassificationId = survivorId });
@@ -200,7 +200,7 @@ public class ClassificationMergeTests : IntegrationTest
         var loserId = await ArrangeClassificationAsync(schoolId, "ACADEMIC STAFF");
 
         using var factory = new EamsApiFactory(Sql.ConnectionString);
-        using var client = factory.CreateClient();
+        using var client = await SignedInClientAsync(factory);
 
         await client.PostAsJsonAsync(
             $"{Route}/{loserId}/merge", new { intoClassificationId = survivorId });
@@ -233,7 +233,7 @@ public class ClassificationMergeTests : IntegrationTest
         var id = await ArrangeClassificationAsync(schoolId, "ACAD");
 
         using var factory = new EamsApiFactory(Sql.ConnectionString);
-        using var client = factory.CreateClient();
+        using var client = await SignedInClientAsync(factory);
 
         var response = await client.PostAsJsonAsync(
             $"{Route}/{id}/merge", new { intoClassificationId = id });
@@ -266,7 +266,7 @@ public class ClassificationMergeTests : IntegrationTest
         var id = await ArrangeClassificationAsync(schoolId, "ACAD");
 
         using var factory = new EamsApiFactory(Sql.ConnectionString);
-        using var client = factory.CreateClient();
+        using var client = await SignedInClientAsync(factory);
 
         var response = await client.PostAsJsonAsync($"{Route}/{id}/merge", new { });
 
@@ -287,7 +287,7 @@ public class ClassificationMergeTests : IntegrationTest
         var liveId = await ArrangeClassificationAsync(schoolId, "ACADEMIC STAFF");
 
         using var factory = new EamsApiFactory(Sql.ConnectionString);
-        using var client = factory.CreateClient();
+        using var client = await SignedInClientAsync(factory);
 
         var response = await client.PostAsJsonAsync(
             $"{Route}/{liveId}/merge", new { intoClassificationId = retiredId });
@@ -321,7 +321,7 @@ public class ClassificationMergeTests : IntegrationTest
         var thirdId = await ArrangeClassificationAsync(schoolId, "TEACHING STAFF");
 
         using var factory = new EamsApiFactory(Sql.ConnectionString);
-        using var client = factory.CreateClient();
+        using var client = await SignedInClientAsync(factory);
 
         Assert.Equal(
             HttpStatusCode.OK,
@@ -387,7 +387,7 @@ public class ClassificationMergeTests : IntegrationTest
         var survivorId = await ArrangeClassificationAsync(schoolId, "STUDENT", survivorAxis);
 
         using var factory = new EamsApiFactory(Sql.ConnectionString);
-        using var client = factory.CreateClient();
+        using var client = await SignedInClientAsync(factory);
 
         var response = await client.PostAsJsonAsync(
             $"{Route}/{loserId}/merge", new { intoClassificationId = survivorId });
@@ -425,7 +425,7 @@ public class ClassificationMergeTests : IntegrationTest
             schoolId, "STUDENT", ClassificationAxis.Student, isActive: false);
 
         using var factory = new EamsApiFactory(Sql.ConnectionString);
-        using var client = factory.CreateClient();
+        using var client = await SignedInClientAsync(factory);
 
         var response = await client.PostAsJsonAsync(
             $"{Route}/{loserId}/merge", new { intoClassificationId = survivorId });
@@ -479,7 +479,7 @@ public class ClassificationMergeTests : IntegrationTest
         var w = await ArrangeClassificationAsync(schoolId, "TEACHING STAFF");
 
         using var factory = new EamsApiFactory(Sql.ConnectionString);
-        using var client = factory.CreateClient();
+        using var client = await SignedInClientAsync(factory);
 
         Assert.Equal(
             HttpStatusCode.OK,
@@ -573,7 +573,7 @@ public class ClassificationMergeTests : IntegrationTest
         var loserId = await ArrangeClassificationAsync(schoolId, "ACADEMIC STAFF");
 
         using var factory = new EamsApiFactory(Sql.ConnectionString);
-        using var client = factory.CreateClient();
+        using var client = await SignedInClientAsync(factory);
 
         Assert.Equal(
             HttpStatusCode.OK,
@@ -633,7 +633,7 @@ public class ClassificationMergeTests : IntegrationTest
         var theirs = await ArrangeClassificationAsync(second, "ACADEMIC STAFF");
 
         using var factory = new EamsApiFactory(Sql.ConnectionString);
-        using var client = factory.CreateClient();
+        using var client = await SignedInClientAsync(factory);
 
         var response = await client.PostAsJsonAsync(
             $"{Route}/{theirs}/merge", new { intoClassificationId = ours });
@@ -671,7 +671,7 @@ public class ClassificationMergeTests : IntegrationTest
         }
 
         using var factory = new EamsApiFactory(Sql.ConnectionString);
-        using var client = factory.CreateClient();
+        using var client = await SignedInClientAsync(factory);
 
         await client.PostAsJsonAsync(
             $"{Route}/{loserId}/merge", new { intoClassificationId = retiredTarget });

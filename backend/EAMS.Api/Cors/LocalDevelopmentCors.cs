@@ -40,8 +40,8 @@ internal static class LocalDevelopmentCors
     /// <para>
     /// <b>The <see cref="ViteDevServerOrigin"/> fallback is Development-only, and the gate matters.</b>
     /// A dev default that survives into a deployed environment means that host permanently trusts a
-    /// page served from the viewer's own machine — a small hole today, since every endpoint is open
-    /// anyway (ADR-001 D-6), but one that quietly outlives the thing that made it small. Outside
+    /// page served from the viewer's own machine — a hole that was small only while every endpoint was
+    /// open anyway (ADR-001 D-6), and is not small now that they are not. Outside
     /// Development an unconfigured API therefore admits <em>no</em> origin: the policy still exists and
     /// still runs, it simply matches nothing, which fails visibly in a browser rather than silently in
     /// a security review.

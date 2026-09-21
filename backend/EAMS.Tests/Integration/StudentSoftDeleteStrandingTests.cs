@@ -214,7 +214,7 @@ public class StudentSoftDeleteStrandingTests : IntegrationTest
         var world = await ArrangeAsync();
 
         using var factory = new EamsApiFactory(Sql.ConnectionString);
-        using var client = factory.CreateClient();
+        using var client = await SignedInClientAsync(factory);
 
         var reissue = await client.PostAsJsonAsync(
             $"{Route}/{world.SuccessorId}/cards", new { cardUid = CardSerial });
@@ -377,17 +377,18 @@ public class StudentSoftDeleteStrandingTests : IntegrationTest
     {
         var world = await ArrangeAsync();
 
-        // by-card is gated by a device key as of Phase 4b (D-28) — which is exactly the caller this
-        // test's own summary named. The student detail read beside it is still open.
+        // by-card is gated by a device key (D-28) — which is exactly the caller this test's own summary
+        // named. The student detail read beside it is an operator's, so it takes a Bearer token.
         var apiKey = await IssueDeviceKeyAsync(world.SchoolId);
 
         using var factory = new EamsApiFactory(Sql.ConnectionString);
-        using var client = factory.CreateClient().WithDeviceKey(apiKey);
+        using var device = factory.CreateClient().WithDeviceKey(apiKey);
+        using var operatorClient = await SignedInClientAsync(factory, world.SchoolId);
 
         Assert.Equal(HttpStatusCode.NotFound,
-            (await client.GetAsync($"{Route}/{world.DeletedStudentId}")).StatusCode);
+            (await operatorClient.GetAsync($"{Route}/{world.DeletedStudentId}")).StatusCode);
 
         Assert.Equal(HttpStatusCode.NotFound,
-            (await client.GetAsync($"{Route}/by-card/{CardSerial}")).StatusCode);
+            (await device.GetAsync($"{Route}/by-card/{CardSerial}")).StatusCode);
     }
 }

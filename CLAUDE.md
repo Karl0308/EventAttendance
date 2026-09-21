@@ -92,8 +92,15 @@ Checks CI runs (run these before declaring work done):
   `internal` except `AddEamsInfrastructure`. Controllers talk to `IStudentService` /
   `IEventService` / `IAttendanceService` from `EAMS.Application.Abstractions` and speak DTOs only.
   Reaching for the DbContext from a controller is a compile error (CS0122), by design.
-- **Auth is deliberately stubbed** — endpoints are open. Don't "fix" this incidentally; JWT +
-  permission-based RBAC is a planned phase (plan §11).
+- **Every endpoint except `POST /auth/login` and `/auth/refresh` is gated** (plan §11). Admin routes
+  carry `[Authorize(AuthenticationSchemes = JwtBearerDefaults.AuthenticationScheme, Policy =
+  EamsPermissions.X)]` beside `[HasPermissionNotEnforced(EamsPermissions.X)]` — the second records the
+  code for the registry tests and enforces nothing on its own. The five capture routes (tap, tap/batch,
+  by-card, heartbeat, manifest) take a `DeviceKey` instead. `GET /events` is the one shared route — the
+  capture app's event picker — on the `DeviceKeyOrBearer` forwarding scheme, and a device gets `Open`
+  events only. A new action needs the pair, or `AuthorizationCoverageTests` fails. Gated routes resolve
+  their tenant from the token's `school_id`, not the development pin — so an integration test calling
+  one signs in with `SignedInClientAsync`.
 - **`backend/EAMS.Tests` is the test project**, split into `Unit/` (pure logic, no database) and
   `Integration/` (real SQL Server). The integration half starts SQL Server 2022 via Testcontainers,
   so Docker must be running locally; with Docker stopped it falls back to `.\SQLEXPRESS` and says

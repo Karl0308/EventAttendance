@@ -5,6 +5,8 @@ using EAMS.Infrastructure.Data;
 using EAMS.Infrastructure.Identity;
 using EAMS.Infrastructure.Services;
 using EAMS.Infrastructure.Sis;
+using Microsoft.AspNetCore.Mvc.Testing;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
 
@@ -178,6 +180,70 @@ public abstract class IntegrationTest : IAsyncLifetime
 
         Assert.Equal(UserProvisioningOutcome.Created, result.Outcome);
         return result.UserId;
+    }
+
+    /// <summary>
+    /// A client that presents a real operator's Bearer token, for the HTTP tests whose subject is not
+    /// authorization. Every admin route demands one, so a test about pagination or UTC round-tripping
+    /// needs a signed-in caller the way it needs a database.
+    ///
+    /// <para>
+    /// <b>The token comes from a real sign-in, not from <see cref="ForgedJwt"/>.</b> A forged token
+    /// would let the suite pass against claims the login never issues. Signing in through
+    /// <c>POST /auth/login</c> means the permissions and the <c>school_id</c> the request is served under
+    /// are the ones production would give this user — and the tenant is the one a test names here, which
+    /// is why <paramref name="schoolId"/> is required rather than defaulted.
+    /// </para>
+    ///
+    /// <para>
+    /// The e-mail is unique per call, so one test can sign in several operators, or sign in again on a
+    /// second host, without colliding on the unique index or on the per-address login limiter.
+    /// </para>
+    /// </summary>
+    internal async Task<HttpClient> SignedInClientAsync(
+        WebApplicationFactory<Program> factory,
+        Guid schoolId,
+        string roleName = EamsRoleNames.SchoolAdmin)
+    {
+        const string password = "correct-horse-battery-staple";
+        var email = $"operator-{Guid.NewGuid():N}@usa.edu.ph";
+
+        await CreateUserAsync(schoolId, email, password, roleName);
+
+        using var session = new AuthApiClient(factory);
+        var login = await session.LoginAsync(email, password);
+        Assert.Equal(System.Net.HttpStatusCode.OK, login.StatusCode);
+
+        return factory.CreateClient().WithBearer(session.AccessToken!);
+    }
+
+    /// <summary>
+    /// The same, signed in to the school the host's development pin would have chosen — the lowest
+    /// <c>Code</c>, read exactly as <c>PinDevelopmentSchoolAsync</c> reads it.
+    ///
+    /// <para>
+    /// <b>For the tests written while these routes were open.</b> An anonymous request was served under
+    /// the pin; a signed-in one is served under its token's school. Signing in to the pinned school keeps
+    /// every tenancy expectation those tests already assert exactly where it was, so the only thing that
+    /// changes about them is that they now present a credential. A test that is <em>about</em> tenancy
+    /// names its school with the other overload.
+    /// </para>
+    /// </summary>
+    internal async Task<HttpClient> SignedInClientAsync(
+        WebApplicationFactory<Program> factory,
+        string roleName = EamsRoleNames.SchoolAdmin)
+    {
+        // Boot the host before reading Schools: a Development host seeds its school on start, and the
+        // pin is chosen then too, so reading first would see a database the host has not finished.
+        _ = factory.Server;
+
+        Guid schoolId;
+        await using (var db = NewDbContext(new TestSchoolContext()))
+        {
+            schoolId = await db.Schools.OrderBy(s => s.Code).Select(s => s.Id).FirstAsync();
+        }
+
+        return await SignedInClientAsync(factory, schoolId, roleName);
     }
 
     /// <summary>

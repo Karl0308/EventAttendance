@@ -1,6 +1,8 @@
 using EAMS.Api.Authorization;
 using EAMS.Application.Abstractions;
 using EAMS.Application.Dtos;
+using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.Infrastructure;
 
@@ -81,6 +83,7 @@ public class StudentClassificationsController : ControllerBase
     /// <response code="200">The person's classifications, ordered by axis then name. Possibly empty.</response>
     /// <response code="404">No such student.</response>
     [HttpGet]
+    [Authorize(AuthenticationSchemes = JwtBearerDefaults.AuthenticationScheme, Policy = EamsPermissions.StudentsRead)]
     [HasPermissionNotEnforced(EamsPermissions.StudentsRead)]
     [ProducesResponseType(typeof(StudentClassificationsDto), StatusCodes.Status200OK)]
     [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status404NotFound)]
@@ -133,6 +136,7 @@ public class StudentClassificationsController : ControllerBase
     /// classification on the same axis at the same moment. Nothing was changed.
     /// </response>
     [HttpPut("{classificationId:guid}")]
+    [Authorize(AuthenticationSchemes = JwtBearerDefaults.AuthenticationScheme, Policy = EamsPermissions.StudentsWrite)]
     [HasPermissionNotEnforced(EamsPermissions.StudentsWrite)]
     [ProducesResponseType(typeof(StudentClassificationWriteResult), StatusCodes.Status200OK)]
     [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status404NotFound)]
@@ -185,6 +189,7 @@ public class StudentClassificationsController : ControllerBase
     /// rolled back to break the tie. Nothing was removed; re-read and try again.
     /// </response>
     [HttpDelete("{classificationId:guid}")]
+    [Authorize(AuthenticationSchemes = JwtBearerDefaults.AuthenticationScheme, Policy = EamsPermissions.StudentsWrite)]
     [HasPermissionNotEnforced(EamsPermissions.StudentsWrite)]
     [ProducesResponseType(typeof(StudentClassificationWriteResult), StatusCodes.Status200OK)]
     [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status404NotFound)]

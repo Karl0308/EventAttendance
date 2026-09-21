@@ -20,15 +20,16 @@ namespace EAMS.Api.MultiTenancy;
 /// <b>Four</b> answers, in order, and the order is load-bearing (ADR-004 D-54.3 added the third):
 /// <list type="number">
 ///   <item>
-///     <b>A <c>school_id</c> claim</b> — the authenticated answer. Today only a device key produces
-///     one; Phase 6's JWT produces the identical claim type, so this code does not change.
+///     <b>A <c>school_id</c> claim</b> — the authenticated answer. A device key and a person's Bearer
+///     token both produce the identical claim type, so this code does not care which it was.
 ///   </item>
 ///   <item>
 ///     <b>No claim, but a request</b> — the pinned development school
-///     (<see cref="IPinnedSchoolContext"/>). Still the ordinary case: every endpoint outside the four
-///     device-gated ones is open under ADR-001 D-6, so most requests carry no credentials at all.
-///     <b>This branch is what Phase 6 deletes</b>, at which point an unauthenticated request is
-///     rejected before it can reach a query.
+///     (<see cref="IPinnedSchoolContext"/>). No longer the ordinary case: every route outside
+///     <c>/auth/login</c> and <c>/auth/refresh</c> refuses a request with no credential before its
+///     action runs. What still arrives here is that anonymous <c>/auth</c> pair and the device-key
+///     lookup that runs before a device's claims exist. Deleting the branch is a separate change that
+///     has to prove neither of those reads a filtered set.
 ///   </item>
 ///   <item>
 ///     <b>No <c>HttpContext</c>, but a scope that declared itself a background scope</b> — the school

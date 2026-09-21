@@ -33,9 +33,8 @@ GET /swagger/v1/swagger.json     the same document, live
 GET /                            Swagger UI, browsable (development environments only)
 ```
 
-The UI is deliberately not served outside development: until Phase 6 lands human authentication, an
-unauthenticated description of an API whose admin surface is open hands out the map as well as the
-door. The **document** builds in every environment, so client tooling is never blocked.
+The UI is deliberately not served outside development: an unauthenticated description of the API
+hands out the map, even though every route behind it now demands a credential. The **document** builds in every environment, so client tooling is never blocked.
 
 > **If `openapi.json` and the running API ever disagree, the API is right and the file is stale — tell
 > us.** The file is a snapshot taken at a commit; the route is generated per request.
@@ -68,21 +67,20 @@ http://<dev-host>:5080            Swagger UI, browsable in a desktop browser
 
 ### Get yourself a device key
 
-**Enrol your own — do not wait for us to send you one, and do not commit one anywhere.** Device
-enrolment is deliberately open on this network while human authentication is still Phase 6:
+**Ask us for one, and do not commit it anywhere.** A device no longer enrols itself: `POST /devices`
+needs a signed-in administrator, who creates your device on the admin Devices page and hands you its
+key **and its device ID** — heartbeat is `POST /devices/{id}/heartbeat`, and nothing else tells the
+device its own ID. See [`mobile-auth-handoff.md`](mobile-auth-handoff.md).
 
-```bash
-curl -X POST http://<dev-host>:5080/api/v1/devices \
-  -H "Content-Type: application/json" \
-  -d '{"name":"<your name> - capture app","deviceType":"Mobile","readerModel":"RN/Expo","isActive":true}'
-```
+That key is shown **once and never again** — the server keeps only a hash. Put it straight into the
+platform keystore (`expo-secure-store` / Android Keystore), never `AsyncStorage`, and never a committed
+file. Lost it? An administrator regenerates it; the old one stops working at that moment.
 
-The response carries `apiKey` **once and never again** — the server keeps only a hash. Put it straight
-into the platform keystore (`expo-secure-store` / Android Keystore), never `AsyncStorage`, and never a
-committed file. Lost it? `POST /api/v1/devices/{id}/regenerate-key`.
+Ask for a key for your **own** device rather than sharing ours: every tap is attributed to the device
+that sent it, so a shared key makes your traffic and ours indistinguishable in the attendance record.
 
-Enrol your **own** device rather than sharing ours: every tap is attributed to the device that sent
-it, so a shared key makes your traffic and ours indistinguishable in the attendance record.
+Pick the event to capture for with `GET /api/v1/events`, using the same key. A device is answered with
+its school's `Open` events only.
 
 ### Test data you can scan
 
@@ -475,11 +473,10 @@ ship.
 
 | Item | Status |
 |---|---|
-| Authentication for human users (JWT + RBAC) | Phase 6 — every non-capture endpoint is open until then |
+| Authentication for human users (JWT + RBAC) | **Built and enforced** — every route outside sign-in needs a credential |
 | Reports | Phase 5 |
 | Card binding — bulk or in-the-field | Undecided; see question 3. No endpoint exists either way |
 
-Until Phase 6 lands, this API must stay on a local or trusted network.
 
 > **The admin SPA has since been built** and is wired to this API rather than to mock data — students,
 > events and their audiences, devices, and the SIS roster import. It is listed here only because an

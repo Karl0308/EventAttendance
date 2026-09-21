@@ -435,7 +435,7 @@ public class CardSearchTests : IntegrationTest
             schoolId, "2024-0002", RealSerial, active: true);
 
         using var factory = new EamsApiFactory(Sql.ConnectionString);
-        using var client = factory.CreateClient();
+        using var client = await SignedInClientAsync(factory);
 
         var response = await client.GetAsync($"{Route}?cardUid=25-03");
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
@@ -480,7 +480,7 @@ public class CardSearchTests : IntegrationTest
         await ArrangeAsync(RealSerial);
 
         using var factory = new EamsApiFactory(Sql.ConnectionString);
-        using var client = factory.CreateClient();
+        using var client = await SignedInClientAsync(factory);
 
         var response = await client.GetAsync($"{Route}?cardUid=999999");
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
@@ -502,7 +502,7 @@ public class CardSearchTests : IntegrationTest
         await ArrangeAsync(RealSerial);
 
         using var factory = new EamsApiFactory(Sql.ConnectionString);
-        using var client = factory.CreateClient();
+        using var client = await SignedInClientAsync(factory);
 
         var response = await client.GetAsync($"{Route}?cardUid={Uri.EscapeDataString(fragment)}");
 

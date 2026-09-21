@@ -283,7 +283,7 @@ public class ApiContractTests : IntegrationTest
     {
         var world = await ArrangeAsync();
         using var factory = new EamsApiFactory(Sql.ConnectionString);
-        using var client = factory.CreateClient();
+        using var client = await SignedInClientAsync(factory);
 
         var response = await client.PostAsync(
             $"/api/v1/attendance/manual?eventId={world.EventId}&studentId={world.StudentId}" +
@@ -320,7 +320,7 @@ public class ApiContractTests : IntegrationTest
     {
         await ArrangeAsync();
         using var factory = new EamsApiFactory(Sql.ConnectionString);
-        using var client = factory.CreateClient();
+        using var client = await SignedInClientAsync(factory);
         var unknown = Guid.NewGuid();
 
         Assert.Equal(HttpStatusCode.NotFound, (await client.GetAsync($"/api/v1/events/{unknown}")).StatusCode);
@@ -334,7 +334,7 @@ public class ApiContractTests : IntegrationTest
     {
         var world = await ArrangeAsync();
         using var factory = new EamsApiFactory(Sql.ConnectionString);
-        using var client = factory.CreateClient();
+        using var client = await SignedInClientAsync(factory);
 
         var response = await client.PostAsync(
             $"/api/v1/attendance/manual?eventId={world.EventId}&studentId={world.StudentId}" +
@@ -361,7 +361,7 @@ public class ApiContractTests : IntegrationTest
     {
         var world = await ArrangeAsync();
         using var factory = new EamsApiFactory(Sql.ConnectionString);
-        using var client = factory.CreateClient();
+        using var client = await SignedInClientAsync(factory);
 
         var response = await client.PostAsync(
             $"/api/v1/attendance/manual?eventId={world.EventId}&studentId={world.StudentId}" +
@@ -378,7 +378,7 @@ public class ApiContractTests : IntegrationTest
     {
         var world = await ArrangeAsync();
         using var factory = new EamsApiFactory(Sql.ConnectionString);
-        using var client = factory.CreateClient();
+        using var client = await SignedInClientAsync(factory);
 
         var response = await client.PostAsync(
             $"/api/v1/attendance/manual?eventId={world.EventId}&studentId={Guid.NewGuid()}",
@@ -387,18 +387,13 @@ public class ApiContractTests : IntegrationTest
         Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
     }
 
-    // ---------------------------------------------------------------- authorization seam (ADR-001 D-6)
+    // ---------------------------------------------------------------- the declaring attribute is inert
 
     /// <summary>
-    /// The empirical half of ADR-001 D-6's "a test asserting it denies nothing": a real request
-    /// through the real pipeline, with no credentials, against an action carrying the attribute.
-    /// It reaches the action body.
-    ///
-    /// <para>
-    /// Like the unit-level seam tests, <b>this is meant to be deleted by Phase 6</b> rather than made
-    /// to pass. When §11 lands, an uncredentialed request here must start returning 401 — and the
-    /// failure is the reminder to replace this file's expectations with denial assertions.
-    /// </para>
+    /// A real request through the real pipeline, with no credentials, against a test-only action that
+    /// carries <c>[HasPermissionNotEnforced]</c> and nothing else. It reaches the action body — so what
+    /// refuses anonymous callers on the real routes is the <c>[Authorize]</c> beside the attribute, and
+    /// <c>AuthEnforcementTests</c> is where that is shown.
     /// </summary>
     [Theory]
     [InlineData("/test-only/permission-probe")]
@@ -412,36 +407,5 @@ public class ApiContractTests : IntegrationTest
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         Assert.Equal(PermissionProbeController.ReachedBody, await response.Content.ReadAsStringAsync());
-    }
-
-    /// <summary>
-    /// And the state that makes the above unsurprising: every real endpoint is open too. Recorded as
-    /// a test rather than a comment because ADR-001 D-6 makes "do not expose this build" a condition
-    /// someone has to be able to check, not a thing they have to remember.
-    /// </summary>
-    [Fact]
-    public async Task Every_api_endpoint_is_reachable_without_credentials()
-    {
-        var world = await ArrangeAsync();
-        using var factory = new EamsApiFactory(Sql.ConnectionString);
-        using var client = factory.CreateClient();
-
-        foreach (var route in new[]
-                 {
-                     "/api/v1/students",
-                     $"/api/v1/students/{world.StudentId}",
-                     "/api/v1/events",
-                     $"/api/v1/events/{world.EventId}",
-                     $"/api/v1/events/{world.EventId}/summary",
-                     $"/api/v1/events/{world.EventId}/roster",
-                     "/api/v1/attendance",
-                 })
-        {
-            var response = await client.GetAsync(route);
-            Assert.True(
-                response.StatusCode == HttpStatusCode.OK,
-                $"{route} returned {(int)response.StatusCode}. If this is a 401 or 403, Technical " +
-                "Plan §11 has landed — delete the authorization-seam tests and assert denial instead.");
-        }
     }
 }

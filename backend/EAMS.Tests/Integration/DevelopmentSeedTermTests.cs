@@ -168,7 +168,7 @@ public class DevelopmentSeedTermTests : IntegrationTest
     public async Task The_seeded_term_is_visible_on_the_route_the_import_page_reads()
     {
         using var factory = new DevelopmentApiFactory(Sql.ConnectionString);
-        using var client = factory.CreateClient();
+        using var client = await SignedInClientAsync(factory);
 
         var response = await client.GetAsync("/api/v1/academic/terms");
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);

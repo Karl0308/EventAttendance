@@ -146,6 +146,7 @@ public class UtcRoundTripTests : IntegrationTest
 
         using var factory = new EamsApiFactory(Sql.ConnectionString);
         using var client = factory.CreateClient().WithDeviceKey(apiKey);
+        using var operatorClient = await SignedInClientAsync(factory, world.SchoolId);
 
         var tap = await client.PostAsJsonAsync("/api/v1/attendance/tap", new
         {
@@ -158,7 +159,7 @@ public class UtcRoundTripTests : IntegrationTest
         using var created = JsonDocument.Parse(await tap.Content.ReadAsStringAsync());
         var onCreate = created.RootElement.GetProperty("record").GetProperty("checkInAt").GetString();
 
-        var list = await client.GetAsync($"/api/v1/attendance?eventId={world.EventId}");
+        var list = await operatorClient.GetAsync($"/api/v1/attendance?eventId={world.EventId}");
         list.EnsureSuccessStatusCode();
 
         using var listed = JsonDocument.Parse(await list.Content.ReadAsStringAsync());
@@ -180,7 +181,7 @@ public class UtcRoundTripTests : IntegrationTest
         var world = await ArrangeAsync(startAt: TestData.Now);
 
         using var factory = new EamsApiFactory(Sql.ConnectionString);
-        using var client = factory.CreateClient();
+        using var client = await SignedInClientAsync(factory);
 
         var response = await client.GetAsync($"/api/v1/events/{world.EventId}");
         response.EnsureSuccessStatusCode();

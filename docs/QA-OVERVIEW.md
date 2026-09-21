@@ -573,7 +573,7 @@ Do not test for these; they are unbuilt, not broken.
 
 | Area | Status |
 |---|---|
-| Staff login, roles, permissions | Later phase — every page is open |
+| Managing staff accounts and roles in the app | Later phase — sign-in and permissions are enforced, but accounts are created outside the app |
 | Reports and exports | Later phase |
 | Recurring / repeating events | Later phase |
 | A live auto-refreshing attendance board | The data exists; the screen does not. Refresh manually |

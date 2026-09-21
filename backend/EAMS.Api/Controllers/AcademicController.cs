@@ -1,6 +1,8 @@
 using EAMS.Api.Authorization;
 using EAMS.Application.Abstractions;
 using EAMS.Application.Dtos;
+using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.Infrastructure;
 
@@ -54,14 +56,13 @@ namespace EAMS.Api.Controllers;
 /// already assigned <c>students.read</c> to the same page. The nearest signal here is that same
 /// §7.1 line: reused, it would have meant "anyone who can browse the roster can browse its
 /// structure", which is defensible but collapses two questions Phase 6 should get to answer
-/// separately. The attribute enforces nothing (ADR-001 D-6), so this is a declaration of intent on
-/// the audit list Phase 6's rename walks, and changing it then is one edit per action. The code
-/// itself now lives once, on <see cref="EamsPermissions"/>, rather than at six call sites.
+/// separately. Enforced by the <c>[Authorize]</c> on each action; the code itself lives once, on
+/// <see cref="EamsPermissions"/>, rather than at every call site.
 /// </para>
 /// </remarks>
-// Permission codes are this phase's, not §6.2's — see the remarks. ADR-001 D-6's bargain was that
-// endpoints get decorated as they are written so Phase 6 wires enforcement rather than re-deriving
-// what each endpoint should have demanded. The attribute enforces nothing.
+// Permission codes are this phase's, not §6.2's — see the remarks. Every action demands a Bearer
+// token, reads included: a term written under the token's school and listed under the development
+// pin's would vanish from the screen that had just created it.
 [ApiController]
 [Route("api/v1/academic")]
 public class AcademicController : ControllerBase
@@ -102,6 +103,7 @@ public class AcademicController : ControllerBase
     /// <param name="ct">Cancellation token.</param>
     /// <response code="200">One page of terms, possibly empty.</response>
     [HttpGet("terms")]
+    [Authorize(AuthenticationSchemes = JwtBearerDefaults.AuthenticationScheme, Policy = EamsPermissions.AcademicRead)]
     [HasPermissionNotEnforced(EamsPermissions.AcademicRead)]
     [ProducesResponseType(typeof(PagedResult<TermDto>), StatusCodes.Status200OK)]
     public async Task<ActionResult<PagedResult<TermDto>>> Terms(
@@ -130,6 +132,7 @@ public class AcademicController : ControllerBase
     /// <response code="200">The current term.</response>
     /// <response code="404">No term in this school is flagged current.</response>
     [HttpGet("terms/current")]
+    [Authorize(AuthenticationSchemes = JwtBearerDefaults.AuthenticationScheme, Policy = EamsPermissions.AcademicRead)]
     [HasPermissionNotEnforced(EamsPermissions.AcademicRead)]
     [ProducesResponseType(typeof(TermDto), StatusCodes.Status200OK)]
     // typeof: [ApiController] turns NotFound() into a ProblemDetails, so declaring the status alone
@@ -181,6 +184,7 @@ public class AcademicController : ControllerBase
     // was considered and left out — D-53 defines three routes, and this controller's surface is the
     // thing the decision is about.
     [HttpPost("terms")]
+    [Authorize(AuthenticationSchemes = JwtBearerDefaults.AuthenticationScheme, Policy = EamsPermissions.AcademicWrite)]
     [HasPermissionNotEnforced(EamsPermissions.AcademicWrite)]
     [ProducesResponseType(typeof(TermDto), StatusCodes.Status201Created)]
     [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status400BadRequest)]
@@ -221,6 +225,7 @@ public class AcademicController : ControllerBase
     /// <response code="404">No such term.</response>
     /// <response code="409">Another term in this school already holds that code.</response>
     [HttpPut("terms/{id:guid}")]
+    [Authorize(AuthenticationSchemes = JwtBearerDefaults.AuthenticationScheme, Policy = EamsPermissions.AcademicWrite)]
     [HasPermissionNotEnforced(EamsPermissions.AcademicWrite)]
     [ProducesResponseType(typeof(TermDto), StatusCodes.Status200OK)]
     [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status400BadRequest)]
@@ -267,6 +272,7 @@ public class AcademicController : ControllerBase
     /// <response code="400"><c>isCurrent</c> was not supplied.</response>
     /// <response code="404">No such term.</response>
     [HttpPatch("terms/{id:guid}/current")]
+    [Authorize(AuthenticationSchemes = JwtBearerDefaults.AuthenticationScheme, Policy = EamsPermissions.AcademicWrite)]
     [HasPermissionNotEnforced(EamsPermissions.AcademicWrite)]
     [ProducesResponseType(typeof(TermDto), StatusCodes.Status200OK)]
     [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status400BadRequest)]
@@ -312,6 +318,7 @@ public class AcademicController : ControllerBase
     /// <param name="ct">Cancellation token.</param>
     /// <response code="200">One page of colleges, possibly empty.</response>
     [HttpGet("colleges")]
+    [Authorize(AuthenticationSchemes = JwtBearerDefaults.AuthenticationScheme, Policy = EamsPermissions.AcademicRead)]
     [HasPermissionNotEnforced(EamsPermissions.AcademicRead)]
     [ProducesResponseType(typeof(PagedResult<CollegeDto>), StatusCodes.Status200OK)]
     public async Task<ActionResult<PagedResult<CollegeDto>>> Colleges(
@@ -335,6 +342,7 @@ public class AcademicController : ControllerBase
     /// <param name="ct">Cancellation token.</param>
     /// <response code="200">One page of matching programmes, possibly empty.</response>
     [HttpGet("programs")]
+    [Authorize(AuthenticationSchemes = JwtBearerDefaults.AuthenticationScheme, Policy = EamsPermissions.AcademicRead)]
     [HasPermissionNotEnforced(EamsPermissions.AcademicRead)]
     [ProducesResponseType(typeof(PagedResult<AcademicProgramDto>), StatusCodes.Status200OK)]
     public async Task<ActionResult<PagedResult<AcademicProgramDto>>> Programs(
@@ -364,6 +372,7 @@ public class AcademicController : ControllerBase
     /// <param name="ct">Cancellation token.</param>
     /// <response code="200">One page of matching courses, possibly empty.</response>
     [HttpGet("courses")]
+    [Authorize(AuthenticationSchemes = JwtBearerDefaults.AuthenticationScheme, Policy = EamsPermissions.AcademicRead)]
     [HasPermissionNotEnforced(EamsPermissions.AcademicRead)]
     [ProducesResponseType(typeof(PagedResult<CourseDto>), StatusCodes.Status200OK)]
     public async Task<ActionResult<PagedResult<CourseDto>>> Courses(
@@ -425,6 +434,7 @@ public class AcademicController : ControllerBase
     /// none was named.
     /// </response>
     [HttpGet("course-offerings")]
+    [Authorize(AuthenticationSchemes = JwtBearerDefaults.AuthenticationScheme, Policy = EamsPermissions.AcademicRead)]
     [HasPermissionNotEnforced(EamsPermissions.AcademicRead)]
     [ProducesResponseType(typeof(PagedResult<CourseOfferingDto>), StatusCodes.Status200OK)]
     public async Task<ActionResult<PagedResult<CourseOfferingDto>>> CourseOfferings(

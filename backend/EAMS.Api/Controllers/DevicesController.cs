@@ -4,6 +4,7 @@ using EAMS.Application.Abstractions;
 using EAMS.Application.Dtos;
 using EAMS.Domain;
 using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.Infrastructure;
 using Microsoft.AspNetCore.RateLimiting;
@@ -14,10 +15,10 @@ namespace EAMS.Api.Controllers;
 /// Technical Plan §6.6 — devices (Phase 4a design, D-25).
 ///
 /// <para>
-/// <b>Only one action on this controller is gated: <c>heartbeat</c>.</b> It is the one a device calls
-/// about itself. Everything else here is an administrator's surface and stays open under ADR-001 D-6
-/// with a declared-but-inert <c>devices.*</c> permission, exactly like students and events — Phase 4b
-/// narrowed the open surface to four endpoints, it did not roll authorization out.
+/// <b>Two principals reach this controller.</b> <c>heartbeat</c> is the one action a device calls
+/// about itself, with its device key. Everything else is an administrator's surface and demands a
+/// Bearer token carrying <c>devices.read</c> or <c>devices.write</c> — the latter mints capture
+/// credentials, which makes it the one grant on this API that can create another principal.
 /// </para>
 /// </summary>
 [ApiController]
@@ -43,6 +44,7 @@ public class DevicesController : ControllerBase
     /// <param name="ct">Cancellation token.</param>
     /// <response code="200">The devices, possibly empty.</response>
     [HttpGet]
+    [Authorize(AuthenticationSchemes = JwtBearerDefaults.AuthenticationScheme, Policy = EamsPermissions.DevicesRead)]
     [HasPermissionNotEnforced(EamsPermissions.DevicesRead)]
     [ProducesResponseType(typeof(IEnumerable<DeviceDto>), StatusCodes.Status200OK)]
     public async Task<ActionResult<IEnumerable<DeviceDto>>> List(CancellationToken ct)
@@ -58,6 +60,7 @@ public class DevicesController : ControllerBase
     /// <response code="200">The device.</response>
     /// <response code="404">No such device in this school.</response>
     [HttpGet("{id:guid}")]
+    [Authorize(AuthenticationSchemes = JwtBearerDefaults.AuthenticationScheme, Policy = EamsPermissions.DevicesRead)]
     [HasPermissionNotEnforced(EamsPermissions.DevicesRead)]
     [ProducesResponseType(typeof(DeviceDto), StatusCodes.Status200OK)]
     [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status404NotFound)]
@@ -78,6 +81,7 @@ public class DevicesController : ControllerBase
     /// none to forget to protect. An operator who loses it rotates.
     /// </remarks>
     [HttpPost]
+    [Authorize(AuthenticationSchemes = JwtBearerDefaults.AuthenticationScheme, Policy = EamsPermissions.DevicesWrite)]
     [HasPermissionNotEnforced(EamsPermissions.DevicesWrite)]
     [ProducesResponseType(typeof(DeviceKeyIssuedDto), StatusCodes.Status201Created)]
     [ProducesResponseType(StatusCodes.Status400BadRequest)]
@@ -97,6 +101,7 @@ public class DevicesController : ControllerBase
     /// different statements.
     /// </summary>
     [HttpPut("{id:guid}")]
+    [Authorize(AuthenticationSchemes = JwtBearerDefaults.AuthenticationScheme, Policy = EamsPermissions.DevicesWrite)]
     [HasPermissionNotEnforced(EamsPermissions.DevicesWrite)]
     [ProducesResponseType(typeof(DeviceDto), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status400BadRequest)]
@@ -113,6 +118,7 @@ public class DevicesController : ControllerBase
     /// stops working the moment this returns.
     /// </summary>
     [HttpPost("{id:guid}/regenerate-key")]
+    [Authorize(AuthenticationSchemes = JwtBearerDefaults.AuthenticationScheme, Policy = EamsPermissions.DevicesWrite)]
     [HasPermissionNotEnforced(EamsPermissions.DevicesWrite)]
     [ProducesResponseType(typeof(DeviceKeyIssuedDto), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
@@ -142,6 +148,7 @@ public class DevicesController : ControllerBase
     /// </para>
     /// </remarks>
     [HttpPost("{id:guid}/revoke-key")]
+    [Authorize(AuthenticationSchemes = JwtBearerDefaults.AuthenticationScheme, Policy = EamsPermissions.DevicesWrite)]
     [HasPermissionNotEnforced(EamsPermissions.DevicesWrite)]
     [ProducesResponseType(typeof(DeviceDto), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]

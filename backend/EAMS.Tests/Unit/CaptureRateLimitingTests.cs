@@ -4,6 +4,7 @@ using EAMS.Api.RateLimiting;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.RateLimiting;
 using Xunit;
+using DeviceKey = EAMS.Domain.DeviceKey;
 
 namespace EAMS.Tests.Unit;
 
@@ -22,11 +23,12 @@ namespace EAMS.Tests.Unit;
 /// </para>
 ///
 /// <para>
-/// <b>Every gated endpoint is rate limited, and the only endpoint limited without being gated is the
-/// live poll.</b> That exception is named rather than left to a looser assertion: Phase 4d added
-/// <c>GET /attendance/live/{eventId}</c>, which is deliberately unauthenticated (a dashboard read, and
-/// the only credential that exists is scoped to <c>attendance.capture</c>) and is therefore the one
-/// place where an IP partition is not a choice — there is no device claim to partition by. It gets its
+/// <b>Every capture and <c>/auth</c> endpoint is rate limited, and the only other limited endpoint is
+/// the live poll.</b> The rest of the admin surface is gated by a Bearer token and a permission and is
+/// not limited: the flood a limiter would stop there needs a token belonging to somebody already
+/// entitled to the data, which is a permissions problem rather than a rate one. The live poll is the
+/// exception because it is designed to be called in a loop, and its limiter runs before the Bearer
+/// token is read, so an IP partition is not a choice — there is no principal to partition by. It gets its
 /// own policy so a browser tab left polling can never spend a kiosk's capture budget.
 /// </para>
 ///
@@ -38,21 +40,14 @@ namespace EAMS.Tests.Unit;
 /// </summary>
 public class CaptureRateLimitingTests
 {
-    private static readonly Assembly ApiAssembly = typeof(AuthorizationStatus).Assembly;
+    private static readonly Assembly ApiAssembly = typeof(EamsPermissions).Assembly;
 
     /// <summary>
-    /// The endpoints that are rate limited <em>without</em> a device key gating them. Exactly one, and
-    /// adding a second is a deliberate one-line edit here — the same allow-list shape
-    /// <c>AuthorizationSeamTests</c> uses, for the same reason: "all gated endpoints are limited" is a
-    /// property that stops being true the first time anyone limits an open one, and the natural repair
-    /// is to delete the test.
-    /// </summary>
-    /// <summary>
-    /// Rate-limited without carrying an <c>[Authorize]</c>.
+    /// Rate-limited without being on the capture or <c>/auth</c> gate this test compares against.
     ///
     /// <para>
-    /// <c>AttendanceController.Live</c> is a deliberately open dashboard read. The two <c>/auth</c>
-    /// entries are open by necessity — a caller presenting a credential is exactly what
+    /// <c>AttendanceController.Live</c> is an admin dashboard read that polls in a loop. The two
+    /// <c>/auth</c> entries are open by necessity — a caller presenting a credential is exactly what
     /// <c>POST /auth/login</c> is for, and <c>POST /auth/refresh</c> authenticates with a cookie
     /// rather than a scheme — and they are the endpoints that most need a limiter, which is why the
     /// two sets were never the same set.
@@ -77,32 +72,27 @@ public class CaptureRateLimitingTests
     /// </para>
     /// </summary>
     /// <remarks>
-    /// <para>
-    /// <c>EventsController.Scans</c> joins it for the same reason and one more. It is a per-event
-    /// report read from a page an operator already has open, behind a Bearer token and
-    /// <c>events.read</c> - so the flood a limiter would stop needs a valid token belonging to
-    /// somebody already entitled to the data, which is a permissions problem rather than a rate one.
-    /// </para>
-    ///
-    /// <para>
-    /// The additional reason is which budget it would land in. The only capture policy is partitioned
-    /// by device, and this endpoint has no device; the <c>auth-ip</c> policy is partitioned by address
-    /// and exists to make password guessing expensive. Putting a back-office report on that budget
-    /// would let one busy office's reporting exhaust the allowance its own sign-ins need - the
-    /// failure being that people cannot log in because their colleagues were reading a page.
-    /// </para>
+    /// The Bearer-gated admin surface is left out of the comparison altogether rather than listed here
+    /// action by action — see the class remarks. Its reads and writes would otherwise have to share
+    /// either a device-partitioned budget they have no device for, or the <c>auth-ip</c> budget whose
+    /// job is making password guessing expensive, where one busy office's work could exhaust the
+    /// allowance its own sign-ins need.
     /// </remarks>
-    private static readonly string[] GatedButNotLimited = ["AuthController.Me", "EventsController.Scans"];
+    private static readonly string[] GatedButNotLimited = ["AuthController.Me"];
 
     [Fact]
-    public void The_rate_limited_actions_are_the_gated_ones_plus_the_live_poll()
+    public void The_rate_limited_actions_are_the_capture_and_auth_gated_ones_plus_the_live_poll()
     {
         var actions = ApiAssembly.GetTypes()
             .SelectMany(t => t.GetMethods(BindingFlags.Public | BindingFlags.Instance | BindingFlags.DeclaredOnly))
             .ToList();
 
+        // Capture routes and the /auth surface only. The admin surface is Bearer-gated too, and is
+        // deliberately not limited, so counting it here would turn "gated" into "everything".
         var gated = Named(actions.Where(m =>
-            m.GetCustomAttributes(inherit: true).OfType<AuthorizeAttribute>().Any()));
+            m.GetCustomAttributes(inherit: true).OfType<AuthorizeAttribute>().Any(a =>
+                a.AuthenticationSchemes == DeviceKey.AuthenticationScheme
+                || m.DeclaringType?.Name == "AuthController")));
 
         var limited = Named(actions.Where(m =>
             m.GetCustomAttributes(inherit: true).OfType<EnableRateLimitingAttribute>().Any()));

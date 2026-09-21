@@ -62,9 +62,9 @@ public static class CaptureRateLimiting
     /// <para>
     /// <b>Separate from <see cref="PolicyName"/> because it limits a different thing for a different
     /// reason.</b> The capture policy protects writes and partitions by device, which requires an
-    /// authenticated principal. The live endpoint is deliberately unauthenticated — it is a dashboard
-    /// read, and the only credential that exists is scoped to <c>attendance.capture</c> — so there is
-    /// no device to partition by and the remote address is the only key available.
+    /// authenticated principal. The live endpoint is a dashboard read gated by a person's Bearer token,
+    /// and that token is read by the authorization middleware, which runs after this limiter — so there
+    /// is no principal to partition by here and the remote address is the only key available.
     /// </para>
     ///
     /// <para>

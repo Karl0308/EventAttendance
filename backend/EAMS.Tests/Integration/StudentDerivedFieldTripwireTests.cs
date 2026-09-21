@@ -113,7 +113,7 @@ public class StudentDerivedFieldTripwireTests : IntegrationTest
         var studentId = await ArrangeStudentAsync(schoolId);
 
         using var factory = new EamsApiFactory(Sql.ConnectionString);
-        using var client = factory.CreateClient();
+        using var client = await SignedInClientAsync(factory);
 
         var read = await client.GetStringAsync($"{Route}/{studentId}");
 
@@ -145,7 +145,7 @@ public class StudentDerivedFieldTripwireTests : IntegrationTest
         var studentId = await ArrangeStudentAsync(schoolId);
 
         using var factory = new EamsApiFactory(Sql.ConnectionString);
-        using var client = factory.CreateClient();
+        using var client = await SignedInClientAsync(factory);
 
         using var read = JsonDocument.Parse(await client.GetStringAsync($"{Route}/{studentId}"));
 
@@ -200,7 +200,7 @@ public class StudentDerivedFieldTripwireTests : IntegrationTest
         await ArrangeSchoolAsync();
 
         using var factory = new EamsApiFactory(Sql.ConnectionString);
-        using var client = factory.CreateClient();
+        using var client = await SignedInClientAsync(factory);
 
         var response = await client.PostAsync(Route, Json(
             $$"""
@@ -243,7 +243,7 @@ public class StudentDerivedFieldTripwireTests : IntegrationTest
         await ArrangeSchoolAsync();
 
         using var factory = new EamsApiFactory(Sql.ConnectionString);
-        using var client = factory.CreateClient();
+        using var client = await SignedInClientAsync(factory);
 
         var response = await client.PostAsync(Route, Json(
             """
@@ -282,7 +282,7 @@ public class StudentDerivedFieldTripwireTests : IntegrationTest
         await ArrangeSchoolAsync();
 
         using var factory = new EamsApiFactory(Sql.ConnectionString);
-        using var client = factory.CreateClient();
+        using var client = await SignedInClientAsync(factory);
 
         var response = await client.PostAsync(Route, Json(
             """
@@ -321,7 +321,7 @@ public class StudentDerivedFieldTripwireTests : IntegrationTest
         await ArrangeSchoolAsync();
 
         using var factory = new EamsApiFactory(Sql.ConnectionString);
-        using var client = factory.CreateClient();
+        using var client = await SignedInClientAsync(factory);
 
         var response = await client.PostAsync(Route, Json(
             """

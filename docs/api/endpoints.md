@@ -7,7 +7,7 @@
 
 This page is a **map, not a contract.** It exists so you can find an endpoint; payload shapes, field types and outcome tokens live in [`openapi.json`](openapi.json), which is what you generate a client from. Behaviour a schema cannot state — what your queue does with each outcome, the card-UID and clock rules — is in [`attendance-contract-handoff.md`](attendance-contract-handoff.md).
 
-`Auth` names the credential an endpoint demands: **DeviceKey** for a capture device, **Bearer** for a signed-in person (`POST /auth/login`). Everything else is still open — enforcement over the rest of the surface is a later phase (ADR-001 D-6), so an unmarked row is not a public endpoint, it is an unprotected one.
+`Auth` names the credential an endpoint demands: **DeviceKey** for a capture device, **Bearer** for a signed-in person (`POST /auth/login`) holding the permission the endpoint requires. Only sign-in and refresh are unmarked.
 
 ## Contents
 
@@ -28,15 +28,15 @@ This page is a **map, not a contract.** It exists so you can find an endpoint; p
 
 | Method | Route | Auth | Errors | What it does |
 |---|---|---|---|---|
-| `GET` | `/academic/colleges` | — | *none declared* | Every college, by name. |
-| `GET` | `/academic/course-offerings` | — | *none declared* | **the section grain, and the row an audience picker is really looking for.** A course taught to two sections is two entries. |
-| `GET` | `/academic/courses` | — | *none declared* | Courses, optionally narrowed by college and search term. |
-| `GET` | `/academic/programs` | — | *none declared* | Degree programmes, optionally narrowed to one college. |
-| `GET` | `/academic/terms` | — | *none declared* | Every term, current first and then newest first. |
-| `POST` | `/academic/terms` | — | `400` `409` | Create a school year + semester (D-53). |
-| `PUT` | `/academic/terms/{id}` | — | `400` `404` `409` | Edit a term's authored fields (D-53). |
-| `PATCH` | `/academic/terms/{id}/current` | — | `400` `404` | Make this the current term, or retire it (D-53). |
-| `GET` | `/academic/terms/current` | — | `404` | The term flagged current, or 404 when none is. |
+| `GET` | `/academic/colleges` | **Bearer** | *none declared* | Every college, by name. |
+| `GET` | `/academic/course-offerings` | **Bearer** | *none declared* | **the section grain, and the row an audience picker is really looking for.** A course taught to two sections is two entries. |
+| `GET` | `/academic/courses` | **Bearer** | *none declared* | Courses, optionally narrowed by college and search term. |
+| `GET` | `/academic/programs` | **Bearer** | *none declared* | Degree programmes, optionally narrowed to one college. |
+| `GET` | `/academic/terms` | **Bearer** | *none declared* | Every term, current first and then newest first. |
+| `POST` | `/academic/terms` | **Bearer** | `400` `409` | Create a school year + semester (D-53). |
+| `PUT` | `/academic/terms/{id}` | **Bearer** | `400` `404` `409` | Edit a term's authored fields (D-53). |
+| `PATCH` | `/academic/terms/{id}/current` | **Bearer** | `400` `404` | Make this the current term, or retire it (D-53). |
+| `GET` | `/academic/terms/current` | **Bearer** | `404` | The term flagged current, or 404 when none is. |
 
 ## Auth
 
@@ -52,31 +52,31 @@ This page is a **map, not a contract.** It exists so you can find an endpoint; p
 
 | Method | Route | Auth | Errors | What it does |
 |---|---|---|---|---|
-| `GET` | `/cards` | — | `400` | Find every card whose serial contains a fragment, and who holds it. |
+| `GET` | `/cards` | **Bearer** | `400` | Find every card whose serial contains a fragment, and who holds it. |
 
 ## Classifications
 
 | Method | Route | Auth | Errors | What it does |
 |---|---|---|---|---|
-| `GET` | `/classifications` | — | *none declared* | The vocabulary, active entries first, then grouped by axis, then by name. |
-| `POST` | `/classifications` | — | `400` `409` | Add a classification to this school's vocabulary. |
-| `DELETE` | `/classifications/{id}` | — | `404` `409` | Remove a classification, but only when nobody holds it, nothing points at it, and it is not itself the record of a merge. |
-| `GET` | `/classifications/{id}` | — | `404` | One entry, retired or not. |
-| `PUT` | `/classifications/{id}` | — | `400` `404` `409` | Rename a classification. |
-| `PATCH` | `/classifications/{id}/active` | — | `400` `404` `409` | Retire a classification, or bring it back. |
-| `POST` | `/classifications/{id}/merge` | — | `400` `404` `409` | Collapse two classifications into one, moving every assignment onto the survivor and deleting nothing. |
+| `GET` | `/classifications` | **Bearer** | *none declared* | The vocabulary, active entries first, then grouped by axis, then by name. |
+| `POST` | `/classifications` | **Bearer** | `400` `409` | Add a classification to this school's vocabulary. |
+| `DELETE` | `/classifications/{id}` | **Bearer** | `404` `409` | Remove a classification, but only when nobody holds it, nothing points at it, and it is not itself the record of a merge. |
+| `GET` | `/classifications/{id}` | **Bearer** | `404` | One entry, retired or not. |
+| `PUT` | `/classifications/{id}` | **Bearer** | `400` `404` `409` | Rename a classification. |
+| `PATCH` | `/classifications/{id}/active` | **Bearer** | `400` `404` `409` | Retire a classification, or bring it back. |
+| `POST` | `/classifications/{id}/merge` | **Bearer** | `400` `404` `409` | Collapse two classifications into one, moving every assignment onto the survivor and deleting nothing. |
 
 ## Devices
 
 | Method | Route | Auth | Errors | What it does |
 |---|---|---|---|---|
-| `GET` | `/devices` | — | *none declared* | Every registered device in this school. |
-| `POST` | `/devices` | — | `400` `409` | §6.6 `POST /devices` — register, and issue the first key. |
-| `GET` | `/devices/{id}` | — | `404` | One registered device. |
-| `PUT` | `/devices/{id}` | — | `400` `404` | §6.6 `PUT /devices/{id}` — the device's own fields. |
+| `GET` | `/devices` | **Bearer** | *none declared* | Every registered device in this school. |
+| `POST` | `/devices` | **Bearer** | `400` `409` | §6.6 `POST /devices` — register, and issue the first key. |
+| `GET` | `/devices/{id}` | **Bearer** | `404` | One registered device. |
+| `PUT` | `/devices/{id}` | **Bearer** | `400` `404` | §6.6 `PUT /devices/{id}` — the device's own fields. |
 | `POST` | `/devices/{id}/heartbeat` | **DeviceKey** | `401` `403` `404` `429` | §6.6 `POST /devices/{id}/heartbeat` — liveness, and one of the four endpoints a device key authenticates. |
-| `POST` | `/devices/{id}/regenerate-key` | — | `404` `409` | §6.6 `POST /devices/{id}/regenerate-key` — hard cut, no overlap window. |
-| `POST` | `/devices/{id}/revoke-key` | — | `404` | Burn the credential without issuing a replacement. |
+| `POST` | `/devices/{id}/regenerate-key` | **Bearer** | `404` `409` | §6.6 `POST /devices/{id}/regenerate-key` — hard cut, no overlap window. |
+| `POST` | `/devices/{id}/revoke-key` | **Bearer** | `404` | Burn the credential without issuing a replacement. |
 
 ## EventManifest
 
@@ -88,32 +88,32 @@ This page is a **map, not a contract.** It exists so you can find an endpoint; p
 
 | Method | Route | Auth | Errors | What it does |
 |---|---|---|---|---|
-| `GET` | `/sis/import/{batchId}` | — | `404` | One import batch and its counts. |
-| `GET` | `/sis/import/{batchId}/rows` | — | *none declared* | A batch's staged rows, optionally narrowed to one outcome — `?result=Failed` is the query an operator runs after every import. |
-| `POST` | `/sis/import/{batchId}/run` | — | `404` `409` | Runs a staged batch. |
-| `POST` | `/sis/import/upload` | — | `400` `422` | Stages a workbook and returns what is in it. |
+| `GET` | `/sis/import/{batchId}` | **Bearer** | `404` | One import batch and its counts. |
+| `GET` | `/sis/import/{batchId}/rows` | **Bearer** | *none declared* | A batch's staged rows, optionally narrowed to one outcome — `?result=Failed` is the query an operator runs after every import. |
+| `POST` | `/sis/import/{batchId}/run` | **Bearer** | `404` `409` | Runs a staged batch. |
+| `POST` | `/sis/import/upload` | **Bearer** | `400` `422` | Stages a workbook and returns what is in it. |
 
 ## StudentClassifications
 
 | Method | Route | Auth | Errors | What it does |
 |---|---|---|---|---|
-| `GET` | `/students/{studentId}/classifications` | — | `404` | Everything this person is classified as. |
-| `DELETE` | `/students/{studentId}/classifications/{classificationId}` | — | `404` `409` | Take this classification off this person. |
-| `PUT` | `/students/{studentId}/classifications/{classificationId}` | — | `404` `409` | Give this person this classification. |
+| `GET` | `/students/{studentId}/classifications` | **Bearer** | `404` | Everything this person is classified as. |
+| `DELETE` | `/students/{studentId}/classifications/{classificationId}` | **Bearer** | `404` `409` | Take this classification off this person. |
+| `PUT` | `/students/{studentId}/classifications/{classificationId}` | **Bearer** | `404` `409` | Give this person this classification. |
 
 ## StudentGroups
 
 | Method | Route | Auth | Errors | What it does |
 |---|---|---|---|---|
-| `GET` | `/student-groups` | — | *none declared* | The audiences an event can be attached to, every filter optional. |
+| `GET` | `/student-groups` | **Bearer** | *none declared* | The audiences an event can be attached to, every filter optional. |
 
 ## Attendance
 
 | Method | Route | Auth | Errors | What it does |
 |---|---|---|---|---|
-| `GET` | `/attendance` | — | *none declared* | Recorded attendance rows, every filter optional. |
-| `GET` | `/attendance/live/{eventId}` | — | `400` `404` `429` | The D-29 cursor-delta poll that stands in for §5/§6.4's SignalR hub. |
-| `POST` | `/attendance/manual` | — | `400` `404` | The organizer override (Technical Plan §6.4). |
+| `GET` | `/attendance` | **Bearer** | *none declared* | Recorded attendance rows, every filter optional. |
+| `GET` | `/attendance/live/{eventId}` | **Bearer** | `400` `404` `429` | The D-29 cursor-delta poll that stands in for §5/§6.4's SignalR hub. |
+| `POST` | `/attendance/manual` | **Bearer** | `400` `404` | The organizer override (Technical Plan §6.4). |
 | `POST` | `/attendance/tap` | **DeviceKey** | `400` `401` `403` `404` `429` | The core capture path (Technical Plan §6.4). |
 | `POST` | `/attendance/tap/batch` | **DeviceKey** | `400` `401` `403` `429` | §8.2's offline queue flush (Phase 4d, D-31). |
 
@@ -121,31 +121,31 @@ This page is a **map, not a contract.** It exists so you can find an endpoint; p
 
 | Method | Route | Auth | Errors | What it does |
 |---|---|---|---|---|
-| `GET` | `/events` | — | *none declared* | The event list, optionally filtered by status. |
-| `POST` | `/events` | — | `400` `409` | §6.3 `POST /events`. |
-| `DELETE` | `/events/{id}` | — | `404` | §6.3 `DELETE /events/{id}` — soft (§4.5 `IsDeleted`). |
-| `GET` | `/events/{id}` | — | `404` | One event. |
-| `PUT` | `/events/{id}` | — | `400` `404` `409` | Update an event. |
-| `GET` | `/events/{id}/attendees` | — | `404` | What is currently attached to this event's audience. |
-| `POST` | `/events/{id}/attendees` | — | `400` `404` `409` | §6.3 `POST /events/{id}/attendees` — associate `{studentGroupIds[], studentIds[]}`. |
-| `DELETE` | `/events/{id}/attendees/groups/{studentGroupId}` | — | `404` `409` | Detaches one group. |
-| `DELETE` | `/events/{id}/attendees/students/{studentId}` | — | `404` `409` | Detach one individually-attached student from the event's audience. |
-| `GET` | `/events/{id}/roster` | — | `404` | §6.3 `GET /events/{id}/roster` — expected versus actual, and the source of §12's Absentee Report. |
+| `GET` | `/events` | **Bearer** **DeviceKey** | `401` `403` | The event list, optionally filtered by status. |
+| `POST` | `/events` | **Bearer** | `400` `409` | §6.3 `POST /events`. |
+| `DELETE` | `/events/{id}` | **Bearer** | `404` | §6.3 `DELETE /events/{id}` — soft (§4.5 `IsDeleted`). |
+| `GET` | `/events/{id}` | **Bearer** | `404` | One event. |
+| `PUT` | `/events/{id}` | **Bearer** | `400` `404` `409` | Update an event. |
+| `GET` | `/events/{id}/attendees` | **Bearer** | `404` | What is currently attached to this event's audience. |
+| `POST` | `/events/{id}/attendees` | **Bearer** | `400` `404` `409` | §6.3 `POST /events/{id}/attendees` — associate `{studentGroupIds[], studentIds[]}`. |
+| `DELETE` | `/events/{id}/attendees/groups/{studentGroupId}` | **Bearer** | `404` `409` | Detaches one group. |
+| `DELETE` | `/events/{id}/attendees/students/{studentId}` | **Bearer** | `404` `409` | Detach one individually-attached student from the event's audience. |
+| `GET` | `/events/{id}/roster` | **Bearer** | `404` | §6.3 `GET /events/{id}/roster` — expected versus actual, and the source of §12's Absentee Report. |
 | `GET` | `/events/{id}/scans` | **Bearer** | `401` `403` `404` | Scans at this event that resolved to no student. |
-| `PATCH` | `/events/{id}/status` | — | `400` `404` | §6.3 `PATCH /events/{id}/status` — Open / Close / Cancel. |
-| `GET` | `/events/{id}/summary` | — | `404` | The §6.7/§12 Event Attendance Summary. |
-| `POST` | `/events/audience/resolve` | — | `400` | How many students a filter matches, who they are, and a preview (D-50/D-51). |
+| `PATCH` | `/events/{id}/status` | **Bearer** | `400` `404` | §6.3 `PATCH /events/{id}/status` — Open / Close / Cancel. |
+| `GET` | `/events/{id}/summary` | **Bearer** | `404` | The §6.7/§12 Event Attendance Summary. |
+| `POST` | `/events/audience/resolve` | **Bearer** | `400` | How many students a filter matches, who they are, and a preview (D-50/D-51). |
 
 ## Students
 
 | Method | Route | Auth | Errors | What it does |
 |---|---|---|---|---|
-| `GET` | `/students` | — | *none declared* | The roster, every filter optional. |
-| `POST` | `/students` | — | `400` `409` | §6.2 `POST /students` — manual roster entry, alongside the §10 bulk import. |
-| `DELETE` | `/students/{id}` | — | `404` | §6.2 `DELETE /students/{id}` — soft (§4.3 `IsDeleted`). |
-| `GET` | `/students/{id}` | — | `404` | One student by primary key. |
-| `PUT` | `/students/{id}` | — | `400` `404` `409` | §6.2 `PUT /students/{id}`. |
-| `POST` | `/students/{id}/cards` | — | `400` `404` `409` | §6.2 `POST /students/{id}/cards` — assign an RFID card `{cardUid, label}`. |
-| `DELETE` | `/students/{id}/cards/{cardId}` | — | `404` | §6.2 `DELETE /students/{id}/cards/{cardId}` — **deactivate**. |
+| `GET` | `/students` | **Bearer** | *none declared* | The roster, every filter optional. |
+| `POST` | `/students` | **Bearer** | `400` `409` | §6.2 `POST /students` — manual roster entry, alongside the §10 bulk import. |
+| `DELETE` | `/students/{id}` | **Bearer** | `404` | §6.2 `DELETE /students/{id}` — soft (§4.3 `IsDeleted`). |
+| `GET` | `/students/{id}` | **Bearer** | `404` | One student by primary key. |
+| `PUT` | `/students/{id}` | **Bearer** | `400` `404` `409` | §6.2 `PUT /students/{id}`. |
+| `POST` | `/students/{id}/cards` | **Bearer** | `400` `404` `409` | §6.2 `POST /students/{id}/cards` — assign an RFID card `{cardUid, label}`. |
+| `DELETE` | `/students/{id}/cards/{cardId}` | **Bearer** | `404` | §6.2 `DELETE /students/{id}/cards/{cardId}` — **deactivate**. |
 | `GET` | `/students/by-card/{cardUid}` | **DeviceKey** | `401` `403` `404` `429` | UID→student resolution for the mobile scan screen. |
 

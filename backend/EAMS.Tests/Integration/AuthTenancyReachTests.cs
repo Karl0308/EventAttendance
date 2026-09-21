@@ -80,58 +80,36 @@ public class AuthTenancyReachTests : IntegrationTest
             .Select(item => item.GetProperty("lastName").GetString())];
     }
 
-    [Fact]
-    public async Task A_bearer_token_does_not_widen_what_an_open_endpoint_returns()
-    {
-        await ArrangeAsync();
-
-        using var factory = new EamsApiFactory(Sql.ConnectionString);
-        using var session = new AuthApiClient(factory);
-        Assert.Equal(HttpStatusCode.OK, (await session.LoginAsync("second@usa.edu.ph", Password)).StatusCode);
-
-        using var authenticated = factory.CreateClient().WithBearer(session.AccessToken!);
-        using var anonymous = factory.CreateClient();
-
-        // Identical, and that is the security property: under the staged cutover an open endpoint owes
-        // the same answer to everybody, so presenting a credential must not unlock a row an anonymous
-        // caller could not already read. A difference in EITHER direction is a finding.
-        Assert.Equal(await LastNamesAsync(anonymous), await LastNamesAsync(authenticated));
-    }
-
     /// <summary>
-    /// <b>A tripwire, not an endorsement.</b> Outside <c>/auth</c> no endpoint carries
-    /// <c>[Authorize]</c>, so the authorization middleware never runs the Bearer scheme, so
-    /// <c>HttpContext.User</c> stays empty and <see cref="ClaimsSchoolContext"/> falls through to the
-    /// development pin — the lowest school <c>Code</c>. A signed-in operator of "ZZZ" therefore reads
-    /// "AAA"'s students today, exactly as an anonymous caller does.
-    ///
-    /// <para>
-    /// That is ADR-001 D-6's staged cutover behaving as designed and it is not a privilege escalation
-    /// — the credential grants nothing extra, see the test above. It IS a landmine: the day an
-    /// endpoint gains <c>[Authorize]</c>, its tenant silently stops being the pin and starts being the
-    /// token, and every tenancy expectation written against the pinned behaviour moves with it. When
-    /// this test fails, that is what happened — re-check the tenant on every route that changed rather
-    /// than updating the expectation here.
-    /// </para>
+    /// <b>A gated route serves the token's school, not the development pin.</b> This used to be a
+    /// tripwire asserting the opposite: while the roster was open, the authorization middleware never
+    /// ran the Bearer scheme on it, so <c>HttpContext.User</c> stayed empty and
+    /// <see cref="ClaimsSchoolContext"/> fell through to the pin — the lowest school <c>Code</c>, "AAA" —
+    /// and a signed-in operator of "ZZZ" read "AAA"'s students. The roster now demands a Bearer token,
+    /// so the tenant is the claim, and each operator reads their own school and only their own.
     /// </summary>
     [Fact]
-    public async Task An_open_endpoint_still_resolves_its_tenant_from_the_pin_and_not_from_the_token()
+    public async Task A_gated_endpoint_resolves_its_tenant_from_the_token_and_not_from_the_pin()
     {
         var world = await ArrangeAsync();
 
         using var factory = new EamsApiFactory(Sql.ConnectionString);
-        using var session = new AuthApiClient(factory);
+        using var second = new AuthApiClient(factory);
+        using var first = new AuthApiClient(factory);
 
-        var login = await session.LoginAsync("second@usa.edu.ph", Password);
+        var login = await second.LoginAsync("second@usa.edu.ph", Password);
         Assert.Equal(HttpStatusCode.OK, login.StatusCode);
+        Assert.Equal(HttpStatusCode.OK, (await first.LoginAsync("first@usa.edu.ph", Password)).StatusCode);
 
         // The token really does name "ZZZ" — so what follows is about the route, not the claim.
         var body = JsonDocument.Parse(await login.Content.ReadAsStringAsync()).RootElement;
         Assert.Equal(world.SecondId, body.GetProperty("user").GetProperty("schoolId").GetGuid());
 
-        using var authenticated = factory.CreateClient().WithBearer(session.AccessToken!);
+        using var secondClient = factory.CreateClient().WithBearer(second.AccessToken!);
+        using var firstClient = factory.CreateClient().WithBearer(first.AccessToken!);
 
-        Assert.Equal(["Alpha"], await LastNamesAsync(authenticated));
+        Assert.Equal(["Omega"], await LastNamesAsync(secondClient));
+        Assert.Equal(["Alpha"], await LastNamesAsync(firstClient));
     }
 
     // ------------------------------------------------- reaching another tenant's user row via /me

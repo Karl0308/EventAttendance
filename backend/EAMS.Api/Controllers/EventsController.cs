@@ -1,6 +1,8 @@
+using EAMS.Api.Authentication;
 using EAMS.Api.Authorization;
 using EAMS.Application.Abstractions;
 using EAMS.Application.Dtos;
+using EAMS.Domain;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Mvc;
@@ -8,7 +10,8 @@ using Microsoft.AspNetCore.Mvc.Infrastructure;
 
 namespace EAMS.Api.Controllers;
 
-// Permission codes per Technical Plan §6.3 (ADR-001 D-6). The attribute enforces nothing.
+// Permission codes per Technical Plan §6.3. The [Authorize] on each action enforces the code; the
+// [HasPermissionNotEnforced] beside it records the same code for the registry tests.
 [ApiController]
 [Route("api/v1/events")]
 public class EventsController : ControllerBase
@@ -34,9 +37,19 @@ public class EventsController : ControllerBase
     // ---------------------------------------------------------------------------------- reads
 
     /// <summary><c>GET /events</c> — the event list, optionally filtered by status.</summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Two credentials reach this route.</b> A signed-in operator with <c>events.read</c> lists any
+    /// status. A capture device lists with its device key, which is what the capture app's event picker
+    /// has always done — and a device is answered with its school's <c>Open</c> events <b>only</b>,
+    /// whatever <c>status</c> it sends, because those are the only events it can tap for and a stolen
+    /// kiosk key has no business enumerating drafts or history. See <c>DeviceKeyOrBearer</c>.
+    /// </para>
+    /// </remarks>
     /// <param name="status">
     /// <c>Draft</c>, <c>Open</c>, <c>Closed</c> or <c>Cancelled</c>. A capture client wants
-    /// <c>?status=Open</c> — a tap against any other status is <c>400 EventNotOpen</c>.
+    /// <c>?status=Open</c> — a tap against any other status is <c>400 EventNotOpen</c>. Ignored for a
+    /// device key, which always receives <c>Open</c>.
     /// </param>
     /// <param name="page">
     /// 1-based page number, default 1. Out-of-range values are clamped, never refused; the response
@@ -48,13 +61,23 @@ public class EventsController : ControllerBase
     /// </param>
     /// <param name="ct">Cancellation token.</param>
     /// <response code="200">One page of matching events, possibly empty.</response>
+    /// <response code="401">No credential, or an invalid one.</response>
+    /// <response code="403">A token without <c>events.read</c>, or a revoked key or inactive device.</response>
     [HttpGet]
+    [Authorize(AuthenticationSchemes = DeviceKeyOrBearer.AuthenticationScheme, Policy = DeviceKeyOrBearer.EventsListPolicy)]
     [HasPermissionNotEnforced(EamsPermissions.EventsRead)]
+    [HasPermissionNotEnforced(EamsPermissions.AttendanceCapture)]
     [ProducesResponseType(typeof(PagedResult<EventDto>), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status401Unauthorized)]
+    [ProducesResponseType(StatusCodes.Status403Forbidden)]
     public async Task<ActionResult<PagedResult<EventDto>>> List(
         [FromQuery] string? status, [FromQuery] int? page, [FromQuery] int? pageSize,
-        CancellationToken ct)
-        => Ok(await _events.ListAsync(status, PageRequest.From(page, pageSize), ct));
+        [FromServices] IDeviceContext device, CancellationToken ct)
+    {
+        // A device sees what it can capture for, and nothing else.
+        var effectiveStatus = device.DeviceId is null ? status : EventStatus.Open;
+        return Ok(await _events.ListAsync(effectiveStatus, PageRequest.From(page, pageSize), ct));
+    }
 
     /// <summary><c>GET /events/{id}</c> — one event.</summary>
     /// <remarks>
@@ -67,6 +90,7 @@ public class EventsController : ControllerBase
     /// <response code="200">The event.</response>
     /// <response code="404">No such event, or it is soft-deleted.</response>
     [HttpGet("{id:guid}")]
+    [Authorize(AuthenticationSchemes = JwtBearerDefaults.AuthenticationScheme, Policy = EamsPermissions.EventsRead)]
     [HasPermissionNotEnforced(EamsPermissions.EventsRead)]
     [ProducesResponseType(typeof(EventDto), StatusCodes.Status200OK)]
     [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status404NotFound)]
@@ -116,6 +140,7 @@ public class EventsController : ControllerBase
     // move to `reports.read` with it; that is one attribute, and Phase 6 will be looking at all of
     // them anyway.
     [HttpGet("{id:guid}/summary")]
+    [Authorize(AuthenticationSchemes = JwtBearerDefaults.AuthenticationScheme, Policy = EamsPermissions.EventsRead)]
     [HasPermissionNotEnforced(EamsPermissions.EventsRead)]
     [ProducesResponseType(typeof(EventSummaryDto), StatusCodes.Status200OK)]
     // typeof: [ApiController] turns NotFound() into a ProblemDetails, so declaring the status alone
@@ -133,6 +158,7 @@ public class EventsController : ControllerBase
     /// Report. <c>events.read</c> for the same reason the summary carries it.
     /// </summary>
     [HttpGet("{id:guid}/roster")]
+    [Authorize(AuthenticationSchemes = JwtBearerDefaults.AuthenticationScheme, Policy = EamsPermissions.EventsRead)]
     [HasPermissionNotEnforced(EamsPermissions.EventsRead)]
     [ProducesResponseType(typeof(EventRosterDto), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
@@ -163,17 +189,11 @@ public class EventsController : ControllerBase
     /// <response code="200">The scans, most recent first, with total and distinct-card counts.</response>
     /// <response code="404">No such event in this tenant.</response>
     /// <remarks>
-    /// <b>The first read in this API that authorization actually enforces, and that is deliberate
-    /// rather than incidental.</b> ADR-001 D-6 left every read open until §11 could be applied to all
-    /// of them at once; this one arrives after the login exists, is consumed by nothing yet, and is
-    /// unreachable by any device key - the mobile surface is five DeviceKey routes and this is not
-    /// among them. So it can be gated without breaking a caller, which makes it the cheapest possible
-    /// place to prove the machinery before the rest of §11 follows.
-    ///
     /// <para>
-    /// <b>Bearer only.</b> A device key is scoped to <c>attendance.capture</c> and has no business
-    /// reading a report; binding the policy to a scheme rather than to a claim alone is what stops a
-    /// capture credential satisfying an operator's permission.
+    /// <b>Bearer only</b>, like every other action on this controller. A device key is scoped to
+    /// <c>attendance.capture</c> and has no business reading a report; binding the policy to a scheme
+    /// rather than to a claim alone is what stops a capture credential satisfying an operator's
+    /// permission.
     /// </para>
     ///
     /// <para>
@@ -205,6 +225,7 @@ public class EventsController : ControllerBase
     /// only way to move it, which is what makes the roster freeze unskippable.
     /// </summary>
     [HttpPost]
+    [Authorize(AuthenticationSchemes = JwtBearerDefaults.AuthenticationScheme, Policy = EamsPermissions.EventsWrite)]
     [HasPermissionNotEnforced(EamsPermissions.EventsWrite)]
     [ProducesResponseType(typeof(EventDto), StatusCodes.Status201Created)]
     [ProducesResponseType(StatusCodes.Status400BadRequest)]
@@ -233,6 +254,7 @@ public class EventsController : ControllerBase
     /// <response code="404">No such event, or it is soft-deleted.</response>
     /// <response code="409">The event's current status does not allow this change.</response>
     [HttpPut("{id:guid}")]
+    [Authorize(AuthenticationSchemes = JwtBearerDefaults.AuthenticationScheme, Policy = EamsPermissions.EventsWrite)]
     [HasPermissionNotEnforced(EamsPermissions.EventsWrite)]
     [ProducesResponseType(typeof(EventDto), StatusCodes.Status200OK)]
     [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status400BadRequest)]
@@ -254,6 +276,7 @@ public class EventsController : ControllerBase
     /// </para>
     /// </summary>
     [HttpPatch("{id:guid}/status")]
+    [Authorize(AuthenticationSchemes = JwtBearerDefaults.AuthenticationScheme, Policy = EamsPermissions.EventsWrite)]
     [HasPermissionNotEnforced(EamsPermissions.EventsWrite)]
     [ProducesResponseType(typeof(EventDto), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status400BadRequest)]
@@ -267,6 +290,7 @@ public class EventsController : ControllerBase
 
     /// <summary>§6.3 <c>DELETE /events/{id}</c> — soft (§4.5 <c>IsDeleted</c>).</summary>
     [HttpDelete("{id:guid}")]
+    [Authorize(AuthenticationSchemes = JwtBearerDefaults.AuthenticationScheme, Policy = EamsPermissions.EventsWrite)]
     [HasPermissionNotEnforced(EamsPermissions.EventsWrite)]
     [ProducesResponseType(StatusCodes.Status204NoContent)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
@@ -349,6 +373,7 @@ public class EventsController : ControllerBase
     // is a declaration of intent on the list Phase 6 walks, and the narrower declaration is the
     // reversible mistake.
     [HttpPost("audience/resolve")]
+    [Authorize(AuthenticationSchemes = JwtBearerDefaults.AuthenticationScheme, Policy = EamsPermissions.EventsWrite)]
     [HasPermissionNotEnforced(EamsPermissions.EventsWrite)]
     [ProducesResponseType(typeof(AudienceResolutionDto), StatusCodes.Status200OK)]
     [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status400BadRequest)]
@@ -396,6 +421,7 @@ public class EventsController : ControllerBase
     /// <response code="200">The attached audience.</response>
     /// <response code="404">No such event, or it is soft-deleted.</response>
     [HttpGet("{id:guid}/attendees")]
+    [Authorize(AuthenticationSchemes = JwtBearerDefaults.AuthenticationScheme, Policy = EamsPermissions.EventsRead)]
     [HasPermissionNotEnforced(EamsPermissions.EventsRead)]
     [ProducesResponseType(typeof(EventAudienceDto), StatusCodes.Status200OK)]
     [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status404NotFound)]
@@ -410,6 +436,7 @@ public class EventsController : ControllerBase
     /// Idempotent; the response reports what was attached versus what already was.
     /// </summary>
     [HttpPost("{id:guid}/attendees")]
+    [Authorize(AuthenticationSchemes = JwtBearerDefaults.AuthenticationScheme, Policy = EamsPermissions.EventsWrite)]
     [HasPermissionNotEnforced(EamsPermissions.EventsWrite)]
     [ProducesResponseType(typeof(EventAudienceResultDto), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status400BadRequest)]
@@ -435,6 +462,7 @@ public class EventsController : ControllerBase
     /// </para>
     /// </summary>
     [HttpDelete("{id:guid}/attendees/groups/{studentGroupId:guid}")]
+    [Authorize(AuthenticationSchemes = JwtBearerDefaults.AuthenticationScheme, Policy = EamsPermissions.EventsWrite)]
     [HasPermissionNotEnforced(EamsPermissions.EventsWrite)]
     [ProducesResponseType(StatusCodes.Status204NoContent)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
@@ -467,6 +495,7 @@ public class EventsController : ControllerBase
     /// <response code="404">No such event.</response>
     /// <response code="409">The event's status does not allow an audience change.</response>
     [HttpDelete("{id:guid}/attendees/students/{studentId:guid}")]
+    [Authorize(AuthenticationSchemes = JwtBearerDefaults.AuthenticationScheme, Policy = EamsPermissions.EventsWrite)]
     [HasPermissionNotEnforced(EamsPermissions.EventsWrite)]
     [ProducesResponseType(StatusCodes.Status204NoContent)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]

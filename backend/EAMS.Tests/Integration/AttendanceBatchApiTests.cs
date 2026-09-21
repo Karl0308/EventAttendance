@@ -232,7 +232,7 @@ public class AttendanceBatchApiTests : IntegrationTest
         var apiKey = await IssueDeviceKeyAsync(world.SchoolId);
         using var factory = new EamsApiFactory(Sql.ConnectionString);
         using var capture = factory.CreateClient().WithDeviceKey(apiKey);
-        using var client = factory.CreateClient();
+        using var client = await SignedInClientAsync(factory);
 
         await capture.PostAsJsonAsync("/api/v1/attendance/tap", new
         {
@@ -280,7 +280,7 @@ public class AttendanceBatchApiTests : IntegrationTest
     {
         var world = await ArrangeAsync();
         using var factory = new EamsApiFactory(Sql.ConnectionString);
-        using var client = factory.CreateClient();
+        using var client = await SignedInClientAsync(factory);
 
         var response = await client.GetAsync(LiveRoute(world.EventId));
 
@@ -291,15 +291,15 @@ public class AttendanceBatchApiTests : IntegrationTest
     /// <summary>
     /// The live endpoint is a dashboard read and is <b>not</b> gated by a device key — see
     /// <c>AttendanceController.Live</c> for why gating it would hand the admin SPA a capture-scoped
-    /// credential. It is open under ADR-001 D-6 like the rest of the admin surface, and this test says
-    /// so out loud rather than leaving it to the absence of an assertion.
+    /// credential. It takes an operator's Bearer token like the rest of the admin surface, and this test
+    /// says so out loud rather than leaving it to the absence of an assertion.
     /// </summary>
     [Fact]
     public async Task The_live_endpoint_needs_no_device_key()
     {
         var world = await ArrangeAsync();
         using var factory = new EamsApiFactory(Sql.ConnectionString);
-        using var client = factory.CreateClient();
+        using var client = await SignedInClientAsync(factory);
 
         var response = await client.GetAsync(LiveRoute(world.EventId));
 
@@ -317,7 +317,7 @@ public class AttendanceBatchApiTests : IntegrationTest
     {
         var world = await ArrangeAsync();
         using var factory = new EamsApiFactory(Sql.ConnectionString);
-        using var client = factory.CreateClient();
+        using var client = await SignedInClientAsync(factory);
 
         var badCursor = await client.GetAsync(LiveRoute(world.EventId, "not-a-cursor"));
         Assert.Equal(HttpStatusCode.BadRequest, badCursor.StatusCode);
@@ -409,7 +409,7 @@ public class AttendanceBatchApiTests : IntegrationTest
     {
         var world = await ArrangeAsync();
         using var factory = new EamsApiFactory(Sql.ConnectionString);
-        using var client = factory.CreateClient();
+        using var client = await SignedInClientAsync(factory);
 
         var response = await client.GetAsync(LiveRoute(world.EventId, "not-a-cursor"));
 
@@ -426,7 +426,7 @@ public class AttendanceBatchApiTests : IntegrationTest
     {
         await ArrangeAsync();
         using var factory = new EamsApiFactory(Sql.ConnectionString);
-        using var client = factory.CreateClient();
+        using var client = await SignedInClientAsync(factory);
 
         var response = await client.GetAsync(LiveRoute(Guid.NewGuid()));
 

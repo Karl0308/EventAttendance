@@ -2,6 +2,7 @@ using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
 using EAMS.Api.Authorization;
+using EAMS.Application.Abstractions;
 using EAMS.Domain;
 using EAMS.Tests.Integration.Infrastructure;
 using Microsoft.EntityFrameworkCore;
@@ -80,7 +81,7 @@ public class SisImportApiTests : IntegrationTest
     {
         var world = await ArrangeAsync();
         using var factory = new EamsApiFactory(Sql.ConnectionString);
-        using var client = factory.CreateClient();
+        using var client = await SignedInClientAsync(factory);
 
         await using var file = SyntheticRoster.Build();
         var response = await UploadAsync(client, world.TermId, file);
@@ -111,7 +112,7 @@ public class SisImportApiTests : IntegrationTest
     {
         var world = await ArrangeAsync();
         using var factory = new EamsApiFactory(Sql.ConnectionString);
-        using var client = factory.CreateClient();
+        using var client = await SignedInClientAsync(factory);
 
         var response = await UploadAsync(client, world.TermId, file: null);
 
@@ -127,7 +128,7 @@ public class SisImportApiTests : IntegrationTest
     {
         await ArrangeAsync();
         using var factory = new EamsApiFactory(Sql.ConnectionString);
-        using var client = factory.CreateClient();
+        using var client = await SignedInClientAsync(factory);
 
         await using var file = SyntheticRoster.Build();
         var response = await UploadAsync(client, Guid.Empty, file);
@@ -145,7 +146,7 @@ public class SisImportApiTests : IntegrationTest
     {
         var world = await ArrangeAsync();
         using var factory = new EamsApiFactory(Sql.ConnectionString);
-        using var client = factory.CreateClient();
+        using var client = await SignedInClientAsync(factory);
 
         await using var notAWorkbook = new MemoryStream("REGNO,NAME\r\nUSA00001,Maria"u8.ToArray());
         var response = await UploadAsync(client, world.TermId, notAWorkbook, "roster.csv");
@@ -166,7 +167,7 @@ public class SisImportApiTests : IntegrationTest
     {
         await ArrangeAsync();
         using var factory = new EamsApiFactory(Sql.ConnectionString);
-        using var client = factory.CreateClient();
+        using var client = await SignedInClientAsync(factory);
 
         await using var file = SyntheticRoster.Build();
         var response = await UploadAsync(client, Guid.NewGuid(), file);
@@ -181,7 +182,7 @@ public class SisImportApiTests : IntegrationTest
     {
         var world = await ArrangeAsync();
         using var factory = new EamsApiFactory(Sql.ConnectionString);
-        using var client = factory.CreateClient();
+        using var client = await SignedInClientAsync(factory);
 
         await using var file = SyntheticRoster.Build();
         var batchId = await BatchIdOfAsync(await UploadAsync(client, world.TermId, file));
@@ -222,7 +223,7 @@ public class SisImportApiTests : IntegrationTest
         }
 
         using var factory = new EamsApiFactory(Sql.ConnectionString);
-        using var client = factory.CreateClient();
+        using var client = await SignedInClientAsync(factory);
 
         await using var file = SyntheticRoster.Build();
         var batchId = await BatchIdOfAsync(await UploadAsync(client, world.TermId, file));
@@ -247,7 +248,7 @@ public class SisImportApiTests : IntegrationTest
     {
         var world = await ArrangeAsync();
         using var factory = new EamsApiFactory(Sql.ConnectionString);
-        using var client = factory.CreateClient();
+        using var client = await SignedInClientAsync(factory);
 
         var unknown = await client.PostAsJsonAsync(
             $"/api/v1/sis/import/{Guid.NewGuid()}/run", new { termId = world.TermId });
@@ -285,7 +286,7 @@ public class SisImportApiTests : IntegrationTest
     {
         await ArrangeAsync();
         using var factory = new EamsApiFactory(Sql.ConnectionString);
-        using var client = factory.CreateClient();
+        using var client = await SignedInClientAsync(factory);
 
         // Model binding fails before the action: MVC composes this one.
         var badBody = await client.PostAsync(
@@ -330,7 +331,7 @@ public class SisImportApiTests : IntegrationTest
     {
         await ArrangeAsync();
         using var factory = new EamsApiFactory(Sql.ConnectionString);
-        using var client = factory.CreateClient();
+        using var client = await SignedInClientAsync(factory);
 
         var response = await client.GetAsync($"/api/v1/sis/import/{Guid.NewGuid()}");
 
@@ -346,7 +347,7 @@ public class SisImportApiTests : IntegrationTest
     {
         var world = await ArrangeAsync();
         using var factory = new EamsApiFactory(Sql.ConnectionString);
-        using var client = factory.CreateClient();
+        using var client = await SignedInClientAsync(factory);
 
         await using var file = SyntheticRoster.Build();
         var batchId = await BatchIdOfAsync(await UploadAsync(client, world.TermId, file));
@@ -381,7 +382,7 @@ public class SisImportApiTests : IntegrationTest
     {
         var world = await ArrangeAsync();
         using var factory = new EamsApiFactory(Sql.ConnectionString);
-        using var client = factory.CreateClient();
+        using var client = await SignedInClientAsync(factory);
 
         await using var file = SyntheticRoster.Build();
         var batchId = await BatchIdOfAsync(await UploadAsync(client, world.TermId, file));
@@ -407,22 +408,15 @@ public class SisImportApiTests : IntegrationTest
         }
     }
 
-    // ------------------------------------------------------------------- the authorization seam
+    // ------------------------------------------------------------------------- authorization
 
     /// <summary>
-    /// ADR-001 D-6: every endpoint declares the permission Phase 6 will demand, and <b>none of them
-    /// enforces it</b>. That matters more here than anywhere else in this API — these four endpoints
-    /// read and write the full roster of every student in the institution, names and institutional
-    /// e-mail addresses included.
-    ///
-    /// <para>
-    /// The assertion is deliberately two-sided: the declaration must be present on every action, and
-    /// the endpoints must still be reachable unauthenticated. The day one of those changes, this test
-    /// says so rather than a reviewer inferring protection from a decoration that enforces nothing.
-    /// </para>
+    /// Every import endpoint declares <c>sis.import</c> and enforces it. That matters more here than
+    /// anywhere else in this API — these four endpoints read and write the full roster of every student
+    /// in the institution, names and institutional e-mail addresses included.
     /// </summary>
     [Fact]
-    public void Every_import_endpoint_declares_the_sis_import_permission_and_enforces_nothing()
+    public void Every_import_endpoint_declares_and_enforces_the_sis_import_permission()
     {
         var actions = typeof(EAMS.Api.Controllers.SisImportController)
             .GetMethods(System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance
@@ -441,23 +435,34 @@ public class SisImportApiTests : IntegrationTest
 
             Assert.Single(declared);
             Assert.Equal("sis.import", declared[0].Permission);
-        }
 
-        // Structurally incapable of enforcing anything: it implements no ASP.NET Core filter
-        // interface, so the MVC pipeline never sees it.
-        Assert.Empty(typeof(HasPermissionNotEnforcedAttribute).GetInterfaces());
+            var enforced = action
+                .GetCustomAttributes(typeof(Microsoft.AspNetCore.Authorization.AuthorizeAttribute), inherit: true)
+                .Cast<Microsoft.AspNetCore.Authorization.AuthorizeAttribute>()
+                .ToList();
+
+            Assert.Equal("sis.import", Assert.Single(enforced).Policy);
+        }
     }
 
+    /// <summary>
+    /// Three callers, three answers: nobody is challenged, an Organizer — whose role does not grant
+    /// <c>sis.import</c> — is forbidden, and a SchoolAdmin reaches the action, which answers 404 for a
+    /// batch that does not exist.
+    /// </summary>
     [Fact]
-    public async Task The_import_endpoints_are_reachable_without_authentication()
+    public async Task The_import_endpoints_admit_only_an_operator_holding_sis_import()
     {
         await ArrangeAsync();
         using var factory = new EamsApiFactory(Sql.ConnectionString);
-        using var client = factory.CreateClient();
+        using var anonymous = factory.CreateClient();
+        using var organizer = await SignedInClientAsync(factory, EamsRoleNames.Organizer);
+        using var admin = await SignedInClientAsync(factory);
 
-        var response = await client.GetAsync($"/api/v1/sis/import/{Guid.NewGuid()}");
+        var route = $"/api/v1/sis/import/{Guid.NewGuid()}";
 
-        // 404 rather than 401/403: the endpoint ran and found nothing, which is the ADR-001 D-6 state.
-        Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
+        Assert.Equal(HttpStatusCode.Unauthorized, (await anonymous.GetAsync(route)).StatusCode);
+        Assert.Equal(HttpStatusCode.Forbidden, (await organizer.GetAsync(route)).StatusCode);
+        Assert.Equal(HttpStatusCode.NotFound, (await admin.GetAsync(route)).StatusCode);
     }
 }

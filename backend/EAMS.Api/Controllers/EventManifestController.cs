@@ -18,12 +18,13 @@ namespace EAMS.Api.Controllers;
 ///
 /// <para>
 /// <b>Its own controller rather than one more action on <c>EventsController</c>, and that is a
-/// deliberate split.</b> Every action there is <c>events.read</c> or <c>events.write</c> and is open
-/// under ADR-001 D-6; this one authenticates a <em>device</em> and carries
+/// deliberate split.</b> Every action there is <c>events.read</c> or <c>events.write</c> for a person's
+/// Bearer token — the event list alone also admits a device, for its picker; this one authenticates
+/// only a <em>device</em> and carries
 /// <c>attendance.capture</c>. One action with a different principal type in the middle of an
 /// administrative controller is a review hazard in both directions — a reader skimming
-/// <c>EventsController</c> would read the whole file as open, and an action added later to a
-/// capture-only controller inherits capture auth rather than landing open by accident. The route is
+/// <c>EventsController</c> would assume every action takes the same credential, and an action added
+/// later to a capture-only controller should inherit capture auth rather than an operator's. The route is
 /// identical either way; only the file is different.
 /// </para>
 ///

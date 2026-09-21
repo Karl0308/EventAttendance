@@ -86,9 +86,8 @@ public static class EamsClaimTypes
 /// <para>
 /// <b>A test failure and not a compile error, and the distinction is the whole reason the tests
 /// exist.</b> The attribute takes a <c>string</c>, so a bare literal at a call site compiles
-/// perfectly — and because the attribute enforces nothing (ADR-001 D-6), a wrong one never fails a
-/// request either. Nothing about a typo'd permission code is visible to the compiler or to the
-/// runtime; the tests are the only thing that sees it.
+/// perfectly, and a wrong one fails only at runtime, as a 500 for a policy that was never registered or
+/// a 403 for a code no role grants. The tests are what see it before a request does.
 /// </para>
 ///
 /// <para>
@@ -103,9 +102,9 @@ public static class EamsClaimTypes
 /// </para>
 ///
 /// <para>
-/// <b>Being here is not a claim that a code is enforced.</b> <see cref="AttendanceCapture"/> is the
-/// only one that is, and it is enforced because it is also a policy name — see its remarks. The rest
-/// are declarations of intent on the list Phase 6 walks.
+/// <b>Every code here is also a policy name.</b> <see cref="AttendanceCapture"/> is registered against
+/// the device scheme; every other code is registered against Bearer by <c>Program.cs</c>, from
+/// <see cref="EamsRoles.HumanAssignable"/>, so adding a code here registers its policy too.
 /// </para>
 /// </summary>
 public static class EamsPermissions

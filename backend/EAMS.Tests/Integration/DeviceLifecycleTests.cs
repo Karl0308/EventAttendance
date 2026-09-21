@@ -332,7 +332,7 @@ public class DeviceLifecycleTests : IntegrationTest
         var schoolId = await ArrangeSchoolAsync();
 
         using var factory = new EamsApiFactory(Sql.ConnectionString);
-        using var client = factory.CreateClient();
+        using var client = await SignedInClientAsync(factory);
 
         var created = await client.PostAsJsonAsync(Route, ValidDevice());
         Assert.Equal(HttpStatusCode.Created, created.StatusCode);
@@ -380,7 +380,7 @@ public class DeviceLifecycleTests : IntegrationTest
         await ArrangeSchoolAsync();
 
         using var factory = new EamsApiFactory(Sql.ConnectionString);
-        using var client = factory.CreateClient();
+        using var client = await SignedInClientAsync(factory);
 
         var created = await client.PostAsJsonAsync(Route, ValidDevice());
         using var issued = JsonDocument.Parse(await created.Content.ReadAsStringAsync());
@@ -404,7 +404,7 @@ public class DeviceLifecycleTests : IntegrationTest
         var unknown = Guid.NewGuid();
 
         using var factory = new EamsApiFactory(Sql.ConnectionString);
-        using var client = factory.CreateClient();
+        using var client = await SignedInClientAsync(factory);
 
         Assert.Equal(HttpStatusCode.NotFound,
             (await client.PutAsJsonAsync($"{Route}/{unknown}", ValidDevice())).StatusCode);
