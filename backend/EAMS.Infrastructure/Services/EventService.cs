@@ -68,7 +68,7 @@ internal sealed class EventService : IEventService, IEventSummaryFigures
 
     private static EventDto ToDto(Event e) => new(
         e.Id, e.Name, e.Description, e.Location, e.StartAt, e.EndAt,
-        e.AttendanceMode, e.GraceMinutes, e.RequireRegistration, e.Status);
+        e.AttendanceMode, e.GraceMinutes, e.RequireRegistration, e.Status, e.IssuesCertificates);
 
     // ------------------------------------------------------------------------------------ reads
 
@@ -1544,8 +1544,21 @@ internal sealed class EventService : IEventService, IEventSummaryFigures
         var ev = await FindAsync(id, ct);
         if (ev is null) return NotFound();
 
-        if (!EventStatusTransition.AcceptsEdits(ev.Status))
+        // The one exception to the Closed lock: the certificates flag (JJ, P5). It does not change what
+        // any attendance row means, so it is editable in every status — but only as the sole change.
+        if (!EventStatusTransition.AcceptsEdits(ev.Status) && !IsCertificatesOnlyEdit(request, ev))
         {
+            // A caller who named the flag was trying the one edit a closed event allows, and tripped on
+            // another field — say which, or "why was my certificates toggle refused" has no answer.
+            if (request.IssuesCertificates is not null)
+            {
+                return new EventWriteResponse(EventWriteOutcome.EventLocked,
+                    $"Event is {ev.Status}. The only edit a {ev.Status} event accepts is changing " +
+                    "IssuesCertificates on its own, and this request also changes " +
+                    $"{string.Join(", ", NonCertificateChanges(request, ev))}. Re-send it with every " +
+                    "other field exactly as stored.", null);
+            }
+
             return new EventWriteResponse(EventWriteOutcome.EventLocked,
                 $"Event is {ev.Status}. Its window and grace period decided Present versus Late for " +
                 "every row already recorded, so editing them now would change what those rows mean " +
@@ -2147,6 +2160,48 @@ internal sealed class EventService : IEventService, IEventSummaryFigures
         ev.GraceMinutes = request.GraceMinutes;
         ev.RequireRegistration = request.RequireRegistration;
         ev.AttendanceMode = ResolveMode(request.AttendanceMode);
+
+        // Null means "not mentioned" and keeps what is stored — false on a new event. See
+        // EventWriteRequest.IssuesCertificates: as a plain bool, every client that predates the field
+        // would clear it on every PUT, with a 200.
+        if (request.IssuesCertificates is { } issuesCertificates)
+            ev.IssuesCertificates = issuesCertificates;
+    }
+
+    /// <summary>
+    /// Whether this request, against a <c>Closed</c> event, names the certificates flag and changes
+    /// nothing else — the one edit a closed event accepts (JJ, P5: the flag is editable in every
+    /// status). Re-sending the flag's current value qualifies, so a retried toggle succeeds.
+    ///
+    /// <para>
+    /// Every other field must arrive exactly as stored, compared the way <see cref="Apply"/> would
+    /// store it, so applying the request rewrites them with the same values. The request must name the
+    /// flag: a body that omits it changes nothing at all, and a closed event keeps answering that with
+    /// <see cref="EventWriteOutcome.EventLocked"/>, exactly as before this field existed.
+    /// </para>
+    /// </summary>
+    private static bool IsCertificatesOnlyEdit(EventWriteRequest request, Event ev) =>
+        request.IssuesCertificates is not null && NonCertificateChanges(request, ev).Count == 0;
+
+    /// <summary>
+    /// Every field other than <c>IssuesCertificates</c> this request would change. The descriptive
+    /// fields are compared as <see cref="Apply"/> stores them — the name trimmed, then ordinal, so a
+    /// casing-only rename is a change — and the attendance-rule fields through
+    /// <see cref="AttendanceRuleChanges"/>, so the two lists cannot disagree about what "unchanged" means.
+    /// </summary>
+    private static IReadOnlyList<string> NonCertificateChanges(EventWriteRequest request, Event ev)
+    {
+        var changed = new List<string>();
+
+        if (!string.Equals(request.Name.Trim(), ev.Name, StringComparison.Ordinal))
+            changed.Add(nameof(Event.Name));
+        if (!string.Equals(request.Description, ev.Description, StringComparison.Ordinal))
+            changed.Add(nameof(Event.Description));
+        if (!string.Equals(request.Location, ev.Location, StringComparison.Ordinal))
+            changed.Add(nameof(Event.Location));
+        changed.AddRange(AttendanceRuleChanges(request, ev));
+
+        return changed;
     }
 
     /// <summary>

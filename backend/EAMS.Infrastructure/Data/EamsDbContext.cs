@@ -839,6 +839,10 @@ internal class EamsDbContext : DbContext
         e.Property(x => x.Status).HasMaxLength(20).IsRequired()
             .HasDefaultValue("Draft").ValueGeneratedNever();
         e.Property(x => x.IsDeleted).HasDefaultValue(false).ValueGeneratedNever();
+        // Not in §4.5 (client QA Q20). EF Core 9 cannot name a default constraint, so the
+        // IssuesCertificatesFlag migration creates DF_Events_IssuesCertificates in raw SQL; the model
+        // only has to agree on the value. EventIssuesCertificatesTests reads the real constraint.
+        e.Property(x => x.IssuesCertificates).HasDefaultValue(false).ValueGeneratedNever();
 
         e.HasOne(x => x.School).WithMany(s => s.Events).HasForeignKey(x => x.SchoolId).IsRequired();
         e.HasOne(x => x.OrganizerUser).WithMany().HasForeignKey(x => x.OrganizerUserId);

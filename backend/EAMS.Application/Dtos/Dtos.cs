@@ -67,9 +67,22 @@ public record CardDto(Guid Id, string CardUid, string? Label, bool IsActive);
 /// every event edited through the UI. Additive on the wire; existing consumers ignore them.
 /// </para>
 /// </summary>
+/// <param name="IssuesCertificates">
+/// Whether this event issues certificates of attendance. A setting only — no certificate is produced
+/// anywhere yet. Always present, never null: an event created before the setting existed reads
+/// <c>false</c>.
+///
+/// <para>
+/// <b>Read it before a <c>PUT</c> if you intend to change it; you do not need it to preserve it.</b>
+/// Omitting <c>issuesCertificates</c> from a <c>PUT /events/{id}</c> body keeps the stored value, so a
+/// client that has never heard of this field cannot clear it. Also served to devices on
+/// <c>GET /events</c>, where it is informational — it plays no part in capture.
+/// </para>
+/// </param>
 public record EventDto(
     Guid Id, string Name, string? Description, string? Location, DateTime StartAt, DateTime EndAt,
-    string AttendanceMode, int GraceMinutes, bool RequireRegistration, string Status);
+    string AttendanceMode, int GraceMinutes, bool RequireRegistration, string Status,
+    bool IssuesCertificates);
 
 public record AttendanceDto(
     Guid Id, Guid EventId, Guid StudentId, string StudentName, string StudentNumber,

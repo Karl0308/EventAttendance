@@ -7,6 +7,39 @@ matching has its own page: [`mobile-card-matching.md`](mobile-card-matching.md).
 
 ---
 
+## 2026-09-21
+
+### `issuesCertificates` on `GET /events` - no release needed, unless your client is strict
+
+Each event now carries a setting for whether it issues certificates of attendance. It appears on
+every event your picker receives:
+
+```jsonc
+{
+  "id": "2fa80420-…",
+  "name": "University Convocation 2026",
+  // …every field you already read, unchanged…
+  "status": "Open",
+  "issuesCertificates": false      // new; always present, never null
+}
+```
+
+**Additive, and nothing is asked of you.** No field was renamed, removed or retyped, and which events a
+device is shown has not changed - still its own school's `Open` events only. The value is informational
+for the capture app: it plays no part in a tap, and no certificate is produced anywhere yet.
+
+**`GET /events/{id}/manifest` does not carry it**, deliberately: the manifest holds only the fields
+capture needs, and adding this one would move the manifest version hash for every cached event.
+
+**But `EventDto` is a closed schema** (`additionalProperties: false` in `openapi.json`), so say it plainly:
+a client that tolerates unknown JSON members - the default for most JSON libraries - sees nothing. A
+client **generated from the previous `openapi.json` with strict deserialization** (unknown members
+rejected) will **fail to parse the event list** until it is regenerated from the current contract. If
+yours is one of those, regenerate before the backend is deployed, or turn unknown-member rejection off
+for this response.
+
+---
+
 ## 2026-09-17
 
 ### An app that is already set up needs no release

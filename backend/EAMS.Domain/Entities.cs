@@ -205,6 +205,19 @@ public class Event : AuditableEntity
     public User? OrganizerUser { get; set; }
     public bool IsDeleted { get; set; }
 
+    /// <summary>
+    /// Whether this event issues certificates of attendance (client QA Q20). Only the setting —
+    /// certificates themselves are not built. Not in §4.5: additive drift, <c>bit NOT NULL</c> with
+    /// the named default <c>DF_Events_IssuesCertificates</c> of <c>0</c>, so every event that existed
+    /// before the column reads false.
+    ///
+    /// <para>
+    /// <b>Editable in every status, <c>Closed</c> included</b> (JJ, P5). It does not change what any
+    /// attendance row means, which is the only reason the other fields lock.
+    /// </para>
+    /// </summary>
+    public bool IssuesCertificates { get; set; }
+
     public ICollection<AttendanceRecord> AttendanceRecords { get; set; } = new List<AttendanceRecord>();
     public ICollection<EventSchedule> Schedules { get; set; } = new List<EventSchedule>();
 }

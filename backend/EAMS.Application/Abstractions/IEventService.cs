@@ -285,7 +285,10 @@ public interface IEventService
     /// <summary>
     /// §6.3 <c>PUT /events/{id}</c>. A full replacement of the event's own fields; it does not touch
     /// <c>Status</c>, <c>SchoolId</c>, <c>IsDeleted</c>, or the audience. Refused on a <c>Closed</c>
-    /// event — see <c>EventStatusTransition.AcceptsEdits</c>.
+    /// event — see <c>EventStatusTransition.AcceptsEdits</c> — <b>except</b> for a request that names
+    /// <see cref="EventWriteRequest.IssuesCertificates"/> and changes nothing else; that flag is
+    /// editable in every status.
+    /// An omitted <c>IssuesCertificates</c> keeps the stored value rather than replacing it.
     /// </summary>
     Task<EventWriteResponse> UpdateAsync(
         Guid id, EventWriteRequest request, CancellationToken ct = default);

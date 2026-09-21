@@ -29,6 +29,25 @@ namespace EAMS.Application.Dtos;
 /// <param name="AttendanceMode">
 /// <c>Single</c> or <c>TimeInOut</c>; null or blank takes §4.5's <c>Single</c> default.
 /// </param>
+/// <param name="IssuesCertificates">
+/// Whether the event issues certificates of attendance. <b>Optional, and omitting it never changes
+/// anything:</b> on <c>POST</c> an omitted or null value creates the event with <c>false</c>; on
+/// <c>PUT</c> it <em>keeps the stored value</em>. Send <c>true</c> or <c>false</c> to set it.
+///
+/// <para>
+/// <b>Why this one field is not a full replacement like the rest of the body.</b> It was added after
+/// clients of this <c>PUT</c> already existed. As a plain boolean, every such client — which sends
+/// the body it knows, without this field — would reset it to <c>false</c> on every edit, silently: a
+/// successful save that turns certificates off. Null is therefore "not mentioned", not "false".
+/// </para>
+///
+/// <para>
+/// <b>Changeable in every status, <c>Closed</c> included.</b> It does not affect what any attendance row
+/// means. On a <c>Closed</c> event a <c>PUT</c> is accepted only when it names this field and changes
+/// nothing else — re-sending the current value included, so a retried toggle succeeds; everything else
+/// on a closed event stays locked.
+/// </para>
+/// </param>
 public record EventWriteRequest(
     string Name,
     string? Description,
@@ -37,7 +56,8 @@ public record EventWriteRequest(
     DateTime EndAt,
     string? AttendanceMode,
     int GraceMinutes,
-    bool RequireRegistration);
+    bool RequireRegistration,
+    bool? IssuesCertificates = null);
 
 /// <summary>The body of <c>PATCH /events/{id}/status</c>. See <c>EventStatusTransition</c>.</summary>
 public record EventStatusRequest(string Status);

@@ -7449,6 +7449,10 @@
           },
           "status": {
             "type": "string"
+          },
+          "issuesCertificates": {
+            "type": "boolean",
+            "description": "Whether this event issues certificates of attendance. A setting only — no certificate is produced\r\nanywhere yet. Always present, never null: an event created before the setting existed reads\r\n`false`.\r\n            \r\n\r\n<b>Read it before a `PUT` if you intend to change it; you do not need it to preserve it.</b>\r\nOmitting `issuesCertificates` from a `PUT /events/{id}` body keeps the stored value, so a\r\nclient that has never heard of this field cannot clear it. Also served to devices on\r\n`GET /events`, where it is informational — it plays no part in capture.\r\n"
           }
         },
         "additionalProperties": false,
@@ -7994,6 +7998,11 @@
           },
           "requireRegistration": {
             "type": "boolean"
+          },
+          "issuesCertificates": {
+            "type": "boolean",
+            "description": "Whether the event issues certificates of attendance. <b>Optional, and omitting it never changes\r\nanything:</b> on `POST` an omitted or null value creates the event with `false`; on\r\n`PUT` it <em>keeps the stored value</em>. Send `true` or `false` to set it.\r\n            \r\n\r\n<b>Why this one field is not a full replacement like the rest of the body.</b> It was added after\r\nclients of this `PUT` already existed. As a plain boolean, every such client — which sends\r\nthe body it knows, without this field — would reset it to `false` on every edit, silently: a\r\nsuccessful save that turns certificates off. Null is therefore \"not mentioned\", not \"false\".\r\n\r\n<b>Changeable in every status, `Closed` included.</b> It does not affect what any attendance row\r\nmeans. On a `Closed` event a `PUT` is accepted only when it names this field and changes\r\nnothing else — re-sending the current value included, so a retried toggle succeeds; everything else\r\non a closed event stays locked.\r\n",
+            "nullable": true
           }
         },
         "additionalProperties": false,
