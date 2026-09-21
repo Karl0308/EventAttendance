@@ -614,7 +614,11 @@ public class AttendanceController : ControllerBase
         TapOutcome.Recorded
             or TapOutcome.DuplicateIgnored
             or TapOutcome.CheckedOut
-            or TapOutcome.AlreadyRecorded => StatusCodes.Status200OK,
+            or TapOutcome.AlreadyRecorded
+            // A double tap inside the minimum interval (B6). Not an error the client can act on, and
+            // §8.2 step 4 treats a conflict as delivered: a 4xx would make an older queue that reads only
+            // the status line stop on a row that is already fully handled.
+            or TapOutcome.TooSoonIgnored => StatusCodes.Status200OK,
 
         // All three name something the request referred to that does not exist.
         TapOutcome.EventNotFound

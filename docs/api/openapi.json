@@ -8894,10 +8894,11 @@
           "TappedAtOutOfRange",
           "TappedAtOutsideEventWindow",
           "DeviceTapIdRequired",
-          "BatchTooLarge"
+          "BatchTooLarge",
+          "TooSoonIgnored"
         ],
         "type": "string",
-        "description": "The `code` returned by `POST /attendance/tap` and by every row of\n`POST /attendance/tap/batch`, on success bodies and RFC 7807 problem bodies alike.\n\n**This list is frozen published contract.** A rename here is a breaking change for a\nclient we cannot recompile, and the symptom is a queue that quietly stops reconciling\nrather than anything that looks like a failure. A build-gating test pins it.\n\nQueue guidance: a `2xx` row is done — drop it. A `4xx` row will be refused identically\nforever — stop retrying rather than skipping past it, and flush strictly in order.\n`BatchTooLarge` is the one exception: chunk to `maxBatchRows` and resend.\n\n| `code` | HTTP |\n|---|---|\n| `Recorded` | 200 |\n| `DuplicateIgnored` | 200 |\n| `CheckedOut` | 200 |\n| `AlreadyRecorded` | 200 |\n| `EventNotFound` | 404 |\n| `EventNotOpen` | 400 |\n| `CardNotFound` | 404 |\n| `DeviceNotRegistered` | 404 |\n| `DeviceMismatch` | 400 |\n| `TappedAtOutOfRange` | 400 |\n| `TappedAtOutsideEventWindow` | 400 |\n| `DeviceTapIdRequired` | 400 |\n| `BatchTooLarge` | 400 |"
+        "description": "The `code` returned by `POST /attendance/tap` and by every row of\n`POST /attendance/tap/batch`, on success bodies and RFC 7807 problem bodies alike.\n\n**This list is frozen published contract.** A rename here is a breaking change for a\nclient we cannot recompile, and the symptom is a queue that quietly stops reconciling\nrather than anything that looks like a failure. A build-gating test pins it.\n\nQueue guidance: a `2xx` row is done — drop it. A `4xx` row will be refused identically\nforever — stop retrying rather than skipping past it, and flush strictly in order.\n`BatchTooLarge` is the one exception: chunk to `maxBatchRows` and resend.\n\n`TooSoonIgnored` is a `2xx`: the same card was counted less than the minimum tap\ninterval ago (3 s), so nothing was written. Drop the row and show the student nothing.\n\n| `code` | HTTP |\n|---|---|\n| `Recorded` | 200 |\n| `DuplicateIgnored` | 200 |\n| `CheckedOut` | 200 |\n| `AlreadyRecorded` | 200 |\n| `EventNotFound` | 404 |\n| `EventNotOpen` | 400 |\n| `CardNotFound` | 404 |\n| `DeviceNotRegistered` | 404 |\n| `DeviceMismatch` | 400 |\n| `TappedAtOutOfRange` | 400 |\n| `TappedAtOutsideEventWindow` | 400 |\n| `DeviceTapIdRequired` | 400 |\n| `BatchTooLarge` | 400 |\n| `TooSoonIgnored` | 200 |"
       },
       "TapRequest": {
         "type": "object",

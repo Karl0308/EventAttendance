@@ -28,4 +28,17 @@ public static class ScanLog
     /// </para>
     /// </summary>
     public const string UnresolvedAction = "attendance.scan.unresolved";
+
+    /// <summary>
+    /// <c>AuditLog.Action</c> for a tap the server ignored because the same card was counted less than
+    /// the minimum tap interval ago (client QA #470 B6, <c>TooSoonIgnored</c>).
+    ///
+    /// <para>
+    /// <b>Filed under the event like an unresolved scan, and deliberately not shown with them.</b> The
+    /// Unresolved Scans panel reads <see cref="UnresolvedAction"/> alone: a suppressed tap resolved to a
+    /// student perfectly well, and listing it beside cards nobody could place would bury the rows that
+    /// panel exists to surface. It is kept so that "why did my second tap not count?" has an answer.
+    /// </para>
+    /// </summary>
+    public const string SuppressedAction = "attendance.scan.suppressed";
 }

@@ -124,6 +124,32 @@ public enum TapOutcome
     /// </para>
     /// </summary>
     BatchTooLarge,
+
+    /// <summary>
+    /// The same card was counted less than the minimum tap interval ago — three seconds by default
+    /// (client QA #470 B6; <see cref="EAMS.Domain.TapInterval"/>). Nothing was written to attendance.
+    ///
+    /// <para>
+    /// <b>A success, HTTP 200, and <c>record</c> is the existing row unchanged.</b> A double tap is not
+    /// an error the client can fix, and §8.2 step 4 treats a conflict as delivered: an older client that
+    /// branches on the status line alone drops the row, which is exactly right.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>Distinct from <see cref="AlreadyRecorded"/> on purpose.</b> B6.3 says the student sees nothing
+    /// when a tap is ignored, and a device may reasonably show a message for <c>AlreadyRecorded</c>
+    /// ("already checked in"). A separate token is what lets it stay silent for this one and only this
+    /// one.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>Never returned for a replay.</b> The <c>deviceTapId</c> replay check runs first, so a retry of a
+    /// counted check-in or check-out is <see cref="DuplicateIgnored"/>. A suppressed tap stores no tap id,
+    /// so its own retry is judged again and — while nothing has moved — comes back this token again.
+    /// Each suppression is kept as an <c>attendance.scan.suppressed</c> audit row, never as attendance.
+    /// </para>
+    /// </summary>
+    TooSoonIgnored,
 }
 
 public enum ManualOutcome

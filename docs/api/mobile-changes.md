@@ -9,6 +9,32 @@ matching has its own page: [`mobile-card-matching.md`](mobile-card-matching.md).
 
 ## 2026-09-21
 
+### Double taps are ignored, and the last tap is the time out - no release needed
+
+Two changes to how the server decides a tap. **No request or response shape changed** and no release
+is required, but the kiosk developer should know both, because each changes what a code can mean.
+
+**1. A second tap of the same card within 3 seconds is ignored.** It returns the new code
+**`TooSoonIgnored`** with HTTP **200** (and `status: 200` on a batch row, counted in `accepted`), the
+existing record unchanged, and `serverTime` as always. **Drop it and show the student nothing** - that
+is the client's own rule (B6.3). A different card is never affected. A client that branches only on the
+status line already drops it correctly; a client with an exhaustive switch on `code` needs a branch
+for the new token. It is judged on `tappedAt`, so keep device clocks within about a second of
+`serverTime`.
+
+**2. In `TimeInOut` events the last tap is the time out.** Every later tap of the same card, 3 seconds
+or more after the latest counted one, moves the check-out to itself and returns `CheckedOut` - so
+`CheckedOut` can now arrive **many times** per student per event. A tap earlier than the current
+check-out never moves it back: it returns `TooSoonIgnored` if it is within 3 seconds of the check-in or
+check-out, `AlreadyRecorded` otherwise. Replaying an *intermediate* check-out tap is `AlreadyRecorded`,
+because only the latest check-out's `deviceTapId` is kept; and replaying the current check-out is
+`DuplicateIgnored` only when the same device also checked the student in - otherwise it comes back
+`TooSoonIgnored` (a known gap on our side). All of these mean drop the row. `Single` events are
+unchanged.
+
+Details: [`attendance-contract-handoff.md`](attendance-contract-handoff.md) - the queue table and
+"Reconciliation has one blind spot".
+
 ### `issuesCertificates` on `GET /events` - no release needed, unless your client is strict
 
 Each event now carries a setting for whether it issues certificates of attendance. It appears on

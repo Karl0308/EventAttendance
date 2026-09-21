@@ -27,8 +27,8 @@ internal sealed class AttendanceService : IAttendanceService
     private readonly IDeviceContext _device;
 
     /// <summary>
-    /// Only ever used to report a §4.13 tap-window setting this service could not read as a number —
-    /// see <see cref="ResolveTapWindowAsync"/>. A malformed setting falls back to the published
+    /// Only ever used to report a §4.13 capture setting this service could not read as a number —
+    /// see <see cref="ResolveCaptureSettingsAsync"/> — and a suppressed-scan audit row it could not write. A malformed setting falls back to the published
     /// default, which is the right behaviour and a silent one, so it says so out loud.
     /// </summary>
     private readonly ILogger<AttendanceService> _logger;
@@ -159,12 +159,13 @@ internal sealed class AttendanceService : IAttendanceService
     // The public entry point takes no window cache: a single tap resolves its §4.13 settings once and
     // has nothing to reuse them across. TapBatchAsync supplies one — see the overload below.
     public Task<TapResponse> TapAsync(TapRequest req, CancellationToken ct = default) =>
-        TapAsync(req, windows: null, ct);
+        TapAsync(req, settingsCache: null, ct);
 
     /// <inheritdoc cref="TapAsync(TapRequest, CancellationToken)"/>
-    /// <param name="windows">
-    /// A per-call memo of resolved §4.13 tap windows, keyed by school, or null to resolve every time.
-    /// Phase 4d's carry-over from 4c: <see cref="ResolveTapWindowAsync"/> is one settings query per tap
+    /// <param name="settingsCache">
+    /// A per-call memo of resolved §4.13 capture settings (the D-36 tap window and the B6 minimum tap
+    /// interval), keyed by school, or null to resolve every time.
+    /// Phase 4d's carry-over from 4c: <see cref="ResolveCaptureSettingsAsync"/> is one settings query per tap
     /// and a 200-row batch would run it 200 times, identically. Supplied by
     /// <see cref="TapBatchAsync"/> and by nothing else.
     ///
@@ -184,7 +185,7 @@ internal sealed class AttendanceService : IAttendanceService
     /// </para>
     /// </param>
     private async Task<TapResponse> TapAsync(
-        TapRequest req, Dictionary<Guid, TapTimeWindow>? windows, CancellationToken ct)
+        TapRequest req, Dictionary<Guid, CaptureSettings>? settingsCache, CancellationToken ct)
     {
         // Read once, at entry, and used for three things that must agree: the fallback timestamp when
         // the client sends none, the D-36 future-tolerance comparison, and the `serverTime` every
@@ -273,7 +274,8 @@ internal sealed class AttendanceService : IAttendanceService
                 serverTime);
         }
 
-        var window = await ResolveTapWindowAsync(ev.SchoolId, windows, ct);
+        var settings = await ResolveCaptureSettingsAsync(ev.SchoolId, settingsCache, ct);
+        var window = settings.Window;
         if (!window.Contains(when, ev.StartAt, ev.EndAt))
         {
             var (from, to) = window.BoundsFor(ev.StartAt, ev.EndAt);
@@ -385,41 +387,166 @@ internal sealed class AttendanceService : IAttendanceService
                 SaveOutcome.Inserted =>
                     Accept(TapOutcome.Recorded, $"Checked in ({status}).", rec, serverTime),
                 SaveOutcome.DuplicateTapWon => Duplicate(saved.Record, serverTime),
+
+                // Insert-race re-dispatch (P7, JJ-approved). Another tap of this card created the row
+                // between our read and our insert. In TimeInOut that other tap was the check-in, so this
+                // one is a LATER tap and is judged against it exactly as if it had arrived a moment
+                // later: inside the interval it is a double tap, beyond it a check-out. Returning
+                // AlreadyRecorded here, as this used to, silently lost a genuine check-out.
+                _ when ev.AttendanceMode == AttendanceMode.TimeInOut => await ApplyLaterTapAsync(
+                    ev, req, uid, deviceId, saved.Record, when, settings.MinTapInterval, serverTime, ct),
                 _ => AlreadyRecorded(saved.Record, serverTime),
             };
         }
 
-        // Already present: in TimeInOut mode, a second tap records check-out.
-        if (ev.AttendanceMode == AttendanceMode.TimeInOut && existing.CheckOutAt is null)
+        // Single mode: a later tap never changes the row, so the interval rule has nothing to guard and
+        // the answer is AlreadyRecorded exactly as before - the wire is unchanged for Single events.
+        //
+        // The replay re-check applies here too (P7 rework, W1): a Single-mode retry whose original
+        // committed between the replay check above and the row read is DuplicateIgnored, not
+        // AlreadyRecorded - see ReplayOfThisTapAsync.
+        if (ev.AttendanceMode != AttendanceMode.TimeInOut)
+            return await ReplayOfThisTapAsync(req, deviceId, serverTime, ct) ?? AlreadyRecorded(existing, serverTime);
+
+        return await ApplyLaterTapAsync(
+            ev, req, uid, deviceId, existing, when, settings.MinTapInterval, serverTime, ct);
+    }
+
+    /// <summary>
+    /// The replay check, asked again from the database, on the way to any answer that writes nothing
+    /// for a row that already exists.
+    ///
+    /// <para>
+    /// The replay check at the top of <c>TapAsync</c> ran before the row was read, so a retry of THIS
+    /// tap whose original committed in between was missed there. Judged on the row alone it is then a
+    /// zero-distance double tap (TimeInOut) or a second tap (Single). A retry of a counted tap is
+    /// <c>DuplicateIgnored</c>, never <c>TooSoonIgnored</c> or <c>AlreadyRecorded</c>. Found by the P7
+    /// flakiness runs; pinned by
+    /// <c>TapIntervalFlowTests.A_retry_whose_original_commits_during_the_replay_check_is_DuplicateIgnored</c>.
+    /// </para>
+    /// </summary>
+    private async Task<TapResponse?> ReplayOfThisTapAsync(
+        TapRequest req, Guid? deviceId, DateTime serverTime, CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(req.DeviceTapId)) return null;
+        var original = await FindByDeviceTapAsync(deviceId, req.DeviceTapId, ct);
+        return original is null ? null : Duplicate(original, serverTime);
+    }
+
+    /// <summary>
+    /// The upper bound on compare-and-set attempts for one check-out. Not a tuning knob: every lost
+    /// attempt means another tap of the same card committed a strictly later check-out, so the number of
+    /// losses is bounded by the number of concurrent taps of one card. Reaching this is a bug in that
+    /// argument, and it fails loudly rather than looping.
+    /// </summary>
+    private const int MaxCheckOutAttempts = 16;
+
+    /// <summary>
+    /// A tap of a card whose row already exists on a <c>TimeInOut</c> event: the B6 interval guard, then
+    /// the Q5 last-tap-wins rule, then a compare-and-set write. The replay check has already run -
+    /// a retry of a counted tap never reaches here - which is what keeps <c>DuplicateIgnored</c> ahead
+    /// of <c>TooSoonIgnored</c>.
+    ///
+    /// <para>
+    /// <b>1. Too soon (client QA #470 B6).</b> Strictly less than the interval from the row's check-in
+    /// or its check-out, measured as an absolute distance so arrival order does not matter. Nothing is
+    /// written to attendance; an <c>attendance.scan.suppressed</c> audit row records it.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>2. Last tap wins, forward only (client QA #472 Q5).</b> A tap moves <c>CheckOutAt</c> only
+    /// when it is later than the latest of the row's check-in and check-out - and, having passed step
+    /// 1, therefore at least the interval later. A stale or out-of-order tap never moves it back and is
+    /// <c>AlreadyRecorded</c>. So <c>CheckOutAt</c> now means "the latest accepted tap", the last one is
+    /// final when capture stops (<c>EventNotOpen</c> once closed, <c>TappedAtOutsideEventWindow</c>
+    /// after <c>EndAt</c> + <c>afterEndMinutes</c>), and each move overwrites
+    /// <c>CheckOutDeviceTapId</c> - so replaying an <em>intermediate</em> check-out is no longer
+    /// recognised by tap id and lands here as <c>AlreadyRecorded</c>, moving nothing. Published.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>3. Compare-and-set, not a concurrency token.</b> <c>UPDATE ... WHERE Id = @id AND CheckOutAt
+    /// = @observed</c> (or <c>IS NULL</c>): the write lands only if nobody moved the check-out since
+    /// this request read it. Zero rows means someone did - so reload and decide again against the
+    /// fresh row. Before any answer that writes nothing, the replay check is asked again from the
+    /// database, because the one at the top of <c>TapAsync</c> can miss a retry of this very tap whose
+    /// original committed a moment later. Making
+    /// <c>CheckOutAt</c> or <c>RowVersion</c> a concurrency token instead would reverse D-30 and change
+    /// <c>ManualAsync</c>'s write semantics. <c>ExecuteUpdateAsync</c> bypasses the change tracker, so
+    /// the tracked row is reloaded after every attempt before anything is built from it.
+    /// </para>
+    /// </summary>
+    private async Task<TapResponse> ApplyLaterTapAsync(
+        Event ev, TapRequest req, string uid, Guid? deviceId, AttendanceRecord row,
+        DateTime when, TimeSpan interval, DateTime serverTime, CancellationToken ct)
+    {
+        for (var attempt = 1; ; attempt++)
         {
-            existing.CheckOutAt = when;
+            var anchors = TapAnchor.From(row.CheckInAt, row.CheckOutAt);
+            if (TapInterval.IsTooSoon(when, anchors, interval, out var anchor))
+            {
+                if (await ReplayOfThisTapAsync(req, deviceId, serverTime, ct) is { } replayed) return replayed;
 
-            // D-34. The check-out's own idempotency key, kept rather than discarded — which is the
-            // whole of the defect this closes. It goes in its own column because the check-in's id is
-            // still load-bearing in DeviceTapId: overwriting that to record this one would fix the
-            // check-out's idempotency by breaking the check-in's, so a replayed check-in would then
-            // write a second row.
-            existing.CheckOutDeviceTapId = req.DeviceTapId;
-            existing.UpdatedAt = DateTime.UtcNow;
+                await LogSuppressedScanAsync(ev, req, uid, deviceId, row.StudentId, when, anchor, interval, serverTime, ct);
+                return Accept(
+                    TapOutcome.TooSoonIgnored,
+                    $"Tap ignored: this card was counted {(when - anchor.At).Duration().TotalSeconds:0.###}s " +
+                    $"from its {anchor.Kind} tap; the minimum interval is {interval.TotalSeconds:0.###}s.",
+                    row, serverTime);
+            }
 
+            if (Latest(row.CheckInAt, row.CheckOutAt) is { } latest && when <= latest)
+                return await ReplayOfThisTapAsync(req, deviceId, serverTime, ct) ?? AlreadyRecorded(row, serverTime);
+
+            var observed = row.CheckOutAt;
+            var target = _db.AttendanceRecords.Where(a => a.Id == row.Id);
+            target = observed is { } seen
+                ? target.Where(a => a.CheckOutAt == seen)
+                : target.Where(a => a.CheckOutAt == null);
+
+            // Read here, not inside the setter: EF translates DateTime.UtcNow in an ExecuteUpdate lambda
+            // to the server's GETUTCDATE() - a datetime, not datetime2, on the database's clock - which
+            // would make this the one UpdatedAt in the service not stamped by the application.
+            var updatedAt = DateTime.UtcNow;
+
+            int written;
             try
             {
-                await _db.SaveChangesAsync(ct);
-                return Accept(TapOutcome.CheckedOut, "Checked out.", existing, serverTime);
+                // D-34 still holds: the check-out's own idempotency key goes in its own column, so the
+                // check-in's DeviceTapId stays replayable. Last-tap-wins overwrites it on each move.
+                written = await target.ExecuteUpdateAsync(set => set
+                    .SetProperty(a => a.CheckOutAt, when)
+                    .SetProperty(a => a.CheckOutDeviceTapId, req.DeviceTapId)
+                    .SetProperty(a => a.UpdatedAt, updatedAt), ct);
             }
-            catch (DbUpdateException ex) when (SqlServerErrors.IsUniqueViolation(ex))
+            catch (Exception ex) when (SqlServerErrors.IsUniqueViolation(ex))
             {
-                // UX_Attendance_Device_CheckOutDeviceTapId rejected the update: this device already
-                // used this tap id to check somebody out. The pre-check above catches the ordinary
-                // replay, so reaching here means the winner landed between that read and this write —
-                // the same race SaveNewRecordAsync recovers from, arriving on an UPDATE instead of an
-                // INSERT, and it exists only because this column is now constrained at all.
-                var winner = await ResolveLostCheckOutRaceAsync(ex, existing, deviceId, req.DeviceTapId, ct);
+                // UX_Attendance_Device_CheckOutDeviceTapId: this device already used this tap id as a
+                // check-out on another row, landed between the replay check and this write. The
+                // statement bypasses SaveChanges, so the provider's SqlException arrives unwrapped -
+                // which is why the Exception overload is the one matched.
+                var winner = await ResolveLostCheckOutRaceAsync(ex, row.Id, deviceId, req.DeviceTapId, ct);
                 return Duplicate(winner, serverTime);
+            }
+
+            await _db.Entry(row).ReloadAsync(ct);
+            if (written == 1) return Accept(TapOutcome.CheckedOut, "Checked out.", row, serverTime);
+
+            // Lost the compare-and-set: somebody moved the check-out. Decide again against the fresh
+            // row. If the tap that moved it was a retry of this one, the next pass lands on a no-write
+            // answer (it is zero distance from the check-out it wrote) and the replay re-check there
+            // turns it into DuplicateIgnored.
+            if (attempt >= MaxCheckOutAttempts)
+            {
+                throw new InvalidOperationException(
+                    $"Recording a check-out on attendance {row.Id} lost the compare-and-set " +
+                    $"{MaxCheckOutAttempts} times. Each loss should mean another tap moved the check-out " +
+                    "strictly forward, so this many losses breaks that argument.");
             }
         }
 
-        return AlreadyRecorded(existing, serverTime);
+        static DateTime? Latest(DateTime? checkInAt, DateTime? checkOutAt) =>
+            checkInAt is { } a && checkOutAt is { } b ? (a > b ? a : b) : checkInAt ?? checkOutAt;
     }
 
     // ---------------------------------------------------------------------- §8.2 batch sync (D-31)
@@ -517,7 +644,7 @@ internal sealed class AttendanceService : IAttendanceService
 
         // Resolved lazily and shared across the whole loop. Empty when the batch is empty, one entry
         // in every realistic batch — an authenticated device's taps all resolve to its own school.
-        var windows = new Dictionary<Guid, TapTimeWindow>();
+        var settingsCache = new Dictionary<Guid, CaptureSettings>();
 
         // Indexed by request position, filled in processing order. That is what makes results[i].index
         // == i without the loop having to run in array order.
@@ -568,7 +695,7 @@ internal sealed class AttendanceService : IAttendanceService
 
         foreach (var (tap, index) in InProcessingOrder(wellFormed, serverTime))
         {
-            rows[index] = new TapBatchRow(index, tap.DeviceTapId, await TapAsync(tap, windows, ct));
+            rows[index] = new TapBatchRow(index, tap.DeviceTapId, await TapAsync(tap, settingsCache, ct));
         }
 
         return new TapBatchResponse(Refusal: null, rows, serverTime);
@@ -732,29 +859,54 @@ internal sealed class AttendanceService : IAttendanceService
     /// Populated on miss, so a school's settings are read at most once per call to
     /// <see cref="TapBatchAsync"/>.
     /// </param>
-    private async Task<TapTimeWindow> ResolveTapWindowAsync(
-        Guid schoolId, Dictionary<Guid, TapTimeWindow>? cache, CancellationToken ct)
+    private async Task<CaptureSettings> ResolveCaptureSettingsAsync(
+        Guid schoolId, Dictionary<Guid, CaptureSettings>? cache, CancellationToken ct)
     {
         if (cache is not null && cache.TryGetValue(schoolId, out var cached)) return cached;
 
-        var resolved = await ReadTapWindowAsync(schoolId, ct);
+        var resolved = await ReadCaptureSettingsAsync(schoolId, ct);
         cache?.Add(schoolId, resolved);
         return resolved;
     }
 
-    /// <inheritdoc cref="ResolveTapWindowAsync"/>
-    private async Task<TapTimeWindow> ReadTapWindowAsync(Guid schoolId, CancellationToken ct)
+    /// <summary>
+    /// Everything the capture decision reads from §4.13, resolved together so a batch still reads the
+    /// settings table once per school: the D-36 tap window and the B6 minimum tap interval.
+    /// </summary>
+    private sealed record CaptureSettings(TapTimeWindow Window, TimeSpan MinTapInterval);
+
+    /// <inheritdoc cref="ResolveCaptureSettingsAsync"/>
+    private async Task<CaptureSettings> ReadCaptureSettingsAsync(Guid schoolId, CancellationToken ct)
     {
         var rows = await _db.SystemSettings
             .Where(s => (s.SchoolId == schoolId || s.SchoolId == null)
                      && (s.Key == TapTimeWindow.BeforeStartMinutesSettingKey
-                      || s.Key == TapTimeWindow.AfterEndMinutesSettingKey))
+                      || s.Key == TapTimeWindow.AfterEndMinutesSettingKey
+                      || s.Key == TapInterval.MinTapIntervalSecondsSettingKey))
             .Select(s => new { s.SchoolId, s.Key, s.Value })
             .ToListAsync(ct);
 
-        return new TapTimeWindow(
+        var window = new TapTimeWindow(
             Minutes(TapTimeWindow.BeforeStartMinutesSettingKey, TapTimeWindow.DefaultBeforeStartMinutes),
             Minutes(TapTimeWindow.AfterEndMinutesSettingKey, TapTimeWindow.DefaultAfterEndMinutes));
+
+        // Same precedence and the same loud fall-through as the window, through the domain's pure
+        // resolver: school row, then global row, then the default; every unreadable candidate — not a
+        // whole number, negative, or above TapInterval's cap — is reported before falling through.
+        var interval = TapInterval.Resolve(
+            rows.Where(r => r.Key == TapInterval.MinTapIntervalSecondsSettingKey)
+                .Select(r => new TapIntervalSettingRow(r.SchoolId.HasValue, r.Value)),
+            unreadable => _logger.LogWarning(
+                "SystemSettings['{Key}'] for school {SchoolId} is '{Value}', which is not a whole " +
+                "number of seconds from 0 to {Max}. Falling through to the next scope, and to the " +
+                "published default of {Default}s if there is none.",
+                TapInterval.MinTapIntervalSecondsSettingKey,
+                unreadable.IsSchoolScope ? (Guid?)schoolId : null,
+                unreadable.Value,
+                TapInterval.MaxMinTapIntervalSeconds,
+                TapInterval.DefaultMinTapIntervalSeconds));
+
+        return new CaptureSettings(window, interval);
 
         int Minutes(string key, int fallback)
         {
@@ -1264,12 +1416,14 @@ internal sealed class AttendanceService : IAttendanceService
     /// already used that tap id somewhere else (Phase 4c, D-34).
     ///
     /// <para>
-    /// <b>The reload is load-bearing, not tidiness.</b> The entity is left <c>Modified</c> with a
-    /// <c>CheckOutAt</c> that was never committed, and it is a row this context is still tracking —
-    /// so any later save would retry the rejected update, and, worse, the record handed back to the
-    /// caller would report a check-out time the database does not have. Reloading restores the honest
-    /// answer: our change did not happen. <see cref="ResolveLostInsertRaceAsync"/> detaches instead
-    /// because its entity was never in the table at all.
+    /// <b>P7: it now answers the compare-and-set in <see cref="ApplyLaterTapAsync"/>, and it no longer
+    /// reloads anything.</b> The check-out used to be a tracked <c>SaveChanges</c> that left the entity
+    /// <c>Modified</c> on failure, so this method had to reload it. <c>ExecuteUpdateAsync</c> never
+    /// touches the change tracker, so there is nothing to undo here; the lost-update half of the old
+    /// race (two check-outs both reading <c>CheckOutAt IS NULL</c>) is now the compare-and-set's zero-row
+    /// answer and its re-dispatch, not an exception. What is left is the one index violation an
+    /// <c>UPDATE</c> can raise, and the violation arrives as the provider's unwrapped
+    /// <c>SqlException</c> — hence <see cref="Exception"/> rather than <see cref="DbUpdateException"/>.
     /// </para>
     ///
     /// <para>
@@ -1292,11 +1446,9 @@ internal sealed class AttendanceService : IAttendanceService
     /// </para>
     /// </summary>
     private async Task<AttendanceRecord> ResolveLostCheckOutRaceAsync(
-        DbUpdateException violation, AttendanceRecord failed,
+        Exception violation, Guid attendanceId,
         Guid? deviceId, string? deviceTapId, CancellationToken ct)
     {
-        await _db.Entry(failed).ReloadAsync(ct);
-
         if (!string.IsNullOrWhiteSpace(deviceTapId))
         {
             var winner = await FindByDeviceTapAsync(deviceId, deviceTapId, ct);
@@ -1304,7 +1456,7 @@ internal sealed class AttendanceService : IAttendanceService
         }
 
         throw new InvalidOperationException(
-            $"A unique-key violation was raised recording a check-out on attendance {failed.Id} with " +
+            $"A unique-key violation was raised recording a check-out on attendance {attendanceId} with " +
             $"deviceTapId '{deviceTapId}', but no conflicting record could be read back. The " +
             "constraint that fired is not one this method knows how to resolve.", violation);
     }
@@ -1377,6 +1529,65 @@ internal sealed class AttendanceService : IAttendanceService
     }
 
     /// <summary>
+    /// Records a tap the B6 interval rule ignored, so "why did my second tap not count?" has an answer.
+    ///
+    /// <para>
+    /// <b>An audit row, never attendance.</b> Filed under the event exactly like an unresolved scan,
+    /// with <see cref="ScanLog.SuppressedAction"/> — which the Unresolved Scans read does not select, so
+    /// a suppressed tap never appears in that panel. No new table, no migration:
+    /// <c>IX_AuditLogs_Entity</c> serves it.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>A failure here must not fail the tap</b>, for the reason <see cref="LogUnresolvedScanAsync"/>
+    /// records, and more so: this tap is a <em>success</em>. Turning it into a 500 would make the queue
+    /// retry a row that is already fully handled. Logged at warning, not swallowed.
+    /// </para>
+    /// </summary>
+    private async Task LogSuppressedScanAsync(
+        Event ev, TapRequest req, string uid, Guid? deviceId, Guid studentId, DateTime when,
+        TapAnchor anchor, TimeSpan interval, DateTime serverTime, CancellationToken ct)
+    {
+        try
+        {
+            _db.AuditLogs.Add(new AuditLog
+            {
+                SchoolId = ev.SchoolId,
+                UserId = _currentUser.UserId,
+                Action = ScanLog.SuppressedAction,
+                EntityType = ScanLog.EventEntityType,
+                EntityId = ev.Id,
+                CreatedAt = serverTime,
+                Changes = JsonSerializer.Serialize(new SuppressedScan(
+                    uid,
+                    req.DeviceTapId,
+                    deviceId,
+                    when,
+                    studentId,
+                    anchor.At,
+                    anchor.Kind.ToString(),
+                    interval.TotalSeconds,
+                    nameof(TapOutcome.TooSoonIgnored)), ScanJson),
+            });
+
+            await _db.SaveChangesAsync(ct);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            // Detach it, or the next SaveChanges on this context - the next row of a batch - re-attempts
+            // the same failing insert and takes an unrelated write down with it.
+            foreach (var entry in _db.ChangeTracker.Entries<AuditLog>().ToList())
+                entry.State = EntityState.Detached;
+
+            _logger.LogWarning(
+                ex,
+                "Could not record the suppressed tap of card {CardUid} on event {EventId}. The tap was " +
+                "answered TooSoonIgnored either way; only the audit row is missing.",
+                uid, ev.Id);
+        }
+    }
+
+    /// <summary>
     /// camelCase, to match every other JSON this API emits.
     ///
     /// <para>
@@ -1405,4 +1616,19 @@ internal sealed class AttendanceService : IAttendanceService
         DateTime TappedAt,
         string ServerOutcome,
         string? LocalOutcome);
+
+    /// <summary>
+    /// The body of a suppressed-scan audit row (B6). Serialized into <c>AuditLog.Changes</c>, camelCase.
+    /// <c>AnchorAt</c>/<c>AnchorKind</c> name the counted tap it was judged against.
+    /// </summary>
+    private sealed record SuppressedScan(
+        string CardUid,
+        string? DeviceTapId,
+        Guid? DeviceId,
+        DateTime TappedAt,
+        Guid StudentId,
+        DateTime AnchorAt,
+        string AnchorKind,
+        double IntervalSeconds,
+        string ServerOutcome);
 }

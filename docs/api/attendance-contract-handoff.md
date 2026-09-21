@@ -143,6 +143,7 @@ drift 4e deleted 443 lines to end, and it would be unpinned by any test.
 | `CheckedOut` | **Drop.** The check-out half was newly stored. |
 | `DuplicateIgnored` | **Drop.** Already stored under this `deviceTapId` — the retry path working as designed, not an error. |
 | `AlreadyRecorded` | **Drop.** Nothing changed. See the reconciliation note below — this one has a catch. |
+| `TooSoonIgnored` | **Drop, and show nothing.** The same card was already counted less than 3 seconds from this tap (client QA B6.3: the student sees nothing when a tap is ignored). A `200` — nothing was written, and it is not an error. Keep it distinct from `AlreadyRecorded` if you show a message for that one. |
 | `EventNotFound` | **Poison.** Also what a device from another school gets for a foreign event; we never confirm the event exists elsewhere. |
 | `CardNotFound` | **Poison — but show it, do not swallow it.** No student holds that UID; retrying will not bind one. Common during rollout while cards are still unbound (see the card-UID rule), so this is the one poison code that needs a real message on screen rather than a silent drop. |
 | `DeviceNotRegistered` | **Stop the queue and re-enrol.** A wiped or re-provisioned handset holds a stale device id. Retrying every queued tap forever is exactly the failure this token exists to prevent. |
@@ -237,6 +238,10 @@ field that decides Present vs Late. Instead:
 - Send `clientClockAt` on each batch — your clock at send time. Its difference from ours is pure skew,
   free of queue latency, and we log and alert on drift.
 - The past is never age-limited. An old queued tap is the entire point of the endpoint.
+- **Keep every device within about 1 second of `serverTime`.** The server ignores a second tap of the
+  same card within 3 seconds of one it already counted (`TooSoonIgnored`), judged on `tappedAt` — so
+  across two devices that rule is only as precise as their clocks agree. Two readers 2 seconds apart
+  can turn a genuine tap into an ignored one, or a double tap into two.
 
 > **Always send `tappedAt` — not only `deviceTapId`.** This is the one recommendation here that exists
 > because of a retry consequence rather than a rule.
@@ -255,8 +260,10 @@ field that decides Present vs Late. Instead:
 
 ## Reconciliation has one blind spot
 
-**Any tap that changes nothing returns `AlreadyRecorded` without storing its `deviceTapId`** — so
-replaying it returns `AlreadyRecorded` again, never `DuplicateIgnored`.
+**Any tap that changes nothing stores no `deviceTapId`** — `AlreadyRecorded` and `TooSoonIgnored`
+alike — so replaying it is decided again and never returns `DuplicateIgnored`. Usually it gets the same
+code back; a replayed `TooSoonIgnored` can come back `AlreadyRecorded` if the student's check-out has
+moved on since.
 
 In `Single` mode — the default — that is the *ordinary* duplicate path, not a rare one: every second
 tap of the same student at the same event lands there. Both codes mean "drop it", so your queue
@@ -266,6 +273,26 @@ it will never get.**
 
 Both halves of a `TimeInOut` pair are independently retryable — send a fresh `deviceTapId` with each
 tap and keep it stable across retries of *that* tap.
+
+**In `TimeInOut`, the last tap is the time out** (client QA Q5). Every later tap of the same card, 3
+seconds or more after the latest one counted, moves the check-out to itself — so **`CheckedOut` can
+now come back many times for one student at one event**, and the last one before capture stops (the
+event closes, or its window ends) is final. The check-out never moves backwards: a tap earlier than the
+current check-out — an out-of-order offline replay — changes nothing. It is **`TooSoonIgnored`** if it
+is within 3 seconds of the check-in or the check-out, and **`AlreadyRecorded`** otherwise.
+
+That has consequences for reconciliation by tap id:
+
+- Only the **latest** check-out's `deviceTapId` is kept, so replaying an *intermediate* check-out tap
+  (one that was later superseded) is no longer recognised as a replay: it returns **`AlreadyRecorded`**,
+  not `DuplicateIgnored`, and moves nothing.
+- Replaying the check-in is `DuplicateIgnored`.
+- Replaying the **current** check-out is `DuplicateIgnored` **only if the same device also checked the
+  student in**. A check-out made on a different device from the check-in is not recognised by its tap id
+  (a known gap on our side, being fixed): its replay lands 0 seconds from the check-out it wrote and
+  comes back **`TooSoonIgnored`**.
+
+Every one of these codes means drop it; only reconciliation *by code* is affected.
 
 ---
 

@@ -498,8 +498,16 @@ public class TapFlowTests : IntegrationTest
         Assert.Single(await AllRecordsAsync());
     }
 
+    /// <summary>
+    /// <b>REPLACED in P7 (client QA #472 Q5) — this used to be
+    /// <c>In_TimeInOut_mode_a_third_tap_is_already_recorded</c>, which pinned first-tap-out-wins.</b>
+    /// The client asked for the opposite: "record the last tap as time out". A third tap beyond the
+    /// minimum interval now moves <c>CheckOutAt</c> (and <c>CheckOutDeviceTapId</c>) to itself and is
+    /// <c>CheckedOut</c>. Same fixture, same three taps; only the expectation moved.
+    /// <c>TapIntervalFlowTests</c> covers the rest of the rule.
+    /// </summary>
     [Fact]
-    public async Task In_TimeInOut_mode_a_third_tap_is_already_recorded()
+    public async Task In_TimeInOut_mode_a_third_tap_moves_the_check_out_to_it()
     {
         var world = await ArrangeAsync(attendanceMode: "TimeInOut", startAt: TestData.Now);
 
@@ -508,10 +516,14 @@ public class TapFlowTests : IntegrationTest
         var third = await TapAsync(new TapRequest(
             world.EventId, StoredUid, null, "third-0001", TestData.Now.AddHours(2).AddMinutes(1)));
 
-        Assert.Equal(TapOutcome.AlreadyRecorded, third.Outcome);
+        Assert.Equal(TapOutcome.CheckedOut, third.Outcome);
         Assert.True(third.Result.Success);
-        Assert.Equal(TestData.Now.AddHours(2), third.Result.Record!.CheckOutAt!.Value);
-        Assert.Single(await AllRecordsAsync());
+        Assert.Equal(TestData.Now.AddHours(2).AddMinutes(1), third.Result.Record!.CheckOutAt!.Value);
+
+        var record = Assert.Single(await AllRecordsAsync());
+        Assert.Equal(TestData.Now.AddHours(2).AddMinutes(1), record.CheckOutAt);
+        Assert.Equal("third-0001", record.CheckOutDeviceTapId);
+        Assert.Equal("in-0001", record.DeviceTapId);
     }
 
     // ---------------------------------------------------------------- check-out idempotency (D-34)
@@ -735,14 +747,24 @@ public class TapFlowTests : IntegrationTest
     }
 
     /// <summary>
-    /// Two check-out taps racing on one student. Only one can win the <c>CheckOutAt is null</c> branch;
-    /// the rest fall through to <c>AlreadyRecorded</c> or are absorbed as duplicates, and none of them
-    /// may be a 500 or a second row. The <see cref="TaskCompletionSource"/> gate is load-bearing for the
-    /// reason the check-in version of this test records.
+    /// Eight check-out taps racing on one student, all claiming the same instant. None may be a 500 or a
+    /// second row, and exactly one may be <c>CheckedOut</c>. The <see cref="TaskCompletionSource"/> gate is
+    /// load-bearing for the reason the check-in version of this test records.
+    ///
+    /// <para>
+    /// <b>REWRITTEN in P7 — same name, same fixture, stronger and different assertions.</b> It used to
+    /// assert only that every response succeeded and one row remained, because the losers fell through
+    /// the old <c>CheckOutAt is null</c> branch to <c>AlreadyRecorded</c>. Under last-tap-wins that
+    /// branch is gone: the losers are stopped by the compare-and-set, re-read the winner, and are then
+    /// judged against its check-out — so with a shared tap id they are replays (<c>DuplicateIgnored</c>),
+    /// and with distinct ids at the same instant they are double taps (<c>TooSoonIgnored</c>). Neither
+    /// is ever <c>AlreadyRecorded</c> any more, and exactly one <c>CheckedOut</c> is now asserted rather
+    /// than implied.
+    /// </para>
     /// </summary>
     [Theory]
-    [InlineData(true)]   // one retried check-out: the new index is what rejects the losers
-    [InlineData(false)]  // distinct check-out taps: the CheckOutAt branch is what does
+    [InlineData(true)]   // one retried check-out: the losers are replays of the winner
+    [InlineData(false)]  // distinct check-out taps at one instant: the losers are inside the interval
     public async Task Concurrent_check_outs_all_succeed_and_write_exactly_one_check_out(bool sameTapId)
     {
         var world = await ArrangeAsync(attendanceMode: "TimeInOut", startAt: TestData.Now);
@@ -767,6 +789,12 @@ public class TapFlowTests : IntegrationTest
             r.Result.Success, $"A concurrent check-out failed with: {r.Outcome} / {r.Result.Message}"));
         var record = Assert.Single(await AllRecordsAsync());
         Assert.Equal(TestData.Now.AddHours(2), record.CheckOutAt);
+
+        Assert.Single(responses, r => r.Outcome == TapOutcome.CheckedOut);
+        var loserOutcome = sameTapId ? TapOutcome.DuplicateIgnored : TapOutcome.TooSoonIgnored;
+        Assert.All(
+            responses.Where(r => r.Outcome != TapOutcome.CheckedOut),
+            r => Assert.Equal(loserOutcome, r.Outcome));
     }
 
     [Fact]

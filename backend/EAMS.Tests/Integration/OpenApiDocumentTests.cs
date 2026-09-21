@@ -484,6 +484,26 @@ public class OpenApiDocumentTests : IntegrationTest
         AssertTokens(document, "LiveOutcomeCode", Enum.GetNames<LiveOutcome>());
     }
 
+    /// <summary>
+    /// P7: the new outcome is on the published table <b>as a 200</b>. The generic check above proves the
+    /// table equals the enum; this one names the pair the kiosk developer is told about, so it cannot be
+    /// published as a 4xx without a failure that says which token and why.
+    /// </summary>
+    [Fact]
+    public async Task The_tap_outcome_table_publishes_TooSoonIgnored_as_200()
+    {
+        using var document = await DocumentAsync();
+        var schema = Schema(document, "TapOutcomeCode");
+
+        Assert.Contains(
+            nameof(TapOutcome.TooSoonIgnored),
+            schema.GetProperty("enum").EnumerateArray().Select(t => t.GetString()));
+        Assert.Contains(
+            "| `TooSoonIgnored` | 200 |",
+            schema.GetProperty("description").GetString()!,
+            StringComparison.Ordinal);
+    }
+
     private static void AssertTokens(JsonDocument document, string schemaName, string[] expected)
     {
         var schema = Schema(document, schemaName);

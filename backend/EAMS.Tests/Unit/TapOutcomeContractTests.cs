@@ -47,6 +47,7 @@ public class TapOutcomeContractTests
         ("DuplicateIgnored", StatusCodes.Status200OK),
         ("CheckedOut", StatusCodes.Status200OK),
         ("AlreadyRecorded", StatusCodes.Status200OK),
+        ("TooSoonIgnored", StatusCodes.Status200OK),
         ("EventNotFound", StatusCodes.Status404NotFound),
         ("CardNotFound", StatusCodes.Status404NotFound),
         ("DeviceNotRegistered", StatusCodes.Status404NotFound),
@@ -191,6 +192,16 @@ public class TapOutcomeContractTests
     [InlineData("BatchTooLarge")]
     public void The_batch_endpoints_tokens_are_declared(string token) =>
         Assert.Contains(token, Enum.GetNames<TapOutcome>());
+
+    /// <summary>
+    /// P7 (client QA #470 B6). A double tap inside the minimum interval is a <b>200</b>, not a 4xx: section
+    /// 8.2 step 4 treats a conflict as delivered, and an older queue that reads only the status line must
+    /// drop the row rather than stop on it. Named so a future "it is really a conflict, make it 409"
+    /// edit fails with this reason attached.
+    /// </summary>
+    [Fact]
+    public void TooSoonIgnored_maps_to_200() =>
+        Assert.Equal(StatusCodes.Status200OK, AttendanceController.StatusCodeFor(TapOutcome.TooSoonIgnored));
 
     /// <summary>
     /// <c>TapResult.Code</c> is a projection of <see cref="TapResponse.Outcome"/>, and

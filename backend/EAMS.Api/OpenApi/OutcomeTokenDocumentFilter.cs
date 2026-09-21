@@ -76,6 +76,9 @@ internal sealed class OutcomeTokenDocumentFilter : IDocumentFilter
                 "Queue guidance: a `2xx` row is done — drop it. A `4xx` row will be refused identically",
                 "forever — stop retrying rather than skipping past it, and flush strictly in order.",
                 "`BatchTooLarge` is the one exception: chunk to `maxBatchRows` and resend.",
+                "",
+                "`TooSoonIgnored` is a `2xx`: the same card was counted less than the minimum tap",
+                "interval ago (3 s), so nothing was written. Drop the row and show the student nothing.",
             ]));
 
         swaggerDoc.Components.Schemas[ManualOutcomeSchemaId] = TokenSchema(
