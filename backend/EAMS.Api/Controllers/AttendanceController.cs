@@ -82,10 +82,36 @@ public class AttendanceController : ControllerBase
     /// rows outright — an insert below the offset shifts everything up by one and the next page skips
     /// it — which is exactly why that endpoint was built on a <c>rowversion</c> cursor instead.
     /// </para>
+    ///
+    /// <para>
+    /// <b>Live Attendance's search (client QA Q7): <c>studentNumber</c>, <c>studentName</c> and
+    /// <c>cardUid</c>.</b> Each is an optional fragment — a "contains" match — and every filter on this
+    /// route, these three included, combines with AND. Absent or blank means that filter is not
+    /// applied. They only ever narrow attendance rows, so a student who has no row for the event never
+    /// appears through them. The rows returned are the same <c>AttendanceDto</c> as without them; no
+    /// field is added to say which filter matched.
+    /// </para>
     /// </remarks>
     /// <param name="eventId">Restrict to one event.</param>
     /// <param name="studentId">Restrict to one student.</param>
     /// <param name="status">One of <c>Present</c>, <c>Late</c>, <c>Absent</c>, <c>Excused</c>.</param>
+    /// <param name="studentNumber">
+    /// A fragment of the student number, matched as written (edges trimmed): <c>2023-00</c> finds
+    /// <c>2023-0001</c>. Bounded by this parameter's <c>maxLength</c>, the column's own width.
+    /// </param>
+    /// <param name="studentName">
+    /// A fragment of the student's name, case-insensitive: any one of first, middle or last name, or a
+    /// run across them in display order (<c>Maria Santos</c>, <c>Maria Reyes Santos</c>). Bounded by this
+    /// parameter's <c>maxLength</c>: three name parts at column width and the two spaces between them.
+    /// </param>
+    /// <param name="cardUid">
+    /// A fragment of the serial of <b>the card that made the tap</b> — not of any other card the
+    /// student holds or has held. Normalized the way stored serials are (uppercase, separators
+    /// stripped), so <c>25-03</c>, <c>25:03</c> and <c>2503</c> are one search. A row with no card —
+    /// a manual entry — never matches it. Bounded by this parameter's <c>maxLength</c>, measured as sent,
+    /// separators included. A value with no letter or digit in it is refused rather than read as
+    /// match-everything.
+    /// </param>
     /// <param name="page">
     /// 1-based page number, default 1. Out-of-range values are clamped, never refused; the response
     /// echoes the page actually served.
@@ -96,16 +122,44 @@ public class AttendanceController : ControllerBase
     /// </param>
     /// <param name="ct">Cancellation token.</param>
     /// <response code="200">One page of matching rows, possibly empty. Never a 404 for an empty filter.</response>
+    /// <response code="400">
+    /// A text filter was longer than its limit, or <c>cardUid</c> contained no letter or digit — which
+    /// normalizes to an empty fragment and would match every tapped row rather than none.
+    /// </response>
     [HttpGet]
     [Authorize(AuthenticationSchemes = JwtBearerDefaults.AuthenticationScheme, Policy = EamsPermissions.AttendanceRead)]
     [HasPermissionNotEnforced(EamsPermissions.AttendanceRead)]
     [ProducesResponseType(typeof(PagedResult<AttendanceDto>), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status400BadRequest)]
     public async Task<ActionResult<PagedResult<AttendanceDto>>> List(
         [FromQuery] Guid? eventId, [FromQuery] Guid? studentId, [FromQuery] string? status,
+        [FromQuery][StringLength(AttendanceListSearch.StudentNumberMaxLength)] string? studentNumber,
+        [FromQuery][StringLength(AttendanceListSearch.StudentNameMaxLength)] string? studentName,
+        [FromQuery][StringLength(AttendanceListSearch.CardUidMaxLength)] string? cardUid,
         [FromQuery] int? page, [FromQuery] int? pageSize,
         CancellationToken ct)
-        => Ok(await _attendance.ListAsync(
-            eventId, studentId, status, PageRequest.From(page, pageSize), ct));
+    {
+        // The lengths are the attributes' (a validation ProblemDetails, before any work — the notes
+        // precedent below). This is the one rule an attribute cannot state: '-' is short enough and
+        // still unusable, because it normalizes to "" and Contains("") matches every carded row. Same
+        // refusal, same code, as GET /cards.
+        if (!string.IsNullOrWhiteSpace(cardUid) && CardUid.Normalize(cardUid).Length == 0)
+        {
+            var problem = ProblemDetailsFactory.CreateProblemDetails(
+                HttpContext, statusCode: StatusCodes.Status400BadRequest,
+                title: "That attendance search cannot be run.",
+                detail: $"'{cardUid}' contains no letter or digit, so there is no card number to search " +
+                        "for. Card serials are stored uppercase with separators stripped and a search is " +
+                        "normalized the same way — this one normalizes to nothing, which would match every " +
+                        "tapped row rather than none. Leave cardUid out to list without a card filter.");
+            problem.Extensions[ErrorCodeProperty] = nameof(CardSearchOutcome.FragmentUnusable);
+            return StatusCode(StatusCodes.Status400BadRequest, problem);
+        }
+
+        return Ok(await _attendance.ListAsync(
+            eventId, studentId, status, PageRequest.From(page, pageSize),
+            new AttendanceListSearch(studentNumber, studentName, cardUid), ct));
+    }
 
     /// <summary>
     /// <c>POST /attendance/tap</c> — the core capture path (Technical Plan §6.4).

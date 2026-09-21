@@ -220,10 +220,19 @@ public interface IAttendanceService
     /// materialized at event close has it null, so a whole event's absentees sort as one
     /// indistinguishable block that SQL Server may return in a different order on every query.
     /// </para>
+    ///
+    /// <para>
+    /// <paramref name="search"/> carries Live Attendance's three text filters (QA Q7). They narrow the
+    /// same queryable the count and the page are built from, so the total always describes the
+    /// filtered rows. Null means no text filter. A non-blank <see cref="AttendanceListSearch.CardUid"/>
+    /// that normalizes to nothing is refused with <see cref="ArgumentException"/> rather than read as
+    /// match-everything — the HTTP boundary rejects it first with a 400, so reaching the throw means a
+    /// non-HTTP caller skipped that check.
+    /// </para>
     /// </summary>
     Task<PagedResult<AttendanceDto>> ListAsync(
         Guid? eventId, Guid? studentId, string? status, PageRequest page,
-        CancellationToken ct = default);
+        AttendanceListSearch? search = null, CancellationToken ct = default);
 
     /// <summary>
     /// The capture workflow, kept whole: resolve UID → validate the event window → idempotency

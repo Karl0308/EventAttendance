@@ -728,7 +728,7 @@
           "Attendance"
         ],
         "summary": "`GET /attendance` — recorded attendance rows, every filter optional.",
-        "description": "\r\n\r\n             A back-office read rather than something to poll: offset-paged, newest check-in first. The live\r\n             dashboard's read is `GET /attendance/live/{eventId}`, which is cursored.\r\n             \r\n\r\n\r\n  <b>The two are not variations on one endpoint and must not be made into one.</b> This answers\r\n             \"give me rows 40 to 60 of what matched\"; the live one answers \"what changed after this cursor\",\r\n             and its `since`/`cursor`/`hasMore` shape is frozen published contract\r\n             (D-29/D-30/D-42) that a mobile client polls today. Offset paging over a live feed also loses\r\n             rows outright — an insert below the offset shifts everything up by one and the next page skips\r\n             it — which is exactly why that endpoint was built on a `rowversion` cursor instead.\r\n             ",
+        "description": "\r\n\r\n             A back-office read rather than something to poll: offset-paged, newest check-in first. The live\r\n             dashboard's read is `GET /attendance/live/{eventId}`, which is cursored.\r\n             \r\n\r\n\r\n  <b>The two are not variations on one endpoint and must not be made into one.</b> This answers\r\n             \"give me rows 40 to 60 of what matched\"; the live one answers \"what changed after this cursor\",\r\n             and its `since`/`cursor`/`hasMore` shape is frozen published contract\r\n             (D-29/D-30/D-42) that a mobile client polls today. Offset paging over a live feed also loses\r\n             rows outright — an insert below the offset shifts everything up by one and the next page skips\r\n             it — which is exactly why that endpoint was built on a `rowversion` cursor instead.\r\n             \r\n\r\n\r\n  <b>Live Attendance's search (client QA Q7): `studentNumber`, `studentName` and\r\n             `cardUid`.</b> Each is an optional fragment — a \"contains\" match — and every filter on this\r\n             route, these three included, combines with AND. Absent or blank means that filter is not\r\n             applied. They only ever narrow attendance rows, so a student who has no row for the event never\r\n             appears through them. The rows returned are the same `AttendanceDto` as without them; no\r\n             field is added to say which filter matched.\r\n             ",
         "parameters": [
           {
             "name": "eventId",
@@ -753,6 +753,36 @@
             "in": "query",
             "description": "One of `Present`, `Late`, `Absent`, `Excused`.",
             "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "studentNumber",
+            "in": "query",
+            "description": "A fragment of the student number, matched as written (edges trimmed): `2023-00` finds\r\n`2023-0001`. Bounded by this parameter's `maxLength`, the column's own width.",
+            "schema": {
+              "maxLength": 50,
+              "minLength": 0,
+              "type": "string"
+            }
+          },
+          {
+            "name": "studentName",
+            "in": "query",
+            "description": "A fragment of the student's name, case-insensitive: any one of first, middle or last name, or a\r\nrun across them in display order (`Maria Santos`, `Maria Reyes Santos`). Bounded by this\r\nparameter's `maxLength`: three name parts at column width and the two spaces between them.",
+            "schema": {
+              "maxLength": 302,
+              "minLength": 0,
+              "type": "string"
+            }
+          },
+          {
+            "name": "cardUid",
+            "in": "query",
+            "description": "A fragment of the serial of <b>the card that made the tap</b> — not of any other card the\r\nstudent holds or has held. Normalized the way stored serials are (uppercase, separators\r\nstripped), so `25-03`, `25:03` and `2503` are one search. A row with no card —\r\na manual entry — never matches it. Bounded by this parameter's `maxLength`, measured as sent,\r\nseparators included. A value with no letter or digit in it is refused rather than read as\r\nmatch-everything.",
+            "schema": {
+              "maxLength": 256,
+              "minLength": 0,
               "type": "string"
             }
           },
@@ -792,6 +822,26 @@
               "text/json": {
                 "schema": {
                   "$ref": "#/components/schemas/AttendanceDtoPagedResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "A text filter was longer than its limit, or `cardUid` contained no letter or digit — which\r\nnormalizes to an empty fragment and would match every tapped row rather than none.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
                 }
               }
             }

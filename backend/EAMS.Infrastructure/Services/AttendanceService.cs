@@ -65,21 +65,90 @@ internal sealed class AttendanceService : IAttendanceService
     /// unique tiebreaker SQL Server may order that block differently on each request, and consecutive
     /// pages then overlap and skip.
     /// </para>
+    ///
+    /// <para>
+    /// <b>The QA Q7 text filters are each a <c>LIKE '%fragment%'</c>, so none of them can seek an
+    /// index</b> — the same trade <c>StudentService.SearchCardsAsync</c> records. It is accepted for the
+    /// same reasons: a human types it, it is almost always paired with <c>eventId</c> (which does seek),
+    /// and the page is bounded. EF's <c>string.Contains</c> escapes <c>%</c>, <c>_</c> and <c>[</c> in
+    /// the parameter itself, so the fragments are passed through untouched. Nothing here needs more
+    /// than SQL Server 2012 offers: it is <c>LIKE</c>, <c>+</c> and <c>COALESCE</c>.
+    /// </para>
     /// </remarks>
     public Task<PagedResult<AttendanceDto>> ListAsync(
         Guid? eventId, Guid? studentId, string? status, PageRequest page,
-        CancellationToken ct = default)
+        AttendanceListSearch? search = null, CancellationToken ct = default)
     {
         var q = _db.AttendanceRecords.AsQueryable();
         if (eventId is not null) q = q.Where(a => a.EventId == eventId);
         if (studentId is not null) q = q.Where(a => a.StudentId == studentId);
         if (!string.IsNullOrWhiteSpace(status)) q = q.Where(a => a.Status == status);
+        if (search is not null) q = ApplySearch(q, search);
 
         return q.ToPageAsync(
             ordered => ordered
                 .Include(a => a.Student)
                 .OrderByDescending(a => a.CheckInAt).ThenBy(a => a.Id),
             ToDto, page, ct);
+    }
+
+    /// <summary>
+    /// Narrows <paramref name="q"/> by Live Attendance's three text filters (QA Q7), AND-combined.
+    /// Every predicate is on the attendance row or its own navigations, so a student without a row can
+    /// never be produced here — the filters only remove rows, they never join students in.
+    /// </summary>
+    private static IQueryable<AttendanceRecord> ApplySearch(
+        IQueryable<AttendanceRecord> q, AttendanceListSearch search)
+    {
+        if (!string.IsNullOrWhiteSpace(search.StudentNumber))
+        {
+            // Verbatim, not card-normalized: the registrar's value keeps its dashes, and '2023-0001'
+            // has to go on matching itself.
+            var number = search.StudentNumber.Trim();
+            q = q.Where(a => a.Student!.StudentNumber.Contains(number));
+        }
+
+        if (!string.IsNullOrWhiteSpace(search.StudentName))
+        {
+            // Student.FullName is computed in the domain and ignored by the model, so it cannot be
+            // queried. Its two possible SQL shapes are spelled out instead: 'First Last' when there is
+            // no middle name and 'First Middle Last' when there is. Each part is also matched alone,
+            // which the joined forms already cover but which keeps a surname search obviously correct.
+            // Case-insensitivity is the column collation's (SQL Server's default is CI), exactly as on
+            // GET /students.
+            var name = search.StudentName.Trim();
+            q = q.Where(a =>
+                a.Student!.FirstName.Contains(name)
+                || a.Student.LastName.Contains(name)
+                || (a.Student.MiddleName != null && a.Student.MiddleName.Contains(name))
+                || (a.Student.FirstName + " " + a.Student.LastName).Contains(name)
+                || (a.Student.MiddleName != null
+                    && (a.Student.FirstName + " " + a.Student.MiddleName + " " + a.Student.LastName)
+                        .Contains(name)));
+        }
+
+        if (!string.IsNullOrWhiteSpace(search.CardUid))
+        {
+            // Normalize first, compare second (CLAUDE.md). An empty normal form is refused rather than
+            // compared, because Contains("") is true of every carded row: '-' would return every RFID
+            // tap looking exactly like a result.
+            var uid = CardUid.Normalize(search.CardUid);
+            if (uid.Length == 0)
+            {
+                throw new ArgumentException(
+                    $"The card fragment '{search.CardUid}' contains no letter or digit, so it normalizes " +
+                    "to nothing and would match every carded row. The HTTP boundary refuses this with a " +
+                    "400; a caller reaching here skipped that check.",
+                    nameof(search));
+            }
+
+            // The card that made THIS tap (JJ's ruling on Q7) — the row's own RfidCardId, not any card
+            // the student holds now or held before. A row with no card (a manual entry, an import
+            // absence) has nothing to match and drops out, which is the intended answer.
+            q = q.Where(a => a.RfidCard != null && a.RfidCard.CardUid.Contains(uid));
+        }
+
+        return q;
     }
 
     // Technical Plan §6.4. The whole capture decision lives here in one place: resolve UID →

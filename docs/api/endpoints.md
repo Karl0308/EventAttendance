@@ -111,7 +111,7 @@ This page is a **map, not a contract.** It exists so you can find an endpoint; p
 
 | Method | Route | Auth | Errors | What it does |
 |---|---|---|---|---|
-| `GET` | `/attendance` | **Bearer** | *none declared* | Recorded attendance rows, every filter optional. |
+| `GET` | `/attendance` | **Bearer** | `400` | Recorded attendance rows, every filter optional. |
 | `GET` | `/attendance/live/{eventId}` | **Bearer** | `400` `404` `429` | The D-29 cursor-delta poll that stands in for §5/§6.4's SignalR hub. |
 | `POST` | `/attendance/manual` | **Bearer** | `400` `404` | The organizer override (Technical Plan §6.4). |
 | `POST` | `/attendance/tap` | **DeviceKey** | `400` `401` `403` `404` `429` | The core capture path (Technical Plan §6.4). |
