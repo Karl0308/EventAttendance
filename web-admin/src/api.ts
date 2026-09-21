@@ -2861,6 +2861,111 @@ async function getImportRows(batchId: string, result?: string): Promise<SisImpor
 }
 
 /**
+ * What `GET /sis/import/template` hands back: the workbook and the name it should be saved under.
+ *
+ * A `Blob` rather than parsed rows, because there is nothing on this reply to narrow — it is the
+ * `.xlsx` bytes, not JSON, and the whole point of the endpoint is that this build never opens it.
+ */
+export interface DownloadedFile {
+  readonly blob: Blob;
+  readonly filename: string;
+}
+
+/**
+ * `SisImportController.TemplateFileName`, mirrored — the same kind of copy `MAX_UPLOAD_BYTES` is, and
+ * for the same reason: used only when `Content-Disposition` is absent or unreadable, never as the
+ * primary source of the name. The server names the file on every real response; this is the floor
+ * under a build that is (briefly) ahead of a deployment that has not grown the header yet.
+ */
+const ROSTER_TEMPLATE_FALLBACK_FILENAME = "EAMS-roster-template.xlsx";
+
+/**
+ * `SisImportController.XlsxContentType`, mirrored — the media type a genuine template answers with,
+ * and the value `downloadRosterTemplate` checks a 200's `Content-Type` against before handing the body
+ * to `saveBlob`.
+ */
+const XLSX_CONTENT_TYPE = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
+
+/**
+ * ASP.NET's `ContentDispositionHeaderValue` writes the plain `filename` **unquoted** when the name is
+ * already a valid HTTP token, which `EAMS-roster-template.xlsx` is — so the real header looks like
+ * `attachment; filename=EAMS-roster-template.xlsx; filename*=UTF-8''EAMS-roster-template.xlsx`, not the
+ * quoted form a hand-written example would guess at. The regex therefore treats the quotes as optional
+ * rather than assumed, and matches a bare run of non-`;` characters either way.
+ *
+ * **Ignoring `filename*` (RFC 5987) is deliberate, not an oversight.** The server's name is a fixed
+ * ASCII constant — `TemplateFileName` — so the encoded form can never disagree with the plain one, and
+ * parsing both to prefer the encoded one would be weight this seam does not spend for an answer the
+ * plain `filename` already gives. It also does not need special-casing against the pattern below: the
+ * literal text this regex looks for is `filename=`, and `filename*=…`'s `*` sits between the two, so
+ * that occurrence never matches regardless of which of the two comes first in the header — the plain
+ * `filename=` is found either way.
+ */
+const CONTENT_DISPOSITION_FILENAME = /filename="?([^";]+)"?/i;
+
+/** The name to save the file under: the server's own, or the mirrored fallback if it said nothing. */
+function templateFilenameOf(contentDisposition: string | null): string {
+  const match = contentDisposition === null ? null : CONTENT_DISPOSITION_FILENAME.exec(contentDisposition);
+  return match?.[1] ?? ROSTER_TEMPLATE_FALLBACK_FILENAME;
+}
+
+/**
+ * `GET /sis/import/template` — the roster template workbook (Task 5, client QA #470 B1, #472 Q1/Q2).
+ *
+ * The one binary download on this seam, and it still goes through `send`: the same Bearer header, the
+ * same single 401-renewal-and-replay, and the same read timeout every other request gets. What differs
+ * is the 2xx body — there is no JSON to narrow, so this reads a `Blob` in place of `parseBody`, and the
+ * filename comes from the response's own `Content-Disposition` rather than being invented here.
+ *
+ * `shape: "read"` on every failure: a `GET`, so a 403 (no `sis.import`), a 409 (no school resolved) or
+ * a network failure are all safely retryable and `httpError`/`advise()` read it exactly like any other
+ * read.
+ */
+async function downloadRosterTemplate(): Promise<DownloadedFile> {
+  const what = "GET /sis/import/template";
+  const res = await send(what, "/sis/import/template");
+  if (!res.ok) throw httpError(what, await readProblem(res), "read");
+
+  // Checked before the body is read at all, and it is the one `malformed` in this function: a 200
+  // carrying something other than the workbook — a proxy's or load balancer's own HTML error page,
+  // saved with a 200 in front of it — is a contract violation, not a transport failure. Left unchecked,
+  // that page would be handed to `saveBlob` as if it were `EAMS-roster-template.xlsx`, and the first
+  // anyone would hear of it is Excel calling the file corrupt.
+  const contentType = res.headers.get("Content-Type") ?? "";
+  if (!contentType.toLowerCase().startsWith(XLSX_CONTENT_TYPE)) {
+    throw new ApiError(
+      "malformed",
+      res.status,
+      `${what} answered 200 with Content-Type "${contentType || "(none)"}", not the workbook type ` +
+        `this build expects ("${XLSX_CONTENT_TYPE}"). Nothing was saved.`,
+      { shape: "read" },
+    );
+  }
+
+  let blob: Blob;
+  try {
+    blob = await res.blob();
+  } catch (cause) {
+    if (isTimeout(cause)) throw timedOut(what, cause, "read", REQUEST_TIMEOUT_MS);
+    // `blob()` cannot fail on the body's *shape* the way `res.json()` can — there is no structure to be
+    // malformed, only bytes. Apart from a timeout, the one way this rejects is the connection dropping
+    // mid-transfer, which is the ordinary `network` failure every other read in this file raises on a
+    // dropped connection — and it is safely retryable, unlike `malformed`, whose advice ("this build
+    // and the API are different versions") would be actively wrong here: a fresh GET is not doomed to
+    // repeat a severed connection.
+    throw new ApiError(
+      "network",
+      0,
+      `Cannot reach the EAMS API at ${baseUrl} — ${what} was not completed; the connection was lost ` +
+        "while the workbook was downloading.",
+      { shape: "read", cause },
+    );
+  }
+
+  return { blob, filename: templateFilenameOf(res.headers.get("Content-Disposition")) };
+}
+
+/**
  * Explanation of why an admin-browser tap is refused. One string, one place — the message the
  * Snackbar shows and the reason in the report are the same text.
  */
@@ -3245,6 +3350,7 @@ export const api = {
   runImport,
   getImportBatch,
   getImportRows,
+  downloadRosterTemplate,
   tap,
   eventDetail,
 };

@@ -379,6 +379,11 @@ const WARNING_LABELS: Record<string, string> = {
   ClassificationMissing: "No category",
   ClassificationRegNoSuggestsPersonnel: "No category, number says personnel",
   ClassificationAxisUnknown: "Unknown category axis",
+  // A value that IS in the school's vocabulary, but typed under another axis's column — `NAP` under
+  // `STUDENT_CATEGORY`, say. Distinct from `ClassificationUnavailable` (the value is not recognised at
+  // all): this one names a real category, just in the wrong place, which is why the label says "wrong
+  // column" rather than "not recognized" — the operator's fix is to move the value, not to look it up.
+  ClassificationWrongAxis: "Category in the wrong column",
 };
 
 /**
@@ -451,3 +456,51 @@ export const POLL_INTERVAL_MS = 2_000;
  */
 export const importProgressPath = (batchId: string): string =>
   `/students/import/${encodeURIComponent(batchId)}`;
+
+// ---------------------------------------------------------------------------------------------
+// The template download (Task 5, client QA #470 B1, #472 Q1/Q2)
+// ---------------------------------------------------------------------------------------------
+
+/**
+ * What the download button says next to itself, so the operator knows the workbook is not a bare
+ * spreadsheet before they open it.
+ */
+export const TEMPLATE_HAS_INSTRUCTIONS_SHEET =
+  "Includes an Instructions sheet — read it before filling in the roster.";
+
+/**
+ * How long the object URL is kept alive after `click()` before it is revoked.
+ *
+ * `click()` on an `<a download>` only **queues** the save — it does not wait for the browser to have
+ * finished reading the blob before returning — and Firefox and older Safari can fail the download
+ * outright if the URL is revoked while that read is still in flight, with nothing on screen saying so
+ * (the page has already moved on to "success"). FileSaver.js, which exists specifically to work around
+ * this browser behaviour, uses 40 s for the same reason; this is a little more conservative than the
+ * ordinary case needs so that a slow disk write is not the thing that turns a good download into a
+ * silently corrupt one.
+ */
+export const REVOKE_OBJECT_URL_DELAY_MS = 30_000;
+
+/**
+ * Saves a downloaded `Blob` to the operator's disk under `filename`, via a temporary anchor.
+ *
+ * There is no other way to do this from a fetched `Blob`: the browser will only run its own save
+ * dialog off a user-initiated navigation, so this fabricates one — an `<a download>` appended to the
+ * document (Firefox and older WebKit refuse to dispatch `click()` on an element that was never in the
+ * DOM), clicked, and removed immediately after. **The object URL is deliberately not revoked in the same
+ * tick** — see `REVOKE_OBJECT_URL_DELAY_MS` — so it is scheduled instead, behind a `setTimeout` of that
+ * constant. The anchor itself is removed from the DOM immediately; only the URL's revocation waits.
+ */
+export function saveBlob(blob: Blob, filename: string): void {
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = filename;
+  document.body.appendChild(anchor);
+  try {
+    anchor.click();
+  } finally {
+    document.body.removeChild(anchor);
+  }
+  setTimeout(() => URL.revokeObjectURL(url), REVOKE_OBJECT_URL_DELAY_MS);
+}

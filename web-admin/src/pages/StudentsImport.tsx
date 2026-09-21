@@ -73,11 +73,13 @@ import { WriteFailureAlert } from "../components/WriteFailureAlert";
 import {
   ROSTER_FILE_EXTENSION,
   RUN_IS_IDEMPOTENT,
+  TEMPLATE_HAS_INSTRUCTIONS_SHEET,
   TERM_IS_NOT_INFERRED,
   UPLOAD_WRITES_NOTHING,
   describeSize,
   importProgressPath,
   rosterFileProblem,
+  saveBlob,
   uploadRefusalOf,
 } from "../sisImport";
 import { SIS_IMPORT_STATUS } from "../types";
@@ -187,6 +189,38 @@ export default function StudentsImport() {
   const check = useApiMutation((batchId: string) => api.getImportBatch(batchId));
   /** Said when the check comes back with no such batch — a 404 is an answer, not a failure. */
   const [checkNote, setCheckNote] = useState<string | undefined>(undefined);
+
+  /**
+   * The template download — a **read**, not a write, and `useApiMutation` still fits it for the same
+   * reason it fits `check` above: it happens because someone pressed a button, at most once per press
+   * (its own in-flight guard is what stops a double click from starting two downloads), and its result
+   * is a file to hand to the browser rather than the screen's subject.
+   */
+  const templateDownload = useApiMutation(() => api.downloadRosterTemplate());
+
+  /**
+   * `saveBlob` runs after the mutation has already reported success — the request landed and the
+   * workbook is sitting in memory — so a throw out of it (`URL.createObjectURL` refusing, an anchor
+   * `click()` throwing) is not something `templateDownload.error` can ever hold. Left uncaught, the
+   * `.then` callback below would reject and — because `downloadTemplate` `void`s the promise it
+   * returns — become an unhandled rejection that nothing on screen says anything about: the button
+   * simply goes idle again as if the download had never been pressed. Caught here instead, and kept in
+   * its own piece of state rather than folded into `templateDownload`'s, because it is a distinct
+   * failure the mutation's own `status` was never going to observe.
+   */
+  const [templateSaveError, setTemplateSaveError] = useState<unknown>(undefined);
+
+  const downloadTemplate = () => {
+    setTemplateSaveError(undefined);
+    void templateDownload.run().then((settled) => {
+      if (settled.outcome !== "succeeded") return;
+      try {
+        saveBlob(settled.data.blob, settled.data.filename);
+      } catch (cause) {
+        setTemplateSaveError(cause);
+      }
+    });
+  };
 
   /**
    * Focus follows the step. Each stage replaces the whole body of the page, so a keyboard user who
@@ -341,6 +375,11 @@ export default function StudentsImport() {
           onUpload={submitUpload}
           running={upload.status === "running"}
           failure={upload.status === "failed" ? { error: upload.error } : undefined}
+          onDownloadTemplate={downloadTemplate}
+          downloadingTemplate={templateDownload.status === "running"}
+          templateDownloadError={
+            templateSaveError ?? (templateDownload.status === "failed" ? templateDownload.error : undefined)
+          }
         />
       )}
 
@@ -383,6 +422,9 @@ function ChooseStep({
   onUpload,
   running,
   failure,
+  onDownloadTemplate,
+  downloadingTemplate,
+  templateDownloadError,
 }: {
   terms: TermsResource;
   termId: string;
@@ -393,6 +435,9 @@ function ChooseStep({
   onUpload: () => void;
   running: boolean;
   failure: { error: unknown } | undefined;
+  onDownloadTemplate: () => void;
+  downloadingTemplate: boolean;
+  templateDownloadError: unknown;
 }) {
   const rows = terms.data ?? [];
   const refusal = failure === undefined ? undefined : uploadRefusalOf(failure.error);
@@ -401,6 +446,32 @@ function ChooseStep({
 
   return (
     <Paper variant="outlined" sx={{ p: 3 }}>
+      {/* Offered before the upload control rather than after it: the workbook the operator needs to
+          fill in is what starts this whole flow for a school that has never run an import before. */}
+      <Stack direction="row" spacing={2} alignItems="center" sx={{ mb: 1 }}>
+        <Button
+          variant="outlined"
+          onClick={onDownloadTemplate}
+          disabled={downloadingTemplate}
+          startIcon={downloadingTemplate ? <CircularProgress size={16} color="inherit" /> : undefined}
+        >
+          {downloadingTemplate ? "Downloading…" : "Download template"}
+        </Button>
+      </Stack>
+      <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+        {TEMPLATE_HAS_INSTRUCTIONS_SHEET}
+      </Typography>
+
+      {templateDownloadError !== undefined && (
+        <Alert severity="error" role="alert" sx={{ mb: 3 }}>
+          <AlertTitle>The template could not be downloaded</AlertTitle>
+          <Typography variant="body2">{describeApiError(templateDownloadError)}</Typography>
+          <Typography variant="body2" sx={{ mt: 1 }}>
+            {advise(templateDownloadError).message}
+          </Typography>
+        </Alert>
+      )}
+
       <Alert severity="info" sx={{ mb: 3 }}>
         {UPLOAD_WRITES_NOTHING}
       </Alert>

@@ -35,6 +35,7 @@ import { ApiError } from "../src/api";
 import {
   MAX_UPLOAD_BYTES,
   ROSTER_FILE_EXTENSION,
+  describeImportWarning,
   describeSize,
   isTerminalStatus,
   rosterFileProblem,
@@ -535,4 +536,64 @@ describe("a status this build does not know", () => {
     );
     expect(notTerminal).toEqual([SIS_IMPORT_STATUS.Pending, SIS_IMPORT_STATUS.Running]);
   });
+});
+
+// ---------------------------------------------------------------------------------------------
+// describeImportWarning — the mapped set
+// ---------------------------------------------------------------------------------------------
+//
+// A hand-copied mirror of `SisImportWarningCode.All` in `backend/EAMS.Domain/SisImportValues.cs`, in
+// the same tripwire idiom `MAX_UPLOAD_BYTES` above uses: nothing here can see the server's list
+// change, only this build's own mapping drifting from it. Verified against the backend on 2026-09-21,
+// the day `ClassificationWrongAxis` (a category value typed under another axis's column, e.g. `NAP`
+// under `STUDENT_CATEGORY`) was added as the 14th code.
+
+describe("describeImportWarning — the mapped set", () => {
+  const KNOWN_WARNING_CODES = [
+    "CourseTitleAlias",
+    "CourseCollegeAdopted",
+    "InstructorPlaceholder",
+    "SectionSpansPrograms",
+    "SectionUnspecified",
+    "StudentIdentityConflict",
+    "RfidCardRevoked",
+    "RfidCardFromLegacyMapping",
+    "ClassificationUnavailable",
+    "ClassificationConflict",
+    "ClassificationMissing",
+    "ClassificationRegNoSuggestsPersonnel",
+    "ClassificationAxisUnknown",
+    "ClassificationWrongAxis",
+  ];
+
+  it("mirrors exactly 14 codes — the count changes only when the backend's list does", () => {
+    expect(KNOWN_WARNING_CODES).toHaveLength(14);
+  });
+
+  it.each(KNOWN_WARNING_CODES)("maps %s to words, not the raw token", (code) => {
+    expect(describeImportWarning(code)).not.toBe(code);
+  });
+
+  it("gives ClassificationWrongAxis its own label: 'Category in the wrong column'", () => {
+    // Distinct from `ClassificationUnavailable`'s "Category not recognized" — this code's value IS in
+    // the school's vocabulary, just typed under the wrong axis's column, so the operator's fix is to
+    // move it rather than to look it up. A label that collapsed the two would undo the reason the
+    // backend split them into separate codes in the first place.
+    expect(describeImportWarning("ClassificationWrongAxis")).toBe("Category in the wrong column");
+  });
+
+  it("falls back to the raw token for a code this build has never heard of", () => {
+    // The documented contract `describeImportWarning`'s own comment states: an unrecognised code is
+    // shown verbatim rather than blanked or thrown on, because the API can grow a warning code without
+    // this build being redeployed.
+    expect(describeImportWarning("SomeFutureCode")).toBe("SomeFutureCode");
+  });
+
+  // Negative control for "maps %s to words, not the raw token", confirmed by hand: removing the
+  // `ClassificationWrongAxis` entry from `WARNING_LABELS` in `src/sisImport.ts` made the
+  // `it.each(KNOWN_WARNING_CODES)` case for that code fail — `describeImportWarning` fell back to the
+  // raw token, exactly as it does for an unmapped code above, and the test caught it rather than
+  // passing on a label that had quietly stopped being applied. The entry was restored with the Edit
+  // tool immediately afterward and this file's full suite was re-run green, which is the run this
+  // comment describes.
 });
