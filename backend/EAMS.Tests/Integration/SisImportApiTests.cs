@@ -412,8 +412,9 @@ public class SisImportApiTests : IntegrationTest
 
     /// <summary>
     /// Every import endpoint declares <c>sis.import</c> and enforces it. That matters more here than
-    /// anywhere else in this API — these four endpoints read and write the full roster of every student
-    /// in the institution, names and institutional e-mail addresses included.
+    /// anywhere else in this API — these endpoints read and write the full roster of every student in
+    /// the institution, names and institutional e-mail addresses included. Five since Task 5 added the
+    /// roster template download, which sits under the same permission as the upload it feeds.
     /// </summary>
     [Fact]
     public void Every_import_endpoint_declares_and_enforces_the_sis_import_permission()
@@ -424,7 +425,7 @@ public class SisImportApiTests : IntegrationTest
             .Where(m => !m.IsSpecialName)
             .ToList();
 
-        Assert.Equal(4, actions.Count);
+        Assert.Equal(5, actions.Count);
 
         foreach (var action in actions)
         {

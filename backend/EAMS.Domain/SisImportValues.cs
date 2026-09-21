@@ -509,12 +509,37 @@ public static class SisImportWarningCode
     /// </summary>
     public const string ClassificationAxisUnknown = "ClassificationAxisUnknown";
 
+    /// <summary>
+    /// A category column named a value that IS in this school's vocabulary, but on another axis —
+    /// <c>NAP</c> typed under <c>STUDENT_CATEGORY</c>. <b>The value is not applied, on either axis, and
+    /// nothing the person already holds is changed.</b> The message names the column it was found in and
+    /// the column it belongs in.
+    ///
+    /// <para>
+    /// <b>Why it is refused rather than filed on its real axis.</b> The column and the value contradict
+    /// each other, and either could be the mistake: NAP in the student column may be a staff member
+    /// pasted one column left, or a student whose value is wrong. Filing it under Personnel picks one
+    /// reading silently.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>And applying it was a crash, not merely a wrong answer.</b> Before this code existed the
+    /// importer checked "already holds something on this axis" by the column's axis but inserted on the
+    /// value's, so a row naming NAP under STUDENT_CATEGORY and ACAD under PERSONNEL_CATEGORY — or NAP
+    /// under STUDENT_CATEGORY for somebody already holding ACAD, or the second import of any file with NAP
+    /// in the student column — inserted a second Personnel row and violated
+    /// <c>UX_StudentClassifications_Student_Axis</c>, failing the whole batch with no row number.
+    /// </para>
+    /// </summary>
+    public const string ClassificationWrongAxis = "ClassificationWrongAxis";
+
     public static readonly IReadOnlyList<string> All =
     [
         CourseTitleAlias, CourseCollegeAdopted, InstructorPlaceholder,
         SectionSpansPrograms, SectionUnspecified, StudentIdentityConflict, RfidCardRevoked,
         RfidCardFromLegacyMapping, ClassificationUnavailable, ClassificationConflict,
         ClassificationMissing, ClassificationRegNoSuggestsPersonnel, ClassificationAxisUnknown,
+        ClassificationWrongAxis,
     ];
 }
 

@@ -452,7 +452,8 @@ internal sealed class SisImportService : ISisImportService
     /// <param name="ClassificationKeys">
     /// One entry per <see cref="ClassificationAxis"/> the mapping carries a column for. <b>Empty for
     /// every batch pinned to profile version 2 or earlier</b>, which is what makes a pre-Task-5 batch
-    /// classify nobody even when re-run against a file that has the columns.
+    /// classify nobody even when re-run against a file that has the columns. <c>Column</c> is the
+    /// profile's source column as written, carried so a warning can name the header an operator sees.
     /// </param>
     /// <param name="UnknownAxisTargets">
     /// The mapping's category rows whose axis is not one of the four, already formatted for an
@@ -469,7 +470,7 @@ internal sealed class SisImportService : ISisImportService
     /// </param>
     private sealed record MappedColumns(
         string? RfidKey,
-        IReadOnlyList<(string Axis, string Key)> ClassificationKeys,
+        IReadOnlyList<(string Axis, string Key, string Column)> ClassificationKeys,
         IReadOnlyList<string> UnknownAxisTargets,
         IReadOnlyList<string> UnreadableAxisTargets);
 
@@ -535,7 +536,7 @@ internal sealed class SisImportService : ISisImportService
         var rfidColumn = columns.FirstOrDefault(c => c.TargetField == rfidTarget);
         var rfid = rfidColumn is null ? null : KeyOf(rfidColumn);
 
-        var byAxis = new List<(string Axis, string Key)>();
+        var byAxis = new List<(string Axis, string Key, string Column)>();
         var unknownAxes = new List<string>();
         var unreadable = new List<(string Axis, string Target)>();
 
@@ -591,7 +592,7 @@ internal sealed class SisImportService : ISisImportService
                 continue;
             }
 
-            byAxis.Add((axis, key));
+            byAxis.Add((axis, key, column.SourceColumn));
         }
 
         var unreadableAxes = new List<string>();
@@ -645,7 +646,11 @@ internal sealed class SisImportService : ISisImportService
         // Whether this row's file carried any of the category columns the profile maps. False is
         // today's roster, and it is why an uncategorised row from such a file is silent rather than
         // warned: see SisImportWarningCode.ClassificationMissing.
-        bool CategoryColumnsPresent);
+        bool CategoryColumnsPresent,
+        // Axis -> the header the profile maps for it, as written. One instance shared by every row of the
+        // batch; carried so SisImportWarningCode.ClassificationWrongAxis can name both the column a value
+        // was typed in and the column it belongs in.
+        IReadOnlyDictionary<string, string> CategoryColumnNames);
 
     /// <summary>
     /// Interprets the staged rows. <paramref name="rfidColumnKey"/> is the
@@ -702,6 +707,9 @@ internal sealed class SisImportService : ISisImportService
                 "again.");
 
         var unknownAxisWarning = clauses.Count == 0 ? null : string.Join(" ", clauses);
+
+        var categoryColumnNames = columns.ClassificationKeys
+            .ToDictionary(c => c.Axis, c => c.Column, StringComparer.Ordinal);
 
         foreach (var row in staged)
         {
@@ -790,7 +798,7 @@ internal sealed class SisImportService : ISisImportService
             // anyone" and the third means "this file does, and says nothing about this person".
             var categoryColumnsPresent = false;
             var categoryCells = new Dictionary<string, string?>(StringComparer.Ordinal);
-            foreach (var (axis, key) in columns.ClassificationKeys)
+            foreach (var (axis, key, _) in columns.ClassificationKeys)
             {
                 if (!cells.TryGetValue(key, out var cell)) continue;
 
@@ -835,7 +843,8 @@ internal sealed class SisImportService : ISisImportService
                     ? null
                     : AcademicKey.NormalizeOrUnspecified(teacher.DisplayName),
                 Categories: RosterClassification.Resolve(regNo, categoryCells),
-                CategoryColumnsPresent: categoryColumnsPresent));
+                CategoryColumnsPresent: categoryColumnsPresent,
+                CategoryColumnNames: categoryColumnNames));
 
             if (sectionName is null)
                 ledger.Warn(row, SisImportWarningCode.SectionUnspecified,
@@ -1783,6 +1792,24 @@ internal sealed class SisImportService : ISisImportService
                 var key = ClassificationText.KeyFor(category.Value);
 
                 vocabulary.TryGetValue(key, out var classification);
+
+                // A value typed in ANOTHER group's column — NAP under STUDENT_CATEGORY. Refused here,
+                // before anything below reads `existing`, and the ordering is the fix: `existing` and
+                // `firstNaming` are keyed by the COLUMN's axis while ClassificationAssignment.For takes
+                // the classification's REAL axis. Applied, NAP would be inserted on Personnel while every
+                // check above it looked at Student — two Personnel rows for one person the moment the
+                // row also names a personnel value, or the moment they already hold one, and a unique
+                // violation on UX_StudentClassifications_Student_Axis that rolls back the whole fact
+                // pass with no row number. Worse, the first import of such a file succeeds, so it is the
+                // SECOND import of the same unchanged file that fails. Never applied on either axis: the
+                // column says one thing and the value another, and choosing between them is a guess.
+                if (classification is not null
+                    && !string.Equals(classification.Axis, axis, StringComparison.Ordinal))
+                {
+                    WarnOnWrongAxis(group, namingRow, category, classification, ledger);
+                    continue;
+                }
+
                 existing.TryGetValue((studentId, axis), out var already);
 
                 // "Already holds exactly this" is asked FIRST, before the row's availability, and the
@@ -1892,6 +1919,28 @@ internal sealed class SisImportService : ISisImportService
         }
 
         return resolved;
+    }
+
+    /// <summary>
+    /// <see cref="SisImportWarningCode.ClassificationWrongAxis"/>: names the column the value was found in
+    /// and the column it belongs in, both as the profile's headers so the operator can find them.
+    /// </summary>
+    private static void WarnOnWrongAxis(
+        RowGroup group, ParsedRow namingRow, RosterClassification.Category category,
+        Classification classification, RowLedger ledger)
+    {
+        var names = namingRow.CategoryColumnNames;
+        var foundIn = names.TryGetValue(category.Axis, out var found) ? found : $"{category.Axis} category";
+        var belongsIn = names.TryGetValue(classification.Axis, out var right)
+            ? $"the {right} column"
+            : $"the {classification.Axis} category column, which this batch's import profile does not map";
+
+        foreach (var row in group.All)
+            ledger.Warn(row.Staged, SisImportWarningCode.ClassificationWrongAxis,
+                $"REGNO {group.First.RegNo} has '{category.Value}' in the {foundIn} column, but " +
+                $"'{classification.Name}' is a {classification.Axis} category and belongs in {belongsIn}. " +
+                "It was NOT applied, on either axis, and nothing this person already holds was changed. " +
+                "Move the value to the right column in the export and re-import.");
     }
 
     private static void WarnOnNoCategory(RowGroup group, RowLedger ledger)
@@ -2465,37 +2514,14 @@ internal sealed class SisImportService : ISisImportService
     /// </summary>
     private async Task<SisImportProfile> EnsureBuiltInProfileAsync(Guid schoolId, CancellationToken ct)
     {
-        var nameKey = AcademicKey.NormalizeOrUnspecified(SisImportProfileTemplate.ProfileName);
+        // The "which version wins" rule lives in SisImportProfileResolution so that the roster template
+        // (GET /sis/import/template) answers the same question the same way. Two copies of it would be
+        // two rules, and the template would start advertising headers the importer no longer reads.
+        if (await SisImportProfileResolution.FindCurrentAsync(_db, schoolId, ct) is { } current)
+            return current;
+
+        var nameKey = SisImportProfileResolution.BuiltInNameKey;
         var version = SisImportProfileTemplate.BuiltInVersion;
-
-        var existing = await _db.SisImportProfiles.IgnoreQueryFilters()
-            .FirstOrDefaultAsync(
-                p => p.SchoolId == schoolId && p.NameKey == nameKey && p.Version == version, ct);
-
-        if (existing is not null)
-        {
-            // Present but superseded by something newer an operator authored: that is their decision and
-            // this method does not fight it. Reactivating would silently overrule a live mapping.
-            if (existing.IsActive) return existing;
-
-            // `p.Version > version` is load-bearing, not a tidy-up. Without it this accepts ANY active
-            // version — including an OLDER one — which is the exact defect the summary above says the
-            // version-matched lookup exists to prevent, arriving through the fallback instead of through
-            // the lookup. A school whose operator activated version 1 would have every NEW upload read
-            // the card serial out of the REGNO column and reinstate the 2026-07-30 correction's defect,
-            // silently and on live data. Deferring to a newer operator-authored version is deliberate;
-            // deferring to an older one is the bug.
-            var newer = await _db.SisImportProfiles.IgnoreQueryFilters()
-                .Where(p => p.SchoolId == schoolId && p.NameKey == nameKey && p.IsActive
-                         && p.Version > version)
-                .OrderByDescending(p => p.Version)
-                .FirstOrDefaultAsync(ct);
-
-            // Falls back to the built-in row itself when the only active version is older — this method
-            // promises the built-in profile, and an older active version is a state the paragraph above
-            // does not contemplate and must not be allowed to satisfy.
-            return newer ?? existing;
-        }
 
         await _db.SisImportProfiles.IgnoreQueryFilters()
             .Where(p => p.SchoolId == schoolId && p.NameKey == nameKey && p.IsActive)

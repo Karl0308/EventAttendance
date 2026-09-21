@@ -136,6 +136,10 @@ public static class DependencyInjection
         services.AddScoped<IAcademicReferenceService, AcademicReferenceService>();
         services.AddScoped<IStudentGroupService, StudentGroupService>();
         services.AddScoped<ISisImportService, SisImportService>();
+        // Task 5's roster template. Separate from the importer because it takes its school from
+        // ISchoolContext (it has no term to take it from); it shares the importer's profile-version rule
+        // through SisImportProfileResolution, not the class.
+        services.AddScoped<ISisImportTemplateService, SisImportTemplateService>();
         services.AddScoped<IDeviceService, DeviceService>();
 
         // D-53's term admin surface — the one write service in the academic layer, and registered

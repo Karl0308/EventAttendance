@@ -59,11 +59,21 @@ internal sealed class RowLedger
     /// and so disappears from a filter by code. It cannot displace anything on a correctly mapped
     /// batch, where it cannot fire at all.
     /// </para>
+    ///
+    /// <para>
+    /// <b><see cref="SisImportWarningCode.ClassificationWrongAxis"/> ranks directly above
+    /// <see cref="SisImportWarningCode.ClassificationUnavailable"/></b>, with the other "the file named a
+    /// category and it was not applied" code. Above it because it is the more definite source bug: the
+    /// value exists and the export put it in the wrong column, so the fix is in the file and nowhere
+    /// else, where an unavailable value may instead be fixed in the vocabulary. Below
+    /// <see cref="SisImportWarningCode.StudentIdentityConflict"/>, which contradicts who the person is.
+    /// </para>
     /// </summary>
     private static readonly IReadOnlyList<string> WarningPrecedence =
     [
         SisImportWarningCode.ClassificationAxisUnknown,
         SisImportWarningCode.StudentIdentityConflict,
+        SisImportWarningCode.ClassificationWrongAxis,
         SisImportWarningCode.ClassificationUnavailable,
         SisImportWarningCode.ClassificationConflict,
         SisImportWarningCode.CourseCollegeAdopted,

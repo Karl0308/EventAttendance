@@ -68,6 +68,13 @@ internal static class SisImportProfileTemplate
     public const string RfidCardUidTarget = "RfidCard.CardUid";
 
     /// <summary>
+    /// The dotted target of the student-number column. Named for the same reason as
+    /// <see cref="RfidCardUidTarget"/>: the roster template finds the REGNO column by it (to format it as
+    /// Text), and a literal in two places would drift silently.
+    /// </summary>
+    public const string StudentNumberTarget = "Student.StudentNumber";
+
+    /// <summary>
     /// The dotted target that marks a category column, one per <see cref="ClassificationAxis"/>: the
     /// axis is the part after the dot, so <c>StudentClassification.Personnel</c> is the row that says
     /// "this source column holds Personnel-axis categories".
@@ -119,7 +126,7 @@ internal static class SisImportProfileTemplate
         // REGNO is the student number and nothing else, and it is the only genuinely required column:
         // without it a row names nobody. It is NOT the card UID — that was version 1's mapping and the
         // client corrected it on 2026-07-30.
-        new(SisRosterColumns.RegNo, "Student.StudentNumber", Verbatim, IsRequired: true),
+        new(SisRosterColumns.RegNo, StudentNumberTarget, Verbatim, IsRequired: true),
 
         // The card serial, and the row that makes this table load-bearing rather than decorative. The
         // pipeline finds the RFID source column by looking for THIS TargetField among the batch's

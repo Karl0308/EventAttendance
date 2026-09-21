@@ -4981,6 +4981,53 @@
         ]
       }
     },
+    "/api/v1/sis/import/template": {
+      "get": {
+        "tags": [
+          "SisImport"
+        ],
+        "summary": "`GET /sis/import/template` — the roster template the school fills in and uploads back.",
+        "description": "Task 5 (QA MDVault #470 B1, #472 Q1/Q2). An `.xlsx` with two sheets: <b>Instructions</b>,\r\nand <b>Roster</b>, whose header row is the source columns of the import profile this school's next\r\nupload will be pinned to (ADR-001 D-4), in profile order — the roster's own headers plus the four\r\ncategory columns `STUDENT_CATEGORY`, `PERSONNEL_CATEGORY`, `FRIARS_CATEGORY` and\r\n`SPECIAL_CATEGORY`. Any header the reader requires to recognise the roster sheet that the\r\nprofile omits is appended, so the template is always accepted as a roster. A newer active profile\r\nversion changes the template's columns; it does not change which headers the reader requires or\r\nthe fixed headers the importer reads the core values from. Headers whose value is required carry a\r\ncomment; the card-serial and student-number columns are formatted as Text so leading zeros\r\nsurvive. Sent with `Cache-Control: no-store`, because it embeds the school's current\r\nclassification list.",
+        "responses": {
+          "200": {
+            "description": "The workbook, as an attachment.",
+            "content": {
+              "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "No school could be resolved for the caller.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "Bearer": []
+          }
+        ]
+      }
+    },
     "/api/v1/sis/import/{batchId}/run": {
       "post": {
         "tags": [
@@ -9091,7 +9138,7 @@
     },
     {
       "name": "SisImport",
-      "description": "Technical Plan §10 — the school-year roster import.\r\n            \r\n\r\n<b>Every endpoint demands a Bearer token carrying `sis.import`.</b> That matters more here\r\nthan anywhere else in this API: these four endpoints read and write the full roster of every\r\nstudent in the institution, including their names and institutional e-mail addresses, and the\r\nupload endpoint writes to the academic tables.\r\n"
+      "description": "Technical Plan §10 — the school-year roster import.\r\n            \r\n\r\n<b>Every endpoint demands a Bearer token carrying `sis.import`.</b> That matters more here\r\nthan anywhere else in this API: these endpoints read and write the full roster of every\r\nstudent in the institution, including their names and institutional e-mail addresses, and the\r\nupload endpoint writes to the academic tables.\r\n"
     },
     {
       "name": "StudentClassifications",
