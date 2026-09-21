@@ -3,7 +3,7 @@
 <!-- GENERATED FILE — DO NOT EDIT.
      Source: docs/api/openapi.json. Regenerate: node scripts/generate-endpoint-index.mjs --write -->
 
-**Generated from [`openapi.json`](openapi.json) — do not edit by hand.** 65 operations across 12 controllers, all mounted under `/api/v1`. Routes below are written relative to that mount.
+**Generated from [`openapi.json`](openapi.json) — do not edit by hand.** 67 operations across 13 controllers, all mounted under `/api/v1`. Routes below are written relative to that mount.
 
 This page is a **map, not a contract.** It exists so you can find an endpoint; payload shapes, field types and outcome tokens live in [`openapi.json`](openapi.json), which is what you generate a client from. Behaviour a schema cannot state — what your queue does with each outcome, the card-UID and clock rules — is in [`attendance-contract-handoff.md`](attendance-contract-handoff.md).
 
@@ -17,6 +17,7 @@ This page is a **map, not a contract.** It exists so you can find an endpoint; p
 - [Classifications](#classifications) — 7
 - [Devices](#devices) — 7
 - [EventManifest](#eventmanifest) — 1
+- [Reports](#reports) — 2
 - [SisImport](#sisimport) — 4
 - [StudentClassifications](#studentclassifications) — 3
 - [StudentGroups](#studentgroups) — 1
@@ -83,6 +84,13 @@ This page is a **map, not a contract.** It exists so you can find an endpoint; p
 | Method | Route | Auth | Errors | What it does |
 |---|---|---|---|---|
 | `GET` | `/events/{id}/manifest` | **DeviceKey** | `400` `401` `403` `404` `409` `413` `429` | The offline capture cache: who is expected at this event and which card resolves to whom. |
+
+## Reports
+
+| Method | Route | Auth | Errors | What it does |
+|---|---|---|---|---|
+| `GET` | `/reports/event/{eventId}/summary` | **Bearer** | `401` `403` `404` | §6.7 `GET /reports/event/{eventId}/summary` — the Event Attendance Summary for one event. |
+| `GET` | `/reports/events/summary` | **Bearer** | `400` `401` `403` `404` | A summary of several hand-picked events: one row per event and their pooled totals. |
 
 ## SisImport
 

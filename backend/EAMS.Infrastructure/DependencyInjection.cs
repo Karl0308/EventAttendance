@@ -120,7 +120,13 @@ public static class DependencyInjection
             AttendanceLiveOptions.Resolve(configuration[AttendanceLiveOptions.ConfigurationKey]));
 
         services.AddScoped<IStudentService, StudentService>();
-        services.AddScoped<IEventService, EventService>();
+        // One scoped EventService per request, reached through two interfaces: the public
+        // IEventService, and the internal IEventSummaryFigures the report service below depends on —
+        // so the report calls the one summary implementation on the same instance and DbContext,
+        // rather than a copy of it (ADR-003 D-12/D-13), without depending on the concrete class.
+        services.AddScoped<EventService>();
+        services.AddScoped<IEventService>(sp => sp.GetRequiredService<EventService>());
+        services.AddScoped<IEventSummaryFigures>(sp => sp.GetRequiredService<EventService>());
         services.AddScoped<IAttendanceService, AttendanceService>();
         services.AddScoped<IStudentGroupProjection, StudentGroupProjection>();
 
@@ -152,6 +158,10 @@ public static class DependencyInjection
         // takes no ISchoolContext: it never creates a row that has to be filed under a school, it joins
         // two rows that already carry one, so what it decides is that the two must agree.
         services.AddScoped<IStudentClassificationService, StudentClassificationService>();
+
+        // §6.7's reports (QA Q15/Q16). Read-only and owning no arithmetic of its own: every figure is
+        // EventService's, reached through IEventSummaryFigures registered above.
+        services.AddScoped<IReportService, ReportService>();
 
         // Resolved per request by the DeviceKey authentication handler, from the request scope — so it
         // gets the same EamsDbContext the rest of the request will use.

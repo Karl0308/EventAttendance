@@ -21,7 +21,7 @@ namespace EAMS.Infrastructure.Services;
 /// join across live data, and no later import can move it.
 /// </para>
 /// </summary>
-internal sealed class EventService : IEventService
+internal sealed class EventService : IEventService, IEventSummaryFigures
 {
     /// <summary>
     /// How many times the close will re-diff and retry after losing an insert race to a tap. One retry
@@ -180,7 +180,28 @@ internal sealed class EventService : IEventService
     /// uncommitted audience change is invisible to this read anyway.
     /// </para>
     /// </param>
-    private async Task<EventSummaryDto> SummaryForAsync(Event e, long? ceiling, CancellationToken ct)
+    private async Task<EventSummaryDto> SummaryForAsync(Event e, long? ceiling, CancellationToken ct) =>
+        (await FiguresForAsync(e, ceiling, ct)).Summary;
+
+    /// <summary>
+    /// One event's summary together with the raw <c>attended</c> count behind its rate — what
+    /// <c>ReportService</c> needs, and the one implementation of the arithmetic.
+    ///
+    /// <para>
+    /// <b>Why it exists, and why only through <see cref="IEventSummaryFigures"/>.</b> The §6.7 reports pool several events into one
+    /// rate — all attendees over all expected — and a pooled rate cannot be rebuilt from
+    /// <see cref="EventSummaryDto.AttendanceRate"/>, which is already rounded. The alternative was a
+    /// second copy of this denominator in the report service, which is exactly what ADR-003
+    /// D-12/D-13 record as failing silently. So the report calls this, and
+    /// <see cref="SummaryForAsync"/> — the live path and <c>GET /events/{id}/summary</c> — reads its
+    /// <see cref="EventSummaryFigures.Summary"/>. Every caller runs the same four queries.
+    /// </para>
+    /// </summary>
+    /// <param name="e">The event, already read, tenant-filtered and not soft-deleted.</param>
+    /// <param name="ceiling">See <see cref="SummaryForAsync"/>. A report passes <c>null</c>.</param>
+    /// <param name="ct">Cancellation token.</param>
+    public async Task<EventSummaryFigures> FiguresForAsync(
+        Event e, long? ceiling, CancellationToken ct)
     {
         var id = e.Id;
         var expectedIds = ExpectedStudentIds(id, e.Status);
@@ -190,10 +211,12 @@ internal sealed class EventService : IEventService
         var attended = await expectedIds.Intersect(AttendedStudentIds(id, ceiling)).CountAsync(ct);
         var unexpected = await RecordedStudentIds(id, ceiling).Except(expectedIds).CountAsync(ct);
 
-        return new EventSummaryDto(
+        var summary = new EventSummaryDto(
             e.Id, e.Name, expected,
             counts.Present, counts.Late, counts.Absent, counts.Excused, unexpected,
-            RateOf(attended, expected));
+            EventSummaryFigures.RateOf(attended, expected));
+
+        return new EventSummaryFigures(summary, attended);
     }
 
     /// <summary>The four §4.9 buckets for one event, as one aggregate.</summary>
@@ -277,20 +300,6 @@ internal sealed class EventService : IEventService
         ceiling is { } max
             ? _db.AttendanceRecords.Where(a => a.EventId == eventId && a.RowVersion <= max)
             : _db.AttendanceRecords.Where(a => a.EventId == eventId);
-
-    /// <summary>
-    /// <c>(invited students who attended) / (invited students)</c>, to one decimal place.
-    ///
-    /// <para>
-    /// <b>The numerator is a count of people drawn from the denominator's own set</b>, produced by
-    /// <c>Intersect</c> — SQL <c>INTERSECT</c>, distinct on both sides — so it cannot exceed
-    /// <paramref name="expected"/> however many rows exist or how they are shaped. That is why there is
-    /// no clamp here: a <c>Math.Min</c> would have capped a number that was still being computed wrongly
-    /// and hidden the walk-ins that made it wrong. They are reported separately instead.
-    /// </para>
-    /// </summary>
-    private static double RateOf(int attended, int expected) =>
-        expected == 0 ? 0 : Math.Round((double)attended / expected * 100, 1);
 
     // ------------------------------------------------------------------------- the denominator
 

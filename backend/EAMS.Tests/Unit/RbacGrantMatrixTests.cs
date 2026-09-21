@@ -22,15 +22,16 @@ public class RbacGrantMatrixTests
         EamsRoles.ReferenceData.Roles.Single(r => r.Name == roleName).PermissionCodes;
 
     /// <summary>
-    /// <b>The registry has twelve codes.</b> A literal, so that adding or removing one is a decision
+    /// <b>The registry has thirteen codes.</b> A literal, so that adding or removing one is a decision
     /// someone makes here as well as there — every count below is relative to this number and a silent
-    /// thirteenth code would quietly widen SuperAdmin.
+    /// fourteenth code would quietly widen SuperAdmin. Thirteen since P3 added <c>reports.read</c>
+    /// (QA Q15/Q16, MDVault #463 Part D).
     /// </summary>
     [Fact]
-    public void The_registry_declares_twelve_permission_codes()
+    public void The_registry_declares_thirteen_permission_codes()
     {
-        Assert.Equal(12, EamsPermissions.All.Count);
-        Assert.Equal(12, EamsPermissions.All.Distinct(StringComparer.Ordinal).Count());
+        Assert.Equal(13, EamsPermissions.All.Count);
+        Assert.Equal(13, EamsPermissions.All.Distinct(StringComparer.Ordinal).Count());
     }
 
     [Fact]
@@ -48,7 +49,7 @@ public class RbacGrantMatrixTests
     }
 
     /// <summary>
-    /// Every permission the registry declares gets a <c>Permissions</c> row — all twelve, including
+    /// Every permission the registry declares gets a <c>Permissions</c> row — all thirteen, including
     /// the one no role holds. The code has to exist for a device key to carry it; what it must not
     /// have is a grant.
     /// </summary>
@@ -63,8 +64,9 @@ public class RbacGrantMatrixTests
     // -------------------------------------------------------------------- the totals, per the matrix
 
     [Theory]
-    [InlineData(EamsRoleNames.SuperAdmin, 11)]
-    [InlineData(EamsRoleNames.SchoolAdmin, 11)]
+    // Admins 11 → 12 in P3: reports.read, granted to SuperAdmin and SchoolAdmin only (Q16).
+    [InlineData(EamsRoleNames.SuperAdmin, 12)]
+    [InlineData(EamsRoleNames.SchoolAdmin, 12)]
     [InlineData(EamsRoleNames.Organizer, 6)]
     [InlineData(EamsRoleNames.Viewer, 4)]
     public void Each_role_holds_exactly_the_approved_number_of_permissions(string role, int expected)
@@ -193,6 +195,7 @@ public class RbacGrantMatrixTests
     [InlineData(EamsPermissions.DevicesWrite)]
     [InlineData(EamsPermissions.SisImport)]
     [InlineData(EamsPermissions.AcademicWrite)]
+    [InlineData(EamsPermissions.ReportsRead)]
     public void Neither_Organizer_nor_Viewer_holds_an_administrative_code(string code)
     {
         Assert.DoesNotContain(code, GrantsFor(EamsRoleNames.Organizer));
@@ -232,5 +235,21 @@ public class RbacGrantMatrixTests
             unknown.Count == 0,
             "These grants name a code that is not on EamsPermissions:\n  " +
             string.Join("\n  ", unknown));
+    }
+
+    /// <summary>
+    /// <b><c>reports.read</c> is administrators' alone</b> — QA Q16 (MDVault #463 Part D), approved by
+    /// JJ over Technical Plan §11, which would also give report reading to Organizer and Viewer. Named
+    /// on its own rather than only as a row of the theory above, because it is the one exclusion here
+    /// that contradicts the plan, and so the one most likely to be "corrected" back.
+    /// </summary>
+    [Fact]
+    public void Neither_Organizer_nor_Viewer_holds_reports_read()
+    {
+        Assert.DoesNotContain(EamsPermissions.ReportsRead, GrantsFor(EamsRoleNames.Organizer));
+        Assert.DoesNotContain(EamsPermissions.ReportsRead, GrantsFor(EamsRoleNames.Viewer));
+
+        Assert.Contains(EamsPermissions.ReportsRead, GrantsFor(EamsRoleNames.SuperAdmin));
+        Assert.Contains(EamsPermissions.ReportsRead, GrantsFor(EamsRoleNames.SchoolAdmin));
     }
 }

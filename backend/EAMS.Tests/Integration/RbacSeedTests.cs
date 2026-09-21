@@ -140,13 +140,13 @@ public class RbacSeedTests : IntegrationTest
     }
 
     /// <summary>
-    /// The approved totals: 11 / 11 / 6 / 4. Literals, because they are the cheapest way to catch a
+    /// The approved totals: 12 / 12 / 6 / 4 (admins were 11 until P3 added <c>reports.read</c>). Literals, because they are the cheapest way to catch a
     /// matrix that has drifted by one cell — an assertion derived from the same code that produced the
     /// grants would agree with any drift.
     /// </summary>
     [Theory]
-    [InlineData(EamsRoleNames.SuperAdmin, 11)]
-    [InlineData(EamsRoleNames.SchoolAdmin, 11)]
+    [InlineData(EamsRoleNames.SuperAdmin, 12)]
+    [InlineData(EamsRoleNames.SchoolAdmin, 12)]
     [InlineData(EamsRoleNames.Organizer, 6)]
     [InlineData(EamsRoleNames.Viewer, 4)]
     public async Task Each_seeded_role_holds_the_approved_number_of_grants(string role, int expected)

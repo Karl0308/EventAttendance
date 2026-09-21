@@ -229,4 +229,25 @@ public static class EamsPermissions
     /// </para>
     /// </summary>
     public const string AcademicWrite = "academic.write";
+
+    /// <summary>
+    /// §6.7's reports module — <c>GET /reports/event/{eventId}/summary</c> and
+    /// <c>GET /reports/events/summary</c>. <b>Administrators only.</b>
+    ///
+    /// <para>
+    /// <b>Granted to SuperAdmin and SchoolAdmin and to nobody else, which is recorded drift from
+    /// Technical Plan §11.</b> §11 gives "read reports" to Organizer and Viewer too; the client's QA
+    /// answer Q16 (MDVault #463 Part D) overrides that, and JJ approved the override. An organizer still
+    /// reads one event's own counts through <c>GET /events/{id}/summary</c> under
+    /// <see cref="EventsRead"/> — what this code guards is the cross-event view.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>Existing databases get the grant from a migration, not from the startup seed</b>
+    /// (<c>GrantReportsReadToAdminRoles</c>). The seed grants only when it <em>creates</em> a role and
+    /// never reconciles one that exists, so without the migration every installation seeded before
+    /// this code existed would answer its own administrators 403.
+    /// </para>
+    /// </summary>
+    public const string ReportsRead = "reports.read";
 }

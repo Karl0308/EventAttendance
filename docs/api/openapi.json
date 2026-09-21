@@ -4639,6 +4639,244 @@
         ]
       }
     },
+    "/api/v1/reports/event/{eventId}/summary": {
+      "get": {
+        "tags": [
+          "Reports"
+        ],
+        "summary": "§6.7 `GET /reports/event/{eventId}/summary` — the Event Attendance Summary for one event.",
+        "description": "\r\n\r\n  <b>The same figures as `GET /events/{id}/summary`, from the same code</b>, so the report\r\n             and the event page can never disagree about one event. It adds the event's `status` and\r\n             `startAt`, and `attended` — the numerator of `attendanceRate`.\r\n             \r\n\r\n\r\n  <b>A closed or cancelled event reports its frozen audience:</b>\r\n  `expected` is the roster\r\n             written down when the event closed, so a later import cannot move a past event's rate.\r\n             ",
+        "parameters": [
+          {
+            "name": "eventId",
+            "in": "path",
+            "description": "The event.",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The summary.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/EventReportRowDto"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EventReportRowDto"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EventReportRowDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No credential, or an invalid one.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Signed in without `reports.read` — every role except SuperAdmin and SchoolAdmin.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such event in the caller's school, or it is soft-deleted.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "Bearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/reports/events/summary": {
+      "get": {
+        "tags": [
+          "Reports"
+        ],
+        "summary": "`GET /reports/events/summary?eventId=…&eventId=…` — a summary of several hand-picked\r\n             events: one row per event and their pooled totals.",
+        "description": "\r\n\r\n  <b>The totals are pooled, not averaged:</b>\r\n  `totals.attendanceRate` is\r\n             `totals.attended` ÷ `totals.expected`, so a large event weighs what its audience\r\n             weighs. It is reproducible from the rows by summing `attended` and `expected`.\r\n             \r\n\r\n\r\n  <b>The selection is bounded.</b> At least one id and at most\r\n             EAMS.Application.Dtos.ReportLimits.MaxEventsPerReport distinct ids; a repeated id counts once. A\r\n             selection outside that range is refused, never truncated.\r\n             \r\n\r\n\r\n  <b>One missing event refuses the whole report</b> with a 404 naming the ids that were not found\r\n             — whether nonexistent, soft-deleted or another school's, which are indistinguishable by design.\r\n             Totals over the events that happened to be found would describe a selection nobody made.\r\n             ",
+        "parameters": [
+          {
+            "name": "eventId",
+            "in": "query",
+            "description": "The events to report on, as a repeated query parameter: `?eventId=A&eventId=B`.",
+            "schema": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "format": "uuid"
+              }
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "One row per distinct event, ordered by start time, and the pooled totals.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/MultiEventReportDto"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MultiEventReportDto"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MultiEventReportDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`SelectionEmpty` (no id) or `SelectionTooLarge` (more distinct ids than the maximum),\r\n             in the body's `code`. A malformed id is a validation problem.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No credential, or an invalid one.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Signed in without `reports.read` — every role except SuperAdmin and SchoolAdmin.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`EventNotFound`: at least one id is not an event in the caller's school. The body's\r\n             `missingEventIds` lists them.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "Bearer": []
+          }
+        ]
+      }
+    },
     "/api/v1/sis/import/upload": {
       "post": {
         "tags": [
@@ -7377,6 +7615,123 @@
         "additionalProperties": false,
         "description": "One §4.7 group attached to the event's audience."
       },
+      "EventReportRowDto": {
+        "type": "object",
+        "properties": {
+          "eventId": {
+            "type": "string",
+            "description": "The event.",
+            "format": "uuid"
+          },
+          "eventName": {
+            "type": "string",
+            "description": "Its name, as stored."
+          },
+          "status": {
+            "type": "string",
+            "description": "`Draft`, `Open`, `Closed` or `Cancelled`."
+          },
+          "startAt": {
+            "type": "string",
+            "description": "When it starts, UTC.",
+            "format": "date-time"
+          },
+          "expected": {
+            "type": "integer",
+            "description": "The invited population (ADR-003 D-19). For a `Closed` or `Cancelled` event this is the\r\naudience frozen when it closed, so a later roster import cannot move a past event's number.",
+            "format": "int32"
+          },
+          "attended": {
+            "type": "integer",
+            "description": "Expected students with a `Present` or `Late` record — the numerator of\r\nAttendanceRate. It is published so a multi-event total can be checked by hand:\r\nthe pooled rate is the sum of these over the sum of Expected.",
+            "format": "int32"
+          },
+          "present": {
+            "type": "integer",
+            "description": "Attendance rows in the `Present` bucket, walk-ins included.",
+            "format": "int32"
+          },
+          "late": {
+            "type": "integer",
+            "description": "Attendance rows in the `Late` bucket, walk-ins included.",
+            "format": "int32"
+          },
+          "absent": {
+            "type": "integer",
+            "description": "Attendance rows in the `Absent` bucket.",
+            "format": "int32"
+          },
+          "excused": {
+            "type": "integer",
+            "description": "Attendance rows in the `Excused` bucket.",
+            "format": "int32"
+          },
+          "unexpected": {
+            "type": "integer",
+            "description": "Students with a record who were not in the expected population.",
+            "format": "int32"
+          },
+          "attendanceRate": {
+            "type": "number",
+            "description": "Attended ÷ Expected × 100, to one decimal place; 0 when\r\n            nothing is expected. It cannot exceed 100.",
+            "format": "double"
+          }
+        },
+        "additionalProperties": false,
+        "description": "One event's line in a §6.7 report — the same figures `GET /events/{id}/summary` publishes,\r\ncomputed by the same code, plus what a report needs beside them."
+      },
+      "EventReportTotalsDto": {
+        "type": "object",
+        "properties": {
+          "eventCount": {
+            "type": "integer",
+            "description": "Distinct events in the report.",
+            "format": "int32"
+          },
+          "expected": {
+            "type": "integer",
+            "description": "The sum of each event's expected population. A student invited to three events counts three times:\r\nthe unit is a seat at an event, not a person.",
+            "format": "int32"
+          },
+          "attended": {
+            "type": "integer",
+            "description": "The sum of each event's `attended`.",
+            "format": "int32"
+          },
+          "present": {
+            "type": "integer",
+            "description": "The sum of each event's `present`.",
+            "format": "int32"
+          },
+          "late": {
+            "type": "integer",
+            "description": "The sum of each event's `late`.",
+            "format": "int32"
+          },
+          "absent": {
+            "type": "integer",
+            "description": "The sum of each event's `absent`.",
+            "format": "int32"
+          },
+          "excused": {
+            "type": "integer",
+            "description": "The sum of each event's `excused`.",
+            "format": "int32"
+          },
+          "unexpected": {
+            "type": "integer",
+            "description": "The sum of each event's `unexpected`.",
+            "format": "int32"
+          },
+          "attendanceRate": {
+            "type": "number",
+            "description": "Attended ÷ Expected × 100, to one decimal place, rounded the\r\n            same way each event's rate is; 0 when nothing is expected.",
+            "format": "double"
+          }
+        },
+        "additionalProperties": false,
+        "description": "The totals of a multi-event report.\r\n            \r\n\r\n<b>Pooled, not averaged.</b>EAMS.Application.Dtos.EventReportTotalsDto.AttendanceRate is every attendee over every expected\r\nstudent across the picked events — so a 500-student assembly weighs 500 times what a one-student\r\nevent does. The average of per-event rates would let a small event swing the headline number, and\r\nit could not be reproduced from the rows.\r\n"
+      },
       "EventRosterDto": {
         "type": "object",
         "properties": {
@@ -7678,6 +8033,23 @@
         ],
         "type": "string",
         "description": "The `code` returned by `POST /attendance/manual` — the organizer override, which is\nnot a device path.\n\n**Frozen published contract on the same terms as `TapOutcomeCode`**, and pinned by the\nsame kind of test. It travels through the identical `code` field, so one accessor\nreads both.\n\n`POST /attendance/manual` deliberately keeps working on a `Closed` event: it is the\nonly recovery route out of a terminal status.\n\n| `code` | HTTP |\n|---|---|\n| `Saved` | 200 |\n| `EventNotFound` | 404 |\n| `StudentNotFound` | 404 |\n| `InvalidStatus` | 400 |\n| `InvalidNotes` | 400 |"
+      },
+      "MultiEventReportDto": {
+        "type": "object",
+        "properties": {
+          "events": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/EventReportRowDto"
+            },
+            "description": "One row per distinct event, ordered by start time, then id."
+          },
+          "totals": {
+            "$ref": "#/components/schemas/EventReportTotalsDto"
+          }
+        },
+        "additionalProperties": false,
+        "description": "A summary of several hand-picked events: one row each, and their pooled totals."
       },
       "ProblemDetails": {
         "type": "object",
@@ -8703,6 +9075,10 @@
     {
       "name": "EventManifest",
       "description": "The device-facing half of the events resource: `GET /events/{id}/manifest`, the offline capture\r\ncache a kiosk or handset pulls before it starts scanning (D-46).\r\n            \r\n\r\n<b>Its own controller rather than one more action on `EventsController`, and that is a\r\ndeliberate split.</b> Every action there is `events.read` or `events.write` for a person's\r\nBearer token — the event list alone also admits a device, for its picker; this one authenticates\r\nonly a <em>device</em> and carries\r\n`attendance.capture`. One action with a different principal type in the middle of an\r\nadministrative controller is a review hazard in both directions — a reader skimming\r\n`EventsController` would assume every action takes the same credential, and an action added\r\nlater to a capture-only controller should inherit capture auth rather than an operator's. The route is\r\nidentical either way; only the file is different.\r\n\r\n<b>`events.read` is rejected outright as the permission for this.</b> A device holding it could\r\nread every event and every roster in the school, which is exactly the blast radius a stolen kiosk\r\nkey must not have. §11 scopes device keys to `attendance.capture` and nothing else, so this\r\nendpoint is already pre-authorized by the credential a capture device holds — and minting an\r\n`events.manifest` code would repeat D-45, forcing Phase 6 to grant two codes for one capability.\r\n"
+    },
+    {
+      "name": "Reports",
+      "description": "Technical Plan §6.7's reports module, as the client's QA answers Q15/Q16 (MDVault #463 Part D)\r\nscoped it: a summary of one event and a summary of several, for administrators only.\r\n            \r\n\r\n<b>Every action here is `reports.read`, which only SuperAdmin and SchoolAdmin hold.</b> That\r\nnarrows §11, which also gives report reading to Organizer and Viewer. Q16 overrides it and JJ\r\napproved the override (see EAMS.Api.Authorization.EamsPermissions.ReportsRead).\r\n\r\n<b>Bearer only.</b> A device key is scoped to `attendance.capture` and belongs to a kiosk,\r\nnot a person; a report is an operator's read.\r\n"
     },
     {
       "name": "SisImport",
