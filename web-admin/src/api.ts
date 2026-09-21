@@ -36,6 +36,9 @@ import type {
   AttendanceRecord,
   AttendanceFilters,
   EventSummary,
+  EventReportRow,
+  EventReportTotals,
+  MultiEventReport,
   SisImportBatch,
   SisImportPreview,
   SisImportRow,
@@ -124,6 +127,12 @@ export interface ApiProblem {
   code?: string;
   /** Server UTC clock. Present on tap and manual-override failures. */
   serverTime?: string;
+  /**
+   * The ids `ReportsController.EventsSummary` could not resolve, on its `404 EventNotFound` only —
+   * `ReportsController.MissingEventIdsProperty`. Present so the Reports page can name what was
+   * refused instead of just reporting a not-found.
+   */
+  missingEventIds?: readonly string[];
 }
 
 /**
@@ -306,6 +315,18 @@ const optNum = (value: unknown): number | undefined =>
 const optBool = (value: unknown): boolean | undefined =>
   typeof value === "boolean" ? value : undefined;
 
+/**
+ * An optional array of strings — `ProblemDetails.missingEventIds` only. Absent, or off-contract
+ * (not an array, or holding a non-string), collapses to `undefined` rather than throwing: this reads
+ * an error body, which is already the "something is wrong" path, and a problem detail that failed to
+ * carry this extension must not stop the status/detail it DID carry from reaching the user.
+ */
+const isStringArray = (value: unknown): value is string[] =>
+  Array.isArray(value) && value.every((item): item is string => typeof item === "string");
+
+const optStrs = (value: unknown): readonly string[] | undefined =>
+  isStringArray(value) ? value : undefined;
+
 // ---------------------------------------------------------------------------------------------
 // Transport
 // ---------------------------------------------------------------------------------------------
@@ -339,6 +360,7 @@ async function readProblem(res: Response): Promise<ApiProblem> {
     traceId: optStr(row.traceId),
     code: optStr(row.code),
     serverTime: optStr(row.serverTime),
+    missingEventIds: optStrs(row.missingEventIds),
   };
 }
 
@@ -1384,6 +1406,39 @@ function toSummary(row: Row, what: string): EventSummary {
   };
 }
 
+/** `EventReportRowDto` — one line of a §6.7 report, single- or multi-event. */
+function toEventReportRow(row: Row, what: string): EventReportRow {
+  return {
+    eventId: reqStr(row, "eventId", what),
+    eventName: reqStr(row, "eventName", what),
+    status: reqStr(row, "status", what),
+    startAt: reqStr(row, "startAt", what),
+    expected: reqNum(row, "expected", what),
+    attended: reqNum(row, "attended", what),
+    present: reqNum(row, "present", what),
+    late: reqNum(row, "late", what),
+    absent: reqNum(row, "absent", what),
+    excused: reqNum(row, "excused", what),
+    unexpected: reqNum(row, "unexpected", what),
+    attendanceRate: reqNum(row, "attendanceRate", what),
+  };
+}
+
+/** `EventReportTotalsDto` — the pooled totals of a multi-event report. */
+function toEventReportTotals(row: Row, what: string): EventReportTotals {
+  return {
+    eventCount: reqNum(row, "eventCount", what),
+    expected: reqNum(row, "expected", what),
+    attended: reqNum(row, "attended", what),
+    present: reqNum(row, "present", what),
+    late: reqNum(row, "late", what),
+    absent: reqNum(row, "absent", what),
+    excused: reqNum(row, "excused", what),
+    unexpected: reqNum(row, "unexpected", what),
+    attendanceRate: reqNum(row, "attendanceRate", what),
+  };
+}
+
 /**
  * `DeviceDto` — and **the absence of a key field here is load-bearing.**
  *
@@ -2139,6 +2194,41 @@ async function eventSummary(eventId: string): Promise<EventSummary | undefined> 
   const what = "GET /events/{id}/summary";
   const body = await getJsonOrMissing(what, `/events/${encodeURIComponent(eventId)}/summary`);
   return body === undefined ? undefined : toSummary(asRow(body, what), what);
+}
+
+// ---------------------------------------------------------------------------------------------
+// Reports — §6.7, client QA Q15/Q16. Admin-only (`reports.read`); see `ReportsController`.
+//
+// **Only the multi-event read is wired up.** The single-event route
+// (`GET /reports/event/{eventId}/summary`) is real on the server and is deliberately not mirrored
+// here: `Reports.tsx` always calls the multi-event route, for one selection or fifty, so it has one
+// error-handling path rather than two — see that page's own module note. A function with no caller
+// and no test is dead weight on this seam, not a convenience held in reserve.
+// ---------------------------------------------------------------------------------------------
+
+/**
+ * `GET /reports/events/summary?eventId=…&eventId=…` — a summary of several hand-picked events: one
+ * row per event and their pooled totals.
+ *
+ * The ids travel as a **repeated query parameter**, which `buildUrl`'s `Record<string, string>` query
+ * shape cannot express — so this builds that one query string itself rather than widening a shape
+ * every other caller on this seam relies on staying a flat record. `getJson` still owns the request,
+ * the 401-renewal retry and the RFC 7807 mapping; only the query string is assembled here.
+ *
+ * A 404 `EventNotFound` names the ids that were not found in `ApiProblem.missingEventIds` — read it
+ * off `ApiError.problem` rather than re-deriving which id was missing from the selection.
+ */
+async function multiEventReportSummary(eventIds: readonly string[]): Promise<MultiEventReport> {
+  const what = "GET /reports/events/summary";
+  const qs = eventIds.map((id) => `eventId=${encodeURIComponent(id)}`).join("&");
+  const body = await getJson(what, `/reports/events/summary${qs ? `?${qs}` : ""}`);
+  const row = asRow(body, what);
+  return {
+    events: asRows(row.events, `${what}.events`).map((item, i) =>
+      toEventReportRow(item, `${what}.events[${i}]`),
+    ),
+    totals: toEventReportTotals(asRow(row.totals, `${what}.totals`), `${what}.totals`),
+  };
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -3131,6 +3221,7 @@ export const api = {
   getEvent,
   listAttendance,
   eventSummary,
+  multiEventReportSummary,
   getEventAudience,
   getEventScans,
   attachEventAudience,

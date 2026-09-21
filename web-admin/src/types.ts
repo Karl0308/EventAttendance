@@ -1005,6 +1005,78 @@ export interface EventSummary {
 }
 
 /**
+ * §6.7 `EventReportRowDto` — one event's line in the Reports module (client QA Q15/Q16). The same
+ * figures `EventSummary` above carries, computed by the same server code, plus what a report needs
+ * beside them: the event's `status` and `startAt`, and `attended` (the numerator of `attendanceRate`,
+ * published so a multi-event total can be checked by hand).
+ *
+ * A closed or cancelled event's `expected` is the audience frozen when it closed — a later roster
+ * import cannot move a past event's rate.
+ */
+export interface EventReportRow {
+  eventId: string;
+  eventName: string;
+  /** `Draft`, `Open`, `Closed` or `Cancelled`. */
+  status: string;
+  /** When it starts, UTC ISO. */
+  startAt: string;
+  expected: number;
+  /** Expected students with a `Present` or `Late` record — the numerator of `attendanceRate`. */
+  attended: number;
+  present: number;
+  late: number;
+  absent: number;
+  excused: number;
+  unexpected: number;
+  attendanceRate: number;
+}
+
+/**
+ * `EventReportTotalsDto` — the pooled totals of a multi-event report. **Pooled, not averaged**:
+ * `attendanceRate` is `attended` ÷ `expected` across every picked event, so a 500-student assembly
+ * weighs 500 times what a one-student event does. Reproducible from `MultiEventReport.events` by
+ * summing `attended` and `expected` — never recompute it a different way (it is server-rounded to
+ * one decimal place the same way each row is).
+ */
+export interface EventReportTotals {
+  /** Distinct events in the report. */
+  eventCount: number;
+  expected: number;
+  attended: number;
+  present: number;
+  late: number;
+  absent: number;
+  excused: number;
+  unexpected: number;
+  attendanceRate: number;
+}
+
+/**
+ * `MultiEventReportDto` — `GET /reports/events/summary`'s body: one row per distinct event, ordered
+ * by start time, and the pooled totals across all of them.
+ */
+export interface MultiEventReport {
+  events: EventReportRow[];
+  totals: EventReportTotals;
+}
+
+/**
+ * `EAMS.Application.Dtos.ReportLimits.MaxEventsPerReport` (`backend/EAMS.Application/Dtos/ReportDtos.cs`),
+ * restated here rather than discovered from a refusal: at least one id and at most this many distinct
+ * ids may be reported on at once; the server refuses a larger selection with 400 `SelectionTooLarge`
+ * rather than truncating it. The Reports page stops an operator selecting a 51st rather than letting
+ * them find out from a refusal.
+ *
+ * **This cap is also bounded by URL length, and the two numbers are coupled.** The ids travel as a
+ * repeated `eventId` query parameter (`multiEventReportSummary` in `api.ts`), and IIS refuses a
+ * request whose query string exceeds its `maxQueryString` limit — raised to 4096 in the API's
+ * `web.config` specifically to clear 50 UUIDs' worth of `&eventId=…` pairs. Raising this constant
+ * without also re-checking (and, if needed, raising) that IIS setting reintroduces the "IIS rejects
+ * the request before this client's own 400 ever fires" failure the reviewer flagged as CRITICAL.
+ */
+export const MAX_REPORT_EVENTS = 50;
+
+/**
  * The signed-in person, exactly as `AuthUserDto` describes them — the body of `GET /auth/me` and the
  * `user` member of every `POST /auth/login` and `POST /auth/refresh` reply.
  *

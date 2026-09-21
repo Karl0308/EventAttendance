@@ -35,6 +35,12 @@ export const PERMISSIONS = {
   sisImport: "sis.import",
   academicRead: "academic.read",
   academicWrite: "academic.write",
+  /**
+   * §6.7's Reports module (client QA Q15/Q16) — narrower than §11's own table, which also gives
+   * report reading to Organizer and Viewer: Q16 overrides it, JJ approved the override, and
+   * `ReportsController` enforces the narrower set (only SuperAdmin and SchoolAdmin hold it).
+   */
+  reportsRead: "reports.read",
 } as const;
 
 /**

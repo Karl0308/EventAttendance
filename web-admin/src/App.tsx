@@ -13,6 +13,7 @@ import Events from "./pages/Events";
 import EventDetail from "./pages/EventDetail";
 import Devices from "./pages/Devices";
 import Terms from "./pages/Terms";
+import Reports from "./pages/Reports";
 
 /**
  * A screen, behind the permission the API will ask it for anyway.
@@ -92,6 +93,9 @@ export default function App() {
             roster can be imported against one, so the screen that creates one cannot be reached only
             from the screen that is already blocked for want of it. */}
         <Route path="/terms" element={gated(PERMISSIONS.academicRead, <Terms />)} />
+
+        {/* Admin-only per Q16, and narrower than §11's own table — see `PERMISSIONS.reportsRead`. */}
+        <Route path="/reports" element={gated(PERMISSIONS.reportsRead, <Reports />)} />
       </Route>
     </Routes>
   );
