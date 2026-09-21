@@ -1375,6 +1375,9 @@ function toEvent(row: Row, what: string): EventItem {
     attendanceMode: reqStr(row, "attendanceMode", what),
     graceMinutes: reqNum(row, "graceMinutes", what),
     status: reqStr(row, "status", what),
+    // Required: `EventDto.IssuesCertificates` is `bool`, always present, never null — an event
+    // created before the setting existed reads `false` server-side rather than omitting the key.
+    issuesCertificates: reqBool(row, "issuesCertificates", what),
   };
 }
 

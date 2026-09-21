@@ -36,6 +36,7 @@ import { act, cleanup, fireEvent, render, screen } from "@testing-library/react"
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 
 import EventDetail from "../src/pages/EventDetail";
+import AuthProvider from "../src/components/AuthProvider";
 import { beginSession, resetSessionForTests } from "../src/authSession";
 import { clearDeviceKey, setDeviceKey } from "../src/deviceKey";
 import type { AuthUser } from "../src/types";
@@ -75,6 +76,7 @@ const eventJson = () => ({
   attendanceMode: "Single",
   graceMinutes: 15,
   status: eventStatus,
+  issuesCertificates: false,
 });
 
 const SUMMARY_JSON = {
@@ -325,9 +327,11 @@ function serve() {
 async function show() {
   const rendered = render(
     <MemoryRouter initialEntries={[`/events/${EVENT_ID}`]}>
-      <Routes>
-        <Route path="/events/:id" element={<EventDetail />} />
-      </Routes>
+      <AuthProvider>
+        <Routes>
+          <Route path="/events/:id" element={<EventDetail />} />
+        </Routes>
+      </AuthProvider>
     </MemoryRouter>,
   );
   await act(async () => {});

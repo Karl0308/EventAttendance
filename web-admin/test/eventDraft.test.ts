@@ -70,6 +70,7 @@ const serverEvent = (overrides: Partial<EventItem> = {}): EventItem => ({
   graceMinutes: 15,
   requireRegistration: false,
   status: "Draft",
+  issuesCertificates: false,
   ...overrides,
 });
 
@@ -240,6 +241,7 @@ describe("validate's answer", () => {
         attendanceMode: "Single",
         graceMinutes: String(MAX_GRACE_MINUTES + 1),
         requireRegistration: false,
+        issuesCertificates: false,
       }),
     );
 

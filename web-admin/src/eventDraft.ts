@@ -67,6 +67,8 @@ export interface Draft {
   attendanceMode: AttendanceMode;
   graceMinutes: string;
   requireRegistration: boolean;
+  /** Whether the event issues certificates of attendance. See `EventWriteRequest.issuesCertificates`. */
+  issuesCertificates: boolean;
 }
 
 export type DraftField = keyof Draft;
@@ -80,6 +82,9 @@ export const EMPTY_DRAFT: Draft = {
   attendanceMode: DEFAULT_ATTENDANCE_MODE,
   graceMinutes: DEFAULT_GRACE_MINUTES,
   requireRegistration: false,
+  // A new event does not issue certificates until an organizer says otherwise — the same default
+  // `EventWriteRequest.IssuesCertificates` applies server-side when a `POST` omits it.
+  issuesCertificates: false,
 };
 
 /**
@@ -121,6 +126,7 @@ export const fieldIdsFor = (prefix: string): Record<DraftField, string> => ({
   attendanceMode: `${prefix}-attendance-mode`,
   graceMinutes: `${prefix}-grace-minutes`,
   requireRegistration: `${prefix}-require-registration`,
+  issuesCertificates: `${prefix}-issues-certificates`,
 });
 
 // ---------------------------------------------------------------------------------------------
@@ -201,6 +207,7 @@ export function draftFrom(event: EventItem): Draft {
     attendanceMode: knownMode(event.attendanceMode) ?? DEFAULT_ATTENDANCE_MODE,
     graceMinutes: String(event.graceMinutes),
     requireRegistration: event.requireRegistration,
+    issuesCertificates: event.issuesCertificates,
   };
 }
 
@@ -347,7 +354,71 @@ export function validate(draft: Draft, origin?: DraftOrigin): Validated {
       attendanceMode: draft.attendanceMode,
       graceMinutes,
       requireRegistration: draft.requireRegistration,
+      issuesCertificates: draft.issuesCertificates,
     },
+  };
+}
+
+// ---------------------------------------------------------------------------------------------
+// The Closed-event certificates toggle
+// ---------------------------------------------------------------------------------------------
+
+/**
+ * The body for the one `PUT` a `Closed` event ever accepts: every other field re-sent exactly as the
+ * server holds it, plus this one flag. `EventDetail.tsx`'s certificates toggle uses this instead of
+ * opening `EditEventDialog`, because a `Closed` event refuses every other edit — see
+ * `EventStatusTransition.AcceptsEdits` and the server's one exception for a request that changes
+ * nothing but `IssuesCertificates`.
+ *
+ * **Built directly from `event`, deliberately bypassing `draftFrom`/`validate` — the opposite of what
+ * this function used to do, and the fix is the whole reason it changed.** The server's
+ * certificates-only check (`NonCertificateChanges`) compares `Description` and `Location` **raw**
+ * against the stored row — no trim, ordinal — because `EventService.Apply` stores them exactly as a
+ * `PUT` sends them, untrimmed. `validate()` trims both and maps `""` to `null`, which is the *right*
+ * behaviour for a form a person is editing and the *wrong* one for echoing a value back unread: an
+ * event whose description was ever written by a non-SPA client as `"Welcome week\n"` or `""` would
+ * have this function trim or nullify it, the server would see that as a second changed field beside
+ * the flag, and refuse the whole request with 409 — on the one call this event can never route
+ * around, since a `Closed` event accepts no other edit. Sending `event.description ?? null` (and
+ * `event.location ?? null`) verbatim is what keeps this toggle from being unfixable-from-the-SPA for
+ * exactly the events it exists to serve.
+ *
+ * `name`, `startAt`, `endAt`, `graceMinutes` and `requireRegistration` are equally verbatim, for the
+ * same reason: any trim, re-parse or re-serialize is a chance to produce a byte the stored row does
+ * not have, and `NonCertificateChanges` refuses on any difference at all.
+ *
+ * `undefined` in two cases, both refusals rather than a best-effort guess:
+ * - `event.attendanceMode` is not one of `ATTENDANCE_MODES` (`knownMode` returns nothing). Sending a
+ *   guessed default here — `draftFrom`'s old fallback to `"Single"` — would ship a `PUT` the server
+ *   is guaranteed to see as a second changed field and refuse; this returns nothing to send instead.
+ * - `event.startAt`/`event.endAt` cannot be parsed at all (`localFrom` returns `""`), which is the same
+ *   unreadable-date drift `EventDetail.tsx`'s `editabilityOf` refuses to open `EditEventDialog` for.
+ *
+ * Neither guard can assume `editabilityOf` already ran: this toggle renders precisely when
+ * `editabilityOf` refuses the *edit dialog* for `Closed` — a status check, not a drift check — so an
+ * event that is both `Closed` and carrying an unrecognised mode or an unparseable date reaches this
+ * function without ever having had those fields checked. `EventDetail.tsx` still renders the switch in
+ * that case; the mutation just settles as a failure this function's `undefined` produces, rather than
+ * a `PUT` sent with a wrong guess in it.
+ */
+export function requestForCertificatesToggle(
+  event: EventItem,
+  issuesCertificates: boolean,
+): EventWriteRequest | undefined {
+  const attendanceMode = knownMode(event.attendanceMode);
+  if (attendanceMode === undefined) return undefined;
+  if (localFrom(event.startAt) === "" || localFrom(event.endAt) === "") return undefined;
+
+  return {
+    name: event.name,
+    description: event.description ?? null,
+    location: event.location ?? null,
+    startAt: event.startAt,
+    endAt: event.endAt,
+    attendanceMode,
+    graceMinutes: event.graceMinutes,
+    requireRegistration: event.requireRegistration,
+    issuesCertificates,
   };
 }
 

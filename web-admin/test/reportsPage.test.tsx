@@ -13,7 +13,8 @@
 //
 // The page itself is rendered directly (`<Reports />` under a bare `MemoryRouter`, session begun on
 // the store) — `Reports.tsx` reaches no `useSignedInUser`/`PermissionGuard` of its own, so it needs no
-// `<AuthProvider>`, exactly as `liveAttendanceFilters.test.tsx` renders `<EventDetail />` the same way.
+// `<AuthProvider>`. `EventDetail.tsx` is no longer the same: it now reads `useSignedInUser()` itself
+// (the certificates toggle's permission gate), so `liveAttendanceFilters.test.tsx` wraps it in one.
 //
 // **This page always calls the multi-event route, never the single-event one** — the component's own
 // module note explains why (one error-handling path for both selection sizes), and `api.ts` no longer
@@ -78,6 +79,7 @@ const eventDto = (id: string, name: string, startAt: string) => ({
   attendanceMode: "Single",
   graceMinutes: 15,
   status: "Open",
+  issuesCertificates: false,
 });
 
 const FRESHMAN = eventDto(EVENT_A, "Freshman Orientation", "2026-09-01T01:00:00Z");

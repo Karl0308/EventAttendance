@@ -318,6 +318,13 @@ export interface EventItem {
   graceMinutes: number;
   requireRegistration: boolean;
   status: string; // Draft/Open/Closed/Cancelled
+  /**
+   * Whether this event issues certificates of attendance (client QA Q20, `#470` B4). A setting only —
+   * nothing here sends a certificate anywhere yet; see `EmailCertificatesButton` in `EventDetail.tsx`.
+   * Always present, never null: an event created before the setting existed reads `false` — see
+   * `EventDto.IssuesCertificates`'s own note.
+   */
+  issuesCertificates: boolean;
 }
 
 /**
@@ -388,6 +395,19 @@ export interface EventWriteRequest {
   attendanceMode: AttendanceMode;
   graceMinutes: number;
   requireRegistration: boolean;
+  /**
+   * Whether the event issues certificates of attendance (client QA Q20, `#470` B4).
+   *
+   * The server's own `EventWriteRequest.IssuesCertificates` is `bool?` — omitted or `null` means
+   * "leave it alone" on a `PUT` and "`false`" on a `POST` — because the field arrived after clients of
+   * the `PUT` already existed, and a plain boolean would have reset every one of them to `false` on
+   * their next ordinary save. This client is not one of those clients: every construction site here
+   * (`eventDraft.ts`'s `validate` and `requestForCertificatesToggle`) fills it explicitly, so it stays
+   * a required `boolean` rather than `boolean | null | undefined` — the omit-means-keep escape hatch
+   * exists for callers this SPA is not, and typing it optional here would only invite a construction
+   * site that forgets to set it and silently turns certificates off on every edit.
+   */
+  issuesCertificates: boolean;
 }
 
 // ---------------------------------------------------------------------------------------------

@@ -9,7 +9,9 @@ import {
   Button,
   CircularProgress,
   Stack,
+  FormControlLabel,
   MenuItem,
+  Switch,
   TextField,
   Snackbar,
   Alert,
@@ -22,11 +24,14 @@ import Grid from "@mui/material/Grid2";
 import SensorsIcon from "@mui/icons-material/Sensors";
 import EditIcon from "@mui/icons-material/Edit";
 import DeleteOutlineIcon from "@mui/icons-material/DeleteOutline";
+import EmailIcon from "@mui/icons-material/Email";
 import { api, describeApiError } from "../api";
 import { advise } from "../apiGuidance";
 import { useApiResource } from "../useApiResource";
 import { useApiMutation } from "../useApiMutation";
 import { useDebounced } from "../useDebounced";
+import { useSignedInUser } from "../authContext";
+import { grants, PERMISSIONS } from "../permissions";
 import { EmptyState, ErrorState, LoadingState } from "../components/ResourceStates";
 import EditEventDialog from "../components/EditEventDialog";
 import DeleteEventDialog from "../components/DeleteEventDialog";
@@ -40,7 +45,7 @@ import AudiencePickerDialog from "../components/AudiencePickerDialog";
 // production build drops the element, this import, the panel and `deviceKey.ts` along with it — which
 // is what keeps a capture credential out of the published artefact.
 import DevDeviceKeyPanel from "../components/DevDeviceKeyPanel";
-import { knownMode, localFrom } from "../eventDraft";
+import { knownMode, localFrom, requestForCertificatesToggle } from "../eventDraft";
 import type { EditScope } from "../eventDraft";
 import { attachSettledText } from "../eventAudience";
 import { statusActionsFor, statusSettledText } from "../eventStatus";
@@ -107,9 +112,9 @@ type Editability =
   | { can: false; reason: string };
 
 const CLOSED_NO_EDITS =
-  "This event is Closed, so nothing about it can be edited. Its recorded attendance is final, and " +
-  "the start time and grace period that decided Present versus Late for each row cannot be moved out " +
-  "from under them. It can still be deleted.";
+  "This event is Closed, so nothing about it can be edited, except whether it issues certificates, " +
+  "below. Its recorded attendance is final, and the start time and grace period that decided Present " +
+  "versus Late for each row cannot be moved out from under them. It can still be deleted.";
 
 function editabilityOf(event: EventItem): Editability {
   if (event.status === EVENT_STATUS.Closed) return { can: false, reason: CLOSED_NO_EDITS };
@@ -141,6 +146,28 @@ function editabilityOf(event: EventItem): Editability {
     event.status === EVENT_STATUS.Draft || event.status === EVENT_STATUS.Open;
   return { can: true, scope: everything ? "everything" : "descriptive" };
 }
+
+// ---------------------------------------------------------------------------------------------
+// The Closed-event certificates toggle (client QA Q20, `#470` B4)
+// ---------------------------------------------------------------------------------------------
+//
+// The one field on a `Closed` event that can still be changed. `EditEventDialog` never opens for a
+// Closed event (`editabilityOf` refuses it above), so this is the one control offered instead — see
+// `requestForCertificatesToggle` in `eventDraft.ts` for how its request body is built.
+
+const CERTIFICATES_TOGGLE_ID = "event-detail-issues-certificates";
+
+/** Read-only for a Viewer — `events.write` is what the server checks on the `PUT` this sends. */
+const CERTIFICATES_NO_PERMISSION =
+  "Changing this needs the events.write permission, which your account does not have.";
+
+// ---------------------------------------------------------------------------------------------
+// Email certificates (client QA Q20, `#470` B4) — present, disabled, and honest about why
+// ---------------------------------------------------------------------------------------------
+
+const EMAIL_CERTIFICATES_DESCRIPTION_ID = "email-certificates-not-available";
+const EMAIL_CERTIFICATES_NOT_AVAILABLE =
+  "Not available yet — certificates cannot be emailed from this screen.";
 
 // ---------------------------------------------------------------------------------------------
 
@@ -519,6 +546,55 @@ export default function EventDetail() {
   // reading, and the picker below renders the two differently.
   const cards = data?.roster.status === "ready" ? data.roster.cards : [];
 
+  /** What the presented token grants — see `PermissionGuard`'s own note on why that, and not a fresh
+   *  read of the database, is the honest thing to gate a control on. */
+  const user = useSignedInUser();
+  const canWriteEvents = grants(user.permissions, PERMISSIONS.eventsWrite);
+
+  /**
+   * The Closed-event certificates toggle's write. Kept apart from `edit` above: that mutation sends
+   * whatever `EditEventDialog` builds from a draft, and `EditEventDialog` never opens for a `Closed`
+   * event — this one sends a body `requestForCertificatesToggle` builds directly from the stored
+   * event instead, which is the one `PUT` a `Closed` event accepts.
+   */
+  const certToggle = useApiMutation((issuesCertificates: boolean) => {
+    if (event === undefined) {
+      return Promise.reject(new Error("No event to toggle certificates on."));
+    }
+    const request = requestForCertificatesToggle(event, issuesCertificates);
+    if (request === undefined) {
+      return Promise.reject(
+        new Error(
+          "This event's stored fields cannot be round-tripped by this build, so the certificates " +
+            "setting cannot be changed here.",
+        ),
+      );
+    }
+    return api.updateEvent(id, request);
+  });
+
+  const toggleCertificates = (next: boolean) => {
+    void certToggle.run(next).then((settled) => {
+      if (settled.outcome === "ignored") return;
+
+      // Either way: a failed `PUT` may still have been applied, same as every other write on this
+      // page, and the re-read is how the switch settles on what is actually stored.
+      detail.reload();
+
+      if (settled.outcome === "succeeded") {
+        announce({
+          severity: "success",
+          text: settled.data.issuesCertificates
+            ? `“${settled.data.name}” now issues certificates of attendance.`
+            : `“${settled.data.name}” no longer issues certificates of attendance.`,
+        });
+      }
+      // A failure renders inline beside the switch (see below) rather than only in the Snackbar —
+      // there is no dialog here for the failure to disappear along with, so the inline alert is not
+      // a duplicate the way it would be for `edit`/`remove`/`move`.
+    });
+  };
+
   // Derived at render rather than synced into state by an effect: the user's choice stands for as
   // long as that card is still on offer, and otherwise falls back to the first one a reload left.
   const pick = cards.some((c) => c.uid === pickUid) ? pickUid : cards[0]?.uid ?? "";
@@ -846,6 +922,13 @@ export default function EventDetail() {
                   label={event.status}
                   color={event.status === EVENT_STATUS.Open ? "success" : "default"}
                 />
+                {/* Read-only here — the toggle lives below, gated on `events.write`, either inside
+                    the edit dialog (every status but Closed) or the control right under this header
+                    (Closed only). This chip is what makes the setting visible without opening either. */}
+                <Chip
+                  variant="outlined"
+                  label={event.issuesCertificates ? "Issues certificates" : "No certificates"}
+                />
                 {/* One button per reachable target, never a menu of all four. Two at most, and each
                     opens its own confirmation: which transition is being made is the whole content of
                     that confirmation, so it cannot be a shared "Are you sure?" over a dropdown. */}
@@ -896,6 +979,43 @@ export default function EventDetail() {
               <Typography variant="body2" color="text.secondary" sx={{ mb: 2, maxWidth: "68ch" }}>
                 {editability.reason}
               </Typography>
+            )}
+
+            {/* The one field a Closed event still accepts a change to (client QA Q20, `#470` B4). Only
+                for Closed: the other two `editability.can === false` cases above are this build being
+                unable to round-trip the event's attendance mode or its dates at all, and this toggle
+                would hit the same wall `EditEventDialog` was refused for — sending it back through the
+                same mapping that cannot represent it. */}
+            {event.status === EVENT_STATUS.Closed && (
+              <Card variant="outlined" sx={{ mb: 3 }}>
+                <CardContent>
+                  <FormControlLabel
+                    control={
+                      <Switch
+                        id={CERTIFICATES_TOGGLE_ID}
+                        checked={event.issuesCertificates}
+                        onChange={(e) => toggleCertificates(e.target.checked)}
+                        disabled={!canWriteEvents || certToggle.status === "running"}
+                      />
+                    }
+                    label="Issues certificates of attendance"
+                  />
+                  <Typography variant="body2" color="text.secondary" sx={{ maxWidth: "68ch" }}>
+                    {canWriteEvents
+                      ? "This event is Closed, so nothing else about it can be changed. This is the " +
+                        "one exception — it does not affect any recorded attendance."
+                      : CERTIFICATES_NO_PERMISSION}
+                  </Typography>
+                  {certToggle.status === "failed" && (
+                    <Alert severity="error" role="alert" sx={{ mt: 1 }}>
+                      {/* The server's own message, verbatim — it names which fields it saw differ when
+                          the refusal is `EventLocked`, and inventing a paraphrase here would be the one
+                          time this screen speaks for a refusal instead of showing it. */}
+                      {describeApiError(certToggle.error)}
+                    </Alert>
+                  )}
+                </CardContent>
+              </Card>
             )}
 
             <Grid container spacing={2} sx={{ mb: 3 }}>
@@ -1066,6 +1186,35 @@ export default function EventDetail() {
                   </>
                 )}
               </Box>
+
+              {/* Shown only when this event issues certificates (client QA Q20, `#470` B4). Disabled
+                  and present rather than absent: a control an operator cannot find is indistinguishable
+                  from one that was never built, where this one is built and simply does not send
+                  anything yet. No `Tooltip` — the reviewer's point stands: the explanation is already
+                  a permanently visible `Typography`, so a tooltip would only duplicate it while adding
+                  a label MUI puts on a generic-role wrapper that assistive tech ignores. `aria-
+                  describedby` still ties the button to that visible text directly, and native
+                  `disabled` is what makes "sends nothing" a platform guarantee rather than something
+                  this file merely omitted to wire up. */}
+              {event.issuesCertificates && (
+                <>
+                  <Button
+                    size="small"
+                    startIcon={<EmailIcon />}
+                    disabled
+                    aria-describedby={EMAIL_CERTIFICATES_DESCRIPTION_ID}
+                  >
+                    Email certificates
+                  </Button>
+                  <Typography
+                    id={EMAIL_CERTIFICATES_DESCRIPTION_ID}
+                    variant="body2"
+                    color="text.secondary"
+                  >
+                    {EMAIL_CERTIFICATES_NOT_AVAILABLE}
+                  </Typography>
+                </>
+              )}
             </Stack>
 
             {attendance.status === "loading" && <LoadingState label="Loading attendance…" />}

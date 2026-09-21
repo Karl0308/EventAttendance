@@ -13,6 +13,7 @@ import {
   FormControlLabel,
   MenuItem,
   Stack,
+  Switch,
   TextField,
   Typography,
 } from "@mui/material";
@@ -55,6 +56,16 @@ const REQUIRE_REGISTRATION_HELP =
   "Recorded on the event, but nothing reads it yet: it does not restrict who can tap in. A student " +
   "who taps without being in an attached section is still recorded, and is shown on the roster as " +
   "not expected. Who is expected is set by the event's audience, not by this box.";
+
+/**
+ * Said beside the certificates switch. It stays editable in every status this form ever renders,
+ * `Cancelled`'s descriptive-only scope included — see `eventDraft.ts`'s `ATTENDANCE_RULE_FIELDS`,
+ * which this field is deliberately not a member of. A `Closed` event never reaches this form at all
+ * (`EventDetail.tsx` refuses to open it); its own toggle lives on the event page instead.
+ */
+const ISSUES_CERTIFICATES_HELP =
+  "A setting only — no certificate is sent anywhere yet. It can be changed regardless of this " +
+  "event's status.";
 
 interface EventFormFieldsProps {
   draft: Draft;
@@ -244,6 +255,23 @@ export function EventFormFields({
         )}
         <Typography variant="body2" color="text.secondary" sx={{ maxWidth: "68ch" }}>
           {REQUIRE_REGISTRATION_HELP}
+        </Typography>
+      </Box>
+
+      <Box>
+        <FormControlLabel
+          control={
+            <Switch
+              id={ids.issuesCertificates}
+              checked={draft.issuesCertificates}
+              onChange={(e) => onChange({ issuesCertificates: e.target.checked })}
+              disabled={locked.has("issuesCertificates")}
+            />
+          }
+          label="Issues certificates of attendance"
+        />
+        <Typography variant="body2" color="text.secondary" sx={{ maxWidth: "68ch" }}>
+          {ISSUES_CERTIFICATES_HELP}
         </Typography>
       </Box>
     </Stack>
