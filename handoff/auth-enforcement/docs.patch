@@ -1,0 +1,345 @@
+diff --git a/docs/QA-OVERVIEW.md b/docs/QA-OVERVIEW.md
+index 79fba7d..e71861d 100644
+--- a/docs/QA-OVERVIEW.md
++++ b/docs/QA-OVERVIEW.md
+@@ -581,7 +581,7 @@ Do not test for these; they are unbuilt, not broken.
+ 
+ | Area | Status |
+ |---|---|
+-| Staff login, roles, permissions | Later phase — every page is open |
++| Managing staff accounts and roles in the app | Later phase — sign-in and permissions are enforced, but accounts are created outside the app |
+ | Reports and exports | Later phase |
+ | Recurring / repeating events | Later phase |
+ | A live auto-refreshing attendance board | The data exists; the screen does not. Refresh manually |
+diff --git a/docs/TESTING_GUIDE.md b/docs/TESTING_GUIDE.md
+index 10ed196..3ed518a 100644
+--- a/docs/TESTING_GUIDE.md
++++ b/docs/TESTING_GUIDE.md
+@@ -110,11 +110,15 @@ different things** (client correction 2026-07-30, register D-43).
+ 
+ ## 4. Auth: what is and is not enforced
+ 
+-**Human authentication is not built** — JWT + permission-based RBAC is Technical Plan §11, deferred
+-by ADR-001 D-6/D-28. Every non-capture endpoint is open. The assembly carries
+-`[assembly: AuthorizationNotEnforced]` and the API logs the fact on every startup, so this is
+-asserted rather than merely true. `AuthorizationSeamTests` and `PermissionRegistryTests` hold the
+-seam. Do not "fix" it incidentally.
++**Every endpoint except `POST /auth/login` and `POST /auth/refresh` is gated** (Technical Plan §11).
++Admin routes need `Authorization: Bearer <accessToken>` from sign-in, and the token's roles must grant
++the endpoint's permission: no token is `401`, the wrong role is `403`. `AuthorizationCoverageTests`
++fails the build for an action with no gate, and `AuthEnforcementTests` sends an anonymous request to
++every route in the host's route table and expects `401`. `PermissionRegistryTests` keeps the permission
++codes and the declared call sites in step.
++
++To exercise an admin route by hand, sign in first and copy `accessToken` from the response. In an
++integration test, use `SignedInClientAsync`.
+ 
+ **Device-key auth on the five capture routes is real and enforced:**
+ 
+diff --git a/docs/adr/README.md b/docs/adr/README.md
+index 44888b5..7fba271 100644
+--- a/docs/adr/README.md
++++ b/docs/adr/README.md
+@@ -49,7 +49,7 @@ all unwritten.** Twenty of them are cited by number in shipped production code,
+ | **D-25** | Key lifecycle: plaintext shown exactly once; hard-cut rotation, no overlap window; `ApiKeyRevokedAt` (burn credential) distinct from `IsActive` (retire device); no key caching | shipped 4b | `DeviceService`, `DeviceLifecycleTests` |
+ | **D-26** | Device identity comes from the authenticated principal via `IDeviceContext`, never from `TapRequest.DeviceId`. Body field retained as a cross-check; mismatch is `400 DeviceMismatch`, never a silent ignore | shipped 4b | `AttendanceService.TapAsync` |
+ | **D-27** | An explicit `device.SchoolId == event.SchoolId` check reported as the existing `DeviceNotRegistered` → 404 — no cross-tenant existence disclosure, no wire change. **Closed the cross-school tap defect** | shipped 4b | `AttendanceService`, `KnownDefectTests` |
+-| **D-28** | Enforcement narrowed to the capture endpoints only; `[HasPermissionNotEnforced]` stays alongside `[Authorize]`; no config off-switch; a Development-seeded device supplies the local key. **ADR-001 D-6's do-not-expose constraint stays in force** | shipped 4b | `Program.cs`, `AuthorizationSeamTests` |
++| **D-28** | Enforcement narrowed to the capture endpoints only; `[HasPermissionNotEnforced]` stays alongside `[Authorize]`; no config off-switch; a Development-seeded device supplies the local key. **ADR-001 D-6's do-not-expose constraint stays in force** — *superseded 2026-09-17: every admin route is now Bearer-gated, see "What is decided where"* | shipped 4b | `Program.cs`, `AuthorizationCoverageTests` |
+ | **D-29** | Live attendance is a cursor-delta polling endpoint. The SignalR hub of §5/§6.4 is **deferred** behind a delta DTO that is a superset of §6.4's declared payload | shipped 4d | `EventService.GetLiveAttendanceAsync`, `AttendanceService.TapBatchAsync` |
+ | **D-30** | A `rowversion` cursor on `AttendanceRecords`, mapped **non-concurrency** so write semantics are unchanged | shipped 4d | `EventService.GetLiveAttendanceAsync`, `AttendanceService.TapBatchAsync` |
+ | **D-31** | `POST /attendance/tap/batch`: per-row results correlated by index **and** `deviceTapId`; always HTTP 200 for a well-formed batch, never 207. **Retrying a whole batch after a `5xx` is safe because every row is idempotent — not because the batch is atomic.** Rows are committed individually (D-32), so a partial failure leaves earlier rows written | shipped 4d | `AttendanceService.TapBatchAsync`, `TapBatchRequest`/`TapBatchResult` schemas (D-38) |
+@@ -106,7 +106,8 @@ Deferred to the ADR-005 consolidation at JJ's direction, not forgotten.
+ | Which enrollment that cache shows | ADR-002 **D-9** |
+ | Why `RfidCards.CardUid` uniqueness was rescoped | ADR-001 **D-3** |
+ | Import mapping config, warning-vs-status semantics | ADR-001 **D-4/D-5**, refined by ADR-002 **D-10** |
+-| Why auth is deferred and what makes that safe | ADR-001 **D-6** |
++| Why auth is deferred and what makes that safe | ADR-001 **D-6** — the deferral ended 2026-09-17 |
++| **How §11 is enforced, and why a device no longer enrols itself** ⚠ gated routes take their tenant from the token, not the pin | Not yet an ADR (2026-09-17). `Program.cs` (a Bearer policy per permission), `AuthorizationCoverageTests`, `AuthEnforcementTests`; `GET /events` shared with device keys (drift from §6.3, open events only) in `DeviceKeyOrBearer`; `docs/api/mobile-changes.md` 2026-09-17 |
+ | Two email columns | ADR-002 **D-7** |
+ | **The two natural-key hedges — and their expiry** | ADR-002 **D-11** ⚠ |
+ | Why `EventGroups` has two filtered unique indexes | ADR-003 **D-12** ⚠ (one of them is denominator arithmetic) |
+diff --git a/docs/api/README-for-mobile-developer.md b/docs/api/README-for-mobile-developer.md
+index 650a6fe..7c3b7a6 100644
+--- a/docs/api/README-for-mobile-developer.md
++++ b/docs/api/README-for-mobile-developer.md
+@@ -1,7 +1,11 @@
+ # EAMS API — start here (mobile / APK developer)
+ 
++> **2026-09-17 — sign-in is now enforced.** An app that already holds its device key keeps working
++> unchanged; a new device gets its key from an administrator instead of enrolling itself. Details in
++> [`mobile-auth-handoff.md`](mobile-auth-handoff.md).
++>
+ > **What changed recently:** [`mobile-changes.md`](mobile-changes.md). Read the top entry before
+-> a release - it says whether anything needs to change on your side, and today the answer is no.
++> a release - it says whether anything needs to change on your side.
+ 
+ The backend is ready for a capture app. This page is a **cover sheet**: what to read, in what
+ order, and what to ask us for. It restates nothing — every shape and rule lives in one of the
+@@ -13,17 +17,18 @@ three files below, and duplicating them here is how a handoff goes stale.
+ |---|---|---|
+ | 1 | [`attendance-contract-handoff.md`](attendance-contract-handoff.md) | **The one to actually read.** Written for you. How to enrol a device, test card serials, what your queue does with each outcome code, the clock and card-UID rules, manifest caching. |
+ | 2 | [`openapi.json`](openapi.json) | **The contract.** Generate your client from this. Every endpoint, payload, error shape and enum. Exported from a running build, so it cannot disagree with the API. |
+-| 3 | [`endpoints.md`](endpoints.md) | A one-page index of all 44 routes — a map for finding your way around #2. No field-level detail by design. |
++| 3 | [`endpoints.md`](endpoints.md) | A one-page index of all 55 routes — a map for finding your way around #2. No field-level detail by design. |
+ 
+ If #2 and the running API ever disagree, the API is right and the file is stale — tell us.
+ 
+ ## The endpoints your app uses
+ 
+-All under `/api/v1`. Everything below except enrolment requires a device key.
++All under `/api/v1`. Everything below requires a device key, which an administrator issues to you —
++a device no longer enrols itself.
+ 
+ | Method | Route | Purpose |
+ |---|---|---|
+-| `POST` | `/devices` | Enrol this device, receive `apiKey` **once**. No key needed — this is the bootstrap. |
++| `GET` | `/events` | Your school's open events, for the event picker. |
+ | `GET` | `/events/{id}/manifest` | Offline cache: who is expected, which card resolves to whom. Supports `If-None-Match`. |
+ | `GET` | `/students/by-card/{cardUid}` | Live UID → student, for the scan screen. |
+ | `POST` | `/attendance/tap` | One tap. |
+@@ -55,22 +60,22 @@ Each is explained properly in the handoff; this is the index so you know what to
+   network-security-config exception for the dev host, or set `usesCleartextTraffic` on a dev build.
+   This is our most common false "your API is broken" report.
+ - **Store the device key in Android Keystore / `expo-secure-store`.** Never `AsyncStorage`, never a
+-  committed file. The server keeps only a hash and cannot re-issue it — lost means
+-  `POST /devices/{id}/regenerate-key`.
++  committed file. The server keeps only a hash and cannot re-issue it — lost means asking an
++  administrator to regenerate it.
+ 
+ ## What to ask us for
+ 
+ - **The dev host IP.** It is DHCP and moves, so it is deliberately not written down here.
+ - **An open event's `eventId`.** A tap needs one, and `tappedAt` must fall inside its window.
+ 
+-Enrol your **own** device rather than sharing ours — every tap is attributed to the device that
++Ask for a key for your **own** device rather than sharing ours — every tap is attributed to the device that
+ sent it, so a shared key makes your traffic and ours indistinguishable in the record.
+ 
+ ## What is not built
+ 
+ | Item | Status |
+ |---|---|
+-| Human authentication (JWT + RBAC) | Phase 6. Every non-capture endpoint is open until then — keep this API on a trusted network. |
++| Human authentication (JWT + RBAC) | **Built and enforced.** Every route outside sign-in needs a credential; yours is the device key. |
+ | Card binding (bulk or in-the-field) | **Decided — bulk, from the roster export. No scope on your side.** See below. |
+ | Reports | Phase 5 |
+ 
+diff --git a/docs/api/attendance-contract-handoff.md b/docs/api/attendance-contract-handoff.md
+index 354b428..9c2598d 100644
+--- a/docs/api/attendance-contract-handoff.md
++++ b/docs/api/attendance-contract-handoff.md
+@@ -33,9 +33,8 @@ GET /swagger/v1/swagger.json     the same document, live
+ GET /                            Swagger UI, browsable (development environments only)
+ ```
+ 
+-The UI is deliberately not served outside development: until Phase 6 lands human authentication, an
+-unauthenticated description of an API whose admin surface is open hands out the map as well as the
+-door. The **document** builds in every environment, so client tooling is never blocked.
++The UI is deliberately not served outside development: an unauthenticated description of the API
++hands out the map, even though every route behind it now demands a credential. The **document** builds in every environment, so client tooling is never blocked.
+ 
+ > **If `openapi.json` and the running API ever disagree, the API is right and the file is stale — tell
+ > us.** The file is a snapshot taken at a commit; the route is generated per request.
+@@ -68,21 +67,20 @@ http://<dev-host>:5080            Swagger UI, browsable in a desktop browser
+ 
+ ### Get yourself a device key
+ 
+-**Enrol your own — do not wait for us to send you one, and do not commit one anywhere.** Device
+-enrolment is deliberately open on this network while human authentication is still Phase 6:
++**Ask us for one, and do not commit it anywhere.** A device no longer enrols itself: `POST /devices`
++needs a signed-in administrator, who creates your device on the admin Devices page and hands you its
++key **and its device ID** — heartbeat is `POST /devices/{id}/heartbeat`, and nothing else tells the
++device its own ID. See [`mobile-auth-handoff.md`](mobile-auth-handoff.md).
+ 
+-```bash
+-curl -X POST http://<dev-host>:5080/api/v1/devices \
+-  -H "Content-Type: application/json" \
+-  -d '{"name":"<your name> - capture app","deviceType":"Mobile","readerModel":"RN/Expo","isActive":true}'
+-```
++That key is shown **once and never again** — the server keeps only a hash. Put it straight into the
++platform keystore (`expo-secure-store` / Android Keystore), never `AsyncStorage`, and never a committed
++file. Lost it? An administrator regenerates it; the old one stops working at that moment.
+ 
+-The response carries `apiKey` **once and never again** — the server keeps only a hash. Put it straight
+-into the platform keystore (`expo-secure-store` / Android Keystore), never `AsyncStorage`, and never a
+-committed file. Lost it? `POST /api/v1/devices/{id}/regenerate-key`.
++Ask for a key for your **own** device rather than sharing ours: every tap is attributed to the device
++that sent it, so a shared key makes your traffic and ours indistinguishable in the attendance record.
+ 
+-Enrol your **own** device rather than sharing ours: every tap is attributed to the device that sent
+-it, so a shared key makes your traffic and ours indistinguishable in the attendance record.
++Pick the event to capture for with `GET /api/v1/events`, using the same key. A device is answered with
++its school's `Open` events only.
+ 
+ ### Test data you can scan
+ 
+@@ -475,11 +473,10 @@ ship.
+ 
+ | Item | Status |
+ |---|---|
+-| Authentication for human users (JWT + RBAC) | Phase 6 — every non-capture endpoint is open until then |
++| Authentication for human users (JWT + RBAC) | **Built and enforced** — every route outside sign-in needs a credential |
+ | Reports | Phase 5 |
+ | Card binding — bulk or in-the-field | Undecided; see question 3. No endpoint exists either way |
+ 
+-Until Phase 6 lands, this API must stay on a local or trusted network.
+ 
+ > **The admin SPA has since been built** and is wired to this API rather than to mock data — students,
+ > events and their audiences, devices, and the SIS roster import. It is listed here only because an
+diff --git a/docs/api/mobile-auth-handoff.md b/docs/api/mobile-auth-handoff.md
+new file mode 100644
+index 0000000..0275343
+--- /dev/null
++++ b/docs/api/mobile-auth-handoff.md
+@@ -0,0 +1,115 @@
++# Handoff: sign-in is now enforced — what it means for the capture app
++
++**For:** the mobile (capture app) developer · **Date:** 2026-09-17 · **Effective:** the next API deployment
++
++**Short version: an app that is already set up keeps working with no change.** It keeps using its
++device key exactly as it does today. The only thing that changes on your side is **how a brand-new
++device gets its key** — see [New devices](#new-devices-no-more-self-enrolment).
++
++---
++
++## Why this changed
++
++Until now, almost every route in the API answered anyone who could reach it: the student roster,
++every event, even `POST /devices`, so anyone could mint a working device key. The API is now deployed
++on the internet, so every route requires a credential:
++
++- **A person** (the admin web app) signs in and sends `Authorization: Bearer <token>`.
++- **A device** (your app) sends `Authorization: DeviceKey eams_dk_<keyId>_<secret>`, as it already does.
++
++---
++
++## What keeps working, unchanged
++
++Same routes, same device key, same requests and responses:
++
++```
++GET  /api/v1/events                      ← your event picker
++GET  /api/v1/events/{id}/manifest
++GET  /api/v1/students/by-card/{cardUid}
++POST /api/v1/attendance/tap
++POST /api/v1/attendance/tap/batch
++POST /api/v1/devices/{id}/heartbeat
++```
++
++### Two things to check in your code — no change expected
++
++**1. Your `GET /events` call must send the device key.** It used to be open, so it worked without the
++`Authorization` header. It now answers a request without one with `401`. If your HTTP client attaches
++the key to every request, as it does for the manifest and taps, there is nothing to do. If the
++picker's request is built separately, add the header there.
++
++**2. A device only ever sees `Open` events, for its own school.** That is what the picker needs, and
++what `?status=Open` already returned. A device asking for another status still gets open events only.
++The response shape is unchanged: `items`, `page`, `pageSize`, `total`, `hasMore`.
++
++| Status | `code` | What your app does |
++|---|---|---|
++| `200` | — | Show the list. Empty `items` means no event is open right now. |
++| `401` | `DeviceKeyMissing` / `DeviceKeyMalformed` / `DeviceKeyInvalid` | The header was missing, or the stored key is wrong. |
++| `403` | `DeviceKeyRevoked` / `DeviceInactive` | An administrator retired this key or device. |
++
++### Everything else refuses a device key
++
++Any route not in the list above now answers a device key with `401` and a `WWW-Authenticate: Bearer`
++challenge — `GET /events/{id}`, `GET /attendance/live/{eventId}`, `GET /students`, and so on. **If your
++app calls one of them, tell us which and why**, and we'll work out a device-safe way to give you that
++data.
++
++---
++
++## New devices: no more self-enrolment
++
++`POST /devices` and `POST /devices/{id}/regenerate-key` now need a signed-in administrator. From the app
++they return `401`. This does **not** affect a device that already has its key stored — only a fresh
++install, a wiped handset, or a lost key.
++
++It had to close: that call handed a working key to anyone who could reach the API, and a key reads
++event manifests (student names and card serials) and records attendance.
++
++**The new setup for a device:**
++
++1. An administrator opens **Devices** in the admin web app and registers the device.
++2. A dialog shows, once: the **device key** (`eams_dk_…`, secret) and the **device ID** (a GUID, not
++   secret).
++3. Those two values go into the app, where your self-enrolment step used to store the values from the
++   `POST /devices` response: the key in `expo-secure-store` / Android Keystore, and the device ID
++   wherever you keep it for heartbeat.
++
++**What this needs from the app:** a way to enter those two values instead of calling `POST /devices`,
++by paste or typing. QR scanning is still an open question (#6 in the contract handoff); tell us if you
++want it. Until that exists, a new device can only be set up with a build that accepts a key.
++
++**Lost key, or `401 DeviceKeyInvalid` / `403 DeviceKeyRevoked`:** an administrator regenerates the key
++on the Devices page; the old one stops working at once. Enter the new key; the device ID does not
++change. Wherever [`attendance-contract-handoff.md`](attendance-contract-handoff.md) says **re-enrol**,
++read it as "get a new key from an administrator". **Keep the offline queue and the cached manifest**
++while you wait.
++
++---
++
++## Checklist
++
++- [ ] The `GET /events` request sends `Authorization: DeviceKey …`.
++- [ ] The app calls no route outside the six listed above.
++- [ ] A new device can be given a key and device ID without calling `POST /devices`. Needed only for
++      new installs and lost keys.
++
++## Testing against it
++
++Ask us for a device key **and** device ID for your own test device; don't share ours, because every
++tap is attributed to the device that sent it.
++
++```bash
++# Your picker, with the key: expect 200 and open events only
++curl -H "Authorization: DeviceKey <key>" https://<host>/api/v1/events
++
++# The same call without the key: expect 401
++curl -i https://<host>/api/v1/events
++
++# Self-enrolment is closed: expect 401
++curl -i -X POST https://<host>/api/v1/devices -H "Content-Type: application/json" -d '{}'
++```
++
++Questions or anything unclear: reply on the usual thread. The changelog entry is in
++[`mobile-changes.md`](mobile-changes.md) (2026-09-17).
+diff --git a/docs/api/mobile-changes.md b/docs/api/mobile-changes.md
+index eb6d51b..9e4e4f4 100644
+--- a/docs/api/mobile-changes.md
++++ b/docs/api/mobile-changes.md
+@@ -7,6 +7,30 @@ matching has its own page: [`mobile-card-matching.md`](mobile-card-matching.md).
+ 
+ ---
+ 
++## 2026-09-17
++
++### An app that is already set up needs no release
++
++Authorization is now enforced across the API. **A device that already holds its key keeps working
++exactly as it does**: tap, batch, manifest, card lookup, heartbeat and your event picker's
++`GET /events` all take the same device key and return the same bodies. The full walkthrough is
++[`mobile-auth-handoff.md`](mobile-auth-handoff.md).
++
++Two things to know:
++
++**1. `GET /events` now requires your device key**, where it used to answer without one. If the picker's
++request already carries `Authorization: DeviceKey …`, as your other calls do, nothing changes. A device
++is answered with its own school's `Open` events only, whatever `status` it sends.
++
++**2. A new device no longer enrols itself.** `POST /devices` and `POST /devices/{id}/regenerate-key`
++need an administrator. This affects only a fresh install or a lost key: an administrator creates the
++device on the admin Devices page and gives you its **key and device ID**, once. The `GET /events/open`
++announced under *Planned* below was not needed and was not built.
++
++`cachedCardMatch` is still only a possibility; nothing about `localOutcome` has changed.
++
++---
++
+ ## 2026-08-25
+ 
+ ### Nothing here requires you to release
