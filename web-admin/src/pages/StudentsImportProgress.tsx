@@ -79,6 +79,7 @@ import {
   POLL_INTERVAL_MS,
   RUN_IS_IDEMPOTENT,
   describeImportPhase,
+  describeImportWarning,
   importOutcomeOf,
 } from "../sisImport";
 import { SIS_IMPORT_ROW_RESULT, SIS_IMPORT_STATUS } from "../types";
@@ -793,7 +794,9 @@ function RowLine({ row }: { row: SisImportRow }) {
         <Stack direction="row" spacing={1} alignItems="center">
           <span>{row.result}</span>
           {row.warningCode !== undefined && (
-            <Chip size="small" variant="outlined" label={row.warningCode} />
+            /* The code as words. The server sentence beside it is not repeated — see
+              `describeImportWarning`, which also says why an unmapped code prints raw. */
+            <Chip size="small" variant="outlined" label={describeImportWarning(row.warningCode)} />
           )}
         </Stack>
       </TableCell>

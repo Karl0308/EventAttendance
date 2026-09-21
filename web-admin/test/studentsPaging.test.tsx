@@ -198,7 +198,7 @@ describe("search", () => {
     await show();
 
     await act(async () => {
-      fireEvent.change(screen.getByLabelText(/search name or student no/i), {
+      fireEvent.change(screen.getByLabelText(/search name, student no\. or card/i), {
         target: { value: "Santos" },
       });
       // The field is debounced, so the request is owed to a pause rather than to the keystroke.
@@ -224,7 +224,7 @@ describe("search", () => {
     expect(lastQuery().get("page")).toBe("2");
 
     await act(async () => {
-      fireEvent.change(screen.getByLabelText(/search name or student no/i), {
+      fireEvent.change(screen.getByLabelText(/search name, student no\. or card/i), {
         target: { value: "Santos" },
       });
       await new Promise((resolve) => setTimeout(resolve, 400));
@@ -240,7 +240,7 @@ describe("search", () => {
     const before = asked.length;
 
     await act(async () => {
-      const field = screen.getByLabelText(/search name or student no/i);
+      const field = screen.getByLabelText(/search name, student no\. or card/i);
       for (const value of ["S", "Sa", "San", "Sant", "Santo", "Santos"]) {
         fireEvent.change(field, { target: { value } });
       }
@@ -270,7 +270,7 @@ describe("the two nothings", () => {
     await show();
 
     await act(async () => {
-      fireEvent.change(screen.getByLabelText(/search name or student no/i), {
+      fireEvent.change(screen.getByLabelText(/search name, student no\. or card/i), {
         target: { value: "Nobody" },
       });
       await new Promise((resolve) => setTimeout(resolve, 400));

@@ -60,8 +60,13 @@ const NO_MATCH = "No student matches that search.";
 //
 // **Search goes to the server.** A filter applied to the rows in hand can only match within the
 // current page, so searching for a surname beginning with W while looking at page 1 would report no
-// matches over a roster that has hundreds. `?search=` matches student number or name — the same two
-// fields the old in-memory filter read, which is why the field's label does not change.
+// matches over a roster that has hundreds. `?search=` matches student number, name **and** a card
+// serial fragment — `StudentService.ListAsync` matches any of the student's cards, active or
+// withdrawn — so the field's label names all three. It did once read "name or student no." and that
+// stopped being true when the card term was added; a label is the field's accessible name, so a
+// screen-reader user was being told the wrong thing rather than merely an incomplete thing. For why a
+// card serial *also* has its own dialog rather than this box being the whole answer, see
+// `CardLookupDialog` — it needs a different answer shape, not a different label.
 //
 // **Sorting is off.** Same reason, sharper: a click on the Name header would reorder the 25 rows on
 // screen while looking exactly like it reordered the roster, and the user has no way to tell those
@@ -721,7 +726,7 @@ export default function Students() {
       <Stack direction="row" spacing={2} sx={{ mb: 2 }} alignItems="center">
         <TextField
           size="small"
-          label="Search name or student no."
+          label="Search name, student no. or card"
           value={search}
           onChange={(e) => changeSearch(e.target.value)}
           sx={{ width: 320 }}

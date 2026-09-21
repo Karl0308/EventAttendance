@@ -2,7 +2,7 @@
 // search box.
 //
 // ---------------------------------------------------------------------------------------------
-// Why this is a separate surface instead of reusing "Search name or student no."
+// Why this is a separate surface instead of reusing the roster's own search box
 // ---------------------------------------------------------------------------------------------
 //
 // `GET /students?search=` already matches a card fragment — the backend extended it for exactly this

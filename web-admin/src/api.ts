@@ -1727,7 +1727,11 @@ async function listStudents(filter?: {
  * `search` goes to the server here rather than being applied to the rows afterwards, and it has to:
  * a client-side filter over one page can only match within that page, so searching for a surname
  * beginning with W while looking at page 1 would correctly report no matches over the whole roster.
- * `?search=` matches student number or name, which is what the field says it does.
+ * `?search=` matches student number, name **and** a card serial fragment — `StudentService.ListAsync`
+ * adds a match over every one of the student's cards, active or withdrawn alike. This comment used to
+ * say "student number or name, which is what the field says it does", and both halves went stale when
+ * the card term landed; the field is now labelled for all three. What the card term here does *not*
+ * give is which card matched — see `searchCards` below for why that is a separate endpoint.
  *
  * The `course` filter carries the same lossiness warning as `listStudents` — it reads the ADR-001 D-2
  * single-valued display cache, so for a student in more than one section it can only name one.

@@ -342,6 +342,59 @@ export function importOutcomeOf(status: string): ImportOutcome {
 }
 
 // ---------------------------------------------------------------------------------------------
+// What a row's warning code says
+// ---------------------------------------------------------------------------------------------
+
+/**
+ * `SisImportWarningCode` as an operator's words for it.
+ *
+ * The row already carries the server's own sentence (`warningMessage`), and this does not repeat it.
+ * What this replaces is the chip beside it, which was printing the wire value —
+ * `ClassificationRegNoSuggestsPersonnel` — at somebody whose job is to fix a spreadsheet. The chip's
+ * job is to be the thing a batch's rows can be *grouped by eye*, so it wants a short phrase; the
+ * sentence beside it is where the detail already lives.
+ *
+ * Each label is drawn from the code's own documentation in `EAMS.Domain/SisImportValues.cs`, which is
+ * where the distinctions are argued — in particular the two that look like one thing and are two:
+ * `ClassificationMissing` (no category, nothing suggests one) versus
+ * `ClassificationRegNoSuggestsPersonnel` (no category, but the number says personnel), which exist
+ * separately precisely because the operator's follow-up differs. A label that collapsed them would
+ * undo the reason there are two codes.
+ *
+ * `Record<string, string>` keyed by the contract values rather than a union, for the same reason
+ * `PHASE_LABELS` above is: this SPA is deployed separately from the API, so a code this build has
+ * never heard of is a normal event rather than an error — see `describeImportWarning`.
+ */
+const WARNING_LABELS: Record<string, string> = {
+  CourseTitleAlias: "Course title differs",
+  CourseCollegeAdopted: "Course college filled in",
+  InstructorPlaceholder: "Instructor to be announced",
+  SectionSpansPrograms: "Section spans programs",
+  SectionUnspecified: "No section named",
+  StudentIdentityConflict: "Student details disagree",
+  RfidCardRevoked: "Card was withdrawn",
+  RfidCardFromLegacyMapping: "Card from an old mapping",
+  ClassificationUnavailable: "Category not recognized",
+  ClassificationConflict: "Category already set",
+  ClassificationMissing: "No category",
+  ClassificationRegNoSuggestsPersonnel: "No category, number says personnel",
+  ClassificationAxisUnknown: "Unknown category axis",
+};
+
+/**
+ * What to call a row's warning.
+ *
+ * **An unknown code is returned verbatim, and that is the contract rather than a stopgap.** The API
+ * can grow a warning code without this build being redeployed, and the two failure modes worth ruling
+ * out are a blank chip — which reads as "no warning" on a row that has one — and a throw, which would
+ * take the whole results table down over a string. Falling back to the raw token degrades to exactly
+ * the behaviour this screen had before the map existed: ugly, and completely informative.
+ */
+export function describeImportWarning(code: string): string {
+  return WARNING_LABELS[code] ?? code;
+}
+
+// ---------------------------------------------------------------------------------------------
 // Standing copy for the detached run
 // ---------------------------------------------------------------------------------------------
 
