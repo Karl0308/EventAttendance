@@ -1,4 +1,5 @@
 using EAMS.Api.Authorization;
+using EAMS.Api.Reports;
 using EAMS.Application.Abstractions;
 using EAMS.Application.Dtos;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
@@ -74,6 +75,141 @@ public class ReportsController : ControllerBase
     {
         var row = await _reports.GetEventSummaryAsync(eventId, ct);
         return row is null ? NotFound() : Ok(row);
+    }
+
+    /// <summary>
+    /// Task 9.6 <c>GET /reports/event/{eventId}/detail</c> — one event's report in detail: its
+    /// particulars, its summary, and (for a <c>TimeInOut</c> event) its time-out totals.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>A new route rather than a wider <c>/summary</c>.</b> <c>/summary</c> returns the same
+    /// <c>EventReportRowDto</c> each row of <c>GET /reports/events/summary</c> is, so widening it would
+    /// widen the multi-event contract too. <c>summary</c> here is that object, from the same code.
+    /// </para>
+    ///
+    /// <para>
+    /// <b><c>timeInOut</c> is <c>null</c> for a <c>Single</c> event</b> (client QA Q12: single-tap events
+    /// are unchanged and carry no time-out statistics). For a <c>TimeInOut</c> event it counts the rows
+    /// with a Time In — any status, the same rows the status buckets count, so an <c>Absent</c> row
+    /// written at close is not "tapped in". <c>tappedOut</c> always equals <c>withTimeOut</c>;
+    /// <c>tappedIn</c> = <c>withTimeOut</c> + <c>withoutTimeOut</c>; <c>averageDurationSeconds</c> is
+    /// the mean over complete In/Out pairs only, in whole seconds, and <c>null</c> when there is none
+    /// (QA A6 — read it beside <c>withoutTimeOut</c>).
+    /// </para>
+    /// </remarks>
+    /// <param name="eventId">The event.</param>
+    /// <param name="ct">Cancellation token.</param>
+    /// <response code="200">The report.</response>
+    /// <response code="401">No credential, or an invalid one.</response>
+    /// <response code="403">Signed in without <c>reports.read</c> — every role except SuperAdmin and SchoolAdmin.</response>
+    /// <response code="404">No such event in the caller's school, or it is soft-deleted.</response>
+    [HttpGet("event/{eventId:guid}/detail")]
+    [Authorize(AuthenticationSchemes = JwtBearerDefaults.AuthenticationScheme, Policy = EamsPermissions.ReportsRead)]
+    [HasPermissionNotEnforced(EamsPermissions.ReportsRead)]
+    [ProducesResponseType(typeof(EventDetailReportDto), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status401Unauthorized)]
+    [ProducesResponseType(StatusCodes.Status403Forbidden)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status404NotFound)]
+    public async Task<ActionResult<EventDetailReportDto>> EventDetail(Guid eventId, CancellationToken ct)
+    {
+        var report = await _reports.GetEventDetailAsync(eventId, ct);
+        return report is null ? NotFound() : Ok(report);
+    }
+
+    /// <summary>
+    /// Task 9.6 <c>GET /reports/event/{eventId}/attendees</c> — the report's student list, paged: every
+    /// student who tapped in, with Time In, Time Out and Duration.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Paged like every admin list</b> (<c>?page=</c> 1-based, <c>?pageSize=</c> default
+    /// <see cref="Paging.DefaultPageSize"/>, clamped to <see cref="Paging.MaxPageSize"/>), because an
+    /// assembly can have thousands of attendees. A client that wants every row walks the pages;
+    /// <c>GET /reports/event/{eventId}/export.csv</c> is the unpaged form, written from the same query.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>Which rows:</b> the event's attendance rows with a Time In, in any status. <c>total</c> therefore
+    /// equals the detail report's <c>timeInOut.tappedIn</c>. <b>Order:</b> last name, first name, middle
+    /// name, student number, Time In, record id — total, so pages never overlap or skip on a stable event.
+    /// On an <c>Open</c> event a tap landing between two page reads can shift later rows, as on every
+    /// offset-paged list.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>For a <c>Single</c> event <c>timeOut</c> and <c>durationSeconds</c> are always <c>null</c></b>
+    /// (QA Q12). Otherwise <c>durationSeconds</c> is Time Out − Time In in whole seconds, and <c>null</c>
+    /// exactly when <c>timeOut</c> is.
+    /// </para>
+    /// </remarks>
+    /// <param name="eventId">The event.</param>
+    /// <param name="page">1-based page number.</param>
+    /// <param name="pageSize">Rows per page.</param>
+    /// <param name="ct">Cancellation token.</param>
+    /// <response code="200">One page of the list.</response>
+    /// <response code="401">No credential, or an invalid one.</response>
+    /// <response code="403">Signed in without <c>reports.read</c> — every role except SuperAdmin and SchoolAdmin.</response>
+    /// <response code="404">No such event in the caller's school, or it is soft-deleted.</response>
+    [HttpGet("event/{eventId:guid}/attendees")]
+    [Authorize(AuthenticationSchemes = JwtBearerDefaults.AuthenticationScheme, Policy = EamsPermissions.ReportsRead)]
+    [HasPermissionNotEnforced(EamsPermissions.ReportsRead)]
+    [ProducesResponseType(typeof(PagedResult<EventReportAttendeeDto>), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status401Unauthorized)]
+    [ProducesResponseType(StatusCodes.Status403Forbidden)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status404NotFound)]
+    public async Task<ActionResult<PagedResult<EventReportAttendeeDto>>> EventAttendees(
+        Guid eventId, [FromQuery] int? page, [FromQuery] int? pageSize, CancellationToken ct)
+    {
+        var result = await _reports.GetEventAttendeesAsync(eventId, PageRequest.From(page, pageSize), ct);
+        return result is null ? NotFound() : Ok(result);
+    }
+
+    /// <summary>
+    /// Task 9.6 <c>GET /reports/event/{eventId}/export.csv</c> — the whole single-event report as a CSV
+    /// download: particulars, totals, and every row of the student list.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>The same numbers and rows as <c>/detail</c> and <c>/attendees</c>, from the same queries</b>, so
+    /// the file agrees with the screen row for row. Under <c>reports.read</c> — no separate export
+    /// permission (JJ decision B: CSV from the server now; printing is the SPA's; no PDF).
+    /// </para>
+    ///
+    /// <para>
+    /// <c>text/csv; charset=utf-8</c> <b>with a UTF-8 byte-order mark</b> so Excel reads ñ correctly;
+    /// RFC 4180 quoting; CRLF records; <c>Content-Disposition: attachment</c> named
+    /// <c>EAMS-event-report-{startDate}-{eventId}.csv</c>; <c>Cache-Control: no-store</c>. A cell that
+    /// begins with <c>=</c>, <c>+</c>, <c>-</c>, <c>@</c>, tab or CR is prefixed with <c>'</c> so a
+    /// spreadsheet cannot run it as a formula. <b>Times are UTC</b>, ISO 8601 with <c>Z</c>, to the
+    /// second, and the headings say so. A <c>Single</c> event's file has no time-out totals and no Time Out
+    /// or Duration columns (QA Q12).
+    /// </para>
+    /// </remarks>
+    /// <param name="eventId">The event.</param>
+    /// <param name="ct">Cancellation token.</param>
+    /// <response code="200">The CSV file, as an attachment.</response>
+    /// <response code="401">No credential, or an invalid one.</response>
+    /// <response code="403">Signed in without <c>reports.read</c> — every role except SuperAdmin and SchoolAdmin.</response>
+    /// <response code="404">No such event in the caller's school, or it is soft-deleted.</response>
+    [HttpGet("event/{eventId:guid}/export.csv")]
+    [Authorize(AuthenticationSchemes = JwtBearerDefaults.AuthenticationScheme, Policy = EamsPermissions.ReportsRead)]
+    [HasPermissionNotEnforced(EamsPermissions.ReportsRead)]
+    [ProducesResponseType(typeof(FileContentResult), StatusCodes.Status200OK, EventReportCsv.ContentType)]
+    [ProducesResponseType(StatusCodes.Status401Unauthorized)]
+    [ProducesResponseType(StatusCodes.Status403Forbidden)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> EventExportCsv(Guid eventId, CancellationToken ct)
+    {
+        var export = await _reports.GetEventExportAsync(eventId, ct);
+        if (export is null) return NotFound();
+
+        // A report is a snapshot of attendance that keeps moving while the event is open, and it names
+        // students; neither a browser nor an intermediary should keep a copy.
+        Response.Headers.CacheControl = "no-store";
+
+        return File(EventReportCsv.Write(export), EventReportCsv.ContentType,
+            EventReportCsv.FileNameFor(export.Report.Event));
     }
 
     /// <summary>

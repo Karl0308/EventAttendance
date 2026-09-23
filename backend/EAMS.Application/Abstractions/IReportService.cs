@@ -68,4 +68,25 @@ public interface IReportService
     /// </summary>
     Task<MultiEventReportResponse> GetMultiEventSummaryAsync(
         IReadOnlyCollection<Guid> eventIds, CancellationToken ct = default);
+
+    /// <summary>
+    /// Task 9.6 <c>GET /reports/event/{eventId}/detail</c> — the event's particulars, its summary
+    /// (the same figures as <see cref="GetEventSummaryAsync"/>) and, for a <c>TimeInOut</c> event, its
+    /// time-out totals. Null when the event is not in the caller's school, or is soft-deleted.
+    /// </summary>
+    Task<EventDetailReportDto?> GetEventDetailAsync(Guid eventId, CancellationToken ct = default);
+
+    /// <summary>
+    /// Task 9.6 <c>GET /reports/event/{eventId}/attendees</c> — one page of the tapped-in rows. Null
+    /// when the event is not in the caller's school, or is soft-deleted.
+    /// </summary>
+    Task<PagedResult<EventReportAttendeeDto>?> GetEventAttendeesAsync(
+        Guid eventId, PageRequest page, CancellationToken ct = default);
+
+    /// <summary>
+    /// Everything the CSV export writes: the detail report and every tapped-in row, from the same
+    /// query and ordering as the two reads above. Null when the event is not in the caller's school,
+    /// or is soft-deleted.
+    /// </summary>
+    Task<EventReportExport?> GetEventExportAsync(Guid eventId, CancellationToken ct = default);
 }

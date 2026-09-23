@@ -4747,6 +4747,339 @@
         ]
       }
     },
+    "/api/v1/reports/event/{eventId}/detail": {
+      "get": {
+        "tags": [
+          "Reports"
+        ],
+        "summary": "Task 9.6 `GET /reports/event/{eventId}/detail` — one event's report in detail: its\r\nparticulars, its summary, and (for a `TimeInOut` event) its time-out totals.",
+        "description": "\r\n\r\n  <b>A new route rather than a wider `/summary`.</b>\r\n  `/summary` returns the same\r\n             `EventReportRowDto` each row of `GET /reports/events/summary` is, so widening it would\r\n             widen the multi-event contract too. `summary` here is that object, from the same code.\r\n             \r\n\r\n\r\n  <b>\r\n    `timeInOut` is `null` for a `Single` event</b> (client QA Q12: single-tap events\r\n             are unchanged and carry no time-out statistics). For a `TimeInOut` event it counts the rows\r\n             with a Time In — any status, the same rows the status buckets count, so an `Absent` row\r\n             written at close is not \"tapped in\". `tappedOut` always equals `withTimeOut`;\r\n             `tappedIn` = `withTimeOut` + `withoutTimeOut`; `averageDurationSeconds` is\r\n             the mean over complete In/Out pairs only, in whole seconds, and `null` when there is none\r\n             (QA A6 — read it beside `withoutTimeOut`).\r\n             ",
+        "parameters": [
+          {
+            "name": "eventId",
+            "in": "path",
+            "description": "The event.",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The report.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/EventDetailReportDto"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EventDetailReportDto"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EventDetailReportDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No credential, or an invalid one.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Signed in without `reports.read` — every role except SuperAdmin and SchoolAdmin.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such event in the caller's school, or it is soft-deleted.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "Bearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/reports/event/{eventId}/attendees": {
+      "get": {
+        "tags": [
+          "Reports"
+        ],
+        "summary": "Task 9.6 `GET /reports/event/{eventId}/attendees` — the report's student list, paged: every\r\nstudent who tapped in, with Time In, Time Out and Duration.",
+        "description": "\r\n\r\n  <b>Paged like every admin list</b> (`?page=` 1-based, `?pageSize=` default\r\n             EAMS.Application.Dtos.Paging.DefaultPageSize, clamped to EAMS.Application.Dtos.Paging.MaxPageSize), because an\r\n             assembly can have thousands of attendees. A client that wants every row walks the pages;\r\n             `GET /reports/event/{eventId}/export.csv` is the unpaged form, written from the same query.\r\n             \r\n\r\n\r\n  <b>Which rows:</b> the event's attendance rows with a Time In, in any status. `total` therefore\r\n             equals the detail report's `timeInOut.tappedIn`. <b>Order:</b> last name, first name, middle\r\n             name, student number, Time In, record id — total, so pages never overlap or skip on a stable event.\r\n             On an `Open` event a tap landing between two page reads can shift later rows, as on every\r\n             offset-paged list.\r\n             \r\n\r\n\r\n  <b>For a `Single` event `timeOut` and `durationSeconds` are always `null`</b>\r\n             (QA Q12). Otherwise `durationSeconds` is Time Out − Time In in whole seconds, and `null`\r\n             exactly when `timeOut` is.\r\n             ",
+        "parameters": [
+          {
+            "name": "eventId",
+            "in": "path",
+            "description": "The event.",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "page",
+            "in": "query",
+            "description": "1-based page number.",
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          },
+          {
+            "name": "pageSize",
+            "in": "query",
+            "description": "Rows per page.",
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "One page of the list.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/EventReportAttendeeDtoPagedResult"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EventReportAttendeeDtoPagedResult"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EventReportAttendeeDtoPagedResult"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No credential, or an invalid one.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Signed in without `reports.read` — every role except SuperAdmin and SchoolAdmin.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such event in the caller's school, or it is soft-deleted.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "Bearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/reports/event/{eventId}/export.csv": {
+      "get": {
+        "tags": [
+          "Reports"
+        ],
+        "summary": "Task 9.6 `GET /reports/event/{eventId}/export.csv` — the whole single-event report as a CSV\r\ndownload: particulars, totals, and every row of the student list.",
+        "description": "\r\n\r\n  <b>The same numbers and rows as `/detail` and `/attendees`, from the same queries</b>, so\r\n             the file agrees with the screen row for row. Under `reports.read` — no separate export\r\n             permission (JJ decision B: CSV from the server now; printing is the SPA's; no PDF).\r\n             \r\n\r\n\r\n  `text/csv; charset=utf-8`\r\n  <b>with a UTF-8 byte-order mark</b> so Excel reads ñ correctly;\r\n             RFC 4180 quoting; CRLF records; `Content-Disposition: attachment` named\r\n             `EAMS-event-report-{startDate}-{eventId}.csv`; `Cache-Control: no-store`. A cell that\r\n             begins with `=`, `+`, `-`, `@`, tab or CR is prefixed with `'` so a\r\n             spreadsheet cannot run it as a formula. <b>Times are UTC</b>, ISO 8601 with `Z`, to the\r\n             second, and the headings say so. A `Single` event's file has no time-out totals and no Time Out\r\n             or Duration columns (QA Q12).\r\n             ",
+        "parameters": [
+          {
+            "name": "eventId",
+            "in": "path",
+            "description": "The event.",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The CSV file, as an attachment.",
+            "content": {
+              "text/csv; charset=utf-8": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No credential, or an invalid one.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Signed in without `reports.read` — every role except SuperAdmin and SchoolAdmin.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such event in the caller's school, or it is soft-deleted.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "Bearer": []
+          }
+        ]
+      }
+    },
     "/api/v1/reports/events/summary": {
       "get": {
         "tags": [
@@ -7458,6 +7791,22 @@
         "additionalProperties": false,
         "description": "One individually-attached student. See EAMS.Application.Dtos.EventAudienceDto.Students."
       },
+      "EventDetailReportDto": {
+        "type": "object",
+        "properties": {
+          "event": {
+            "$ref": "#/components/schemas/EventReportDetailsDto"
+          },
+          "summary": {
+            "$ref": "#/components/schemas/EventReportRowDto"
+          },
+          "timeInOut": {
+            "$ref": "#/components/schemas/EventTimeOutTotalsDto"
+          }
+        },
+        "additionalProperties": false,
+        "description": "`GET /reports/event/{eventId}/detail` — Task 9.6's single-event report: the event's\r\n            particulars, its summary figures, and (for a `TimeInOut` event) its time-out totals. The\r\n            student list is paged separately (`GET /reports/event/{eventId}/attendees`) and the whole thing\r\n            exports as one CSV (`GET /reports/event/{eventId}/export.csv`)."
+      },
       "EventDto": {
         "type": "object",
         "properties": {
@@ -7665,6 +8014,130 @@
         },
         "additionalProperties": false,
         "description": "One §4.7 group attached to the event's audience."
+      },
+      "EventReportAttendeeDto": {
+        "type": "object",
+        "properties": {
+          "studentId": {
+            "type": "string",
+            "description": "The student.",
+            "format": "uuid"
+          },
+          "studentNumber": {
+            "type": "string",
+            "description": "The school's student number, as stored."
+          },
+          "lastName": {
+            "type": "string",
+            "description": "Last name, as stored."
+          },
+          "firstName": {
+            "type": "string",
+            "description": "First name, as stored."
+          },
+          "middleName": {
+            "type": "string",
+            "description": "Middle name, as stored; null when there is none.",
+            "nullable": true
+          },
+          "timeIn": {
+            "type": "string",
+            "description": "The Time In (`CheckInAt`), UTC. Never null: the list is the tapped-in rows.",
+            "format": "date-time"
+          },
+          "timeOut": {
+            "type": "string",
+            "description": "The Time Out (`CheckOutAt` — the last accepted tap), UTC; null when the student never timed\r\nout, and <b>always null for a `Single` event</b> (QA Q12).",
+            "format": "date-time",
+            "nullable": true
+          },
+          "durationSeconds": {
+            "type": "integer",
+            "description": "TimeOut − TimeIn in whole seconds (SQL Server\r\n            `DATEDIFF(SECOND, …)`); null exactly when TimeOut is.",
+            "format": "int64",
+            "nullable": true
+          }
+        },
+        "additionalProperties": false,
+        "description": "One line of a Task 9.6 student list: a student who tapped in. Ordered by last name, first name,\r\nmiddle name, student number, Time In, then record id — so the order is total and a printout, the\r\nCSV and every page agree."
+      },
+      "EventReportAttendeeDtoPagedResult": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/EventReportAttendeeDto"
+            },
+            "description": "This page's rows, in the endpoint's documented order. Empty is an ordinary answer — for an empty\r\nfilter and for a page past the end alike."
+          },
+          "page": {
+            "type": "integer",
+            "description": "The 1-based page actually served, which is <em>not</em> necessarily the one requested: an\r\nout-of-range `?page=` is clamped and this is where a client sees that it was.",
+            "format": "int32"
+          },
+          "pageSize": {
+            "type": "integer",
+            "description": "The page size actually applied, after the EAMS.Application.Dtos.Paging.MaxPageSize clamp. The field that\r\nmakes clamping discoverable rather than silent.",
+            "format": "int32"
+          },
+          "total": {
+            "type": "integer",
+            "description": "Rows matching the filter across every page, counted in the database against the same filter that\r\nproduced Items. This is what a grid needs to render a page count; without it a\r\ncaller can only discover the end by walking into it.",
+            "format": "int32"
+          },
+          "hasMore": {
+            "type": "boolean",
+            "description": "Whether another page exists after this one.\r\n            \r\n\r\n<b>Derived here rather than left to the client, because the client gets it wrong.</b>`page * pageSize < total` is right and `items.Count == pageSize` is the version\r\npeople write — which reports a further page whenever the last page happens to be exactly full,\r\nso a paging loop makes one extra request every time the total is a multiple of the page size.\r\nComputing it once, on the side that already holds the total, is a byte on the wire against a\r\nclass of off-by-one nobody finds in review.\r\n",
+            "readOnly": true
+          }
+        },
+        "additionalProperties": false,
+        "description": "One page of an admin list read, plus what the caller needs to ask for the next one.\r\n            \r\n\r\n<b>Every §6.2/§6.3 admin list returns this; `GET /attendance/live/{eventId}` deliberately does\r\nnot.</b> That endpoint pages by cursor (`since`/`cursor`/`hasMore`) because it is a\r\npolling delta rather than a list — a client asks \"what changed after this point\", not \"give me rows\r\n40 to 60\" — and its shape is frozen published contract under D-29/D-30/D-42. Offset paging over a\r\nlive feed also drops rows: an insert below the cursor shifts every subsequent row up by one and the\r\nnext page skips it. The two mechanisms coexisting is correct, not an inconsistency to tidy.\r\n"
+      },
+      "EventReportDetailsDto": {
+        "type": "object",
+        "properties": {
+          "eventId": {
+            "type": "string",
+            "description": "The event.",
+            "format": "uuid"
+          },
+          "name": {
+            "type": "string",
+            "description": "Its name, as stored."
+          },
+          "location": {
+            "type": "string",
+            "description": "Where it is held; null when none was entered.",
+            "nullable": true
+          },
+          "startAt": {
+            "type": "string",
+            "description": "When it starts, UTC.",
+            "format": "date-time"
+          },
+          "endAt": {
+            "type": "string",
+            "description": "When it ends, UTC.",
+            "format": "date-time"
+          },
+          "attendanceMode": {
+            "type": "string",
+            "description": "`Single` or `TimeInOut`."
+          },
+          "graceMinutes": {
+            "type": "integer",
+            "description": "Minutes after StartAt a first tap still counts as `Present`.",
+            "format": "int32"
+          },
+          "status": {
+            "type": "string",
+            "description": "`Draft`, `Open`, `Closed` or `Cancelled`."
+          }
+        },
+        "additionalProperties": false,
+        "description": "The event's own particulars, as a Task 9.6 report prints them above the figures (client QA,\r\nMDVault #470 / #463): name, location, date and time, mode and grace."
       },
       "EventReportRowDto": {
         "type": "object",
@@ -8010,6 +8483,39 @@
         },
         "additionalProperties": false,
         "description": "Technical Plan §6.7/§12 — the Event Attendance Summary."
+      },
+      "EventTimeOutTotalsDto": {
+        "type": "object",
+        "properties": {
+          "tappedIn": {
+            "type": "integer",
+            "description": "Rows with a Time In.",
+            "format": "int32"
+          },
+          "tappedOut": {
+            "type": "integer",
+            "description": "Rows with both a Time In and a Time Out. <b>Always equal to WithTimeOut</b>:\r\nQA's 9.6 lists both headings, and in this system they are one count — Time Out is the student's\r\nlast accepted tap, forward only, so a row either has one or does not. It is published twice so each\r\nheading has its own field; a test pins the equality so a QA correction that separates them shows up\r\nas a red test rather than as a silently duplicated number.",
+            "format": "int32"
+          },
+          "withTimeOut": {
+            "type": "integer",
+            "description": "Rows with a Time In and a Time Out — the complete pairs.",
+            "format": "int32"
+          },
+          "withoutTimeOut": {
+            "type": "integer",
+            "description": "Rows with a Time In and no Time Out: TappedIn − WithTimeOut.\r\nPublished beside AverageDurationSeconds so the average is never read without\r\nthe number of people it leaves out (QA recorded assumption A6).",
+            "format": "int32"
+          },
+          "averageDurationSeconds": {
+            "type": "integer",
+            "description": "The mean of (Time Out − Time In) over the complete pairs <b>only</b> — a missing Time Out is left\r\nout, never counted as zero (A6). Whole seconds, rounded half away from zero, computed by SQL\r\nServer as `DATEDIFF(SECOND, …)` — so each pair is measured in second boundaries crossed, the\r\nsame way every row's EAMS.Application.Dtos.EventReportAttendeeDto.DurationSeconds is, and this is exactly\r\nthe rounded mean of those. `null` when there is no complete pair.",
+            "format": "int64",
+            "nullable": true
+          }
+        },
+        "additionalProperties": false,
+        "description": "Task 9.6's time-out totals for a `TimeInOut` event. <b>Never present for a `Single`\r\nevent</b> (client QA Q12: single-tap events are unchanged and carry no time-out statistics) — the\r\nwhole object is `null` there, rather than a set of zeros that would read as \"nobody left\".\r\n            \r\n\r\n<b>Which rows count.</b> Every attendance row of the event with a Time In (`CheckInAt`), in\r\nany status — the same rows, soft-deleted students included, that the `present`/`late`/\r\n`absent`/`excused` buckets beside it count, so the two never describe different\r\npopulations. An `Absent` row written when the event closed has no Time In and is therefore not\r\n\"tapped in\". A row whose status was later overridden (to `Absent`, say) keeps the Time In its\r\ntap recorded and is still counted: these figures describe taps observed, the buckets describe the\r\nstatus an operator settled on.\r\n\r\n<b>By construction EAMS.Application.Dtos.EventTimeOutTotalsDto.TappedIn = EAMS.Application.Dtos.EventTimeOutTotalsDto.WithTimeOut + EAMS.Application.Dtos.EventTimeOutTotalsDto.WithoutTimeOut.</b>\r\nA Time Out counts only on a row that also has a Time In (a complete pair); see\r\nEAMS.Application.Dtos.EventTimeOutTotalsDto.TappedOut.\r\n"
       },
       "EventWriteRequest": {
         "type": "object",
