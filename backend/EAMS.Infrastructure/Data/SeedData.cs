@@ -230,6 +230,7 @@ internal static class SeedData
 
         await SeedTermAsync(db, school, ct);
         await SeedClassificationsAsync(db, school, ct);
+        await SeedEventClassificationsAsync(db, school, ct);
 
         // Everything below is the first-run bulk. It stays gated on the school having just been
         // created, because these rows are a coherent fixture — students with cards, events, a kiosk,
@@ -509,6 +510,51 @@ internal static class SeedData
                 // in rather than from what the value looks like. See ClassificationSeedValues for the
                 // tally, and for the guess it replaced.
                 Axis = axis,
+                NameKey = key,
+                IsActive = true,
+            });
+        }
+    }
+
+    /// <summary>
+    /// The three event classifications the client's specification lists as the initial set
+    /// (<see cref="EventClassificationSeedValues.All"/>).
+    ///
+    /// <para>
+    /// <b>Its own guard, per row, and NOT the school guard</b> — for the reason
+    /// <see cref="SeedClassificationsAsync"/> spells out in full: anything riding
+    /// <see cref="InitializeAsync"/>'s early return runs only on a database nobody has, and this is a
+    /// vocabulary a later release may add a value to, which has to reach installations that already ran
+    /// the earlier one. Keyed on <see cref="EventClassification.NameKey"/> so it is safe to re-run after
+    /// an administrator has renamed one, and it never updates, reactivates or re-adds a deactivated row —
+    /// the seed makes the vocabulary <em>exist</em>, it does not enforce its opening state against the
+    /// operator. A deleted seeded row is the one operator change this would revert, which is why
+    /// <c>EventClassificationService.DeleteAsync</c> refuses to delete a seeded key and points at
+    /// deactivate instead.
+    /// </para>
+    /// </summary>
+    private static async Task SeedEventClassificationsAsync(
+        EamsDbContext db, School school, CancellationToken ct)
+    {
+        List<string> existingKeys = db.Entry(school).State == EntityState.Added
+            ? []
+            : await db.EventClassifications.AsNoTracking()
+                .Where(c => c.SchoolId == school.Id)
+                .Select(c => c.NameKey)
+                .ToListAsync(ct);
+
+        var present = existingKeys.ToHashSet(StringComparer.Ordinal);
+
+        foreach (var (name, description) in EventClassificationSeedValues.All)
+        {
+            var key = EventClassificationText.KeyFor(name);
+            if (!present.Add(key)) continue;
+
+            db.EventClassifications.Add(new EventClassification
+            {
+                SchoolId = school.Id,
+                Name = name,
+                Description = description,
                 NameKey = key,
                 IsActive = true,
             });

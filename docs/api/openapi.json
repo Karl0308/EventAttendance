@@ -3178,6 +3178,547 @@
         ]
       }
     },
+    "/api/v1/event-classifications": {
+      "get": {
+        "tags": [
+          "EventClassifications"
+        ],
+        "summary": "`GET /event-classifications` — the vocabulary, active entries first, then by name.",
+        "parameters": [
+          {
+            "name": "includeInactive",
+            "in": "query",
+            "description": "Defaults to false — what the event-creation picker wants. A report wants `true`: a deactivated\r\nclassification still describes the events recorded under it.",
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "name": "page",
+            "in": "query",
+            "description": "1-based page number, default 1. Out-of-range values are clamped, not refused.",
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          },
+          {
+            "name": "pageSize",
+            "in": "query",
+            "description": "Rows per page. Default 50, maximum 200; a larger value is clamped.",
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "One page of event classifications, possibly empty.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/EventClassificationDtoPagedResult"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EventClassificationDtoPagedResult"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EventClassificationDtoPagedResult"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "Bearer": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "EventClassifications"
+        ],
+        "summary": "`POST /event-classifications` — add a classification to this school's vocabulary.",
+        "requestBody": {
+          "description": "The display name and optional description.",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EventClassificationCreateRequest"
+              }
+            },
+            "text/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EventClassificationCreateRequest"
+              }
+            },
+            "application/*+json": {
+              "schema": {
+                "$ref": "#/components/schemas/EventClassificationCreateRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "The created classification, active. `Location` names it.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/EventClassificationDto"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EventClassificationDto"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EventClassificationDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The name is blank, over-length, whitespace-padded, has no letter or digit, or the description is over-length.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "That name's key is already in use here, or no school could be resolved.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "Bearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/event-classifications/{id}": {
+      "get": {
+        "tags": [
+          "EventClassifications"
+        ],
+        "summary": "`GET /event-classifications/{id}` — one entry, active or not.",
+        "operationId": "GetEventClassification",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The classification.",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The classification.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/EventClassificationDto"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EventClassificationDto"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EventClassificationDto"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such classification in this school.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "Bearer": []
+          }
+        ]
+      },
+      "put": {
+        "tags": [
+          "EventClassifications"
+        ],
+        "summary": "`PUT /event-classifications/{id}` — change the display name and/or description.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The classification.",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "The new name and description.",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EventClassificationUpdateRequest"
+              }
+            },
+            "text/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EventClassificationUpdateRequest"
+              }
+            },
+            "application/*+json": {
+              "schema": {
+                "$ref": "#/components/schemas/EventClassificationUpdateRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The updated classification.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/EventClassificationDto"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EventClassificationDto"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EventClassificationDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The name or description breaks a column rule.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such classification.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Another classification in this school already holds that name's key.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "Bearer": []
+          }
+        ]
+      },
+      "delete": {
+        "tags": [
+          "EventClassifications"
+        ],
+        "summary": "`DELETE /event-classifications/{id}` — remove a classification, but only when no event\r\n            references it and it is not one of the seeded three.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The classification.",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The deleted classification, as it was.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/EventClassificationDto"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EventClassificationDto"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EventClassificationDto"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such classification.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "An event is classified as it, or it is one of the seeded values the startup seed would re-create — deactivate those instead. It was not deleted.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "Bearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/event-classifications/{id}/active": {
+      "patch": {
+        "tags": [
+          "EventClassifications"
+        ],
+        "summary": "`PATCH /event-classifications/{id}/active` — deactivate a classification, or bring it back.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The classification.",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "`{\"isActive\": false}` to deactivate, `{\"isActive\": true}` to restore.",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EventClassificationActiveRequest"
+              }
+            },
+            "text/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EventClassificationActiveRequest"
+              }
+            },
+            "application/*+json": {
+              "schema": {
+                "$ref": "#/components/schemas/EventClassificationActiveRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The classification, with its new flag.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/EventClassificationDto"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EventClassificationDto"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EventClassificationDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`isActive` was not supplied.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such classification.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "Bearer": []
+          }
+        ]
+      }
+    },
     "/api/v1/events/{id}/manifest": {
       "get": {
         "tags": [
@@ -7791,6 +8332,119 @@
         "additionalProperties": false,
         "description": "One individually-attached student. See EAMS.Application.Dtos.EventAudienceDto.Students."
       },
+      "EventClassificationActiveRequest": {
+        "type": "object",
+        "properties": {
+          "isActive": {
+            "type": "boolean",
+            "description": "<b>Nullable, and an omitted member is a 400 rather than a default.</b> A missing JSON member binds to\r\n            `false`, and on this route `false` deactivates a classification — the same reasoning\r\n            `ClassificationActiveRequest.IsActive` and `PATCH /academic/terms/{id}/current` record.",
+            "nullable": true
+          }
+        },
+        "additionalProperties": false,
+        "description": "The body of `PATCH /event-classifications/{id}/active`."
+      },
+      "EventClassificationCreateRequest": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "The display name. Required, 100 characters or fewer, no leading or trailing whitespace (refused\r\nrather than trimmed), and it must contain at least one letter or digit so it has a normalized key."
+          },
+          "description": {
+            "type": "string",
+            "description": "Optional, 1000 characters or fewer.",
+            "nullable": true
+          }
+        },
+        "additionalProperties": false,
+        "description": "The body of `POST /event-classifications`."
+      },
+      "EventClassificationDto": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "The stable identity. <b>This is what an event row will hold</b> once the Event Audience module adds\r\nthe link, so it survives every rename — the reason the vocabulary is a table rather than a string\r\ncolumn.",
+            "format": "uuid"
+          },
+          "name": {
+            "type": "string",
+            "description": "The display form, exactly as authored."
+          },
+          "nameKey": {
+            "type": "string",
+            "description": "The normalized key the uniqueness index is built on (letters and digits, upper-cased). Published so\r\nan administrator told \"that name is taken\" by a row that does not look taken can see why."
+          },
+          "description": {
+            "type": "string",
+            "description": "The optional description, or null.",
+            "nullable": true
+          },
+          "isActive": {
+            "type": "boolean",
+            "description": "`false` is deactivated: not offered for new events, but still held by every event recorded under\r\n            it. Pickers filter on this; reports must not."
+          },
+          "retiredAt": {
+            "type": "string",
+            "description": "When it was last deactivated, or null while active.",
+            "format": "date-time",
+            "nullable": true
+          }
+        },
+        "additionalProperties": false,
+        "description": "One entry in the institution's event-classification vocabulary."
+      },
+      "EventClassificationDtoPagedResult": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/EventClassificationDto"
+            },
+            "description": "This page's rows, in the endpoint's documented order. Empty is an ordinary answer — for an empty\r\nfilter and for a page past the end alike."
+          },
+          "page": {
+            "type": "integer",
+            "description": "The 1-based page actually served, which is <em>not</em> necessarily the one requested: an\r\nout-of-range `?page=` is clamped and this is where a client sees that it was.",
+            "format": "int32"
+          },
+          "pageSize": {
+            "type": "integer",
+            "description": "The page size actually applied, after the EAMS.Application.Dtos.Paging.MaxPageSize clamp. The field that\r\nmakes clamping discoverable rather than silent.",
+            "format": "int32"
+          },
+          "total": {
+            "type": "integer",
+            "description": "Rows matching the filter across every page, counted in the database against the same filter that\r\nproduced Items. This is what a grid needs to render a page count; without it a\r\ncaller can only discover the end by walking into it.",
+            "format": "int32"
+          },
+          "hasMore": {
+            "type": "boolean",
+            "description": "Whether another page exists after this one.\r\n            \r\n\r\n<b>Derived here rather than left to the client, because the client gets it wrong.</b>`page * pageSize < total` is right and `items.Count == pageSize` is the version\r\npeople write — which reports a further page whenever the last page happens to be exactly full,\r\nso a paging loop makes one extra request every time the total is a multiple of the page size.\r\nComputing it once, on the side that already holds the total, is a byte on the wire against a\r\nclass of off-by-one nobody finds in review.\r\n",
+            "readOnly": true
+          }
+        },
+        "additionalProperties": false,
+        "description": "One page of an admin list read, plus what the caller needs to ask for the next one.\r\n            \r\n\r\n<b>Every §6.2/§6.3 admin list returns this; `GET /attendance/live/{eventId}` deliberately does\r\nnot.</b> That endpoint pages by cursor (`since`/`cursor`/`hasMore`) because it is a\r\npolling delta rather than a list — a client asks \"what changed after this point\", not \"give me rows\r\n40 to 60\" — and its shape is frozen published contract under D-29/D-30/D-42. Offset paging over a\r\nlive feed also drops rows: an insert below the cursor shifts every subsequent row up by one and the\r\nnext page skips it. The two mechanisms coexisting is correct, not an inconsistency to tidy.\r\n"
+      },
+      "EventClassificationUpdateRequest": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "The new display name. Same rules as on creation."
+          },
+          "description": {
+            "type": "string",
+            "description": "The new description, or null to clear it. A `PUT` replaces, so an omitted description clears the\r\nstored one — the form always sends what it read back.",
+            "nullable": true
+          }
+        },
+        "additionalProperties": false,
+        "description": "The body of `PUT /event-classifications/{id}` — a full replacement of the two editable fields."
+      },
       "EventDetailReportDto": {
         "type": "object",
         "properties": {
@@ -9634,6 +10288,10 @@
     {
       "name": "Devices",
       "description": "Technical Plan §6.6 — devices (Phase 4a design, D-25).\r\n            \r\n\r\n<b>Two principals reach this controller.</b>`heartbeat` is the one action a device calls\r\nabout itself, with its device key. Everything else is an administrator's surface and demands a\r\nBearer token carrying `devices.read` or `devices.write` — the latter mints capture\r\ncredentials, which makes it the one grant on this API that can create another principal.\r\n"
+    },
+    {
+      "name": "EventClassifications",
+      "description": "The institution's event-classification vocabulary — Institutional, Departmental, Organizational, and\r\nwhatever the client adds — as a list an administrator edits."
     },
     {
       "name": "EventManifest",

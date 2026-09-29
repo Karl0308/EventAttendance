@@ -15,6 +15,7 @@ import {
 import DashboardIcon from "@mui/icons-material/Dashboard";
 import PeopleIcon from "@mui/icons-material/People";
 import EventIcon from "@mui/icons-material/Event";
+import CategoryIcon from "@mui/icons-material/Category";
 import RouterIcon from "@mui/icons-material/Router";
 import CalendarMonthIcon from "@mui/icons-material/CalendarMonth";
 import AssessmentIcon from "@mui/icons-material/Assessment";
@@ -54,6 +55,12 @@ const nav: readonly NavEntry[] = [
     permission: PERMISSIONS.studentsRead,
   },
   { to: "/events", label: "Events", icon: <EventIcon />, permission: PERMISSIONS.eventsRead },
+  {
+    to: "/event-classifications",
+    label: "Event classifications",
+    icon: <CategoryIcon />,
+    permission: PERMISSIONS.eventsRead,
+  },
   { to: "/devices", label: "Devices", icon: <RouterIcon />, permission: PERMISSIONS.devicesRead },
   // Last, and that is not an accident of appending: a term is created once a semester, where the
   // four above are visited daily. `isActive` matches on `startsWith`, and `/terms` shares no prefix

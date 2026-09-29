@@ -156,6 +156,12 @@ public static class DependencyInjection
         // from this list.
         services.AddScoped<IClassificationService, ClassificationService>();
 
+        // The event-classification vocabulary (Institutional/Departmental/Organizational, extensible).
+        // Takes an ISchoolContext for the same reason ClassificationService does — a create decides which
+        // school the classification is filed under — and is registered on its own so that "which
+        // vocabularies can an administrator edit" stays answerable from this list.
+        services.AddScoped<IEventClassificationService, EventClassificationService>();
+
         // The other half of classification: who holds which entry. Registered separately from the
         // vocabulary above rather than folded into it, because the two are different subjects with
         // different lifecycles — a category outlives everybody filed under it — and because this one

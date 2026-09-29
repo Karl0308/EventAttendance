@@ -47,6 +47,8 @@ import type {
   StudentGroup,
   Term,
   TermWriteRequest,
+  EventClassification,
+  EventClassificationWriteRequest,
 } from "./types";
 
 // The one security-relevant dependency this module has, and the reason it is in the import block
@@ -1282,6 +1284,18 @@ function toClassification(row: Row, what: string): Classification {
     retiredAt: optStr(row.retiredAt),
     mergedIntoClassificationId: optStr(row.mergedIntoClassificationId),
     studentCount: reqNum(row, "studentCount", what),
+  };
+}
+
+/** `EventClassificationDto` — one entry in the event-classification vocabulary. */
+function toEventClassification(row: Row, what: string): EventClassification {
+  return {
+    id: reqStr(row, "id", what),
+    name: reqStr(row, "name", what),
+    nameKey: reqStr(row, "nameKey", what),
+    description: optStr(row.description),
+    isActive: reqBool(row, "isActive", what),
+    retiredAt: optStr(row.retiredAt),
   };
 }
 
@@ -2618,6 +2632,99 @@ async function setTermCurrent(id: string, isCurrent: boolean): Promise<Term> {
   );
 }
 
+// ---------------------------------------------------------------------------------------------
+// Event classifications — Institutional / Departmental / Organizational, extensible
+// ---------------------------------------------------------------------------------------------
+
+/**
+ * `GET /event-classifications` — the vocabulary the event-creation picker is built from.
+ *
+ * `listAll` rather than `getPage`: the seeded set is three rows and a picker needs the whole set.
+ * `includeInactive` defaults to `false` here too — a picker offering a deactivated classification would
+ * let an administrator file a new event under one deliberately withdrawn; a caller wanting the
+ * deactivated ones for a report or an admin screen passes `true` explicitly.
+ */
+async function listEventClassifications(includeInactive?: boolean): Promise<EventClassification[]> {
+  return listAll(
+    "GET /event-classifications",
+    "/event-classifications",
+    { includeInactive: includeInactive === undefined ? undefined : String(includeInactive) },
+    toEventClassification,
+  );
+}
+
+/**
+ * `POST /event-classifications` — add a classification to the school's vocabulary, always active.
+ *
+ * Refusals worth knowing: **400** for a blank, over-length or whitespace-padded name (or an over-long
+ * description), and **409** for a duplicate name (`NameExists`, decided on the normalized key) or when
+ * no school could be resolved (`NoSchoolResolved`).
+ */
+async function createEventClassification(
+  request: EventClassificationWriteRequest,
+): Promise<EventClassification> {
+  return writeJson(
+    "POST /event-classifications",
+    "/event-classifications",
+    { method: "POST", payload: request },
+    "The event classification was created",
+    toEventClassification,
+  );
+}
+
+/**
+ * `PUT /event-classifications/{id}` — a full replacement of the name and description. Refusals: **400**
+ * as above, **404** for a classification that is not there, **409** for renaming onto another's name.
+ */
+async function updateEventClassification(
+  id: string,
+  request: EventClassificationWriteRequest,
+): Promise<EventClassification> {
+  return writeJson(
+    "PUT /event-classifications/{id}",
+    `/event-classifications/${encodeURIComponent(id)}`,
+    { method: "PUT", payload: request },
+    "The change was saved",
+    toEventClassification,
+  );
+}
+
+/**
+ * `PATCH /event-classifications/{id}/active` — the only door into the active flag.
+ *
+ * **`isActive` is a required parameter rather than a defaulted one, and that is load-bearing**, for the
+ * reason `setTermCurrent`'s is: the server treats a missing member as a 400 rather than binding it to
+ * `false`, so a client that forgot the field would otherwise quietly withdraw a classification and get a
+ * 200 for it. `false` deactivates (the safe half of "delete"); `true` brings it back. Idempotent.
+ */
+async function setEventClassificationActive(
+  id: string,
+  isActive: boolean,
+): Promise<EventClassification> {
+  return writeJson(
+    "PATCH /event-classifications/{id}/active",
+    `/event-classifications/${encodeURIComponent(id)}/active`,
+    { method: "PATCH", payload: { isActive } },
+    isActive ? "The event classification was reactivated" : "The event classification was deactivated",
+    toEventClassification,
+  );
+}
+
+/**
+ * `DELETE /event-classifications/{id}` — a guarded hard delete that answers **200 with the deleted row**
+ * (so the caller can re-create it from the response), or **409** when an event references it (`InUse`) or
+ * it is one of the seeded three (`SeedProtected`) — deactivate those instead. **404** for an unknown id.
+ */
+async function deleteEventClassification(id: string): Promise<EventClassification> {
+  return writeJson(
+    "DELETE /event-classifications/{id}",
+    `/event-classifications/${encodeURIComponent(id)}`,
+    { method: "DELETE" },
+    "The event classification was deleted",
+    toEventClassification,
+  );
+}
+
 /**
  * Which term a section list was read for — and, when it is not the one that was asked for, the fact
  * that says the rows already fetched have to be thrown away.
@@ -3345,6 +3452,11 @@ export const api = {
   createTerm,
   updateTerm,
   setTermCurrent,
+  listEventClassifications,
+  createEventClassification,
+  updateEventClassification,
+  setEventClassificationActive,
+  deleteEventClassification,
   sectionChoices,
   uploadRoster,
   runImport,

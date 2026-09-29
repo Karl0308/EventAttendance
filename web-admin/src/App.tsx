@@ -13,6 +13,7 @@ import Events from "./pages/Events";
 import EventDetail from "./pages/EventDetail";
 import Devices from "./pages/Devices";
 import Terms from "./pages/Terms";
+import EventClassifications from "./pages/EventClassifications";
 import Reports from "./pages/Reports";
 
 /**
@@ -93,6 +94,14 @@ export default function App() {
             roster can be imported against one, so the screen that creates one cannot be reached only
             from the screen that is already blocked for want of it. */}
         <Route path="/terms" element={gated(PERMISSIONS.academicRead, <Terms />)} />
+
+        {/* Gated on `events.read` — the event-classification vocabulary reuses the events permission
+            pair, the same decision the server's `EventClassificationsController` records for reusing
+            `events.*` rather than minting a new code. */}
+        <Route
+          path="/event-classifications"
+          element={gated(PERMISSIONS.eventsRead, <EventClassifications />)}
+        />
 
         {/* Admin-only per Q16, and narrower than §11's own table — see `PERMISSIONS.reportsRead`. */}
         <Route path="/reports" element={gated(PERMISSIONS.reportsRead, <Reports />)} />

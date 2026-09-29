@@ -217,6 +217,26 @@ internal static class TestData
         Guid studentId, Classification classification) =>
         ClassificationAssignment.For(studentId, classification);
 
+    /// <summary>
+    /// An event-classification vocabulary entry. <see cref="EventClassification.NameKey"/> is derived
+    /// here rather than defaulted to a literal, for the reason <see cref="NewClassification"/> records:
+    /// a hand-written key could put a row in the table that
+    /// <c>UX_EventClassifications_SchoolId_NameKey</c> treats as distinct while the service treats as a
+    /// duplicate.
+    /// </summary>
+    public static EventClassification NewEventClassification(
+        Guid schoolId,
+        string name = "Institutional Events",
+        string? description = null,
+        bool isActive = true) => new()
+    {
+        SchoolId = schoolId,
+        Name = name,
+        NameKey = EventClassificationText.KeyFor(name),
+        Description = description,
+        IsActive = isActive,
+    };
+
     public static College NewCollege(
         Guid schoolId, string name = "College of Criminal Justice", string? code = "CCJ") => new()
     {

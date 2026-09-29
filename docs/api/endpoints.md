@@ -3,7 +3,7 @@
 <!-- GENERATED FILE — DO NOT EDIT.
      Source: docs/api/openapi.json. Regenerate: node scripts/generate-endpoint-index.mjs --write -->
 
-**Generated from [`openapi.json`](openapi.json) — do not edit by hand.** 71 operations across 13 controllers, all mounted under `/api/v1`. Routes below are written relative to that mount.
+**Generated from [`openapi.json`](openapi.json) — do not edit by hand.** 77 operations across 14 controllers, all mounted under `/api/v1`. Routes below are written relative to that mount.
 
 This page is a **map, not a contract.** It exists so you can find an endpoint; payload shapes, field types and outcome tokens live in [`openapi.json`](openapi.json), which is what you generate a client from. Behaviour a schema cannot state — what your queue does with each outcome, the card-UID and clock rules — is in [`attendance-contract-handoff.md`](attendance-contract-handoff.md).
 
@@ -16,6 +16,7 @@ This page is a **map, not a contract.** It exists so you can find an endpoint; p
 - [Cards](#cards) — 1
 - [Classifications](#classifications) — 7
 - [Devices](#devices) — 7
+- [EventClassifications](#eventclassifications) — 6
 - [EventManifest](#eventmanifest) — 1
 - [Reports](#reports) — 5
 - [SisImport](#sisimport) — 5
@@ -78,6 +79,17 @@ This page is a **map, not a contract.** It exists so you can find an endpoint; p
 | `POST` | `/devices/{id}/heartbeat` | **DeviceKey** | `401` `403` `404` `429` | §6.6 `POST /devices/{id}/heartbeat` — liveness, and one of the four endpoints a device key authenticates. |
 | `POST` | `/devices/{id}/regenerate-key` | **Bearer** | `404` `409` | §6.6 `POST /devices/{id}/regenerate-key` — hard cut, no overlap window. |
 | `POST` | `/devices/{id}/revoke-key` | **Bearer** | `404` | Burn the credential without issuing a replacement. |
+
+## EventClassifications
+
+| Method | Route | Auth | Errors | What it does |
+|---|---|---|---|---|
+| `GET` | `/event-classifications` | **Bearer** | *none declared* | The vocabulary, active entries first, then by name. |
+| `POST` | `/event-classifications` | **Bearer** | `400` `409` | Add a classification to this school's vocabulary. |
+| `DELETE` | `/event-classifications/{id}` | **Bearer** | `404` `409` | Remove a classification, but only when no event references it and it is not one of the seeded three. |
+| `GET` | `/event-classifications/{id}` | **Bearer** | `404` | One entry, active or not. |
+| `PUT` | `/event-classifications/{id}` | **Bearer** | `400` `404` `409` | Change the display name and/or description. |
+| `PATCH` | `/event-classifications/{id}/active` | **Bearer** | `400` `404` | Deactivate a classification, or bring it back. |
 
 ## EventManifest
 

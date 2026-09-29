@@ -80,6 +80,13 @@ internal class EamsDbContext : DbContext
     public DbSet<StudentClassification> StudentClassifications => Set<StudentClassification>();
 
     /// <summary>
+    /// The administrator-owned event-classification vocabulary — Institutional, Departmental,
+    /// Organizational, and whatever the client adds. Additive; distinct from <see cref="Classifications"/>
+    /// (which classifies people, not events). See <see cref="EventClassification"/>.
+    /// </summary>
+    public DbSet<EventClassification> EventClassifications => Set<EventClassification>();
+
+    /// <summary>
     /// Every <c>DateTime</c> in the model round-trips as UTC. Applied as a convention rather than
     /// per property so entities added later (the ADR-001 D-1 academic layer) inherit it by default
     /// instead of by remembering — the failure mode this closes is silent and invisible in the
@@ -224,6 +231,7 @@ internal class EamsDbContext : DbContext
         ConfigureSystem(b);
         ConfigureAcademicStructure(b);
         ConfigureClassifications(b);
+        ConfigureEventClassifications(b);
         ConfigureSchoolIdQueryFilters(b);
 
         // Hard deletes are never issued by the application (§4 uses IsDeleted soft delete), and an
@@ -393,6 +401,11 @@ internal class EamsDbContext : DbContext
         // failure this whole block exists to avoid.
         b.Entity<StudentClassification>().HasQueryFilter(
             x => _school.CurrentSchoolId == null || x.Student!.SchoolId == _school.CurrentSchoolId);
+
+        // The event-classification vocabulary owns a SchoolId directly. Filtered like every other owner —
+        // an institution's event categories are tenant data like any other.
+        b.Entity<EventClassification>().HasQueryFilter(
+            x => _school.CurrentSchoolId == null || x.SchoolId == _school.CurrentSchoolId);
     }
 
     /// <summary>
@@ -748,6 +761,34 @@ internal class EamsDbContext : DbContext
             // of which scan by classification rather than by person.
             e.HasIndex(x => x.ClassificationId)
                 .HasDatabaseName("IX_StudentClassifications_ClassificationId");
+        });
+
+    /// <summary>
+    /// The event-classification vocabulary. Not a §4 table — additive, recorded as drift.
+    ///
+    /// <para>
+    /// <b>The name index is unfiltered</b>, for the same reason <see cref="ConfigureClassifications"/>'s
+    /// is: a classification name is not re-issuable, so a deactivated <c>Departmental Events</c> keeps its
+    /// key and a second live row with that key would split the events between two rows nobody can tell
+    /// apart. Bringing a deactivated one back is <c>PATCH /event-classifications/{id}/active</c> rather
+    /// than creating a duplicate.
+    /// </para>
+    /// </summary>
+    private static void ConfigureEventClassifications(ModelBuilder b) =>
+        b.Entity<EventClassification>(e =>
+        {
+            e.ToTable("EventClassifications");
+
+            e.Property(x => x.Name).HasMaxLength(EventClassificationText.NameMaxLength).IsRequired();
+            e.Property(x => x.NameKey).HasMaxLength(AcademicKey.MaxLength).IsRequired();
+            e.Property(x => x.Description).HasMaxLength(EventClassificationText.DescriptionMaxLength);
+            e.Property(x => x.IsActive).HasDefaultValue(true).ValueGeneratedNever();
+
+            e.HasOne(x => x.School).WithMany().HasForeignKey(x => x.SchoolId).IsRequired();
+
+            e.HasIndex(x => new { x.SchoolId, x.NameKey }).IsUnique()
+                .HasFilter(null)
+                .HasDatabaseName("UX_EventClassifications_SchoolId_NameKey");
         });
 
     // §4.2 Schools

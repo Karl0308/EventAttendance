@@ -124,6 +124,39 @@ export const CLASSIFICATION_AXES = ["Student", "Personnel", "Friars", "Special"]
 
 export type ClassificationAxisName = (typeof CLASSIFICATION_AXES)[number];
 
+/**
+ * `EventClassificationDto` — one entry in the institution's *event*-classification vocabulary
+ * (Institutional / Departmental / Organizational, extensible), as `GET /event-classifications` lists it.
+ *
+ * **Distinct from `Classification` above**, which classifies *people* (the access-control axis). They
+ * share the word and nothing else — no rows, no route, no table.
+ */
+export interface EventClassification {
+  id: string;
+  /** The display form, exactly as authored. */
+  name: string;
+  nameKey: string;
+  /** The optional description the spec lists as a field, or unset. */
+  description?: string;
+  /** `false` is deactivated: not offered for new events, but still held by every event recorded under it. */
+  isActive: boolean;
+  retiredAt?: string;
+}
+
+/**
+ * The body of `POST /event-classifications` and `PUT /event-classifications/{id}` — one shape for both,
+ * because the server checks them with one piece of code.
+ *
+ * `description` is `string | null` rather than optional, as the other write requests are: a `PUT` is a
+ * full replacement, so an omitted description clears the stored one, and deciding at the construction
+ * site is what stops an empty text box being sent as `""`. **`isActive` is deliberately absent** — moving
+ * that flag is `PATCH /event-classifications/{id}/active`, the same split `TermWriteRequest` draws.
+ */
+export interface EventClassificationWriteRequest {
+  name: string;
+  description: string | null;
+}
+
 export interface Student {
   id: string;
   studentNumber: string;
