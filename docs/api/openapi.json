@@ -5751,6 +5751,50 @@
         ]
       }
     },
+    "/api/v1/roles": {
+      "get": {
+        "tags": [
+          "Roles"
+        ],
+        "summary": "`GET /roles` — every role, ordered by name, with the count of users in this school that hold\r\n            it and the permission codes it grants.",
+        "responses": {
+          "200": {
+            "description": "The roles.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/RoleDto"
+                  }
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/RoleDto"
+                  }
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/RoleDto"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "Bearer": []
+          }
+        ]
+      }
+    },
     "/api/v1/sis/import/upload": {
       "post": {
         "tags": [
@@ -7181,6 +7225,597 @@
           },
           "404": {
             "description": "Not Found",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "Bearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/users": {
+      "get": {
+        "tags": [
+          "Users"
+        ],
+        "summary": "`GET /users` — the school's users, active first then by name.",
+        "parameters": [
+          {
+            "name": "search",
+            "in": "query",
+            "description": "Optional fragment matched against e-mail and full name.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "includeInactive",
+            "in": "query",
+            "description": "Include deactivated accounts. Defaults to false.",
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "name": "page",
+            "in": "query",
+            "description": "1-based page number, default 1.",
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          },
+          {
+            "name": "pageSize",
+            "in": "query",
+            "description": "Rows per page, default 50, maximum 200.",
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "One page of users, possibly empty.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/UserDtoPagedResult"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UserDtoPagedResult"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UserDtoPagedResult"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "Bearer": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "Users"
+        ],
+        "summary": "`POST /users` — create a user with an initial role and password.",
+        "requestBody": {
+          "description": "The user's e-mail, name, initial role and password.",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UserCreateRequest"
+              }
+            },
+            "text/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UserCreateRequest"
+              }
+            },
+            "application/*+json": {
+              "schema": {
+                "$ref": "#/components/schemas/UserCreateRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "The created user. `Location` names it.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/UserDto"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UserDto"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UserDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "A field failed a column rule or the password policy.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The e-mail is already in use, the role is unknown, or no school could be resolved.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "Bearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/users/{id}": {
+      "get": {
+        "tags": [
+          "Users"
+        ],
+        "summary": "`GET /users/{id}` — one user.",
+        "operationId": "GetUser",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The user.",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The user.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/UserDto"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UserDto"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UserDto"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such user in this school.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "Bearer": []
+          }
+        ]
+      },
+      "put": {
+        "tags": [
+          "Users"
+        ],
+        "summary": "`PUT /users/{id}` — edit the full name and phone. Not the e-mail; see EAMS.Application.Dtos.UserUpdateRequest.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The user.",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "The new full name and phone.",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UserUpdateRequest"
+              }
+            },
+            "text/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UserUpdateRequest"
+              }
+            },
+            "application/*+json": {
+              "schema": {
+                "$ref": "#/components/schemas/UserUpdateRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The updated user.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/UserDto"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UserDto"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UserDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The full name is blank or a field is over-length.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such user.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "Bearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/users/{id}/active": {
+      "patch": {
+        "tags": [
+          "Users"
+        ],
+        "summary": "`PATCH /users/{id}/active` — deactivate a user, or bring them back.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The user.",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "`{\"isActive\": false}` to deactivate, `{\"isActive\": true}` to restore.",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UserActiveRequest"
+              }
+            },
+            "text/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UserActiveRequest"
+              }
+            },
+            "application/*+json": {
+              "schema": {
+                "$ref": "#/components/schemas/UserActiveRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The user, with its new flag.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/UserDto"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UserDto"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UserDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`isActive` was not supplied.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such user.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "You aimed it at your own account — that would lock you out.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "Bearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/users/{id}/roles": {
+      "put": {
+        "tags": [
+          "Users"
+        ],
+        "summary": "`PUT /users/{id}/roles` — replace the set of roles the user holds.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The user.",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "The complete set of role ids the user should hold after the call.",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UserRolesRequest"
+              }
+            },
+            "text/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UserRolesRequest"
+              }
+            },
+            "application/*+json": {
+              "schema": {
+                "$ref": "#/components/schemas/UserRolesRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The user, with its new roles.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/UserDto"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UserDto"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UserDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`roleIds` was not supplied.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such user.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "A role id is unknown, or you aimed it at your own account.",
             "content": {
               "text/plain": {
                 "schema": {
@@ -9310,6 +9945,40 @@
         },
         "additionalProperties": {}
       },
+      "RoleDto": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "name": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string",
+            "nullable": true
+          },
+          "isSystem": {
+            "type": "boolean",
+            "description": "`true` for the four built-in roles (§4.11). A future role-administration surface reads this to\r\n            refuse deleting one — a product whose built-in roles can be deleted can be locked out of itself."
+          },
+          "userCount": {
+            "type": "integer",
+            "description": "How many users in this school hold the role — scoped by the tenant query filter through the user, so a\r\nSchoolAdmin sees their own school's count. Roles themselves are global.",
+            "format": "int32"
+          },
+          "permissionCodes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The permission codes the role grants, so the picker can show what it does."
+          }
+        },
+        "additionalProperties": false,
+        "description": "One role, as `GET /roles` lists it — enough for the user-management screen's role picker to\r\noffer it and show what it grants."
+      },
       "Seams": {
         "type": "object",
         "properties": {
@@ -10251,6 +10920,163 @@
         },
         "additionalProperties": false,
         "description": "The body of `POST /academic/terms` and `PUT /academic/terms/{id}` (D-53).\r\n            \r\n\r\n<b>EAMS.Application.Dtos.TermWriteRequest.Code is stored exactly as typed.</b> It is the one natural key in the academic\r\nlayer that is authored by a person rather than scraped from a spreadsheet cell, so there is no dirt\r\nto clean and `AcademicKey` never touches it. A value with leading or trailing whitespace is a\r\n`400` rather than a silent trim — see EAMS.Domain.TermText for why refusing beats\r\nnormalizing here.\r\n\r\n<b>`SchoolId` is deliberately absent</b>, exactly as it is on `EventWriteRequest` and\r\n`DeviceWriteRequest`: the tenant comes from\r\nEAMS.Application.Abstractions.ISchoolContext, never from the request.\r\n\r\n<b>`IsCurrent` is deliberately absent too, and that is not symmetry for its own sake.</b>\r\nMoving the flag is a two-row operation guarded by a filtered unique index\r\n(`UX_Terms_SchoolId_Current`), so it is `PATCH /academic/terms/{id}/current` — the same\r\nsplit `PATCH /events/{id}/status` draws for the same reason. It also keeps the create path's\r\nunique-violation arm unambiguous: with the current flag out of the body, the only index a create can\r\npossibly break is `UX_Terms_SchoolId_Code`, so answering `TermCodeExists` is a fact rather\r\nthan a guess between two indexes.\r\n"
+      },
+      "UserActiveRequest": {
+        "type": "object",
+        "properties": {
+          "isActive": {
+            "type": "boolean",
+            "description": "Nullable, and an omitted member is a 400 rather than a default — the same reasoning\r\n`ClassificationActiveRequest.IsActive` records: a missing member binds to `false`, and on\r\nthis route `false` locks a user out.",
+            "nullable": true
+          }
+        },
+        "additionalProperties": false,
+        "description": "The body of `PATCH /users/{id}/active`."
+      },
+      "UserCreateRequest": {
+        "type": "object",
+        "properties": {
+          "email": {
+            "type": "string"
+          },
+          "fullName": {
+            "type": "string"
+          },
+          "phone": {
+            "type": "string",
+            "nullable": true
+          },
+          "roleName": {
+            "type": "string"
+          },
+          "password": {
+            "type": "string",
+            "description": "The initial password. Held to the same length policy the provisioning service enforces."
+          }
+        },
+        "additionalProperties": false,
+        "description": "The body of `POST /users`."
+      },
+      "UserDto": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "email": {
+            "type": "string",
+            "description": "The login identifier, normalized."
+          },
+          "fullName": {
+            "type": "string"
+          },
+          "phone": {
+            "type": "string",
+            "nullable": true
+          },
+          "isActive": {
+            "type": "boolean",
+            "description": "`false` is deactivated — the account cannot sign in, and its historical\r\n            rows (attendance it recorded, audit entries) are untouched."
+          },
+          "lastLoginAt": {
+            "type": "string",
+            "description": "When the user last signed in, or null if never.",
+            "format": "date-time",
+            "nullable": true
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "roles": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/UserRoleRef"
+            },
+            "description": "Every role the user holds. Empty is an ordinary state — a user with no role has no access, which is\r\n§11's \"users without roles\" case, not an error."
+          }
+        },
+        "additionalProperties": false,
+        "description": "One user, as `GET /users` and `GET /users/{id}` publish them."
+      },
+      "UserDtoPagedResult": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/UserDto"
+            },
+            "description": "This page's rows, in the endpoint's documented order. Empty is an ordinary answer — for an empty\r\nfilter and for a page past the end alike."
+          },
+          "page": {
+            "type": "integer",
+            "description": "The 1-based page actually served, which is <em>not</em> necessarily the one requested: an\r\nout-of-range `?page=` is clamped and this is where a client sees that it was.",
+            "format": "int32"
+          },
+          "pageSize": {
+            "type": "integer",
+            "description": "The page size actually applied, after the EAMS.Application.Dtos.Paging.MaxPageSize clamp. The field that\r\nmakes clamping discoverable rather than silent.",
+            "format": "int32"
+          },
+          "total": {
+            "type": "integer",
+            "description": "Rows matching the filter across every page, counted in the database against the same filter that\r\nproduced Items. This is what a grid needs to render a page count; without it a\r\ncaller can only discover the end by walking into it.",
+            "format": "int32"
+          },
+          "hasMore": {
+            "type": "boolean",
+            "description": "Whether another page exists after this one.\r\n            \r\n\r\n<b>Derived here rather than left to the client, because the client gets it wrong.</b>`page * pageSize < total` is right and `items.Count == pageSize` is the version\r\npeople write — which reports a further page whenever the last page happens to be exactly full,\r\nso a paging loop makes one extra request every time the total is a multiple of the page size.\r\nComputing it once, on the side that already holds the total, is a byte on the wire against a\r\nclass of off-by-one nobody finds in review.\r\n",
+            "readOnly": true
+          }
+        },
+        "additionalProperties": false,
+        "description": "One page of an admin list read, plus what the caller needs to ask for the next one.\r\n            \r\n\r\n<b>Every §6.2/§6.3 admin list returns this; `GET /attendance/live/{eventId}` deliberately does\r\nnot.</b> That endpoint pages by cursor (`since`/`cursor`/`hasMore`) because it is a\r\npolling delta rather than a list — a client asks \"what changed after this point\", not \"give me rows\r\n40 to 60\" — and its shape is frozen published contract under D-29/D-30/D-42. Offset paging over a\r\nlive feed also drops rows: an insert below the cursor shifts every subsequent row up by one and the\r\nnext page skips it. The two mechanisms coexisting is correct, not an inconsistency to tidy.\r\n"
+      },
+      "UserRoleRef": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "name": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false,
+        "description": "One role a user holds, as an id/name pair so a picker can round-trip the selection."
+      },
+      "UserRolesRequest": {
+        "type": "object",
+        "properties": {
+          "roleIds": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "description": "The roles to hold. An empty list is allowed and leaves the user with no access — §11's \"users without\r\nroles\" state — but null is a 400: it is the difference between \"remove every role\" and \"the field was\r\nnot sent\".",
+            "nullable": true
+          }
+        },
+        "additionalProperties": false,
+        "description": "The body of `PUT /users/{id}/roles` — the complete set of roles the user should hold after the\r\ncall (a replacement, not a delta)."
+      },
+      "UserUpdateRequest": {
+        "type": "object",
+        "properties": {
+          "fullName": {
+            "type": "string"
+          },
+          "phone": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "additionalProperties": false,
+        "description": "The body of `PUT /users/{id}` — the editable profile fields."
       }
     },
     "securitySchemes": {
@@ -10302,6 +11128,10 @@
       "description": "Technical Plan §6.7's reports module, as the client's QA answers Q15/Q16 (MDVault #463 Part D)\r\nscoped it: a summary of one event and a summary of several, for administrators only.\r\n            \r\n\r\n<b>Every action here is `reports.read`, which only SuperAdmin and SchoolAdmin hold.</b> That\r\nnarrows §11, which also gives report reading to Organizer and Viewer. Q16 overrides it and JJ\r\napproved the override (see EAMS.Api.Authorization.EamsPermissions.ReportsRead).\r\n\r\n<b>Bearer only.</b> A device key is scoped to `attendance.capture` and belongs to a kiosk,\r\nnot a person; a report is an operator's read.\r\n"
     },
     {
+      "name": "Roles",
+      "description": "The role list — §11's roles, for the user-management screen to assign from."
+    },
+    {
       "name": "SisImport",
       "description": "Technical Plan §10 — the school-year roster import.\r\n            \r\n\r\n<b>Every endpoint demands a Bearer token carrying `sis.import`.</b> That matters more here\r\nthan anywhere else in this API: these endpoints read and write the full roster of every\r\nstudent in the institution, including their names and institutional e-mail addresses, and the\r\nupload endpoint writes to the academic tables.\r\n"
     },
@@ -10312,6 +11142,10 @@
     {
       "name": "StudentGroups",
       "description": "Technical Plan §4.7 `StudentGroups` over HTTP — <b>reads only</b>."
+    },
+    {
+      "name": "Users",
+      "description": "§11's User Management (UserWithRBAC.docx) — the admin surface over `Users` and the roles they\r\nhold. Users are tenant-scoped, so every route here is bounded to the caller's school by the global\r\nquery filter."
     }
   ]
 }

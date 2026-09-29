@@ -49,6 +49,11 @@ import type {
   TermWriteRequest,
   EventClassification,
   EventClassificationWriteRequest,
+  AdminUser,
+  UserRoleRef,
+  UserCreateRequest,
+  UserUpdateRequest,
+  Role,
 } from "./types";
 
 // The one security-relevant dependency this module has, and the reason it is in the import block
@@ -1284,6 +1289,35 @@ function toClassification(row: Row, what: string): Classification {
     retiredAt: optStr(row.retiredAt),
     mergedIntoClassificationId: optStr(row.mergedIntoClassificationId),
     studentCount: reqNum(row, "studentCount", what),
+  };
+}
+
+/** `UserDto` — one user in §11's User Management surface. */
+function toAdminUser(row: Row, what: string): AdminUser {
+  return {
+    id: reqStr(row, "id", what),
+    email: reqStr(row, "email", what),
+    fullName: reqStr(row, "fullName", what),
+    phone: optStr(row.phone),
+    isActive: reqBool(row, "isActive", what),
+    lastLoginAt: optStr(row.lastLoginAt),
+    createdAt: reqStr(row, "createdAt", what),
+    roles: asRows(row.roles, `${what}.roles`).map((r, i): UserRoleRef => ({
+      id: reqStr(r, "id", `${what}.roles[${i}]`),
+      name: reqStr(r, "name", `${what}.roles[${i}]`),
+    })),
+  };
+}
+
+/** `RoleDto` — one role the user-management screen assigns from. */
+function toRole(row: Row, what: string): Role {
+  return {
+    id: reqStr(row, "id", what),
+    name: reqStr(row, "name", what),
+    description: optStr(row.description),
+    isSystem: reqBool(row, "isSystem", what),
+    userCount: reqNum(row, "userCount", what),
+    permissionCodes: reqStrs(row, "permissionCodes", what),
   };
 }
 
@@ -2633,6 +2667,77 @@ async function setTermCurrent(id: string, isCurrent: boolean): Promise<Term> {
 }
 
 // ---------------------------------------------------------------------------------------------
+// User management — §11 (UserWithRBAC.docx), administrators only
+// ---------------------------------------------------------------------------------------------
+
+/**
+ * `GET /users` — the school's users, active first then by name. `listAll` walks the pages: a single
+ * school's staff list is small, and the screen groups and filters the whole set client-side.
+ */
+async function listUsers(includeInactive?: boolean, search?: string): Promise<AdminUser[]> {
+  return listAll(
+    "GET /users",
+    "/users",
+    {
+      includeInactive: includeInactive === undefined ? undefined : String(includeInactive),
+      search: search === undefined || search.length === 0 ? undefined : search,
+    },
+    toAdminUser,
+  );
+}
+
+/** `GET /users/{id}` — one user, or undefined when this tenant has no such row (404). */
+async function getUser(id: string): Promise<AdminUser | undefined> {
+  const what = "GET /users/{id}";
+  const body = await getJsonOrMissing(what, `/users/${encodeURIComponent(id)}`);
+  return body === undefined ? undefined : toAdminUser(asRow(body, what), what);
+}
+
+/**
+ * `POST /users` — create a user with an initial role and password. Refusals: **400** for a field or the
+ * password policy, **409** for a duplicate e-mail (`EmailInUse`), an unknown role (`UnknownRole`), or no
+ * resolvable school (`NoSchoolResolved`).
+ */
+async function createUser(request: UserCreateRequest): Promise<AdminUser> {
+  return writeJson(
+    "POST /users", "/users", { method: "POST", payload: request }, "The user was created", toAdminUser);
+}
+
+/** `PUT /users/{id}` — edit the full name and phone (not the e-mail). */
+async function updateUser(id: string, request: UserUpdateRequest): Promise<AdminUser> {
+  return writeJson(
+    "PUT /users/{id}", `/users/${encodeURIComponent(id)}`,
+    { method: "PUT", payload: request }, "The change was saved", toAdminUser);
+}
+
+/**
+ * `PATCH /users/{id}/active` — deactivate a user or bring them back. **409 `SelfLockout`** if you aim it
+ * at your own account. `isActive` is required (an omitted member is a 400, never a silent lockout).
+ */
+async function setUserActive(id: string, isActive: boolean): Promise<AdminUser> {
+  return writeJson(
+    "PATCH /users/{id}/active", `/users/${encodeURIComponent(id)}/active`,
+    { method: "PATCH", payload: { isActive } },
+    isActive ? "The user was reactivated" : "The user was deactivated", toAdminUser);
+}
+
+/**
+ * `PUT /users/{id}/roles` — replace the complete set of roles the user holds (a replacement, not a
+ * delta). An empty array removes every role; **409 `SelfLockout`** if you aim it at your own account,
+ * **409 `UnknownRole`** if a role id is unknown.
+ */
+async function setUserRoles(id: string, roleIds: readonly string[]): Promise<AdminUser> {
+  return writeJson(
+    "PUT /users/{id}/roles", `/users/${encodeURIComponent(id)}/roles`,
+    { method: "PUT", payload: { roleIds } }, "The roles were updated", toAdminUser);
+}
+
+/** `GET /roles` — the roles the user-management screen assigns from. */
+async function listRoles(): Promise<Role[]> {
+  return listAll("GET /roles", "/roles", {}, toRole);
+}
+
+// ---------------------------------------------------------------------------------------------
 // Event classifications — Institutional / Departmental / Organizational, extensible
 // ---------------------------------------------------------------------------------------------
 
@@ -3457,6 +3562,13 @@ export const api = {
   updateEventClassification,
   setEventClassificationActive,
   deleteEventClassification,
+  listUsers,
+  getUser,
+  createUser,
+  updateUser,
+  setUserActive,
+  setUserRoles,
+  listRoles,
   sectionChoices,
   uploadRoster,
   runImport,

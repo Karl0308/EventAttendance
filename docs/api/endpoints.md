@@ -3,7 +3,7 @@
 <!-- GENERATED FILE — DO NOT EDIT.
      Source: docs/api/openapi.json. Regenerate: node scripts/generate-endpoint-index.mjs --write -->
 
-**Generated from [`openapi.json`](openapi.json) — do not edit by hand.** 77 operations across 14 controllers, all mounted under `/api/v1`. Routes below are written relative to that mount.
+**Generated from [`openapi.json`](openapi.json) — do not edit by hand.** 84 operations across 16 controllers, all mounted under `/api/v1`. Routes below are written relative to that mount.
 
 This page is a **map, not a contract.** It exists so you can find an endpoint; payload shapes, field types and outcome tokens live in [`openapi.json`](openapi.json), which is what you generate a client from. Behaviour a schema cannot state — what your queue does with each outcome, the card-UID and clock rules — is in [`attendance-contract-handoff.md`](attendance-contract-handoff.md).
 
@@ -19,9 +19,11 @@ This page is a **map, not a contract.** It exists so you can find an endpoint; p
 - [EventClassifications](#eventclassifications) — 6
 - [EventManifest](#eventmanifest) — 1
 - [Reports](#reports) — 5
+- [Roles](#roles) — 1
 - [SisImport](#sisimport) — 5
 - [StudentClassifications](#studentclassifications) — 3
 - [StudentGroups](#studentgroups) — 1
+- [Users](#users) — 6
 - [Attendance](#attendance) — 5
 - [Events](#events) — 14
 - [Students](#students) — 8
@@ -107,6 +109,12 @@ This page is a **map, not a contract.** It exists so you can find an endpoint; p
 | `GET` | `/reports/event/{eventId}/summary` | **Bearer** | `401` `403` `404` | §6.7 `GET /reports/event/{eventId}/summary` — the Event Attendance Summary for one event. |
 | `GET` | `/reports/events/summary` | **Bearer** | `400` `401` `403` `404` | A summary of several hand-picked events: one row per event and their pooled totals. |
 
+## Roles
+
+| Method | Route | Auth | Errors | What it does |
+|---|---|---|---|---|
+| `GET` | `/roles` | **Bearer** | *none declared* | Every role, ordered by name, with the count of users in this school that hold it and the permission codes it grants. |
+
 ## SisImport
 
 | Method | Route | Auth | Errors | What it does |
@@ -130,6 +138,17 @@ This page is a **map, not a contract.** It exists so you can find an endpoint; p
 | Method | Route | Auth | Errors | What it does |
 |---|---|---|---|---|
 | `GET` | `/student-groups` | **Bearer** | *none declared* | The audiences an event can be attached to, every filter optional. |
+
+## Users
+
+| Method | Route | Auth | Errors | What it does |
+|---|---|---|---|---|
+| `GET` | `/users` | **Bearer** | *none declared* | The school's users, active first then by name. |
+| `POST` | `/users` | **Bearer** | `400` `409` | Create a user with an initial role and password. |
+| `GET` | `/users/{id}` | **Bearer** | `404` | One user. |
+| `PUT` | `/users/{id}` | **Bearer** | `400` `404` | Edit the full name and phone. |
+| `PATCH` | `/users/{id}/active` | **Bearer** | `400` `404` `409` | Deactivate a user, or bring them back. |
+| `PUT` | `/users/{id}/roles` | **Bearer** | `400` `404` `409` | Replace the set of roles the user holds. |
 
 ## Attendance
 

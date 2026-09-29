@@ -14,6 +14,7 @@ import EventDetail from "./pages/EventDetail";
 import Devices from "./pages/Devices";
 import Terms from "./pages/Terms";
 import EventClassifications from "./pages/EventClassifications";
+import Users from "./pages/Users";
 import Reports from "./pages/Reports";
 
 /**
@@ -102,6 +103,9 @@ export default function App() {
           path="/event-classifications"
           element={gated(PERMISSIONS.eventsRead, <EventClassifications />)}
         />
+
+        {/* §11 User Management (UserWithRBAC.docx), administrators only. */}
+        <Route path="/users" element={gated(PERMISSIONS.usersRead, <Users />)} />
 
         {/* Admin-only per Q16, and narrower than §11's own table — see `PERMISSIONS.reportsRead`. */}
         <Route path="/reports" element={gated(PERMISSIONS.reportsRead, <Reports />)} />

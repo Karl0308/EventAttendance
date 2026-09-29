@@ -231,6 +231,28 @@ public static class EamsPermissions
     public const string AcademicWrite = "academic.write";
 
     /// <summary>
+    /// §11's User Management (UserWithRBAC.docx) — reading the user list and one user:
+    /// <c>GET /users</c> and <c>GET /users/{id}</c>.
+    ///
+    /// <para>
+    /// <b>Granted to SuperAdmin and SchoolAdmin</b> — every human-assignable code is, and the two hold
+    /// an identical set by design (§4.11 <c>Roles</c> has no <c>SchoolId</c>, so the admins cannot
+    /// differ in this schema; see <see cref="EamsRoles.HumanAssignable"/> and
+    /// <c>EamsRoleNames.SchoolAdmin</c>). Users are tenant-scoped, so a SchoolAdmin manages only their
+    /// own school's users through the global query filter. Existing installations receive the grant from
+    /// <c>GrantUserAdminToAdminRoles</c>, not the startup seed, which never reconciles an existing role.
+    /// </para>
+    /// </summary>
+    public const string UsersRead = "users.read";
+
+    /// <summary>
+    /// §11's User Management writes — creating, editing, activating/deactivating a user and setting the
+    /// roles it holds (<c>POST /users</c>, <c>PUT /users/{id}</c>, <c>PATCH /users/{id}/active</c>,
+    /// <c>PUT /users/{id}/roles</c>). Administrators only, exactly as <see cref="UsersRead"/>.
+    /// </summary>
+    public const string UsersWrite = "users.write";
+
+    /// <summary>
     /// §6.7's reports module — <c>GET /reports/event/{eventId}/summary</c> and
     /// <c>GET /reports/events/summary</c>. <b>Administrators only.</b>
     ///

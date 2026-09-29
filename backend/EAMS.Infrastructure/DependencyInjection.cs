@@ -192,6 +192,15 @@ public static class DependencyInjection
         services.AddScoped<IUserProvisioningService, UserProvisioningService>();
         services.AddScoped<IRefreshTokenStore, RefreshTokenStore>();
 
+        // §11's User Management admin surface (UserWithRBAC.docx). Scoped like the rest; it composes the
+        // provisioning service above for creation so no user is created by a rule the bootstrap path does
+        // not use, and reads ICurrentUser for the self-lockout guards.
+        services.AddScoped<IUserAdminService, UserAdminService>();
+
+        // The role list the user-management screen assigns from. Read-only today; role administration is
+        // a later increment.
+        services.AddScoped<IRoleAdminService, RoleAdminService>();
+
         // Phase 6b: the /auth surface's verify-and-persist half. It composes the three above and adds
         // the effective permission set and the audit trail; it mints nothing, because the signing key
         // never enters this assembly (D-74 — see TokenIssuer in EAMS.Api).

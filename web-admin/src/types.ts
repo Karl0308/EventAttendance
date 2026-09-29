@@ -157,6 +157,60 @@ export interface EventClassificationWriteRequest {
   description: string | null;
 }
 
+// ---------------------------------------------------------------------------------------------
+// §11 User Management (UserWithRBAC.docx) — administrators only
+// ---------------------------------------------------------------------------------------------
+
+/** One role a user holds, or one offered by the role picker. */
+export interface Role {
+  id: string;
+  name: string;
+  description?: string;
+  /** The four built-in roles are system roles; a future role editor refuses to delete one. */
+  isSystem: boolean;
+  /** Users in this school that hold the role. */
+  userCount: number;
+  /** The permission codes the role grants — shown so a picker can say what it does. */
+  permissionCodes: string[];
+}
+
+/** One role reference on a user — an id/name pair so a picker round-trips the selection. */
+export interface UserRoleRef {
+  id: string;
+  name: string;
+}
+
+/** `UserDto` — one user, as `GET /users` and `GET /users/{id}` publish them. */
+export interface AdminUser {
+  id: string;
+  email: string;
+  fullName: string;
+  phone?: string;
+  /** `false` is deactivated — cannot sign in; historical rows are kept. */
+  isActive: boolean;
+  lastLoginAt?: string;
+  createdAt: string;
+  roles: UserRoleRef[];
+}
+
+/**
+ * The body of `POST /users`. The initial password is held to the server's length policy (12+). Further
+ * roles are assigned after creation via `PUT /users/{id}/roles`.
+ */
+export interface UserCreateRequest {
+  email: string;
+  fullName: string;
+  phone: string | null;
+  roleName: string;
+  password: string;
+}
+
+/** The body of `PUT /users/{id}` — the editable profile fields (not the e-mail). */
+export interface UserUpdateRequest {
+  fullName: string;
+  phone: string | null;
+}
+
 export interface Student {
   id: string;
   studentNumber: string;
