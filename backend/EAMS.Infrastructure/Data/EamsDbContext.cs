@@ -87,6 +87,12 @@ internal class EamsDbContext : DbContext
     public DbSet<EventClassification> EventClassifications => Set<EventClassification>();
 
     /// <summary>
+    /// The Academic Community's personnel — faculty and employees (StudentsEmployees.docx). The parallel
+    /// of <see cref="Students"/>. Additive. See <see cref="Personnel"/>.
+    /// </summary>
+    public DbSet<Personnel> Personnel => Set<Personnel>();
+
+    /// <summary>
     /// Every <c>DateTime</c> in the model round-trips as UTC. Applied as a convention rather than
     /// per property so entities added later (the ADR-001 D-1 academic layer) inherit it by default
     /// instead of by remembering — the failure mode this closes is silent and invisible in the
@@ -232,6 +238,7 @@ internal class EamsDbContext : DbContext
         ConfigureAcademicStructure(b);
         ConfigureClassifications(b);
         ConfigureEventClassifications(b);
+        ConfigurePersonnel(b);
         ConfigureSchoolIdQueryFilters(b);
 
         // Hard deletes are never issued by the application (§4 uses IsDeleted soft delete), and an
@@ -405,6 +412,11 @@ internal class EamsDbContext : DbContext
         // The event-classification vocabulary owns a SchoolId directly. Filtered like every other owner —
         // an institution's event categories are tenant data like any other.
         b.Entity<EventClassification>().HasQueryFilter(
+            x => _school.CurrentSchoolId == null || x.SchoolId == _school.CurrentSchoolId);
+
+        // Personnel own a SchoolId directly — filtered like Students. IsDeleted is filtered in the reads,
+        // not here, exactly as it is for Students.
+        b.Entity<Personnel>().HasQueryFilter(
             x => _school.CurrentSchoolId == null || x.SchoolId == _school.CurrentSchoolId);
     }
 
@@ -789,6 +801,46 @@ internal class EamsDbContext : DbContext
             e.HasIndex(x => new { x.SchoolId, x.NameKey }).IsUnique()
                 .HasFilter(null)
                 .HasDatabaseName("UX_EventClassifications_SchoolId_NameKey");
+        });
+
+    /// <summary>
+    /// The Academic Community's personnel. Not a §4 table — additive.
+    ///
+    /// <para>
+    /// <b>Both uniqueness indexes are filtered to live rows.</b> Personnel are soft-deleted, and unlike
+    /// <c>IX_Students_SchoolId_StudentNumber</c> (which deliberately keeps a deleted student's number
+    /// taken) these free the ID and the card for reuse when a record is removed — a mistaken personnel
+    /// entry re-added under the same ID should just work. The RFID index additionally excludes NULL, so
+    /// the many personnel without a card do not collide on "no card".
+    /// </para>
+    /// </summary>
+    private static void ConfigurePersonnel(ModelBuilder b) =>
+        b.Entity<Personnel>(e =>
+        {
+            e.ToTable("Personnel");
+            e.Property(x => x.PersonnelNumber).HasMaxLength(PersonnelText.NumberMaxLength).IsRequired();
+            e.Property(x => x.FirstName).HasMaxLength(PersonnelText.NameMaxLength).IsRequired();
+            e.Property(x => x.MiddleName).HasMaxLength(PersonnelText.NameMaxLength);
+            e.Property(x => x.LastName).HasMaxLength(PersonnelText.NameMaxLength).IsRequired();
+            e.Property(x => x.Email).HasMaxLength(PersonnelText.EmailMaxLength);
+            e.Property(x => x.Classification).HasMaxLength(PersonnelText.ClassificationMaxLength);
+            e.Property(x => x.Department).HasMaxLength(PersonnelText.DepartmentMaxLength);
+            e.Property(x => x.Organization).HasMaxLength(PersonnelText.OrganizationMaxLength);
+            e.Property(x => x.Position).HasMaxLength(PersonnelText.PositionMaxLength);
+            e.Property(x => x.RfidUid).HasMaxLength(PersonnelText.RfidUidMaxLength);
+            e.Property(x => x.Status).HasMaxLength(20).IsRequired()
+                .HasDefaultValue(PersonnelStatus.Active).ValueGeneratedNever();
+            e.Property(x => x.IsDeleted).HasDefaultValue(false).ValueGeneratedNever();
+
+            e.HasOne(x => x.School).WithMany().HasForeignKey(x => x.SchoolId).IsRequired();
+
+            e.HasIndex(x => new { x.SchoolId, x.PersonnelNumber }).IsUnique()
+                .HasFilter("[IsDeleted] = 0")
+                .HasDatabaseName("UX_Personnel_SchoolId_PersonnelNumber");
+
+            e.HasIndex(x => new { x.SchoolId, x.RfidUid }).IsUnique()
+                .HasFilter("[IsDeleted] = 0 AND [RfidUid] IS NOT NULL")
+                .HasDatabaseName("UX_Personnel_SchoolId_RfidUid");
         });
 
     // §4.2 Schools

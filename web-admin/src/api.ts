@@ -55,6 +55,8 @@ import type {
   UserUpdateRequest,
   Role,
   RoleWriteRequest,
+  Personnel,
+  PersonnelWriteRequest,
 } from "./types";
 
 // The one security-relevant dependency this module has, and the reason it is in the import block
@@ -1290,6 +1292,25 @@ function toClassification(row: Row, what: string): Classification {
     retiredAt: optStr(row.retiredAt),
     mergedIntoClassificationId: optStr(row.mergedIntoClassificationId),
     studentCount: reqNum(row, "studentCount", what),
+  };
+}
+
+/** `PersonnelDto` — one personnel record. */
+function toPersonnel(row: Row, what: string): Personnel {
+  return {
+    id: reqStr(row, "id", what),
+    personnelNumber: reqStr(row, "personnelNumber", what),
+    fullName: reqStr(row, "fullName", what),
+    firstName: reqStr(row, "firstName", what),
+    middleName: optStr(row.middleName),
+    lastName: reqStr(row, "lastName", what),
+    email: optStr(row.email),
+    classification: optStr(row.classification),
+    department: optStr(row.department),
+    organization: optStr(row.organization),
+    position: optStr(row.position),
+    rfidUid: optStr(row.rfidUid),
+    status: reqStr(row, "status", what),
   };
 }
 
@@ -2668,6 +2689,39 @@ async function setTermCurrent(id: string, isCurrent: boolean): Promise<Term> {
 }
 
 // ---------------------------------------------------------------------------------------------
+// Academic Community — Personnel (StudentsEmployees.docx)
+// ---------------------------------------------------------------------------------------------
+
+/**
+ * `GET /personnel` — the school's personnel. `listAll` walks the pages: a school's staff is small enough
+ * to hold, and the grid filters and sorts the whole set client-side.
+ */
+async function listPersonnel(): Promise<Personnel[]> {
+  return listAll("GET /personnel", "/personnel", {}, toPersonnel);
+}
+
+/** `POST /personnel` — create a record. **409** on a duplicate ID or RFID UID. */
+async function createPersonnel(request: PersonnelWriteRequest): Promise<Personnel> {
+  return writeJson(
+    "POST /personnel", "/personnel", { method: "POST", payload: request },
+    "The personnel record was created", toPersonnel);
+}
+
+/** `PUT /personnel/{id}` — full replacement of the record's fields. */
+async function updatePersonnel(id: string, request: PersonnelWriteRequest): Promise<Personnel> {
+  return writeJson(
+    "PUT /personnel/{id}", `/personnel/${encodeURIComponent(id)}`,
+    { method: "PUT", payload: request }, "The change was saved", toPersonnel);
+}
+
+/** `DELETE /personnel/{id}` — soft-delete. Answers 200 with the removed record. */
+async function deletePersonnel(id: string): Promise<Personnel> {
+  return writeJson(
+    "DELETE /personnel/{id}", `/personnel/${encodeURIComponent(id)}`,
+    { method: "DELETE" }, "The personnel record was removed", toPersonnel);
+}
+
+// ---------------------------------------------------------------------------------------------
 // User management — §11 (UserWithRBAC.docx), administrators only
 // ---------------------------------------------------------------------------------------------
 
@@ -3601,6 +3655,10 @@ export const api = {
   updateEventClassification,
   setEventClassificationActive,
   deleteEventClassification,
+  listPersonnel,
+  createPersonnel,
+  updatePersonnel,
+  deletePersonnel,
   listUsers,
   getUser,
   createUser,

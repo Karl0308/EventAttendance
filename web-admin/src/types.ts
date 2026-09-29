@@ -217,6 +217,53 @@ export interface RoleWriteRequest {
   description: string | null;
 }
 
+// ---------------------------------------------------------------------------------------------
+// Academic Community — Personnel (StudentsEmployees.docx)
+// ---------------------------------------------------------------------------------------------
+
+/** `PersonnelDto` — one personnel (faculty/employee) record, as `GET /personnel` publishes it. */
+export interface Personnel {
+  id: string;
+  personnelNumber: string;
+  /** Composed by the server (`Last, First Middle`); read-only. */
+  fullName: string;
+  firstName: string;
+  middleName?: string;
+  lastName: string;
+  email?: string;
+  classification?: string;
+  department?: string;
+  organization?: string;
+  position?: string;
+  /** Normalized card serial (letters and digits, upper-cased), or unset. */
+  rfidUid?: string;
+  /** `Active` or `Inactive`. */
+  status: string;
+}
+
+/** §11's two personnel statuses. Read to compare; `Personnel.status` stays `string` on the wire. */
+export const PERSONNEL_STATUSES = ["Active", "Inactive"] as const;
+export type PersonnelStatusName = (typeof PERSONNEL_STATUSES)[number];
+
+/**
+ * The body of `POST /personnel` and `PUT /personnel/{id}` — one shape, checked by one method. A full
+ * replacement on update. Nullable strings are `string | null` (an omitted key and an explicit null mean
+ * the same to the server); `rfidUid` is sent as read and normalized server-side.
+ */
+export interface PersonnelWriteRequest {
+  personnelNumber: string;
+  firstName: string;
+  middleName: string | null;
+  lastName: string;
+  email: string | null;
+  classification: string | null;
+  department: string | null;
+  organization: string | null;
+  position: string | null;
+  rfidUid: string | null;
+  status: PersonnelStatusName;
+}
+
 export interface Student {
   id: string;
   studentNumber: string;

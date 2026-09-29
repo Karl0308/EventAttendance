@@ -7,6 +7,7 @@ import { PERMISSIONS, type PermissionCode } from "./permissions";
 import Dashboard from "./pages/Dashboard";
 import Login from "./pages/Login";
 import Students from "./pages/Students";
+import PersonnelPage from "./pages/Personnel";
 import StudentsImport from "./pages/StudentsImport";
 import StudentsImportProgress from "./pages/StudentsImportProgress";
 import Events from "./pages/Events";
@@ -62,6 +63,9 @@ export default function App() {
         <Route path="/" element={<Dashboard />} />
 
         <Route path="/students" element={gated(PERMISSIONS.studentsRead, <Students />)} />
+        {/* The Academic Community's Personnel tab (StudentsEmployees.docx). Same module and permission
+            as the roster; a distinct route rather than an in-page tab in this increment. */}
+        <Route path="/personnel" element={gated(PERMISSIONS.studentsRead, <PersonnelPage />)} />
         {/* Declared before nothing and after `/students` only for readability — the paths are
             distinct, so order does not decide the match. No nav entry of its own: `Layout`'s
             `isActive` matches on `startsWith`, so Students stays highlighted while the import runs,

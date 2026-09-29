@@ -218,6 +218,33 @@ internal static class TestData
         ClassificationAssignment.For(studentId, classification);
 
     /// <summary>
+    /// A personnel record. <see cref="Personnel.RfidUid"/> is normalized here rather than defaulted to a
+    /// literal, so a fixture cannot write a UID the service would never store.
+    /// </summary>
+    public static Personnel NewPersonnel(
+        Guid schoolId,
+        string personnelNumber = "EMP-0001",
+        string firstName = "Jose",
+        string? middleName = "P",
+        string lastName = "Rizal",
+        string? classification = "ACAD",
+        string? department = "CICT",
+        string? rfidUid = null,
+        string status = "Active") => new()
+    {
+        SchoolId = schoolId,
+        PersonnelNumber = personnelNumber,
+        FirstName = firstName,
+        MiddleName = middleName,
+        LastName = lastName,
+        Email = $"{personnelNumber}@usa.edu.ph",
+        Classification = classification,
+        Department = department,
+        RfidUid = rfidUid is null ? null : CardUid.Normalize(rfidUid),
+        Status = status,
+    };
+
+    /// <summary>
     /// An event-classification vocabulary entry. <see cref="EventClassification.NameKey"/> is derived
     /// here rather than defaulted to a literal, for the reason <see cref="NewClassification"/> records:
     /// a hand-written key could put a row in the table that

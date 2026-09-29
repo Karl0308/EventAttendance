@@ -120,6 +120,11 @@ public static class DependencyInjection
             AttendanceLiveOptions.Resolve(configuration[AttendanceLiveOptions.ConfigurationKey]));
 
         services.AddScoped<IStudentService, StudentService>();
+
+        // The Academic Community's Personnel tab (StudentsEmployees.docx). The parallel of the student
+        // service; takes an ISchoolContext for the same reason — a create decides which school to file the
+        // record under.
+        services.AddScoped<IPersonnelService, PersonnelService>();
         // One scoped EventService per request, reached through two interfaces: the public
         // IEventService, and the internal IEventSummaryFigures the report service below depends on —
         // so the report calls the one summary implementation on the same instance and DbContext,

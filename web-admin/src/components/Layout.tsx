@@ -14,6 +14,7 @@ import {
 } from "@mui/material";
 import DashboardIcon from "@mui/icons-material/Dashboard";
 import PeopleIcon from "@mui/icons-material/People";
+import BadgeIcon from "@mui/icons-material/Badge";
 import EventIcon from "@mui/icons-material/Event";
 import CategoryIcon from "@mui/icons-material/Category";
 import RouterIcon from "@mui/icons-material/Router";
@@ -54,6 +55,12 @@ const nav: readonly NavEntry[] = [
     // deliberately keeps saying `/students`; this is confirmed intentional, not a missed rename.
     label: "Academic Community",
     icon: <PeopleIcon />,
+    permission: PERMISSIONS.studentsRead,
+  },
+  {
+    to: "/personnel",
+    label: "Personnel",
+    icon: <BadgeIcon />,
     permission: PERMISSIONS.studentsRead,
   },
   { to: "/events", label: "Events", icon: <EventIcon />, permission: PERMISSIONS.eventsRead },
