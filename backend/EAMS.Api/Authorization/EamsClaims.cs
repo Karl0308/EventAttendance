@@ -253,6 +253,26 @@ public static class EamsPermissions
     public const string UsersWrite = "users.write";
 
     /// <summary>
+    /// §11's Role Management reads — the role list with its grants and the permission catalogue the
+    /// role-permission editor is built from (<c>GET /roles</c> in its detailed form, <c>GET /permissions</c>).
+    ///
+    /// <para>
+    /// Administrators only, like the other admin codes. <b>Roles are global</b> (§4.11 <c>Roles</c> has no
+    /// <c>SchoolId</c>), so editing them affects every tenant — but the two admin roles hold an identical
+    /// code set by design, so this follows the same rule as the rest. Existing installations receive the
+    /// grant from <c>GrantRoleAdminToAdminRoles</c>.
+    /// </para>
+    /// </summary>
+    public const string RolesRead = "roles.read";
+
+    /// <summary>
+    /// §11's Role Management writes — creating a role, editing its name/description, configuring its
+    /// permissions, and deleting a non-system, unassigned role (<c>POST /roles</c>, <c>PUT /roles/{id}</c>,
+    /// <c>PUT /roles/{id}/permissions</c>, <c>DELETE /roles/{id}</c>). Administrators only.
+    /// </summary>
+    public const string RolesWrite = "roles.write";
+
+    /// <summary>
     /// §6.7's reports module — <c>GET /reports/event/{eventId}/summary</c> and
     /// <c>GET /reports/events/summary</c>. <b>Administrators only.</b>
     ///

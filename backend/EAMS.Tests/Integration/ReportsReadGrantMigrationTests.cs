@@ -255,12 +255,13 @@ public class ReportsReadGrantMigrationTests : IntegrationTest
 
                 Assert.Equal(0, await ReportsReadRowsAsync(connectionString));
 
-                // Migrating this far back also unwinds the later GrantUserAdminToAdminRoles migration,
-                // whose Down removes the two user-admin grants (users.read, users.write) from each admin
-                // role. So an admin loses three grants in total, not one — reports.read plus those two.
-                // (Any future grant migration added after this one widens this delta again; it is the
-                // cost of a down-test that must cross every later migration to reach its target.)
-                const int adminGrantsRemovedByLaterMigrations = 3;
+                // Migrating this far back also unwinds the later admin-grant migrations, whose Downs
+                // remove the user-admin grants (users.read, users.write) and the role-admin grants
+                // (roles.read, roles.write) from each admin role. So an admin loses five grants in total,
+                // not one — reports.read plus those four. (Any future grant migration added after these
+                // widens this delta again; it is the cost of a down-test that must cross every later
+                // migration to reach its target.)
+                const int adminGrantsRemovedByLaterMigrations = 5;
                 Assert.Equal(before[EamsRoleNames.SuperAdmin] - adminGrantsRemovedByLaterMigrations, await AllGrantsAsync(connectionString, EamsRoleNames.SuperAdmin));
                 Assert.Equal(before[EamsRoleNames.SchoolAdmin] - adminGrantsRemovedByLaterMigrations, await AllGrantsAsync(connectionString, EamsRoleNames.SchoolAdmin));
                 Assert.Equal(before[EamsRoleNames.Organizer], await AllGrantsAsync(connectionString, EamsRoleNames.Organizer));

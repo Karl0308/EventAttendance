@@ -211,6 +211,12 @@ export interface UserUpdateRequest {
   phone: string | null;
 }
 
+/** The body of `POST /roles` and `PUT /roles/{id}` — one shape, because the server checks them alike. */
+export interface RoleWriteRequest {
+  name: string;
+  description: string | null;
+}
+
 export interface Student {
   id: string;
   studentNumber: string;

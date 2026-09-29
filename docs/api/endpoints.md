@@ -3,7 +3,7 @@
 <!-- GENERATED FILE — DO NOT EDIT.
      Source: docs/api/openapi.json. Regenerate: node scripts/generate-endpoint-index.mjs --write -->
 
-**Generated from [`openapi.json`](openapi.json) — do not edit by hand.** 84 operations across 16 controllers, all mounted under `/api/v1`. Routes below are written relative to that mount.
+**Generated from [`openapi.json`](openapi.json) — do not edit by hand.** 90 operations across 17 controllers, all mounted under `/api/v1`. Routes below are written relative to that mount.
 
 This page is a **map, not a contract.** It exists so you can find an endpoint; payload shapes, field types and outcome tokens live in [`openapi.json`](openapi.json), which is what you generate a client from. Behaviour a schema cannot state — what your queue does with each outcome, the card-UID and clock rules — is in [`attendance-contract-handoff.md`](attendance-contract-handoff.md).
 
@@ -18,8 +18,9 @@ This page is a **map, not a contract.** It exists so you can find an endpoint; p
 - [Devices](#devices) — 7
 - [EventClassifications](#eventclassifications) — 6
 - [EventManifest](#eventmanifest) — 1
+- [Permissions](#permissions) — 1
 - [Reports](#reports) — 5
-- [Roles](#roles) — 1
+- [Roles](#roles) — 6
 - [SisImport](#sisimport) — 5
 - [StudentClassifications](#studentclassifications) — 3
 - [StudentGroups](#studentgroups) — 1
@@ -99,6 +100,12 @@ This page is a **map, not a contract.** It exists so you can find an endpoint; p
 |---|---|---|---|---|
 | `GET` | `/events/{id}/manifest` | **DeviceKey** | `400` `401` `403` `404` `409` `413` `429` | The offline capture cache: who is expected at this event and which card resolves to whom. |
 
+## Permissions
+
+| Method | Route | Auth | Errors | What it does |
+|---|---|---|---|---|
+| `GET` | `/permissions` | **Bearer** | *none declared* | Every permission code a role may be granted, ordered. |
+
 ## Reports
 
 | Method | Route | Auth | Errors | What it does |
@@ -113,7 +120,12 @@ This page is a **map, not a contract.** It exists so you can find an endpoint; p
 
 | Method | Route | Auth | Errors | What it does |
 |---|---|---|---|---|
-| `GET` | `/roles` | **Bearer** | *none declared* | Every role, ordered by name, with the count of users in this school that hold it and the permission codes it grants. |
+| `GET` | `/roles` | **Bearer** | *none declared* | Every role, with the count of users in this school that hold it and the codes it grants. |
+| `POST` | `/roles` | **Bearer** | `400` `409` | Create a custom role. |
+| `DELETE` | `/roles/{id}` | **Bearer** | `404` `409` | Delete a custom role that no user holds. |
+| `GET` | `/roles/{id}` | **Bearer** | `404` | One role. |
+| `PUT` | `/roles/{id}` | **Bearer** | `400` `404` `409` | Rename and re-describe a custom role. |
+| `PUT` | `/roles/{id}/permissions` | **Bearer** | `400` `404` `409` | Replace the set of permission codes a custom role grants. |
 
 ## SisImport
 

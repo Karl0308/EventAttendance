@@ -54,6 +54,7 @@ import type {
   UserCreateRequest,
   UserUpdateRequest,
   Role,
+  RoleWriteRequest,
 } from "./types";
 
 // The one security-relevant dependency this module has, and the reason it is in the import block
@@ -2732,9 +2733,47 @@ async function setUserRoles(id: string, roleIds: readonly string[]): Promise<Adm
     { method: "PUT", payload: { roleIds } }, "The roles were updated", toAdminUser);
 }
 
-/** `GET /roles` — the roles the user-management screen assigns from. */
+/** `GET /roles` — the roles the user-management screen assigns from, and Role Management edits. */
 async function listRoles(): Promise<Role[]> {
   return listAll("GET /roles", "/roles", {}, toRole);
+}
+
+/** `POST /roles` — create a custom role (no permissions yet). **409** on a duplicate name. */
+async function createRole(request: RoleWriteRequest): Promise<Role> {
+  return writeJson(
+    "POST /roles", "/roles", { method: "POST", payload: request }, "The role was created", toRole);
+}
+
+/** `PUT /roles/{id}` — rename/re-describe a custom role. **409** for a built-in role or a duplicate name. */
+async function updateRole(id: string, request: RoleWriteRequest): Promise<Role> {
+  return writeJson(
+    "PUT /roles/{id}", `/roles/${encodeURIComponent(id)}`,
+    { method: "PUT", payload: request }, "The change was saved", toRole);
+}
+
+/**
+ * `PUT /roles/{id}/permissions` — replace the set of permission codes a custom role grants. **400** for a
+ * code a role may not hold, **409** for a built-in role.
+ */
+async function setRolePermissions(id: string, permissionCodes: readonly string[]): Promise<Role> {
+  return writeJson(
+    "PUT /roles/{id}/permissions", `/roles/${encodeURIComponent(id)}/permissions`,
+    { method: "PUT", payload: { permissionCodes } }, "The permissions were updated", toRole);
+}
+
+/** `DELETE /roles/{id}` — delete a custom role no user holds. **409** for a built-in or held role. */
+async function deleteRole(id: string): Promise<Role> {
+  return writeJson(
+    "DELETE /roles/{id}", `/roles/${encodeURIComponent(id)}`,
+    { method: "DELETE" }, "The role was deleted", toRole);
+}
+
+/** `GET /permissions` — every permission code a role may be granted, for the permission editor. */
+async function listPermissions(): Promise<string[]> {
+  const what = "GET /permissions";
+  const body = await getJson(what, "/permissions");
+  if (!isStringArray(body)) throw offContract(what, "it did not return an array of strings");
+  return body;
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -3569,6 +3608,11 @@ export const api = {
   setUserActive,
   setUserRoles,
   listRoles,
+  createRole,
+  updateRole,
+  setRolePermissions,
+  deleteRole,
+  listPermissions,
   sectionChoices,
   uploadRoster,
   runImport,

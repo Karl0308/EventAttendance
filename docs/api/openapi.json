@@ -5180,6 +5180,50 @@
         ]
       }
     },
+    "/api/v1/permissions": {
+      "get": {
+        "tags": [
+          "Permissions"
+        ],
+        "summary": "`GET /permissions` — every permission code a role may be granted, ordered.",
+        "responses": {
+          "200": {
+            "description": "The grantable permission codes.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "Bearer": []
+          }
+        ]
+      }
+    },
     "/api/v1/reports/event/{eventId}/summary": {
       "get": {
         "tags": [
@@ -5756,7 +5800,7 @@
         "tags": [
           "Roles"
         ],
-        "summary": "`GET /roles` — every role, ordered by name, with the count of users in this school that hold\r\n            it and the permission codes it grants.",
+        "summary": "`GET /roles` — every role, with the count of users in this school that hold it and the codes\r\n            it grants. The set user management assigns from.",
         "responses": {
           "200": {
             "description": "The roles.",
@@ -5783,6 +5827,504 @@
                   "items": {
                     "$ref": "#/components/schemas/RoleDto"
                   }
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "Bearer": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "Roles"
+        ],
+        "summary": "`POST /roles` — create a custom role. It starts with no permissions; configure them next.",
+        "requestBody": {
+          "description": "The role's name and optional description.",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RoleCreateRequest"
+              }
+            },
+            "text/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RoleCreateRequest"
+              }
+            },
+            "application/*+json": {
+              "schema": {
+                "$ref": "#/components/schemas/RoleCreateRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "The created role. `Location` names it.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/RoleDto"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RoleDto"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RoleDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The name is blank or a field is over-length.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "A role with that name already exists.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "Bearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/roles/{id}": {
+      "get": {
+        "tags": [
+          "Roles"
+        ],
+        "summary": "`GET /roles/{id}` — one role.",
+        "operationId": "GetRole",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The role.",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The role.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/RoleDto"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RoleDto"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RoleDto"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such role.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "Bearer": []
+          }
+        ]
+      },
+      "put": {
+        "tags": [
+          "Roles"
+        ],
+        "summary": "`PUT /roles/{id}` — rename and re-describe a custom role.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The role.",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "The new name and description.",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RoleUpdateRequest"
+              }
+            },
+            "text/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RoleUpdateRequest"
+              }
+            },
+            "application/*+json": {
+              "schema": {
+                "$ref": "#/components/schemas/RoleUpdateRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The updated role.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/RoleDto"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RoleDto"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RoleDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The name is blank or a field is over-length.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such role.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Another role holds that name, or this is a built-in role.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "Bearer": []
+          }
+        ]
+      },
+      "delete": {
+        "tags": [
+          "Roles"
+        ],
+        "summary": "`DELETE /roles/{id}` — delete a custom role that no user holds.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The role.",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The deleted role.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/RoleDto"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RoleDto"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RoleDto"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such role.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "This is a built-in role, or users still hold it.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "Bearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/roles/{id}/permissions": {
+      "put": {
+        "tags": [
+          "Roles"
+        ],
+        "summary": "`PUT /roles/{id}/permissions` — replace the set of permission codes a custom role grants.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The role.",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "The complete set of permission codes the role should grant.",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RolePermissionsRequest"
+              }
+            },
+            "text/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RolePermissionsRequest"
+              }
+            },
+            "application/*+json": {
+              "schema": {
+                "$ref": "#/components/schemas/RolePermissionsRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The role, with its new permissions.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/RoleDto"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RoleDto"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RoleDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`permissionCodes` was not supplied, or names a code a role may not hold.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such role.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "This is a built-in role, or a code cannot be granted.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
                 }
               }
             }
@@ -9945,6 +10487,22 @@
         },
         "additionalProperties": {}
       },
+      "RoleCreateRequest": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Required, 50 characters or fewer, unique among roles, not a whitespace-only value."
+          },
+          "description": {
+            "type": "string",
+            "description": "Optional, 300 characters or fewer.",
+            "nullable": true
+          }
+        },
+        "additionalProperties": false,
+        "description": "The body of `POST /roles`."
+      },
       "RoleDto": {
         "type": "object",
         "properties": {
@@ -9978,6 +10536,35 @@
         },
         "additionalProperties": false,
         "description": "One role, as `GET /roles` lists it — enough for the user-management screen's role picker to\r\noffer it and show what it grants."
+      },
+      "RolePermissionsRequest": {
+        "type": "object",
+        "properties": {
+          "permissionCodes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The codes to grant. An empty list is allowed and leaves the role granting nothing. Null is a 400 —\r\n\"grant nothing\" and \"the field was not sent\" are different.",
+            "nullable": true
+          }
+        },
+        "additionalProperties": false,
+        "description": "The body of `PUT /roles/{id}/permissions` — the complete set of permission codes the role should\r\ngrant after the call (a replacement, not a delta)."
+      },
+      "RoleUpdateRequest": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "additionalProperties": false,
+        "description": "The body of `PUT /roles/{id}` — rename and re-describe a custom role."
       },
       "Seams": {
         "type": "object",
@@ -11124,12 +11711,16 @@
       "description": "The device-facing half of the events resource: `GET /events/{id}/manifest`, the offline capture\r\ncache a kiosk or handset pulls before it starts scanning (D-46).\r\n            \r\n\r\n<b>Its own controller rather than one more action on `EventsController`, and that is a\r\ndeliberate split.</b> Every action there is `events.read` or `events.write` for a person's\r\nBearer token — the event list alone also admits a device, for its picker; this one authenticates\r\nonly a <em>device</em> and carries\r\n`attendance.capture`. One action with a different principal type in the middle of an\r\nadministrative controller is a review hazard in both directions — a reader skimming\r\n`EventsController` would assume every action takes the same credential, and an action added\r\nlater to a capture-only controller should inherit capture auth rather than an operator's. The route is\r\nidentical either way; only the file is different.\r\n\r\n<b>`events.read` is rejected outright as the permission for this.</b> A device holding it could\r\nread every event and every roster in the school, which is exactly the blast radius a stolen kiosk\r\nkey must not have. §11 scopes device keys to `attendance.capture` and nothing else, so this\r\nendpoint is already pre-authorized by the credential a capture device holds — and minting an\r\n`events.manifest` code would repeat D-45, forcing Phase 6 to grant two codes for one capability.\r\n"
     },
     {
+      "name": "Permissions",
+      "description": "The permission catalogue the role-permission editor is built from — every code a role may hold."
+    },
+    {
       "name": "Reports",
       "description": "Technical Plan §6.7's reports module, as the client's QA answers Q15/Q16 (MDVault #463 Part D)\r\nscoped it: a summary of one event and a summary of several, for administrators only.\r\n            \r\n\r\n<b>Every action here is `reports.read`, which only SuperAdmin and SchoolAdmin hold.</b> That\r\nnarrows §11, which also gives report reading to Organizer and Viewer. Q16 overrides it and JJ\r\napproved the override (see EAMS.Api.Authorization.EamsPermissions.ReportsRead).\r\n\r\n<b>Bearer only.</b> A device key is scoped to `attendance.capture` and belongs to a kiosk,\r\nnot a person; a report is an operator's read.\r\n"
     },
     {
       "name": "Roles",
-      "description": "The role list — §11's roles, for the user-management screen to assign from."
+      "description": "§11's Role Management (UserWithRBAC.docx) — the role list, and administration of custom roles."
     },
     {
       "name": "SisImport",

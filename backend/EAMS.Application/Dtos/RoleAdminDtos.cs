@@ -20,3 +20,21 @@ public record RoleDto(
     bool IsSystem,
     int UserCount,
     IReadOnlyList<string> PermissionCodes);
+
+/// <summary>The body of <c>POST /roles</c>.</summary>
+/// <param name="Name">Required, 50 characters or fewer, unique among roles, not a whitespace-only value.</param>
+/// <param name="Description">Optional, 300 characters or fewer.</param>
+public record RoleCreateRequest(string Name, string? Description);
+
+/// <summary>The body of <c>PUT /roles/{id}</c> — rename and re-describe a custom role.</summary>
+public record RoleUpdateRequest(string Name, string? Description);
+
+/// <summary>
+/// The body of <c>PUT /roles/{id}/permissions</c> — the complete set of permission codes the role should
+/// grant after the call (a replacement, not a delta).
+/// </summary>
+/// <param name="PermissionCodes">
+/// The codes to grant. An empty list is allowed and leaves the role granting nothing. Null is a 400 —
+/// "grant nothing" and "the field was not sent" are different.
+/// </param>
+public record RolePermissionsRequest(IReadOnlyList<string>? PermissionCodes);

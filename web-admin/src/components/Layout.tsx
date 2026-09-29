@@ -20,6 +20,7 @@ import RouterIcon from "@mui/icons-material/Router";
 import CalendarMonthIcon from "@mui/icons-material/CalendarMonth";
 import AssessmentIcon from "@mui/icons-material/Assessment";
 import GroupIcon from "@mui/icons-material/Group";
+import AdminPanelSettingsIcon from "@mui/icons-material/AdminPanelSettings";
 import LogoutIcon from "@mui/icons-material/Logout";
 
 import { useAuth, useSignedInUser } from "../authContext";
@@ -78,6 +79,12 @@ const nav: readonly NavEntry[] = [
     label: "Users",
     icon: <GroupIcon />,
     permission: PERMISSIONS.usersRead,
+  },
+  {
+    to: "/roles",
+    label: "Roles",
+    icon: <AdminPanelSettingsIcon />,
+    permission: PERMISSIONS.rolesRead,
   },
   // Last, and gated on `reports.read` rather than `events.read`/`attendance.read`: it is narrower
   // than either and the one this screen's own route checks — see `PERMISSIONS.reportsRead`.

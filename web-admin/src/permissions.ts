@@ -38,6 +38,9 @@ export const PERMISSIONS = {
   /** §11's User Management (UserWithRBAC.docx) — administrators only. */
   usersRead: "users.read",
   usersWrite: "users.write",
+  /** §11's Role Management — administrators only. */
+  rolesRead: "roles.read",
+  rolesWrite: "roles.write",
   /**
    * §6.7's Reports module (client QA Q15/Q16) — narrower than §11's own table, which also gives
    * report reading to Organizer and Viewer: Q16 overrides it, JJ approved the override, and
