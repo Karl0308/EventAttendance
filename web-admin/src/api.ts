@@ -61,6 +61,11 @@ import type {
   AttendanceCodeGenerateResult,
   AttendanceCodeEmailRequest,
   AttendanceCodeEmailResult,
+  PreRegistrationSession,
+  PreRegistrationSessionCreateRequest,
+  PreRegistrant,
+  PreRegisterRequest,
+  PreRegisterResult,
   AdminUser,
   UserRoleRef,
   UserCreateRequest,
@@ -1513,6 +1518,44 @@ function toAttendanceCodeEmailResult(row: Row, what: string): AttendanceCodeEmai
     skippedNoEmail: reqNum(row, "skippedNoEmail", what),
     skippedNoCode: reqNum(row, "skippedNoCode", what),
     failed: reqNum(row, "failed", what),
+  };
+}
+
+/** `PreRegistrationSessionDto` — one session with its live counter. */
+function toPreRegistrationSession(row: Row, what: string): PreRegistrationSession {
+  return {
+    id: reqStr(row, "id", what),
+    name: reqStr(row, "name", what),
+    audienceDefinitionId: reqStr(row, "audienceDefinitionId", what),
+    audienceName: reqStr(row, "audienceName", what),
+    capacity: reqNum(row, "capacity", what),
+    registeredCount: reqNum(row, "registeredCount", what),
+    isClosed: reqBool(row, "isClosed", what),
+    isFull: reqBool(row, "isFull", what),
+  };
+}
+
+/** `PreRegistrantDto` — one pre-registered attendee. */
+function toPreRegistrant(row: Row, what: string): PreRegistrant {
+  return {
+    id: reqStr(row, "id", what),
+    type: reqStr(row, "type", what) as PreRegistrant["type"],
+    attendeeId: reqStr(row, "attendeeId", what),
+    number: reqStr(row, "number", what),
+    fullName: reqStr(row, "fullName", what),
+    rfidUid: optStr(row.rfidUid),
+    departmentOrProgram: optStr(row.departmentOrProgram),
+    method: reqStr(row, "method", what) as PreRegistrant["method"],
+    registeredAt: reqStr(row, "registeredAt", what),
+  };
+}
+
+/** `PreRegisterResult` — the live counter plus, on a registration, the new registrant. */
+function toPreRegisterResult(row: Row, what: string): PreRegisterResult {
+  return {
+    registeredCount: reqNum(row, "registeredCount", what),
+    capacity: reqNum(row, "capacity", what),
+    registrant: isRow(row.registrant) ? toPreRegistrant(row.registrant, `${what}.registrant`) : undefined,
   };
 }
 
@@ -3314,6 +3357,82 @@ async function emailAttendanceCodes(
   );
 }
 
+/** `GET /pre-registration/sessions` — the pre-registration sessions, newest first, with live counters. */
+async function listPreRegistrationSessions(): Promise<PreRegistrationSession[]> {
+  const what = "GET /pre-registration/sessions";
+  const body = await getJson(what, "/pre-registration/sessions");
+  return asRows(body, what).map((r, i) => toPreRegistrationSession(r, `${what}[${i}]`));
+}
+
+/** `POST /pre-registration/sessions` — open a session against an active audience. */
+async function createPreRegistrationSession(
+  request: PreRegistrationSessionCreateRequest,
+): Promise<PreRegistrationSession> {
+  return writeJson(
+    "POST /pre-registration/sessions",
+    "/pre-registration/sessions",
+    { method: "POST", payload: request },
+    "The pre-registration session was created",
+    toPreRegistrationSession,
+  );
+}
+
+/** `PATCH /pre-registration/sessions/{id}/close` — close or reopen a session. Idempotent. */
+async function setPreRegistrationClosed(
+  id: string,
+  isClosed: boolean,
+): Promise<PreRegistrationSession> {
+  return writeJson(
+    "PATCH /pre-registration/sessions/{id}/close",
+    `/pre-registration/sessions/${encodeURIComponent(id)}/close`,
+    { method: "PATCH", payload: { isClosed } },
+    isClosed ? "The session was closed" : "The session was reopened",
+    toPreRegistrationSession,
+  );
+}
+
+/** `GET /pre-registration/sessions/{id}/registrants` — the registered attendees. */
+async function listPreRegistrants(sessionId: string): Promise<PreRegistrant[]> {
+  const what = "GET /pre-registration/sessions/{id}/registrants";
+  const body = await getJson(
+    what,
+    `/pre-registration/sessions/${encodeURIComponent(sessionId)}/registrants`,
+  );
+  return asRows(body, what).map((r, i) => toPreRegistrant(r, `${what}[${i}]`));
+}
+
+/**
+ * `POST /pre-registration/sessions/{id}/register` — register one attendee by tap or manual choice. Refusals:
+ * **400** malformed, **404** unknown session or manual attendee, **409** duplicate/full/closed, **422** an
+ * unrecognized card.
+ */
+async function registerPreRegistrant(
+  sessionId: string,
+  request: PreRegisterRequest,
+): Promise<PreRegisterResult> {
+  return writeJson(
+    "POST /pre-registration/sessions/{id}/register",
+    `/pre-registration/sessions/${encodeURIComponent(sessionId)}/register`,
+    { method: "POST", payload: request },
+    "The attendee was registered",
+    toPreRegisterResult,
+  );
+}
+
+/** `DELETE /pre-registration/sessions/{id}/registrants/{registrantId}` — remove a registration. */
+async function removePreRegistrant(
+  sessionId: string,
+  registrantId: string,
+): Promise<PreRegisterResult> {
+  return writeJson(
+    "DELETE /pre-registration/sessions/{id}/registrants/{registrantId}",
+    `/pre-registration/sessions/${encodeURIComponent(sessionId)}/registrants/${encodeURIComponent(registrantId)}`,
+    { method: "DELETE" },
+    "The attendee was removed",
+    toPreRegisterResult,
+  );
+}
+
 /**
  * Which term a section list was read for — and, when it is not the one that was asked for, the fact
  * that says the rows already fetched have to be thrown away.
@@ -4056,6 +4175,12 @@ export const api = {
   listAttendanceCodes,
   generateAttendanceCodes,
   emailAttendanceCodes,
+  listPreRegistrationSessions,
+  createPreRegistrationSession,
+  setPreRegistrationClosed,
+  listPreRegistrants,
+  registerPreRegistrant,
+  removePreRegistrant,
   listPersonnel,
   createPersonnel,
   updatePersonnel,

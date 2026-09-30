@@ -16,6 +16,7 @@ import Devices from "./pages/Devices";
 import Terms from "./pages/Terms";
 import EventClassifications from "./pages/EventClassifications";
 import EventAudiences from "./pages/EventAudiences";
+import PreRegistration from "./pages/PreRegistration";
 import Users from "./pages/Users";
 import Roles from "./pages/Roles";
 import Clearance from "./pages/Clearance";
@@ -118,6 +119,13 @@ export default function App() {
         <Route
           path="/event-audiences"
           element={gated(PERMISSIONS.eventsRead, <EventAudiences />)}
+        />
+
+        {/* Pre-Registration (PreRegistration.docx) — sessions against an audience, tap/manual
+            registration. Reuses the events permission pair, like the audience module it extends. */}
+        <Route
+          path="/pre-registration"
+          element={gated(PERMISSIONS.eventsRead, <PreRegistration />)}
         />
 
         {/* §11 User Management (UserWithRBAC.docx), administrators only. */}

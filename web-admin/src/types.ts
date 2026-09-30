@@ -295,6 +295,60 @@ export interface AttendanceCodeEmailResult {
 }
 
 // ---------------------------------------------------------------------------------------------
+// Pre-Registration (PreRegistration.docx) — sessions against an audience, tap/manual registration
+// ---------------------------------------------------------------------------------------------
+
+/** One pre-registration session, with its live counter. */
+export interface PreRegistrationSession {
+  id: string;
+  name: string;
+  audienceDefinitionId: string;
+  audienceName: string;
+  capacity: number;
+  registeredCount: number;
+  isClosed: boolean;
+  isFull: boolean;
+}
+
+/** The body of `POST /pre-registration/sessions`. */
+export interface PreRegistrationSessionCreateRequest {
+  name: string;
+  audienceDefinitionId: string;
+  capacity: number;
+}
+
+/** One pre-registered attendee. */
+export interface PreRegistrant {
+  id: string;
+  type: "Student" | "Personnel";
+  attendeeId: string;
+  number: string;
+  fullName: string;
+  rfidUid?: string;
+  departmentOrProgram?: string;
+  method: "Tapped" | "Manual";
+  registeredAt: string;
+}
+
+/** The body of `POST /pre-registration/sessions/{id}/register`. */
+export interface PreRegisterRequest {
+  method: "Tapped" | "Manual";
+  /** For `Tapped`. */
+  cardUid?: string;
+  /** For `Manual`. */
+  type?: "Student" | "Personnel";
+  /** For `Manual`. */
+  attendeeId?: string;
+}
+
+/** The result of a registration (or removal) — the live counter, and the new registrant when one was added. */
+export interface PreRegisterResult {
+  registeredCount: number;
+  capacity: number;
+  registrant?: PreRegistrant;
+}
+
+// ---------------------------------------------------------------------------------------------
 // §11 User Management (UserWithRBAC.docx) — administrators only
 // ---------------------------------------------------------------------------------------------
 

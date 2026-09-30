@@ -18,6 +18,7 @@ import BadgeIcon from "@mui/icons-material/Badge";
 import EventIcon from "@mui/icons-material/Event";
 import CategoryIcon from "@mui/icons-material/Category";
 import GroupsIcon from "@mui/icons-material/Groups";
+import HowToRegIcon from "@mui/icons-material/HowToReg";
 import RouterIcon from "@mui/icons-material/Router";
 import CalendarMonthIcon from "@mui/icons-material/CalendarMonth";
 import AssessmentIcon from "@mui/icons-material/Assessment";
@@ -77,6 +78,12 @@ const nav: readonly NavEntry[] = [
     to: "/event-audiences",
     label: "Event audiences",
     icon: <GroupsIcon />,
+    permission: PERMISSIONS.eventsRead,
+  },
+  {
+    to: "/pre-registration",
+    label: "Pre-registration",
+    icon: <HowToRegIcon />,
     permission: PERMISSIONS.eventsRead,
   },
   { to: "/devices", label: "Devices", icon: <RouterIcon />, permission: PERMISSIONS.devicesRead },

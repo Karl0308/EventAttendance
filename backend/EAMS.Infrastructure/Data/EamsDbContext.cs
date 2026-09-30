@@ -106,6 +106,13 @@ internal class EamsDbContext : DbContext
     public DbSet<EventAttendanceCode> EventAttendanceCodes => Set<EventAttendanceCode>();
 
     /// <summary>
+    /// Pre-registration sessions and their registrants (PreRegistration.docx). Additive. See
+    /// <see cref="PreRegistrationSession"/> and <see cref="PreRegistration"/>.
+    /// </summary>
+    public DbSet<PreRegistrationSession> PreRegistrationSessions => Set<PreRegistrationSession>();
+    public DbSet<PreRegistration> PreRegistrations => Set<PreRegistration>();
+
+    /// <summary>
     /// Every <c>DateTime</c> in the model round-trips as UTC. Applied as a convention rather than
     /// per property so entities added later (the ADR-001 D-1 academic layer) inherit it by default
     /// instead of by remembering — the failure mode this closes is silent and invisible in the
@@ -254,6 +261,7 @@ internal class EamsDbContext : DbContext
         ConfigurePersonnel(b);
         ConfigureAudienceDefinitions(b);
         ConfigureEventAttendanceCodes(b);
+        ConfigurePreRegistration(b);
         ConfigureSchoolIdQueryFilters(b);
 
         // Hard deletes are never issued by the application (§4 uses IsDeleted soft delete), and an
@@ -442,6 +450,14 @@ internal class EamsDbContext : DbContext
         // Attendance codes carry a SchoolId denormalized from their event — filtered directly like
         // AttendanceRecords, so the filter and the code-uniqueness constraint select the same rows.
         b.Entity<EventAttendanceCode>().HasQueryFilter(
+            x => _school.CurrentSchoolId == null || x.SchoolId == _school.CurrentSchoolId);
+
+        // Pre-registration sessions and their registrants both own a SchoolId directly — filtered like
+        // every other owner. The registrant filter reads its own column rather than joining through the
+        // session, so filter and the duplicate-uniqueness indexes select the same rows.
+        b.Entity<PreRegistrationSession>().HasQueryFilter(
+            x => _school.CurrentSchoolId == null || x.SchoolId == _school.CurrentSchoolId);
+        b.Entity<PreRegistration>().HasQueryFilter(
             x => _school.CurrentSchoolId == null || x.SchoolId == _school.CurrentSchoolId);
     }
 
@@ -931,6 +947,65 @@ internal class EamsDbContext : DbContext
             e.HasIndex(x => new { x.EventId, x.StudentId }).IsUnique()
                 .HasDatabaseName("UX_EventAttendanceCodes_EventId_StudentId");
         });
+
+    /// <summary>
+    /// Pre-registration sessions and their registrants (PreRegistration.docx). Not a §4 table — additive.
+    ///
+    /// <para>
+    /// A registrant is exactly one of a student or personnel — the same XOR shape
+    /// <see cref="ConfigureEventGroups"/> uses, with the same two-filtered-index treatment so an attendee
+    /// cannot be registered twice into one session whichever way they were added. Every FK is
+    /// <c>Restrict</c>, like the rest of the model.
+    /// </para>
+    /// </summary>
+    private static void ConfigurePreRegistration(ModelBuilder b)
+    {
+        b.Entity<PreRegistrationSession>(e =>
+        {
+            e.ToTable("PreRegistrationSessions");
+            e.Property(x => x.Name).HasMaxLength(PreRegistrationText.NameMaxLength).IsRequired();
+            e.Property(x => x.IsClosed).HasDefaultValue(false).ValueGeneratedNever();
+
+            e.HasOne(x => x.School).WithMany().HasForeignKey(x => x.SchoolId).IsRequired();
+            e.HasOne(x => x.AudienceDefinition).WithMany()
+                .HasForeignKey(x => x.AudienceDefinitionId).IsRequired();
+
+            e.HasIndex(x => x.SchoolId).HasDatabaseName("IX_PreRegistrationSessions_SchoolId");
+        });
+
+        b.Entity<PreRegistration>(e =>
+        {
+            e.ToTable("PreRegistrations", t => t.HasCheckConstraint(
+                "CK_PreRegistrations_StudentOrPersonnel",
+                "([StudentId] IS NOT NULL AND [PersonnelId] IS NULL) OR " +
+                "([StudentId] IS NULL AND [PersonnelId] IS NOT NULL)"));
+
+            e.Property(x => x.AttendeeType).HasMaxLength(20).IsRequired();
+            e.Property(x => x.Method).HasMaxLength(20).IsRequired();
+
+            e.HasOne(x => x.School).WithMany().HasForeignKey(x => x.SchoolId).IsRequired();
+            e.HasOne(x => x.Session).WithMany(s => s.Registrations)
+                .HasForeignKey(x => x.SessionId).IsRequired();
+            e.HasOne(x => x.Student).WithMany().HasForeignKey(x => x.StudentId);
+            e.HasOne(x => x.Personnel).WithMany().HasForeignKey(x => x.PersonnelId);
+
+            // One attendee per session, whichever way added. Two filtered indexes rather than one over the
+            // pair, for the reason ConfigureEventGroups records: the CHECK makes exactly one id NULL per
+            // row, so a composite would lean on NULL-equals-NULL inside a unique index by accident.
+            e.HasIndex(x => new { x.SessionId, x.StudentId }).IsUnique()
+                .HasFilter("[StudentId] IS NOT NULL")
+                .HasDatabaseName("UX_PreRegistrations_Session_Student");
+
+            e.HasIndex(x => new { x.SessionId, x.PersonnelId }).IsUnique()
+                .HasFilter("[PersonnelId] IS NOT NULL")
+                .HasDatabaseName("UX_PreRegistrations_Session_Personnel");
+
+            // The FK index EF would build on SessionId leads with SessionId under both composites, which it
+            // then calls redundant and drops — but both composites are filtered and cannot serve the
+            // unfiltered "list this session's registrants" read. Declared explicitly, like EventGroups.
+            e.HasIndex(x => x.SessionId).HasDatabaseName("IX_PreRegistrations_SessionId");
+        });
+    }
 
     // §4.2 Schools
     private static void ConfigureSchools(ModelBuilder b) => b.Entity<School>(e =>

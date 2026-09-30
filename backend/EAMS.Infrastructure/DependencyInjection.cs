@@ -181,6 +181,11 @@ public static class DependencyInjection
         // place a real transport drops in.
         services.AddSingleton<IEmailSender, LoggingEmailSender>();
 
+        // Pre-registration (PreRegistration.docx) — sessions against an audience, into which attendees are
+        // pre-registered by tap or manual selection. Takes an ISchoolContext for the same reason: a create
+        // files the session under a school.
+        services.AddScoped<IPreRegistrationService, PreRegistrationService>();
+
         // The other half of classification: who holds which entry. Registered separately from the
         // vocabulary above rather than folded into it, because the two are different subjects with
         // different lifecycles — a category outlives everybody filed under it — and because this one

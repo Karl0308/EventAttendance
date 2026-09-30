@@ -6732,6 +6732,609 @@
         ]
       }
     },
+    "/api/v1/pre-registration/sessions": {
+      "get": {
+        "tags": [
+          "PreRegistration"
+        ],
+        "summary": "`GET /pre-registration/sessions` — the sessions, newest first, with live counters.",
+        "responses": {
+          "200": {
+            "description": "The sessions, possibly empty.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/PreRegistrationSessionDto"
+                  }
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/PreRegistrationSessionDto"
+                  }
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/PreRegistrationSessionDto"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "Bearer": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "PreRegistration"
+        ],
+        "summary": "`POST /pre-registration/sessions` — open a session against an active audience.",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PreRegistrationSessionCreateRequest"
+              }
+            },
+            "text/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PreRegistrationSessionCreateRequest"
+              }
+            },
+            "application/*+json": {
+              "schema": {
+                "$ref": "#/components/schemas/PreRegistrationSessionCreateRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "The created session. `Location` names it.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/PreRegistrationSessionDto"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PreRegistrationSessionDto"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PreRegistrationSessionDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The name or capacity breaks a rule.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The audience is unavailable, or no school could be resolved.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "Bearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/pre-registration/sessions/{id}": {
+      "get": {
+        "tags": [
+          "PreRegistration"
+        ],
+        "summary": "`GET /pre-registration/sessions/{id}` — one session with its counter.",
+        "operationId": "GetSession",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The session.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/PreRegistrationSessionDto"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PreRegistrationSessionDto"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PreRegistrationSessionDto"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such session in this school.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "Bearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/pre-registration/sessions/{id}/close": {
+      "patch": {
+        "tags": [
+          "PreRegistration"
+        ],
+        "summary": "`PATCH /pre-registration/sessions/{id}/close` — close or reopen a session.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PreRegistrationCloseRequest"
+              }
+            },
+            "text/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PreRegistrationCloseRequest"
+              }
+            },
+            "application/*+json": {
+              "schema": {
+                "$ref": "#/components/schemas/PreRegistrationCloseRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The session, with its new flag.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/PreRegistrationSessionDto"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PreRegistrationSessionDto"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PreRegistrationSessionDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`isClosed` was not supplied.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such session.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "Bearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/pre-registration/sessions/{id}/register": {
+      "post": {
+        "tags": [
+          "PreRegistration"
+        ],
+        "summary": "`POST /pre-registration/sessions/{id}/register` — register one attendee by tap or manual choice.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PreRegisterRequest"
+              }
+            },
+            "text/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PreRegisterRequest"
+              }
+            },
+            "application/*+json": {
+              "schema": {
+                "$ref": "#/components/schemas/PreRegisterRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The attendee was registered; the body carries the live counter.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/PreRegisterResult"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PreRegisterResult"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PreRegisterResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "A malformed request — unknown method/type, or a missing card/id.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such session, or a manually chosen attendee that does not exist.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The attendee is already registered, the session is full, or the session is closed.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A tapped card matched no Academic Community record.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "Bearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/pre-registration/sessions/{id}/registrants": {
+      "get": {
+        "tags": [
+          "PreRegistration"
+        ],
+        "summary": "`GET /pre-registration/sessions/{id}/registrants` — the registered attendees.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The registrants, possibly empty.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/PreRegistrantDto"
+                  }
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/PreRegistrantDto"
+                  }
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/PreRegistrantDto"
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such session.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "Bearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/pre-registration/sessions/{id}/registrants/{registrantId}": {
+      "delete": {
+        "tags": [
+          "PreRegistration"
+        ],
+        "summary": "`DELETE /pre-registration/sessions/{id}/registrants/{registrantId}` — remove one registration.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "registrantId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Removed; the body carries the updated counter.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/PreRegisterResult"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PreRegisterResult"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PreRegisterResult"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such session, or no such registration in it.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "Bearer": []
+          }
+        ]
+      }
+    },
     "/api/v1/reports/event/{eventId}/summary": {
       "get": {
         "tags": [
@@ -12819,6 +13422,177 @@
         "additionalProperties": false,
         "description": "The body of `POST /personnel` and `PUT /personnel/{id}` — one type, checked by one method.\r\nA full replacement on update, so an edit form fills it from the record it is editing."
       },
+      "PreRegisterOutcome": {
+        "enum": [
+          0,
+          1,
+          2,
+          3,
+          4,
+          5,
+          6,
+          7
+        ],
+        "type": "integer",
+        "description": "The outcome of a single registration (PreRegistration.docx §Validation distinguishes these).",
+        "format": "int32"
+      },
+      "PreRegisterRequest": {
+        "type": "object",
+        "properties": {
+          "method": {
+            "type": "string",
+            "description": "`Tapped` (supply CardUid) or `Manual` (supply\r\n            Type and AttendeeId)."
+          },
+          "cardUid": {
+            "type": "string",
+            "description": "The scanned card, for a `Tapped` registration.",
+            "nullable": true
+          },
+          "type": {
+            "type": "string",
+            "description": "`Student` or `Personnel`, for a `Manual` registration.",
+            "nullable": true
+          },
+          "attendeeId": {
+            "type": "string",
+            "description": "The chosen student or personnel id, for a `Manual` registration.",
+            "format": "uuid",
+            "nullable": true
+          }
+        },
+        "additionalProperties": false,
+        "description": "The body of `POST /pre-registration/sessions/{id}/register`."
+      },
+      "PreRegisterResult": {
+        "type": "object",
+        "properties": {
+          "outcome": {
+            "$ref": "#/components/schemas/PreRegisterOutcome"
+          },
+          "message": {
+            "type": "string"
+          },
+          "registeredCount": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "capacity": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "registrant": {
+            "$ref": "#/components/schemas/PreRegistrantDto"
+          }
+        },
+        "additionalProperties": false,
+        "description": "The result of a registration attempt, with the live counter for the screen."
+      },
+      "PreRegistrantDto": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "type": {
+            "type": "string"
+          },
+          "attendeeId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "number": {
+            "type": "string"
+          },
+          "fullName": {
+            "type": "string"
+          },
+          "rfidUid": {
+            "type": "string",
+            "nullable": true
+          },
+          "departmentOrProgram": {
+            "type": "string",
+            "nullable": true
+          },
+          "method": {
+            "type": "string"
+          },
+          "registeredAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "additionalProperties": false,
+        "description": "One pre-registered attendee (PreRegistration.docx: the Pre-Registered Attendees list)."
+      },
+      "PreRegistrationCloseRequest": {
+        "type": "object",
+        "properties": {
+          "isClosed": {
+            "type": "boolean",
+            "nullable": true
+          }
+        },
+        "additionalProperties": false,
+        "description": "The body of `PATCH /pre-registration/sessions/{id}/close`."
+      },
+      "PreRegistrationSessionCreateRequest": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "audienceDefinitionId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "capacity": {
+            "type": "integer",
+            "format": "int32"
+          }
+        },
+        "additionalProperties": false,
+        "description": "The body of `POST /pre-registration/sessions`."
+      },
+      "PreRegistrationSessionDto": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "name": {
+            "type": "string"
+          },
+          "audienceDefinitionId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "audienceName": {
+            "type": "string"
+          },
+          "capacity": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "registeredCount": {
+            "type": "integer",
+            "description": "How many attendees are registered — kept in step with the rows.",
+            "format": "int32"
+          },
+          "isClosed": {
+            "type": "boolean"
+          },
+          "isFull": {
+            "type": "boolean",
+            "description": "`RegisteredCount >= Capacity`, precomputed for the counter display."
+          }
+        },
+        "additionalProperties": false,
+        "description": "One pre-registration session, as the list and by-id reads publish it."
+      },
       "ProblemDetails": {
         "type": "object",
         "properties": {
@@ -14130,6 +14904,10 @@
     {
       "name": "Personnel",
       "description": "The Academic Community's Personnel tab (StudentsEmployees.docx) — faculty and employees master data."
+    },
+    {
+      "name": "PreRegistration",
+      "description": "The Pre-Registration surface (PreRegistration.docx) — sessions opened against an event audience, into\r\nwhich attendees are pre-registered by RFID tap or manual selection, up to a capacity."
     },
     {
       "name": "Reports",
