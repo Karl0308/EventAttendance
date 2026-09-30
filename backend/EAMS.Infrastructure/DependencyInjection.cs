@@ -178,6 +178,10 @@ public static class DependencyInjection
         // EventService's, reached through IEventSummaryFigures registered above.
         services.AddScoped<IReportService, ReportService>();
 
+        // The Clearance Checker (Clearance-Checker-Module.docx). Read-only over event/attendance data;
+        // reads ICurrentUser to attribute its audit row.
+        services.AddScoped<IClearanceService, ClearanceService>();
+
         // Resolved per request by the DeviceKey authentication handler, from the request scope — so it
         // gets the same EamsDbContext the rest of the request will use.
         services.AddScoped<IDeviceAuthenticator, DeviceAuthenticator>();

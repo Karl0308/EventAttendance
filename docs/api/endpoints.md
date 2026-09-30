@@ -3,7 +3,7 @@
 <!-- GENERATED FILE — DO NOT EDIT.
      Source: docs/api/openapi.json. Regenerate: node scripts/generate-endpoint-index.mjs --write -->
 
-**Generated from [`openapi.json`](openapi.json) — do not edit by hand.** 95 operations across 18 controllers, all mounted under `/api/v1`. Routes below are written relative to that mount.
+**Generated from [`openapi.json`](openapi.json) — do not edit by hand.** 97 operations across 19 controllers, all mounted under `/api/v1`. Routes below are written relative to that mount.
 
 This page is a **map, not a contract.** It exists so you can find an endpoint; payload shapes, field types and outcome tokens live in [`openapi.json`](openapi.json), which is what you generate a client from. Behaviour a schema cannot state — what your queue does with each outcome, the card-UID and clock rules — is in [`attendance-contract-handoff.md`](attendance-contract-handoff.md).
 
@@ -15,6 +15,7 @@ This page is a **map, not a contract.** It exists so you can find an endpoint; p
 - [Auth](#auth) — 5
 - [Cards](#cards) — 1
 - [Classifications](#classifications) — 7
+- [Clearance](#clearance) — 2
 - [Devices](#devices) — 7
 - [EventClassifications](#eventclassifications) — 6
 - [EventManifest](#eventmanifest) — 1
@@ -71,6 +72,13 @@ This page is a **map, not a contract.** It exists so you can find an endpoint; p
 | `PUT` | `/classifications/{id}` | **Bearer** | `400` `404` `409` | Rename a classification. |
 | `PATCH` | `/classifications/{id}/active` | **Bearer** | `400` `404` `409` | Retire a classification, or bring it back. |
 | `POST` | `/classifications/{id}/merge` | **Bearer** | `400` `404` `409` | Collapse two classifications into one, moving every assignment onto the survivor and deleting nothing. |
+
+## Clearance
+
+| Method | Route | Auth | Errors | What it does |
+|---|---|---|---|---|
+| `GET` | `/clearance/students/{studentId}` | **Bearer** | `404` | The clearance report for one student. |
+| `GET` | `/clearance/students/{studentId}/export` | **Bearer** | `404` | The same report as a CSV download (CLR-02). |
 
 ## Devices
 

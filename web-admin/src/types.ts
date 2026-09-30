@@ -218,6 +218,37 @@ export interface RoleWriteRequest {
 }
 
 // ---------------------------------------------------------------------------------------------
+// Clearance Checker (Clearance-Checker-Module.docx)
+// ---------------------------------------------------------------------------------------------
+
+/** The student info card at the top of a clearance report. No clearance status is computed. */
+export interface ClearanceStudent {
+  studentId: string;
+  studentNumber: string;
+  fullName: string;
+  department?: string;
+  program?: string;
+  college?: string;
+  yearLevel?: string;
+  section?: string;
+}
+
+/** One event on a clearance report. `attendance` is Attended / Missed / Excused / Late. */
+export interface ClearanceEvent {
+  eventId: string;
+  eventName: string;
+  eventDate: string;
+  attendance: string;
+  checkInAt?: string;
+  checkOutAt?: string;
+}
+
+export interface ClearanceReport {
+  student: ClearanceStudent;
+  events: ClearanceEvent[];
+}
+
+// ---------------------------------------------------------------------------------------------
 // Academic Community — Personnel (StudentsEmployees.docx)
 // ---------------------------------------------------------------------------------------------
 

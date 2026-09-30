@@ -20,6 +20,7 @@ import CategoryIcon from "@mui/icons-material/Category";
 import RouterIcon from "@mui/icons-material/Router";
 import CalendarMonthIcon from "@mui/icons-material/CalendarMonth";
 import AssessmentIcon from "@mui/icons-material/Assessment";
+import FactCheckIcon from "@mui/icons-material/FactCheck";
 import GroupIcon from "@mui/icons-material/Group";
 import AdminPanelSettingsIcon from "@mui/icons-material/AdminPanelSettings";
 import LogoutIcon from "@mui/icons-material/Logout";
@@ -99,6 +100,12 @@ const nav: readonly NavEntry[] = [
     to: "/reports",
     label: "Reports",
     icon: <AssessmentIcon />,
+    permission: PERMISSIONS.reportsRead,
+  },
+  {
+    to: "/clearance",
+    label: "Clearance",
+    icon: <FactCheckIcon />,
     permission: PERMISSIONS.reportsRead,
   },
 ];

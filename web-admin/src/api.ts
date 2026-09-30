@@ -57,6 +57,9 @@ import type {
   RoleWriteRequest,
   Personnel,
   PersonnelWriteRequest,
+  ClearanceReport,
+  ClearanceStudent,
+  ClearanceEvent,
 } from "./types";
 
 // The one security-relevant dependency this module has, and the reason it is in the import block
@@ -1292,6 +1295,31 @@ function toClassification(row: Row, what: string): Classification {
     retiredAt: optStr(row.retiredAt),
     mergedIntoClassificationId: optStr(row.mergedIntoClassificationId),
     studentCount: reqNum(row, "studentCount", what),
+  };
+}
+
+/** `ClearanceReportDto` — a student's clearance report. */
+function toClearanceReport(row: Row, what: string): ClearanceReport {
+  const student = asRow(row.student, `${what}.student`);
+  return {
+    student: {
+      studentId: reqStr(student, "studentId", `${what}.student`),
+      studentNumber: reqStr(student, "studentNumber", `${what}.student`),
+      fullName: reqStr(student, "fullName", `${what}.student`),
+      department: optStr(student.department),
+      program: optStr(student.program),
+      college: optStr(student.college),
+      yearLevel: optStr(student.yearLevel),
+      section: optStr(student.section),
+    } satisfies ClearanceStudent,
+    events: asRows(row.events, `${what}.events`).map((e, i): ClearanceEvent => ({
+      eventId: reqStr(e, "eventId", `${what}.events[${i}]`),
+      eventName: reqStr(e, "eventName", `${what}.events[${i}]`),
+      eventDate: reqStr(e, "eventDate", `${what}.events[${i}]`),
+      attendance: reqStr(e, "attendance", `${what}.events[${i}]`),
+      checkInAt: optStr(e.checkInAt),
+      checkOutAt: optStr(e.checkOutAt),
+    })),
   };
 }
 
@@ -2724,6 +2752,60 @@ async function deletePersonnel(id: string): Promise<Personnel> {
 }
 
 // ---------------------------------------------------------------------------------------------
+// Clearance Checker (Clearance-Checker-Module.docx)
+// ---------------------------------------------------------------------------------------------
+
+const clearanceQuery = (dateFrom?: string, dateTo?: string): Record<string, string | undefined> => ({
+  dateFrom: dateFrom && dateFrom.length > 0 ? dateFrom : undefined,
+  dateTo: dateTo && dateTo.length > 0 ? dateTo : undefined,
+});
+
+/** `GET /clearance/students/{id}` — a student's clearance report. */
+async function clearanceReport(
+  studentId: string,
+  dateFrom?: string,
+  dateTo?: string,
+): Promise<ClearanceReport> {
+  const what = "GET /clearance/students/{id}";
+  const body = await getJson(
+    what, `/clearance/students/${encodeURIComponent(studentId)}`, clearanceQuery(dateFrom, dateTo));
+  return toClearanceReport(asRow(body, what), what);
+}
+
+const CLEARANCE_CSV_FALLBACK_FILENAME = "EAMS-clearance.csv";
+
+/**
+ * `GET /clearance/students/{id}/export` — the server-authored CSV (formula-injection-safe, BOM'd). Goes
+ * through `send` for the same Bearer header and 401 replay every request gets, then reads a Blob rather
+ * than JSON — the same shape `downloadRosterTemplate` takes for its binary download.
+ */
+async function downloadClearanceCsv(
+  studentId: string,
+  dateFrom?: string,
+  dateTo?: string,
+): Promise<DownloadedFile> {
+  const what = "GET /clearance/students/{id}/export";
+  const res = await send(
+    what, `/clearance/students/${encodeURIComponent(studentId)}/export`, clearanceQuery(dateFrom, dateTo));
+  if (!res.ok) throw httpError(what, await readProblem(res), "read");
+
+  let blob: Blob;
+  try {
+    blob = await res.blob();
+  } catch (cause) {
+    if (isTimeout(cause)) throw timedOut(what, cause, "read", REQUEST_TIMEOUT_MS);
+    throw new ApiError(
+      "network", 0,
+      `Cannot reach the EAMS API at ${baseUrl} — ${what} was not completed; the connection was lost.`,
+      { shape: "read", cause });
+  }
+
+  const disposition = res.headers.get("Content-Disposition");
+  const match = disposition === null ? null : CONTENT_DISPOSITION_FILENAME.exec(disposition);
+  return { blob, filename: match?.[1] ?? CLEARANCE_CSV_FALLBACK_FILENAME };
+}
+
+// ---------------------------------------------------------------------------------------------
 // User management — §11 (UserWithRBAC.docx), administrators only
 // ---------------------------------------------------------------------------------------------
 
@@ -3661,6 +3743,8 @@ export const api = {
   createPersonnel,
   updatePersonnel,
   deletePersonnel,
+  clearanceReport,
+  downloadClearanceCsv,
   listUsers,
   getUser,
   createUser,

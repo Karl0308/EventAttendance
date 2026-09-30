@@ -17,6 +17,7 @@ import Terms from "./pages/Terms";
 import EventClassifications from "./pages/EventClassifications";
 import Users from "./pages/Users";
 import Roles from "./pages/Roles";
+import Clearance from "./pages/Clearance";
 import Reports from "./pages/Reports";
 
 /**
@@ -117,6 +118,9 @@ export default function App() {
 
         {/* Admin-only per Q16, and narrower than §11's own table — see `PERMISSIONS.reportsRead`. */}
         <Route path="/reports" element={gated(PERMISSIONS.reportsRead, <Reports />)} />
+
+        {/* Clearance Checker (Clearance-Checker-Module.docx) — a cross-event report, same admin gate. */}
+        <Route path="/clearance" element={gated(PERMISSIONS.reportsRead, <Clearance />)} />
       </Route>
     </Routes>
   );

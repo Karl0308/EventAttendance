@@ -2589,6 +2589,176 @@
         ]
       }
     },
+    "/api/v1/clearance/students/{studentId}": {
+      "get": {
+        "tags": [
+          "Clearance"
+        ],
+        "summary": "`GET /clearance/students/{studentId}` — the clearance report for one student.",
+        "parameters": [
+          {
+            "name": "studentId",
+            "in": "path",
+            "description": "The student.",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "dateFrom",
+            "in": "query",
+            "description": "Optional inclusive lower bound on event start date.",
+            "schema": {
+              "type": "string",
+              "format": "date-time"
+            }
+          },
+          {
+            "name": "dateTo",
+            "in": "query",
+            "description": "Optional inclusive upper bound on event start date.",
+            "schema": {
+              "type": "string",
+              "format": "date-time"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The report.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClearanceReportDto"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClearanceReportDto"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClearanceReportDto"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such student in this school.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "Bearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/clearance/students/{studentId}/export": {
+      "get": {
+        "tags": [
+          "Clearance"
+        ],
+        "summary": "`GET /clearance/students/{studentId}/export` — the same report as a CSV download (CLR-02).\r\n            PDF is the SPA's Print button, not a server format (JJ decision B).",
+        "parameters": [
+          {
+            "name": "studentId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "dateFrom",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "format": "date-time"
+            }
+          },
+          {
+            "name": "dateTo",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "format": "date-time"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The CSV file.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such student in this school.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "Bearer": []
+          }
+        ]
+      }
+    },
     "/api/v1/devices": {
       "get": {
         "tags": [
@@ -9524,6 +9694,94 @@
         "additionalProperties": false,
         "description": "The body of `PUT /classifications/{id}`."
       },
+      "ClearanceEventDto": {
+        "type": "object",
+        "properties": {
+          "eventId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "eventName": {
+            "type": "string"
+          },
+          "eventDate": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "attendance": {
+            "type": "string",
+            "description": "`Attended`, `Late`, `Excused` or `Missed` — mapped from the §4.9 attendance status\r\n            (Present → Attended, Absent or no record → Missed), which is the vocabulary the spec's report uses."
+          },
+          "checkInAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "checkOutAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          }
+        },
+        "additionalProperties": false,
+        "description": "One event on a clearance report, with the student's attendance for it."
+      },
+      "ClearanceReportDto": {
+        "type": "object",
+        "properties": {
+          "student": {
+            "$ref": "#/components/schemas/ClearanceStudentDto"
+          },
+          "events": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ClearanceEventDto"
+            }
+          }
+        },
+        "additionalProperties": false,
+        "description": "A student's clearance report: the info card and every event they were eligible for, with attendance."
+      },
+      "ClearanceStudentDto": {
+        "type": "object",
+        "properties": {
+          "studentId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "studentNumber": {
+            "type": "string"
+          },
+          "fullName": {
+            "type": "string"
+          },
+          "department": {
+            "type": "string",
+            "description": "The student's course/department, from the roster cache (e.g. BSIT).",
+            "nullable": true
+          },
+          "program": {
+            "type": "string",
+            "description": "The programme/course — the same cached value; the spec lists both columns.",
+            "nullable": true
+          },
+          "college": {
+            "type": "string",
+            "description": "The college the student's current-term programme belongs to (e.g. CICT), or null\r\n            when there is no current-term record to resolve it from.",
+            "nullable": true
+          },
+          "yearLevel": {
+            "type": "string",
+            "nullable": true
+          },
+          "section": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "additionalProperties": false,
+        "description": "The student side of a clearance report (Clearance-Checker-Module.docx) — the info card at the top of\r\nthe result. No clearance <em>status</em> is computed anywhere: the administrator reads the events and\r\ninterprets them."
+      },
       "CollegeDto": {
         "type": "object",
         "properties": {
@@ -12309,6 +12567,10 @@
     {
       "name": "Classifications",
       "description": "The institution's classification vocabulary — `STUDENT`, `NAP`, `ACAD` and the five\r\nother values the client's access-control export carries — as a list an administrator edits."
+    },
+    {
+      "name": "Clearance",
+      "description": "The Clearance Checker (Clearance-Checker-Module.docx) — a student's events and their attendance for\r\neach. <b>No clearance status is computed</b>; the administrator interprets the results."
     },
     {
       "name": "Devices",
