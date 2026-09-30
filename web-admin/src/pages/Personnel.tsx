@@ -25,18 +25,22 @@ import { DataGrid, GridToolbar, type GridColDef } from "@mui/x-data-grid";
 import AddIcon from "@mui/icons-material/Add";
 import EditIcon from "@mui/icons-material/Edit";
 import DeleteIcon from "@mui/icons-material/Delete";
+import DownloadIcon from "@mui/icons-material/Download";
+import UploadFileIcon from "@mui/icons-material/UploadFile";
 import { api, describeApiError } from "../api";
 import { useApiResource } from "../useApiResource";
 import { useApiMutation } from "../useApiMutation";
 import { EmptyState, ErrorState, LoadingState } from "../components/ResourceStates";
 import PersonnelFormDialog from "../components/PersonnelFormDialog";
-import type { Personnel, PersonnelWriteRequest } from "../types";
+import PersonnelImportDialog from "../components/PersonnelImportDialog";
+import { saveBlob } from "../sisImport";
+import type { Personnel, PersonnelImportResult, PersonnelWriteRequest } from "../types";
 
 const loadPersonnel = () => api.listPersonnel();
 
 const NO_PERSONNEL =
-  "This school has no personnel yet. Personnel are faculty and employees — add them here, or (soon) " +
-  "import them.";
+  "This school has no personnel yet. Personnel are faculty and employees — add them here, or import them " +
+  "from a CSV.";
 
 const NO_VALUE = "—";
 
@@ -53,10 +57,14 @@ export default function PersonnelPage() {
   const create = useApiMutation((request: PersonnelWriteRequest) => api.createPersonnel(request));
   const edit = useApiMutation((id: string, request: PersonnelWriteRequest) => api.updatePersonnel(id, request));
   const remove = useApiMutation((id: string) => api.deletePersonnel(id));
+  const importMut = useApiMutation((rows: PersonnelWriteRequest[]) => api.importPersonnel(rows));
+  const download = useApiMutation(() => api.downloadPersonnelCsv());
 
   const [creating, setCreating] = useState(false);
   const [editing, setEditing] = useState<Personnel | undefined>(undefined);
   const [deleting, setDeleting] = useState<Personnel | undefined>(undefined);
+  const [importing, setImporting] = useState(false);
+  const [importResult, setImportResult] = useState<PersonnelImportResult | undefined>(undefined);
 
   const createOpen = useRef(creating);
   const editOpen = useRef(editing !== undefined);
@@ -84,6 +92,30 @@ export default function PersonnelPage() {
       } else if (!createOpen.current) {
         announce({ severity: "error", text: describeApiError(s.error) });
       }
+    });
+  };
+
+  const openImport = () => {
+    importMut.reset();
+    setImportResult(undefined);
+    setImporting(true);
+  };
+
+  const runImport = (rows: PersonnelWriteRequest[]) => {
+    void importMut.run(rows).then((s) => {
+      if (s.outcome === "ignored") return;
+      if (s.outcome === "succeeded") {
+        setImportResult(s.data);
+        personnel.reload();
+      }
+      // A failure (e.g. empty/oversized batch) surfaces in the dialog via importMut.error.
+    });
+  };
+
+  const runExport = () => {
+    void download.run().then((s) => {
+      if (s.outcome === "succeeded") saveBlob(s.data.blob, s.data.filename);
+      else if (s.outcome === "failed") announce({ severity: "error", text: describeApiError(s.error) });
     });
   };
 
@@ -174,16 +206,28 @@ export default function PersonnelPage() {
         <Typography variant="h5" fontWeight={700}>
           Personnel
         </Typography>
-        <Button
-          variant="contained"
-          startIcon={<AddIcon />}
-          onClick={() => {
-            create.reset();
-            setCreating(true);
-          }}
-        >
-          Add personnel
-        </Button>
+        <Stack direction="row" spacing={1}>
+          <Button
+            startIcon={<DownloadIcon />}
+            onClick={runExport}
+            disabled={download.status === "running"}
+          >
+            {download.status === "running" ? "Exporting…" : "Export CSV"}
+          </Button>
+          <Button startIcon={<UploadFileIcon />} onClick={openImport}>
+            Import CSV
+          </Button>
+          <Button
+            variant="contained"
+            startIcon={<AddIcon />}
+            onClick={() => {
+              create.reset();
+              setCreating(true);
+            }}
+          >
+            Add personnel
+          </Button>
+        </Stack>
       </Stack>
 
       <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
@@ -271,6 +315,16 @@ export default function PersonnelPage() {
             </Button>
           </DialogActions>
         </Dialog>
+      )}
+
+      {importing && (
+        <PersonnelImportDialog
+          onClose={() => setImporting(false)}
+          onImport={runImport}
+          running={importMut.status === "running"}
+          result={importResult}
+          error={importMut.status === "failed" ? importMut.error : undefined}
+        />
       )}
 
       <Snackbar

@@ -6732,6 +6732,157 @@
         ]
       }
     },
+    "/api/v1/personnel/export.csv": {
+      "get": {
+        "tags": [
+          "Personnel"
+        ],
+        "summary": "`GET /personnel/export.csv` — every record matching the same filters as the list, as a CSV whose\r\n            columns are exactly the ones `POST /personnel/import` reads, so an export round-trips through import.",
+        "parameters": [
+          {
+            "name": "personnelNumber",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "rfidUid",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "name",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "department",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "position",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "classification",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The CSV.",
+            "content": {
+              "text/csv; charset=utf-8": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "Bearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/personnel/import": {
+      "post": {
+        "tags": [
+          "Personnel"
+        ],
+        "summary": "`POST /personnel/import` — a bulk upsert keyed on `PersonnelNumber`. Each row runs the same\r\n            validation and uniqueness rules as a single write; a failed row is tallied with its reason and does\r\n            not stop the others, so the response is a per-row summary rather than all-or-nothing.",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PersonnelImportRequest"
+              }
+            },
+            "text/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PersonnelImportRequest"
+              }
+            },
+            "application/*+json": {
+              "schema": {
+                "$ref": "#/components/schemas/PersonnelImportRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The import summary — created, updated, failed, and each failure's reason.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/PersonnelImportResultDto"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PersonnelImportResultDto"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PersonnelImportResultDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "No rows, or more than the maximum this endpoint accepts.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "Bearer": []
+          }
+        ]
+      }
+    },
     "/api/v1/pre-registration/sessions": {
       "get": {
         "tags": [
@@ -13743,6 +13894,66 @@
         },
         "additionalProperties": false,
         "description": "One page of an admin list read, plus what the caller needs to ask for the next one.\r\n            \r\n\r\n<b>Every §6.2/§6.3 admin list returns this; `GET /attendance/live/{eventId}` deliberately does\r\nnot.</b> That endpoint pages by cursor (`since`/`cursor`/`hasMore`) because it is a\r\npolling delta rather than a list — a client asks \"what changed after this point\", not \"give me rows\r\n40 to 60\" — and its shape is frozen published contract under D-29/D-30/D-42. Offset paging over a\r\nlive feed also drops rows: an insert below the cursor shifts every subsequent row up by one and the\r\nnext page skips it. The two mechanisms coexisting is correct, not an inconsistency to tidy.\r\n"
+      },
+      "PersonnelImportErrorDto": {
+        "type": "object",
+        "properties": {
+          "row": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "personnelNumber": {
+            "type": "string",
+            "nullable": true
+          },
+          "message": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false,
+        "description": "One row that could not be imported, by its 1-based position in the request."
+      },
+      "PersonnelImportRequest": {
+        "type": "object",
+        "properties": {
+          "rows": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PersonnelWriteRequest"
+            }
+          }
+        },
+        "additionalProperties": false,
+        "description": "The body of `POST /personnel/import` — a bulk upsert. Each row is a EAMS.Application.Dtos.PersonnelWriteRequest\r\n(the same shape and rules as a single create/edit); rows are matched to existing records by\r\n`PersonnelNumber` within the school — an existing number updates, a new one creates."
+      },
+      "PersonnelImportResultDto": {
+        "type": "object",
+        "properties": {
+          "total": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "created": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "updated": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "failed": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "errors": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PersonnelImportErrorDto"
+            }
+          }
+        },
+        "additionalProperties": false,
+        "description": "The outcome of a bulk import — how many rows created, updated, and failed, with per-row reasons."
       },
       "PersonnelWriteRequest": {
         "type": "object",

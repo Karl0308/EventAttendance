@@ -53,3 +53,21 @@ public record PersonnelListFilter(
     string? Position = null,
     string? Classification = null,
     string? Status = null);
+
+/// <summary>
+/// The body of <c>POST /personnel/import</c> — a bulk upsert. Each row is a <see cref="PersonnelWriteRequest"/>
+/// (the same shape and rules as a single create/edit); rows are matched to existing records by
+/// <c>PersonnelNumber</c> within the school — an existing number updates, a new one creates.
+/// </summary>
+public record PersonnelImportRequest(IReadOnlyList<PersonnelWriteRequest> Rows);
+
+/// <summary>One row that could not be imported, by its 1-based position in the request.</summary>
+public record PersonnelImportErrorDto(int Row, string? PersonnelNumber, string Message);
+
+/// <summary>The outcome of a bulk import — how many rows created, updated, and failed, with per-row reasons.</summary>
+public record PersonnelImportResultDto(
+    int Total,
+    int Created,
+    int Updated,
+    int Failed,
+    IReadOnlyList<PersonnelImportErrorDto> Errors);

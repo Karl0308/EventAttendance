@@ -3,7 +3,7 @@
 <!-- GENERATED FILE — DO NOT EDIT.
      Source: docs/api/openapi.json. Regenerate: node scripts/generate-endpoint-index.mjs --write -->
 
-**Generated from [`openapi.json`](openapi.json) — do not edit by hand.** 119 operations across 23 controllers, all mounted under `/api/v1`. Routes below are written relative to that mount.
+**Generated from [`openapi.json`](openapi.json) — do not edit by hand.** 121 operations across 23 controllers, all mounted under `/api/v1`. Routes below are written relative to that mount.
 
 This page is a **map, not a contract.** It exists so you can find an endpoint; payload shapes, field types and outcome tokens live in [`openapi.json`](openapi.json), which is what you generate a client from. Behaviour a schema cannot state — what your queue does with each outcome, the card-UID and clock rules — is in [`attendance-contract-handoff.md`](attendance-contract-handoff.md).
 
@@ -22,7 +22,7 @@ This page is a **map, not a contract.** It exists so you can find an endpoint; p
 - [EventClassifications](#eventclassifications) — 6
 - [EventManifest](#eventmanifest) — 1
 - [Permissions](#permissions) — 1
-- [Personnel](#personnel) — 5
+- [Personnel](#personnel) — 7
 - [PreRegistration](#preregistration) — 7
 - [Reports](#reports) — 7
 - [Roles](#roles) — 6
@@ -149,6 +149,8 @@ This page is a **map, not a contract.** It exists so you can find an endpoint; p
 | `DELETE` | `/personnel/{id}` | **Bearer** | `404` | Soft-delete the record. |
 | `GET` | `/personnel/{id}` | **Bearer** | `404` | One record. |
 | `PUT` | `/personnel/{id}` | **Bearer** | `400` `404` `409` | A full replacement of the record's fields. |
+| `GET` | `/personnel/export.csv` | **Bearer** | *none declared* | Every record matching the same filters as the list, as a CSV whose columns are exactly the ones `POST /personnel/import` reads, so an export round-trips through import. |
+| `POST` | `/personnel/import` | **Bearer** | `400` | A bulk upsert keyed on `PersonnelNumber`. |
 
 ## PreRegistration
 

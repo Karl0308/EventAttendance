@@ -553,6 +553,22 @@ export interface PersonnelWriteRequest {
   status: PersonnelStatusName;
 }
 
+/** One row of a bulk import that could not be applied, by its 1-based position. */
+export interface PersonnelImportError {
+  row: number;
+  personnelNumber?: string;
+  message: string;
+}
+
+/** The summary `POST /personnel/import` returns — an upsert keyed on personnel number. */
+export interface PersonnelImportResult {
+  total: number;
+  created: number;
+  updated: number;
+  failed: number;
+  errors: PersonnelImportError[];
+}
+
 export interface Student {
   id: string;
   studentNumber: string;

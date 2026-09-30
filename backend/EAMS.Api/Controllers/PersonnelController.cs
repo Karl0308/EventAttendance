@@ -1,4 +1,5 @@
 using EAMS.Api.Authorization;
+using EAMS.Api.Reports;
 using EAMS.Application.Abstractions;
 using EAMS.Application.Dtos;
 using Microsoft.AspNetCore.Authorization;
@@ -119,6 +120,62 @@ public class PersonnelController : ControllerBase
     {
         var response = await _personnel.DeleteAsync(id, ct);
         return response.Outcome == PersonnelWriteOutcome.Saved ? Ok(response.Personnel) : Failure(response);
+    }
+
+    // ----------------------------------------------------------------------------- import / export
+
+    /// <summary>The most rows one import call accepts — beyond this it is a paste of the wrong file.</summary>
+    internal const int MaxImportRows = 5000;
+
+    /// <summary>
+    /// <c>GET /personnel/export.csv</c> — every record matching the same filters as the list, as a CSV whose
+    /// columns are exactly the ones <c>POST /personnel/import</c> reads, so an export round-trips through import.
+    /// </summary>
+    /// <response code="200">The CSV.</response>
+    [HttpGet("export.csv")]
+    [Authorize(AuthenticationSchemes = JwtBearerDefaults.AuthenticationScheme, Policy = EamsPermissions.StudentsRead)]
+    [HasPermissionNotEnforced(EamsPermissions.StudentsRead)]
+    [ProducesResponseType(typeof(FileContentResult), StatusCodes.Status200OK, PersonnelCsv.ContentType)]
+    public async Task<IActionResult> ExportCsv(
+        [FromQuery] string? personnelNumber, [FromQuery] string? rfidUid, [FromQuery] string? name,
+        [FromQuery] string? department, [FromQuery] string? position, [FromQuery] string? classification,
+        [FromQuery] string? status, CancellationToken ct)
+    {
+        var rows = await _personnel.ExportAsync(
+            new PersonnelListFilter(personnelNumber, rfidUid, name, department, position, classification, status),
+            ct);
+
+        // Personnel data names people; do not let a browser or intermediary keep a copy.
+        Response.Headers.CacheControl = "no-store";
+
+        return File(PersonnelCsv.Write(rows), PersonnelCsv.ContentType, PersonnelCsv.FileName());
+    }
+
+    /// <summary>
+    /// <c>POST /personnel/import</c> — a bulk upsert keyed on <c>PersonnelNumber</c>. Each row runs the same
+    /// validation and uniqueness rules as a single write; a failed row is tallied with its reason and does
+    /// not stop the others, so the response is a per-row summary rather than all-or-nothing.
+    /// </summary>
+    /// <response code="200">The import summary — created, updated, failed, and each failure's reason.</response>
+    /// <response code="400">No rows, or more than the maximum this endpoint accepts.</response>
+    [HttpPost("import")]
+    [Authorize(AuthenticationSchemes = JwtBearerDefaults.AuthenticationScheme, Policy = EamsPermissions.StudentsWrite)]
+    [HasPermissionNotEnforced(EamsPermissions.StudentsWrite)]
+    [ProducesResponseType(typeof(PersonnelImportResultDto), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status400BadRequest)]
+    public async Task<ActionResult<PersonnelImportResultDto>> Import(
+        [FromBody] PersonnelImportRequest request, CancellationToken ct)
+    {
+        var rows = request.Rows ?? [];
+        if (rows.Count == 0)
+            return Failure(new PersonnelWriteResponse(
+                PersonnelWriteOutcome.ValidationFailed, "The import contained no rows.", null));
+        if (rows.Count > MaxImportRows)
+            return Failure(new PersonnelWriteResponse(
+                PersonnelWriteOutcome.ValidationFailed,
+                $"The import has {rows.Count} rows; at most {MaxImportRows} are accepted in one call.", null));
+
+        return Ok(await _personnel.ImportAsync(rows, ct));
     }
 
     // -------------------------------------------------------------------------------- translation

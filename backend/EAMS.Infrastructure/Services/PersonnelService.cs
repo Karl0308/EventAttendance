@@ -31,6 +31,18 @@ internal sealed class PersonnelService : IPersonnelService
     public async Task<PagedResult<PersonnelDto>> ListAsync(
         PersonnelListFilter filter, PageRequest page, CancellationToken ct = default)
     {
+        return await FilteredQuery(filter).ToPageAsync(Ordered, page, ct);
+    }
+
+    public async Task<IReadOnlyList<PersonnelDto>> ExportAsync(
+        PersonnelListFilter filter, CancellationToken ct = default)
+    {
+        return await Ordered(FilteredQuery(filter)).ToListAsync(ct);
+    }
+
+    /// <summary>The list/export filter, shared so a CSV export and the paged screen cannot drift apart.</summary>
+    private IQueryable<Personnel> FilteredQuery(PersonnelListFilter filter)
+    {
         var query = _db.Personnel.AsNoTracking().Where(p => !p.IsDeleted);
 
         if (Fragment(filter.PersonnelNumber) is { } number)
@@ -61,16 +73,15 @@ internal sealed class PersonnelService : IPersonnelService
         if (Fragment(filter.Status) is { } status)
             query = query.Where(p => p.Status == status);
 
-        return await query.ToPageAsync(
-            q => q
-                .OrderByDescending(p => p.Status == PersonnelStatus.Active)
-                .ThenBy(p => p.LastName)
-                .ThenBy(p => p.FirstName)
-                .ThenBy(p => p.Id)
-                .Select(p => ToDtoExpression(p)),
-            page,
-            ct);
+        return query;
     }
+
+    private static IQueryable<PersonnelDto> Ordered(IQueryable<Personnel> q) =>
+        q.OrderByDescending(p => p.Status == PersonnelStatus.Active)
+            .ThenBy(p => p.LastName)
+            .ThenBy(p => p.FirstName)
+            .ThenBy(p => p.Id)
+            .Select(p => ToDtoExpression(p));
 
     public async Task<PersonnelDto?> GetAsync(Guid id, CancellationToken ct = default)
     {
@@ -158,6 +169,54 @@ internal sealed class PersonnelService : IPersonnelService
             "Personnel record removed. It is soft-deleted — kept so any future attendance can still " +
             "resolve, and its ID and card are freed for reuse.",
             ToDto(row));
+    }
+
+    // ----------------------------------------------------------------------------------------- import
+
+    public async Task<PersonnelImportResultDto> ImportAsync(
+        IReadOnlyList<PersonnelWriteRequest> rows, CancellationToken ct = default)
+    {
+        var created = 0;
+        var updated = 0;
+        var errors = new List<PersonnelImportErrorDto>();
+
+        // Each row goes through the same CreateAsync/UpdateAsync as a single write, so import cannot admit a
+        // record that the manual form would reject, and every uniqueness rule is enforced identically. A
+        // failed row is tallied and the import continues (spec: distinguish success from each failure kind).
+        for (var i = 0; i < rows.Count; i++)
+        {
+            var row = rows[i];
+            var line = i + 1;
+            var number = row.PersonnelNumber?.Trim() ?? "";
+
+            if (number.Length == 0)
+            {
+                errors.Add(new PersonnelImportErrorDto(line, null, "A personnel ID is required."));
+                continue;
+            }
+
+            // Upsert key: an existing live record with this number in the tenant is updated, else created.
+            var existingId = await _db.Personnel.AsNoTracking()
+                .Where(p => !p.IsDeleted && p.PersonnelNumber == number)
+                .Select(p => (Guid?)p.Id)
+                .FirstOrDefaultAsync(ct);
+
+            var response = existingId is { } id
+                ? await UpdateAsync(id, row, ct)
+                : await CreateAsync(row, ct);
+
+            if (response.Outcome == PersonnelWriteOutcome.Saved)
+            {
+                if (existingId is null) created++;
+                else updated++;
+            }
+            else
+            {
+                errors.Add(new PersonnelImportErrorDto(line, number, response.Message));
+            }
+        }
+
+        return new PersonnelImportResultDto(rows.Count, created, updated, errors.Count, errors);
     }
 
     // --------------------------------------------------------------------------------------- plumbing

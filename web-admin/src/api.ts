@@ -77,6 +77,7 @@ import type {
   RoleWriteRequest,
   Personnel,
   PersonnelWriteRequest,
+  PersonnelImportResult,
   ClearanceReport,
   ClearanceStudent,
   ClearanceEvent,
@@ -2969,6 +2970,59 @@ async function deletePersonnel(id: string): Promise<Personnel> {
     { method: "DELETE" }, "The personnel record was removed", toPersonnel);
 }
 
+/** `PersonnelImportResultDto` — the per-row upsert summary. */
+function toPersonnelImportResult(row: Row, what: string): PersonnelImportResult {
+  return {
+    total: reqNum(row, "total", what),
+    created: reqNum(row, "created", what),
+    updated: reqNum(row, "updated", what),
+    failed: reqNum(row, "failed", what),
+    errors: asRows(row.errors, `${what}.errors`).map((e, i) => ({
+      row: reqNum(e, "row", `${what}.errors[${i}]`),
+      personnelNumber: optStr(e.personnelNumber),
+      message: reqStr(e, "message", `${what}.errors[${i}]`),
+    })),
+  };
+}
+
+/**
+ * `POST /personnel/import` — a bulk upsert keyed on personnel number. Each row is validated like a single
+ * write; a failed row is tallied with its reason rather than failing the batch. **400** for no rows or more
+ * than the server's maximum.
+ */
+async function importPersonnel(rows: PersonnelWriteRequest[]): Promise<PersonnelImportResult> {
+  return writeJson(
+    "POST /personnel/import", "/personnel/import",
+    { method: "POST", payload: { rows } },
+    "The personnel import was processed",
+    toPersonnelImportResult,
+  );
+}
+
+const PERSONNEL_CSV_FALLBACK_FILENAME = "EAMS-personnel.csv";
+
+/** `GET /personnel/export.csv` — every record as a CSV whose columns are exactly the import columns. */
+async function downloadPersonnelCsv(): Promise<DownloadedFile> {
+  const what = "GET /personnel/export.csv";
+  const res = await send(what, "/personnel/export.csv");
+  if (!res.ok) throw httpError(what, await readProblem(res), "read");
+
+  let blob: Blob;
+  try {
+    blob = await res.blob();
+  } catch (cause) {
+    if (isTimeout(cause)) throw timedOut(what, cause, "read", REQUEST_TIMEOUT_MS);
+    throw new ApiError(
+      "network", 0,
+      `Cannot reach the EAMS API at ${baseUrl} — ${what} was not completed; the connection was lost.`,
+      { shape: "read", cause });
+  }
+
+  const disposition = res.headers.get("Content-Disposition");
+  const match = disposition === null ? null : CONTENT_DISPOSITION_FILENAME.exec(disposition);
+  return { blob, filename: match?.[1] ?? PERSONNEL_CSV_FALLBACK_FILENAME };
+}
+
 // ---------------------------------------------------------------------------------------------
 // Unrecognized RFID scans — manual ID entry (UnrecognizedRFIDScans.docx)
 // ---------------------------------------------------------------------------------------------
@@ -4264,6 +4318,8 @@ export const api = {
   createPersonnel,
   updatePersonnel,
   deletePersonnel,
+  importPersonnel,
+  downloadPersonnelCsv,
   clearanceReport,
   downloadClearanceCsv,
   recordManualId,

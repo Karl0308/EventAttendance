@@ -34,7 +34,7 @@ public record PersonnelWriteResponse(PersonnelWriteOutcome Outcome, string Messa
 /// administrator.
 ///
 /// <para>
-/// Import and export are a separate, later increment; this is the manual CRUD, filters and list.
+/// Manual CRUD, filters and list, plus bulk <see cref="ExportAsync"/> / <see cref="ImportAsync"/>.
 /// </para>
 /// </summary>
 public interface IPersonnelService
@@ -44,6 +44,21 @@ public interface IPersonnelService
     /// </summary>
     Task<PagedResult<PersonnelDto>> ListAsync(
         PersonnelListFilter filter, PageRequest page, CancellationToken ct = default);
+
+    /// <summary>
+    /// <c>GET /personnel/export.csv</c>'s data — every record matching the filter (no paging), in the same
+    /// order the list uses, for a CSV download.
+    /// </summary>
+    Task<IReadOnlyList<PersonnelDto>> ExportAsync(
+        PersonnelListFilter filter, CancellationToken ct = default);
+
+    /// <summary>
+    /// <c>POST /personnel/import</c> — a bulk upsert keyed on <c>PersonnelNumber</c> within the school. Each
+    /// row runs the same validation and uniqueness rules as a single write; a failed row is tallied with its
+    /// reason and does not stop the others.
+    /// </summary>
+    Task<PersonnelImportResultDto> ImportAsync(
+        IReadOnlyList<PersonnelWriteRequest> rows, CancellationToken ct = default);
 
     /// <summary><c>GET /personnel/{id}</c> — one record, or null when this tenant has none / it is deleted.</summary>
     Task<PersonnelDto?> GetAsync(Guid id, CancellationToken ct = default);
