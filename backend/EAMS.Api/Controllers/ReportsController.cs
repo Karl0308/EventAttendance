@@ -41,7 +41,13 @@ public class ReportsController : ControllerBase
     internal const string MissingEventIdsProperty = "missingEventIds";
 
     private readonly IReportService _reports;
-    public ReportsController(IReportService reports) => _reports = reports;
+    private readonly IAttendanceAnalyticsService _analytics;
+
+    public ReportsController(IReportService reports, IAttendanceAnalyticsService analytics)
+    {
+        _reports = reports;
+        _analytics = analytics;
+    }
 
     /// <summary>
     /// §6.7 <c>GET /reports/event/{eventId}/summary</c> — the Event Attendance Summary for one event.
@@ -266,6 +272,95 @@ public class ReportsController : ControllerBase
         return response.Outcome == MultiEventReportOutcome.Ready
             ? Ok(response.Report)
             : Failure(response);
+    }
+
+    // ----------------------------------------------------------------- RPT-01 attendance analytics
+
+    /// <summary>
+    /// <c>GET /reports/attendance-analytics</c> — recorded student attendance grouped by course, year level
+    /// or section over a date range, with a Present / Late / Absent / Excused breakdown and a rate
+    /// (Reports-Module-Enhancement.docx RPT-01, scoped to what the model carries — see
+    /// <see cref="IAttendanceAnalyticsService"/>).
+    /// </summary>
+    /// <remarks>
+    /// Drill-down is a re-query, not a second endpoint: ask for a finer <c>groupBy</c> and pass the parent's
+    /// value as a filter (Course → <c>groupBy=Section&amp;course=BSIT</c> → <c>groupBy=Event&amp;course=BSIT&amp;section=A</c>).
+    /// At the Event level each row carries <c>eventId</c>, so the SPA links into the Event Module.
+    /// </remarks>
+    /// <param name="groupBy"><c>Course</c> (default), <c>YearLevel</c>, <c>Section</c>, or <c>Event</c>.</param>
+    /// <param name="from">Only events starting on/after this UTC instant.</param>
+    /// <param name="to">Only events starting on/before this UTC instant.</param>
+    /// <param name="includeCancelled">Cancelled events are excluded unless true.</param>
+    /// <param name="course">Drill-down filter.</param>
+    /// <param name="yearLevel">Drill-down filter.</param>
+    /// <param name="section">Drill-down filter.</param>
+    /// <param name="ct">Cancellation token.</param>
+    /// <response code="200">The grouped report and its totals.</response>
+    /// <response code="400">An unknown <c>groupBy</c>, or <c>from</c> after <c>to</c>.</response>
+    /// <response code="401">No credential, or an invalid one.</response>
+    /// <response code="403">Signed in without <c>reports.read</c>.</response>
+    [HttpGet("attendance-analytics")]
+    [Authorize(AuthenticationSchemes = JwtBearerDefaults.AuthenticationScheme, Policy = EamsPermissions.ReportsRead)]
+    [HasPermissionNotEnforced(EamsPermissions.ReportsRead)]
+    [ProducesResponseType(typeof(AttendanceAnalyticsReportDto), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status401Unauthorized)]
+    [ProducesResponseType(StatusCodes.Status403Forbidden)]
+    public async Task<ActionResult<AttendanceAnalyticsReportDto>> AttendanceAnalytics(
+        [FromQuery] string? groupBy, [FromQuery] DateTime? from, [FromQuery] DateTime? to,
+        [FromQuery] bool includeCancelled, [FromQuery] string? course, [FromQuery] string? yearLevel,
+        [FromQuery] string? section, CancellationToken ct)
+    {
+        var result = await _analytics.GetReportAsync(
+            new AttendanceAnalyticsQuery(groupBy, from, to, includeCancelled, course, yearLevel, section), ct);
+
+        return result.Outcome == AttendanceAnalyticsOutcome.Ok
+            ? Ok(result.Report)
+            : AnalyticsFailure(result);
+    }
+
+    /// <summary>
+    /// <c>GET /reports/attendance-analytics/export.csv</c> — the same report as a CSV download.
+    /// </summary>
+    /// <response code="200">The CSV.</response>
+    /// <response code="400">An unknown <c>groupBy</c>, or <c>from</c> after <c>to</c>.</response>
+    [HttpGet("attendance-analytics/export.csv")]
+    [Authorize(AuthenticationSchemes = JwtBearerDefaults.AuthenticationScheme, Policy = EamsPermissions.ReportsRead)]
+    [HasPermissionNotEnforced(EamsPermissions.ReportsRead)]
+    [ProducesResponseType(typeof(FileContentResult), StatusCodes.Status200OK, AttendanceAnalyticsCsv.ContentType)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status401Unauthorized)]
+    [ProducesResponseType(StatusCodes.Status403Forbidden)]
+    public async Task<IActionResult> AttendanceAnalyticsExportCsv(
+        [FromQuery] string? groupBy, [FromQuery] DateTime? from, [FromQuery] DateTime? to,
+        [FromQuery] bool includeCancelled, [FromQuery] string? course, [FromQuery] string? yearLevel,
+        [FromQuery] string? section, CancellationToken ct)
+    {
+        var result = await _analytics.GetReportAsync(
+            new AttendanceAnalyticsQuery(groupBy, from, to, includeCancelled, course, yearLevel, section), ct);
+        if (result.Outcome != AttendanceAnalyticsOutcome.Ok) return AnalyticsFailure(result);
+
+        // A report names no student here (it is aggregate), but it is still a moving snapshot; do not cache.
+        Response.Headers.CacheControl = "no-store";
+
+        return File(
+            AttendanceAnalyticsCsv.Write(result.Report!), AttendanceAnalyticsCsv.ContentType,
+            AttendanceAnalyticsCsv.FileNameFor(result.Report!));
+    }
+
+    private ObjectResult AnalyticsFailure(AttendanceAnalyticsResult result)
+    {
+        var status = result.Outcome == AttendanceAnalyticsOutcome.ValidationFailed
+            ? StatusCodes.Status400BadRequest
+            : throw new ArgumentOutOfRangeException(
+                nameof(result), result.Outcome,
+                $"No HTTP status is mapped for this {nameof(AttendanceAnalyticsOutcome)}.");
+
+        var problem = ProblemDetailsFactory.CreateProblemDetails(
+            HttpContext, statusCode: status, title: "The report could not be produced.",
+            detail: result.Message);
+        problem.Extensions[ErrorCodeProperty] = result.Outcome.ToString();
+        return StatusCode(status, problem);
     }
 
     /// <summary>

@@ -3,7 +3,7 @@
 <!-- GENERATED FILE — DO NOT EDIT.
      Source: docs/api/openapi.json. Regenerate: node scripts/generate-endpoint-index.mjs --write -->
 
-**Generated from [`openapi.json`](openapi.json) — do not edit by hand.** 117 operations across 23 controllers, all mounted under `/api/v1`. Routes below are written relative to that mount.
+**Generated from [`openapi.json`](openapi.json) — do not edit by hand.** 119 operations across 23 controllers, all mounted under `/api/v1`. Routes below are written relative to that mount.
 
 This page is a **map, not a contract.** It exists so you can find an endpoint; payload shapes, field types and outcome tokens live in [`openapi.json`](openapi.json), which is what you generate a client from. Behaviour a schema cannot state — what your queue does with each outcome, the card-UID and clock rules — is in [`attendance-contract-handoff.md`](attendance-contract-handoff.md).
 
@@ -24,7 +24,7 @@ This page is a **map, not a contract.** It exists so you can find an endpoint; p
 - [Permissions](#permissions) — 1
 - [Personnel](#personnel) — 5
 - [PreRegistration](#preregistration) — 7
-- [Reports](#reports) — 5
+- [Reports](#reports) — 7
 - [Roles](#roles) — 6
 - [Scans](#scans) — 2
 - [SisImport](#sisimport) — 5
@@ -166,6 +166,8 @@ This page is a **map, not a contract.** It exists so you can find an endpoint; p
 
 | Method | Route | Auth | Errors | What it does |
 |---|---|---|---|---|
+| `GET` | `/reports/attendance-analytics` | **Bearer** | `400` `401` `403` | Recorded student attendance grouped by course, year level or section over a date range, with a Present / Late / Absent / Excused breakdown and a rate (Reports-Module-Enhancement.docx RPT-01, scoped to what the model carries — see EAMS.Application.Abstractions.IAttendanceAnalyticsService). |
+| `GET` | `/reports/attendance-analytics/export.csv` | **Bearer** | `400` `401` `403` | The same report as a CSV download. |
 | `GET` | `/reports/event/{eventId}/attendees` | **Bearer** | `401` `403` `404` | Task 9.6 `GET /reports/event/{eventId}/attendees` — the report's student list, paged: every student who tapped in, with Time In, Time Out and Duration. |
 | `GET` | `/reports/event/{eventId}/detail` | **Bearer** | `401` `403` `404` | Task 9.6 `GET /reports/event/{eventId}/detail` — one event's report in detail: its particulars, its summary, and (for a `TimeInOut` event) its time-out totals. |
 | `GET` | `/reports/event/{eventId}/export.csv` | **Bearer** | `401` `403` `404` | Task 9.6 `GET /reports/event/{eventId}/export.csv` — the whole single-event report as a CSV download: particulars, totals, and every row of the student list. |

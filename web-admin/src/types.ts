@@ -349,6 +349,47 @@ export interface PreRegisterResult {
 }
 
 // ---------------------------------------------------------------------------------------------
+// Attendance analytics (Reports-Module-Enhancement.docx RPT-01, scoped)
+// ---------------------------------------------------------------------------------------------
+
+/** The grouping dimensions the analytics report supports; `Event` is the last drill-down level. */
+export type AttendanceGroupBy = "Course" | "YearLevel" | "Section" | "Event";
+
+/** The query behind the analytics report — drill-down narrows the filters and asks for a finer groupBy. */
+export interface AttendanceAnalyticsQuery {
+  groupBy: AttendanceGroupBy;
+  from?: string;
+  to?: string;
+  includeCancelled?: boolean;
+  course?: string;
+  yearLevel?: string;
+  section?: string;
+}
+
+/** One row of the analytics report — a group, or one event at the last level. */
+export interface AttendanceAnalyticsRow {
+  key: string;
+  /** Set only at the Event level, so the row can link into the Event Module. */
+  eventId?: string;
+  eventDate?: string;
+  totalEvents: number;
+  people: number;
+  present: number;
+  late: number;
+  absent: number;
+  excused: number;
+  total: number;
+  attendanceRate: number;
+}
+
+/** The whole analytics report — the group rows and a totals row over the same scope. */
+export interface AttendanceAnalyticsReport {
+  groupBy: AttendanceGroupBy;
+  rows: AttendanceAnalyticsRow[];
+  totals: AttendanceAnalyticsRow;
+}
+
+// ---------------------------------------------------------------------------------------------
 // §11 User Management (UserWithRBAC.docx) — administrators only
 // ---------------------------------------------------------------------------------------------
 

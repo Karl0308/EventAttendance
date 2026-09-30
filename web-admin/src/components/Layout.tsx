@@ -22,6 +22,7 @@ import HowToRegIcon from "@mui/icons-material/HowToReg";
 import RouterIcon from "@mui/icons-material/Router";
 import CalendarMonthIcon from "@mui/icons-material/CalendarMonth";
 import AssessmentIcon from "@mui/icons-material/Assessment";
+import QueryStatsIcon from "@mui/icons-material/QueryStats";
 import FactCheckIcon from "@mui/icons-material/FactCheck";
 import ContactlessIcon from "@mui/icons-material/Contactless";
 import GroupIcon from "@mui/icons-material/Group";
@@ -115,6 +116,12 @@ const nav: readonly NavEntry[] = [
     to: "/reports",
     label: "Reports",
     icon: <AssessmentIcon />,
+    permission: PERMISSIONS.reportsRead,
+  },
+  {
+    to: "/attendance-analytics",
+    label: "Attendance analytics",
+    icon: <QueryStatsIcon />,
     permission: PERMISSIONS.reportsRead,
   },
   {

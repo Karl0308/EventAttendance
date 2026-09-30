@@ -22,6 +22,7 @@ import Roles from "./pages/Roles";
 import Clearance from "./pages/Clearance";
 import ManualRfidRecords from "./pages/ManualRfidRecords";
 import Reports from "./pages/Reports";
+import AttendanceAnalytics from "./pages/AttendanceAnalytics";
 
 /**
  * A screen, behind the permission the API will ask it for anyway.
@@ -136,6 +137,14 @@ export default function App() {
 
         {/* Admin-only per Q16, and narrower than §11's own table — see `PERMISSIONS.reportsRead`. */}
         <Route path="/reports" element={gated(PERMISSIONS.reportsRead, <Reports />)} />
+
+        {/* RPT-01 attendance analytics (Reports-Module-Enhancement.docx) — same reports.read gate. A
+            top-level path rather than under /reports so the sidebar's startsWith active-match does not
+            light both entries at once. */}
+        <Route
+          path="/attendance-analytics"
+          element={gated(PERMISSIONS.reportsRead, <AttendanceAnalytics />)}
+        />
 
         {/* Clearance Checker (Clearance-Checker-Module.docx) — a cross-event report, same admin gate. */}
         <Route path="/clearance" element={gated(PERMISSIONS.reportsRead, <Clearance />)} />

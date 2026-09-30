@@ -186,6 +186,10 @@ public static class DependencyInjection
         // files the session under a school.
         services.AddScoped<IPreRegistrationService, PreRegistrationService>();
 
+        // Attendance analytics (Reports-Module-Enhancement.docx RPT-01) — read-only grouped attendance,
+        // scoped by the query filters, so it takes no ISchoolContext.
+        services.AddScoped<IAttendanceAnalyticsService, AttendanceAnalyticsService>();
+
         // The other half of classification: who holds which entry. Registered separately from the
         // vocabulary above rather than folded into it, because the two are different subjects with
         // different lifecycles — a category outlives everybody filed under it — and because this one

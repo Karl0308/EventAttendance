@@ -7906,6 +7906,301 @@
         ]
       }
     },
+    "/api/v1/reports/attendance-analytics": {
+      "get": {
+        "tags": [
+          "Reports"
+        ],
+        "summary": "`GET /reports/attendance-analytics` — recorded student attendance grouped by course, year level\r\n            or section over a date range, with a Present / Late / Absent / Excused breakdown and a rate\r\n            (Reports-Module-Enhancement.docx RPT-01, scoped to what the model carries — see\r\n            EAMS.Application.Abstractions.IAttendanceAnalyticsService).",
+        "description": "Drill-down is a re-query, not a second endpoint: ask for a finer `groupBy` and pass the parent's\r\nvalue as a filter (Course → `groupBy=Section&course=BSIT` → `groupBy=Event&course=BSIT&section=A`).\r\nAt the Event level each row carries `eventId`, so the SPA links into the Event Module.",
+        "parameters": [
+          {
+            "name": "groupBy",
+            "in": "query",
+            "description": "`Course` (default), `YearLevel`, `Section`, or `Event`.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "from",
+            "in": "query",
+            "description": "Only events starting on/after this UTC instant.",
+            "schema": {
+              "type": "string",
+              "format": "date-time"
+            }
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "description": "Only events starting on/before this UTC instant.",
+            "schema": {
+              "type": "string",
+              "format": "date-time"
+            }
+          },
+          {
+            "name": "includeCancelled",
+            "in": "query",
+            "description": "Cancelled events are excluded unless true.",
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "name": "course",
+            "in": "query",
+            "description": "Drill-down filter.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "yearLevel",
+            "in": "query",
+            "description": "Drill-down filter.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "section",
+            "in": "query",
+            "description": "Drill-down filter.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The grouped report and its totals.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/AttendanceAnalyticsReportDto"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AttendanceAnalyticsReportDto"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AttendanceAnalyticsReportDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "An unknown `groupBy`, or `from` after `to`.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No credential, or an invalid one.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Signed in without `reports.read`.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "Bearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/reports/attendance-analytics/export.csv": {
+      "get": {
+        "tags": [
+          "Reports"
+        ],
+        "summary": "`GET /reports/attendance-analytics/export.csv` — the same report as a CSV download.",
+        "parameters": [
+          {
+            "name": "groupBy",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "from",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "format": "date-time"
+            }
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "format": "date-time"
+            }
+          },
+          {
+            "name": "includeCancelled",
+            "in": "query",
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "name": "course",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "yearLevel",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "section",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The CSV.",
+            "content": {
+              "text/csv; charset=utf-8": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "An unknown `groupBy`, or `from` after `to`.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "Bearer": []
+          }
+        ]
+      }
+    },
     "/api/v1/roles": {
       "get": {
         "tags": [
@@ -10702,6 +10997,83 @@
         },
         "additionalProperties": false,
         "description": "One page of an admin list read, plus what the caller needs to ask for the next one.\r\n            \r\n\r\n<b>Every §6.2/§6.3 admin list returns this; `GET /attendance/live/{eventId}` deliberately does\r\nnot.</b> That endpoint pages by cursor (`since`/`cursor`/`hasMore`) because it is a\r\npolling delta rather than a list — a client asks \"what changed after this point\", not \"give me rows\r\n40 to 60\" — and its shape is frozen published contract under D-29/D-30/D-42. Offset paging over a\r\nlive feed also drops rows: an insert below the cursor shifts every subsequent row up by one and the\r\nnext page skips it. The two mechanisms coexisting is correct, not an inconsistency to tidy.\r\n"
+      },
+      "AttendanceAnalyticsReportDto": {
+        "type": "object",
+        "properties": {
+          "groupBy": {
+            "type": "string"
+          },
+          "rows": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AttendanceAnalyticsRowDto"
+            }
+          },
+          "totals": {
+            "$ref": "#/components/schemas/AttendanceAnalyticsRowDto"
+          }
+        },
+        "additionalProperties": false,
+        "description": "The whole report — the group rows and a totals row over the same scope."
+      },
+      "AttendanceAnalyticsRowDto": {
+        "type": "object",
+        "properties": {
+          "key": {
+            "type": "string",
+            "description": "The group value, or the event name at the Event level."
+          },
+          "eventId": {
+            "type": "string",
+            "description": "Set only at the Event level, so the SPA can link into the Event Module.",
+            "format": "uuid",
+            "nullable": true
+          },
+          "eventDate": {
+            "type": "string",
+            "description": "Set only at the Event level.",
+            "format": "date-time",
+            "nullable": true
+          },
+          "totalEvents": {
+            "type": "integer",
+            "description": "Distinct events contributing to this row.",
+            "format": "int32"
+          },
+          "people": {
+            "type": "integer",
+            "description": "Distinct students contributing to this row.",
+            "format": "int32"
+          },
+          "present": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "late": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "absent": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "excused": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "total": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "attendanceRate": {
+            "type": "number",
+            "description": "(Present + Late) / Total, as a percentage 0..100, or 0 when Total is 0.",
+            "format": "double"
+          }
+        },
+        "additionalProperties": false,
+        "description": "One row of the attendance-analytics report — a group (course/year/section) or, at the last level, one\r\nevent."
       },
       "AttendanceCodeDto": {
         "type": "object",

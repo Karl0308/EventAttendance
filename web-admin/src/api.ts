@@ -66,6 +66,9 @@ import type {
   PreRegistrant,
   PreRegisterRequest,
   PreRegisterResult,
+  AttendanceAnalyticsQuery,
+  AttendanceAnalyticsRow,
+  AttendanceAnalyticsReport,
   AdminUser,
   UserRoleRef,
   UserCreateRequest,
@@ -1556,6 +1559,45 @@ function toPreRegisterResult(row: Row, what: string): PreRegisterResult {
     registeredCount: reqNum(row, "registeredCount", what),
     capacity: reqNum(row, "capacity", what),
     registrant: isRow(row.registrant) ? toPreRegistrant(row.registrant, `${what}.registrant`) : undefined,
+  };
+}
+
+/** `AttendanceAnalyticsRowDto` — one group (or event) row of the RPT-01 report. */
+function toAttendanceAnalyticsRow(row: Row, what: string): AttendanceAnalyticsRow {
+  return {
+    key: reqStr(row, "key", what),
+    eventId: optStr(row.eventId),
+    eventDate: optStr(row.eventDate),
+    totalEvents: reqNum(row, "totalEvents", what),
+    people: reqNum(row, "people", what),
+    present: reqNum(row, "present", what),
+    late: reqNum(row, "late", what),
+    absent: reqNum(row, "absent", what),
+    excused: reqNum(row, "excused", what),
+    total: reqNum(row, "total", what),
+    attendanceRate: reqNum(row, "attendanceRate", what),
+  };
+}
+
+/** `AttendanceAnalyticsReportDto` — the grouped rows plus a totals row. */
+function toAttendanceAnalyticsReport(row: Row, what: string): AttendanceAnalyticsReport {
+  return {
+    groupBy: reqStr(row, "groupBy", what) as AttendanceAnalyticsReport["groupBy"],
+    rows: asRows(row.rows, `${what}.rows`).map((r, i) => toAttendanceAnalyticsRow(r, `${what}.rows[${i}]`)),
+    totals: toAttendanceAnalyticsRow(asRow(row.totals, `${what}.totals`), `${what}.totals`),
+  };
+}
+
+/** The analytics query, as the shared string-map the transport takes. */
+function analyticsQuery(query: AttendanceAnalyticsQuery): Record<string, string | undefined> {
+  return {
+    groupBy: query.groupBy,
+    from: query.from,
+    to: query.to,
+    includeCancelled: query.includeCancelled ? "true" : undefined,
+    course: query.course,
+    yearLevel: query.yearLevel,
+    section: query.section,
   };
 }
 
@@ -3433,6 +3475,41 @@ async function removePreRegistrant(
   );
 }
 
+/** `GET /reports/attendance-analytics` — the RPT-01 grouped attendance report for the query. */
+async function getAttendanceAnalytics(
+  query: AttendanceAnalyticsQuery,
+): Promise<AttendanceAnalyticsReport> {
+  const what = "GET /reports/attendance-analytics";
+  const body = await getJson(what, "/reports/attendance-analytics", analyticsQuery(query));
+  return toAttendanceAnalyticsReport(asRow(body, what), what);
+}
+
+const ANALYTICS_CSV_FALLBACK_FILENAME = "EAMS-attendance.csv";
+
+/** `GET /reports/attendance-analytics/export.csv` — the same report as a downloadable CSV. */
+async function downloadAttendanceAnalyticsCsv(
+  query: AttendanceAnalyticsQuery,
+): Promise<DownloadedFile> {
+  const what = "GET /reports/attendance-analytics/export.csv";
+  const res = await send(what, "/reports/attendance-analytics/export.csv", analyticsQuery(query));
+  if (!res.ok) throw httpError(what, await readProblem(res), "read");
+
+  let blob: Blob;
+  try {
+    blob = await res.blob();
+  } catch (cause) {
+    if (isTimeout(cause)) throw timedOut(what, cause, "read", REQUEST_TIMEOUT_MS);
+    throw new ApiError(
+      "network", 0,
+      `Cannot reach the EAMS API at ${baseUrl} — ${what} was not completed; the connection was lost.`,
+      { shape: "read", cause });
+  }
+
+  const disposition = res.headers.get("Content-Disposition");
+  const match = disposition === null ? null : CONTENT_DISPOSITION_FILENAME.exec(disposition);
+  return { blob, filename: match?.[1] ?? ANALYTICS_CSV_FALLBACK_FILENAME };
+}
+
 /**
  * Which term a section list was read for — and, when it is not the one that was asked for, the fact
  * that says the rows already fetched have to be thrown away.
@@ -4181,6 +4258,8 @@ export const api = {
   listPreRegistrants,
   registerPreRegistrant,
   removePreRegistrant,
+  getAttendanceAnalytics,
+  downloadAttendanceAnalyticsCsv,
   listPersonnel,
   createPersonnel,
   updatePersonnel,
