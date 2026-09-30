@@ -21,6 +21,7 @@ import RouterIcon from "@mui/icons-material/Router";
 import CalendarMonthIcon from "@mui/icons-material/CalendarMonth";
 import AssessmentIcon from "@mui/icons-material/Assessment";
 import FactCheckIcon from "@mui/icons-material/FactCheck";
+import ContactlessIcon from "@mui/icons-material/Contactless";
 import GroupIcon from "@mui/icons-material/Group";
 import AdminPanelSettingsIcon from "@mui/icons-material/AdminPanelSettings";
 import LogoutIcon from "@mui/icons-material/Logout";
@@ -107,6 +108,12 @@ const nav: readonly NavEntry[] = [
     label: "Clearance",
     icon: <FactCheckIcon />,
     permission: PERMISSIONS.reportsRead,
+  },
+  {
+    to: "/manual-scans",
+    label: "Manual RFID Records",
+    icon: <ContactlessIcon />,
+    permission: PERMISSIONS.attendanceRead,
   },
 ];
 

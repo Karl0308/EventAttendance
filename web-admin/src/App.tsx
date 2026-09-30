@@ -18,6 +18,7 @@ import EventClassifications from "./pages/EventClassifications";
 import Users from "./pages/Users";
 import Roles from "./pages/Roles";
 import Clearance from "./pages/Clearance";
+import ManualRfidRecords from "./pages/ManualRfidRecords";
 import Reports from "./pages/Reports";
 
 /**
@@ -121,6 +122,10 @@ export default function App() {
 
         {/* Clearance Checker (Clearance-Checker-Module.docx) — a cross-event report, same admin gate. */}
         <Route path="/clearance" element={gated(PERMISSIONS.reportsRead, <Clearance />)} />
+
+        {/* Manual RFID Records (UnrecognizedRFIDScans.docx) — review is attendance.read; recording an
+            entry is attendance.write, which the server enforces on the POST. */}
+        <Route path="/manual-scans" element={gated(PERMISSIONS.attendanceRead, <ManualRfidRecords />)} />
       </Route>
     </Routes>
   );

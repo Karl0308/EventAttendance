@@ -41,4 +41,12 @@ public static class ScanLog
     /// </para>
     /// </summary>
     public const string SuppressedAction = "attendance.scan.suppressed";
+
+    /// <summary>
+    /// <c>AuditLog.Action</c> for a manual ID-number entry recorded against an unrecognized RFID scan
+    /// (UnrecognizedRFIDScans.docx): the operator typed the Student or Employee ID for a card the reader
+    /// could not place, so the scan can be reconciled later. Kept in the same namespaced family as the
+    /// scan rows above, and read back by the manual-records review.
+    /// </summary>
+    public const string ManualIdEntryAction = "attendance.scan.manual-id";
 }

@@ -218,6 +218,32 @@ export interface RoleWriteRequest {
 }
 
 // ---------------------------------------------------------------------------------------------
+// Unrecognized RFID scans — manual ID entry (UnrecognizedRFIDScans.docx)
+// ---------------------------------------------------------------------------------------------
+
+/** One recorded manual ID entry for an unrecognized scan. */
+export interface ManualIdEntry {
+  id: string;
+  cardUid: string;
+  idNumber: string;
+  personType: string; // Student | Employee
+  isResolved: boolean;
+  resolvedName?: string;
+  eventId?: string;
+  note?: string;
+  recordedAt: string;
+}
+
+/** The body of POST /scans/manual-id. */
+export interface ManualIdEntryRequest {
+  cardUid: string;
+  idNumber: string;
+  personType: string;
+  eventId: string | null;
+  note: string | null;
+}
+
+// ---------------------------------------------------------------------------------------------
 // Clearance Checker (Clearance-Checker-Module.docx)
 // ---------------------------------------------------------------------------------------------
 

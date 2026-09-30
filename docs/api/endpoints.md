@@ -3,7 +3,7 @@
 <!-- GENERATED FILE — DO NOT EDIT.
      Source: docs/api/openapi.json. Regenerate: node scripts/generate-endpoint-index.mjs --write -->
 
-**Generated from [`openapi.json`](openapi.json) — do not edit by hand.** 97 operations across 19 controllers, all mounted under `/api/v1`. Routes below are written relative to that mount.
+**Generated from [`openapi.json`](openapi.json) — do not edit by hand.** 99 operations across 20 controllers, all mounted under `/api/v1`. Routes below are written relative to that mount.
 
 This page is a **map, not a contract.** It exists so you can find an endpoint; payload shapes, field types and outcome tokens live in [`openapi.json`](openapi.json), which is what you generate a client from. Behaviour a schema cannot state — what your queue does with each outcome, the card-UID and clock rules — is in [`attendance-contract-handoff.md`](attendance-contract-handoff.md).
 
@@ -23,6 +23,7 @@ This page is a **map, not a contract.** It exists so you can find an endpoint; p
 - [Personnel](#personnel) — 5
 - [Reports](#reports) — 5
 - [Roles](#roles) — 6
+- [Scans](#scans) — 2
 - [SisImport](#sisimport) — 5
 - [StudentClassifications](#studentclassifications) — 3
 - [StudentGroups](#studentgroups) — 1
@@ -145,6 +146,13 @@ This page is a **map, not a contract.** It exists so you can find an endpoint; p
 | `GET` | `/roles/{id}` | **Bearer** | `404` | One role. |
 | `PUT` | `/roles/{id}` | **Bearer** | `400` `404` `409` | Rename and re-describe a custom role. |
 | `PUT` | `/roles/{id}/permissions` | **Bearer** | `400` `404` `409` | Replace the set of permission codes a custom role grants. |
+
+## Scans
+
+| Method | Route | Auth | Errors | What it does |
+|---|---|---|---|---|
+| `GET` | `/scans/manual-id` | **Bearer** | *none declared* | The recorded manual ID entries for this school, newest first. |
+| `POST` | `/scans/manual-id` | **Bearer** | `400` `409` | Record the ID an operator entered for an unrecognized scan. |
 
 ## SisImport
 

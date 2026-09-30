@@ -60,6 +60,8 @@ import type {
   ClearanceReport,
   ClearanceStudent,
   ClearanceEvent,
+  ManualIdEntry,
+  ManualIdEntryRequest,
 } from "./types";
 
 // The one security-relevant dependency this module has, and the reason it is in the import block
@@ -1295,6 +1297,21 @@ function toClassification(row: Row, what: string): Classification {
     retiredAt: optStr(row.retiredAt),
     mergedIntoClassificationId: optStr(row.mergedIntoClassificationId),
     studentCount: reqNum(row, "studentCount", what),
+  };
+}
+
+/** `ManualIdEntryDto` — one recorded manual ID entry for an unrecognized scan. */
+function toManualIdEntry(row: Row, what: string): ManualIdEntry {
+  return {
+    id: reqStr(row, "id", what),
+    cardUid: reqStr(row, "cardUid", what),
+    idNumber: reqStr(row, "idNumber", what),
+    personType: reqStr(row, "personType", what),
+    isResolved: reqBool(row, "isResolved", what),
+    resolvedName: optStr(row.resolvedName),
+    eventId: optStr(row.eventId),
+    note: optStr(row.note),
+    recordedAt: reqStr(row, "recordedAt", what),
   };
 }
 
@@ -2752,6 +2769,22 @@ async function deletePersonnel(id: string): Promise<Personnel> {
 }
 
 // ---------------------------------------------------------------------------------------------
+// Unrecognized RFID scans — manual ID entry (UnrecognizedRFIDScans.docx)
+// ---------------------------------------------------------------------------------------------
+
+/** `POST /scans/manual-id` — record the ID an operator typed for an unrecognized scan. */
+async function recordManualId(request: ManualIdEntryRequest): Promise<ManualIdEntry> {
+  return writeJson(
+    "POST /scans/manual-id", "/scans/manual-id",
+    { method: "POST", payload: request }, "The scan record was saved", toManualIdEntry);
+}
+
+/** `GET /scans/manual-id` — the recorded manual ID entries for this school, newest first. */
+async function listManualIdEntries(): Promise<ManualIdEntry[]> {
+  return listAll("GET /scans/manual-id", "/scans/manual-id", {}, toManualIdEntry);
+}
+
+// ---------------------------------------------------------------------------------------------
 // Clearance Checker (Clearance-Checker-Module.docx)
 // ---------------------------------------------------------------------------------------------
 
@@ -3745,6 +3778,8 @@ export const api = {
   deletePersonnel,
   clearanceReport,
   downloadClearanceCsv,
+  recordManualId,
+  listManualIdEntries,
   listUsers,
   getUser,
   createUser,

@@ -6955,6 +6955,151 @@
         ]
       }
     },
+    "/api/v1/scans/manual-id": {
+      "post": {
+        "tags": [
+          "Scans"
+        ],
+        "summary": "`POST /scans/manual-id` — record the ID an operator entered for an unrecognized scan.",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ManualIdEntryRequest"
+              }
+            },
+            "text/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ManualIdEntryRequest"
+              }
+            },
+            "application/*+json": {
+              "schema": {
+                "$ref": "#/components/schemas/ManualIdEntryRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "The recorded entry.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ManualIdEntryDto"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ManualIdEntryDto"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ManualIdEntryDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The card UID or ID number is blank, or the person type is not Student/Employee.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "No school could be resolved.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "Bearer": []
+          }
+        ]
+      },
+      "get": {
+        "tags": [
+          "Scans"
+        ],
+        "summary": "`GET /scans/manual-id` — the recorded manual ID entries for this school, newest first.",
+        "parameters": [
+          {
+            "name": "page",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          },
+          {
+            "name": "pageSize",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "One page of manual ID entries.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ManualIdEntryDtoPagedResult"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ManualIdEntryDtoPagedResult"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ManualIdEntryDtoPagedResult"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "Bearer": []
+          }
+        ]
+      }
+    },
     "/api/v1/sis/import/upload": {
       "post": {
         "tags": [
@@ -11147,6 +11292,112 @@
         "additionalProperties": false,
         "description": "The body of `POST /auth/login`."
       },
+      "ManualIdEntryDto": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "cardUid": {
+            "type": "string"
+          },
+          "idNumber": {
+            "type": "string"
+          },
+          "personType": {
+            "type": "string"
+          },
+          "isResolved": {
+            "type": "boolean",
+            "description": "Whether EAMS.Application.Dtos.ManualIdEntryDto.IdNumber matched a real person in the named roster at record time. An unresolved\r\nentry is still kept — the point is to capture the operator's input for later reconciliation — but the\r\nreview can highlight the ones that need attention."
+          },
+          "resolvedName": {
+            "type": "string",
+            "description": "The matched person's name, when resolved.",
+            "nullable": true
+          },
+          "eventId": {
+            "type": "string",
+            "format": "uuid",
+            "nullable": true
+          },
+          "note": {
+            "type": "string",
+            "nullable": true
+          },
+          "recordedAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "additionalProperties": false,
+        "description": "One recorded manual ID entry, as the review list returns it."
+      },
+      "ManualIdEntryDtoPagedResult": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ManualIdEntryDto"
+            },
+            "description": "This page's rows, in the endpoint's documented order. Empty is an ordinary answer — for an empty\r\nfilter and for a page past the end alike."
+          },
+          "page": {
+            "type": "integer",
+            "description": "The 1-based page actually served, which is <em>not</em> necessarily the one requested: an\r\nout-of-range `?page=` is clamped and this is where a client sees that it was.",
+            "format": "int32"
+          },
+          "pageSize": {
+            "type": "integer",
+            "description": "The page size actually applied, after the EAMS.Application.Dtos.Paging.MaxPageSize clamp. The field that\r\nmakes clamping discoverable rather than silent.",
+            "format": "int32"
+          },
+          "total": {
+            "type": "integer",
+            "description": "Rows matching the filter across every page, counted in the database against the same filter that\r\nproduced Items. This is what a grid needs to render a page count; without it a\r\ncaller can only discover the end by walking into it.",
+            "format": "int32"
+          },
+          "hasMore": {
+            "type": "boolean",
+            "description": "Whether another page exists after this one.\r\n            \r\n\r\n<b>Derived here rather than left to the client, because the client gets it wrong.</b>`page * pageSize < total` is right and `items.Count == pageSize` is the version\r\npeople write — which reports a further page whenever the last page happens to be exactly full,\r\nso a paging loop makes one extra request every time the total is a multiple of the page size.\r\nComputing it once, on the side that already holds the total, is a byte on the wire against a\r\nclass of off-by-one nobody finds in review.\r\n",
+            "readOnly": true
+          }
+        },
+        "additionalProperties": false,
+        "description": "One page of an admin list read, plus what the caller needs to ask for the next one.\r\n            \r\n\r\n<b>Every §6.2/§6.3 admin list returns this; `GET /attendance/live/{eventId}` deliberately does\r\nnot.</b> That endpoint pages by cursor (`since`/`cursor`/`hasMore`) because it is a\r\npolling delta rather than a list — a client asks \"what changed after this point\", not \"give me rows\r\n40 to 60\" — and its shape is frozen published contract under D-29/D-30/D-42. Offset paging over a\r\nlive feed also drops rows: an insert below the cursor shifts every subsequent row up by one and the\r\nnext page skips it. The two mechanisms coexisting is correct, not an inconsistency to tidy.\r\n"
+      },
+      "ManualIdEntryRequest": {
+        "type": "object",
+        "properties": {
+          "cardUid": {
+            "type": "string",
+            "description": "The scanned RFID UID. Normalized server-side before it is stored."
+          },
+          "idNumber": {
+            "type": "string",
+            "description": "The Student or Employee ID the operator entered. Required — the record cannot be saved without it."
+          },
+          "personType": {
+            "type": "string",
+            "description": "`Student` or `Employee`, so the right roster is checked and the row is identifiable."
+          },
+          "eventId": {
+            "type": "string",
+            "description": "The event the scan happened at, if known.",
+            "format": "uuid",
+            "nullable": true
+          },
+          "note": {
+            "type": "string",
+            "description": "An optional free-text note.",
+            "nullable": true
+          }
+        },
+        "additionalProperties": false,
+        "description": "The body of `POST /scans/manual-id` — the ID an operator typed for an unrecognized RFID scan\r\n(UnrecognizedRFIDScans.docx)."
+      },
       "ManualOutcomeCode": {
         "enum": [
           "Saved",
@@ -12599,6 +12850,10 @@
     {
       "name": "Roles",
       "description": "§11's Role Management (UserWithRBAC.docx) — the role list, and administration of custom roles."
+    },
+    {
+      "name": "Scans",
+      "description": "Manual ID entry for unrecognized RFID scans (UnrecognizedRFIDScans.docx) — the operator records the\r\nStudent or Employee ID for a card the reader could not place, and administrators review the records\r\nfor reconciliation."
     },
     {
       "name": "SisImport",

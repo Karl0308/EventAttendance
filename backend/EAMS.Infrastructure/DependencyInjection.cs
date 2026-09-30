@@ -182,6 +182,10 @@ public static class DependencyInjection
         // reads ICurrentUser to attribute its audit row.
         services.AddScoped<IClearanceService, ClearanceService>();
 
+        // Manual ID entry for unrecognized RFID scans (UnrecognizedRFIDScans.docx). Stores to AuditLogs;
+        // takes the tenant seam to scope reads and file writes, and ICurrentUser for attribution.
+        services.AddScoped<IUnrecognizedScanService, UnrecognizedScanService>();
+
         // Resolved per request by the DeviceKey authentication handler, from the request scope — so it
         // gets the same EamsDbContext the rest of the request will use.
         services.AddScoped<IDeviceAuthenticator, DeviceAuthenticator>();
