@@ -79,10 +79,15 @@ public record CardDto(Guid Id, string CardUid, string? Label, bool IsActive);
 /// <c>GET /events</c>, where it is informational — it plays no part in capture.
 /// </para>
 /// </param>
+/// <param name="GraceBeforeStartMinutes">
+/// Per-event grace before start (EventGracePeriod.docx §1), or null for "no per-event limit". Read to
+/// preserve on a <c>PUT</c> — the write surface is a full replacement.
+/// </param>
+/// <param name="GraceAfterEndMinutes">Per-event grace after end (§3), or null. As above.</param>
 public record EventDto(
     Guid Id, string Name, string? Description, string? Location, DateTime StartAt, DateTime EndAt,
     string AttendanceMode, int GraceMinutes, bool RequireRegistration, string Status,
-    bool IssuesCertificates);
+    bool IssuesCertificates, int? GraceBeforeStartMinutes, int? GraceAfterEndMinutes);
 
 public record AttendanceDto(
     Guid Id, Guid EventId, Guid StudentId, string StudentName, string StudentNumber,

@@ -48,6 +48,16 @@ namespace EAMS.Application.Dtos;
 /// on a closed event stays locked.
 /// </para>
 /// </param>
+/// <param name="GraceMinutes">Grace period after start — the Present/Late cutoff (§4.5's original grace).</param>
+/// <param name="GraceBeforeStartMinutes">
+/// Grace period before start (EventGracePeriod.docx §1), or null. Null means "no per-event before-start
+/// limit"; a value refuses taps earlier than <c>StartAt − this</c> as Too Early. Optional and defaulted
+/// null so callers that predate the field are unchanged.
+/// </param>
+/// <param name="GraceAfterEndMinutes">
+/// Grace period after end (EventGracePeriod.docx §3), or null. A value refuses taps later than
+/// <c>EndAt + this</c> as Attendance Closed.
+/// </param>
 public record EventWriteRequest(
     string Name,
     string? Description,
@@ -57,7 +67,9 @@ public record EventWriteRequest(
     string? AttendanceMode,
     int GraceMinutes,
     bool RequireRegistration,
-    bool? IssuesCertificates = null);
+    bool? IssuesCertificates = null,
+    int? GraceBeforeStartMinutes = null,
+    int? GraceAfterEndMinutes = null);
 
 /// <summary>The body of <c>PATCH /events/{id}/status</c>. See <c>EventStatusTransition</c>.</summary>
 public record EventStatusRequest(string Status);

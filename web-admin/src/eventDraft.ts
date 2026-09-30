@@ -66,6 +66,9 @@ export interface Draft {
   endAt: string;
   attendanceMode: AttendanceMode;
   graceMinutes: string;
+  /** Per-event grace before start / after end (EventGracePeriod.docx). Empty = "no per-event limit". */
+  graceBeforeStartMinutes: string;
+  graceAfterEndMinutes: string;
   requireRegistration: boolean;
   /** Whether the event issues certificates of attendance. See `EventWriteRequest.issuesCertificates`. */
   issuesCertificates: boolean;
@@ -81,6 +84,9 @@ export const EMPTY_DRAFT: Draft = {
   endAt: "",
   attendanceMode: DEFAULT_ATTENDANCE_MODE,
   graceMinutes: DEFAULT_GRACE_MINUTES,
+  // Empty by default — no per-event before/after limit; the school-wide tap window governs.
+  graceBeforeStartMinutes: "",
+  graceAfterEndMinutes: "",
   requireRegistration: false,
   // A new event does not issue certificates until an organizer says otherwise — the same default
   // `EventWriteRequest.IssuesCertificates` applies server-side when a `POST` omits it.
@@ -99,6 +105,8 @@ export const VALIDATED_FIELDS = [
   "endAt",
   "location",
   "graceMinutes",
+  "graceBeforeStartMinutes",
+  "graceAfterEndMinutes",
   "description",
 ] as const;
 
@@ -125,6 +133,8 @@ export const fieldIdsFor = (prefix: string): Record<DraftField, string> => ({
   endAt: `${prefix}-end-at`,
   attendanceMode: `${prefix}-attendance-mode`,
   graceMinutes: `${prefix}-grace-minutes`,
+  graceBeforeStartMinutes: `${prefix}-grace-before-start`,
+  graceAfterEndMinutes: `${prefix}-grace-after-end`,
   requireRegistration: `${prefix}-require-registration`,
   issuesCertificates: `${prefix}-issues-certificates`,
 });
@@ -189,6 +199,17 @@ function wholeMinutesFrom(raw: string): number | undefined {
 }
 
 /**
+ * An optional per-event grace period (EventGracePeriod.docx). An empty box is a valid `null` — "no
+ * per-event limit; the school window governs" — while a filled box obeys the same range as
+ * `wholeMinutesFrom`. Returns `ok: false` only for a filled box that is not a whole number in range.
+ */
+function optionalMinutesFrom(raw: string): { ok: true; value: number | null } | { ok: false } {
+  if (raw.trim() === "") return { ok: true, value: null };
+  const value = wholeMinutesFrom(raw);
+  return value === undefined ? { ok: false } : { ok: true, value };
+}
+
+/**
  * The boxes filled from an event that already exists — the edit form's starting state.
  *
  * `attendanceMode` is narrowed against the same set the picker is built from rather than asserted:
@@ -206,6 +227,10 @@ export function draftFrom(event: EventItem): Draft {
     endAt: localFrom(event.endAt),
     attendanceMode: knownMode(event.attendanceMode) ?? DEFAULT_ATTENDANCE_MODE,
     graceMinutes: String(event.graceMinutes),
+    graceBeforeStartMinutes:
+      event.graceBeforeStartMinutes == null ? "" : String(event.graceBeforeStartMinutes),
+    graceAfterEndMinutes:
+      event.graceAfterEndMinutes == null ? "" : String(event.graceAfterEndMinutes),
     requireRegistration: event.requireRegistration,
     issuesCertificates: event.issuesCertificates,
   };
@@ -246,6 +271,8 @@ const ATTENDANCE_RULE_FIELDS: ReadonlySet<DraftField> = new Set([
   "startAt",
   "endAt",
   "graceMinutes",
+  "graceBeforeStartMinutes",
+  "graceAfterEndMinutes",
   "attendanceMode",
   "requireRegistration",
 ]);
@@ -328,14 +355,21 @@ export function validate(draft: Draft, origin?: DraftOrigin): Validated {
     errors.graceMinutes = `A whole number of minutes from ${MIN_GRACE_MINUTES} to ${MAX_GRACE_MINUTES}.`;
   }
 
-  // The three `=== undefined` arms are what narrow the resolved values for the request below; they
-  // cannot fire on their own, because each of them set an error above. The `errors` check is the
-  // real condition and it is first.
+  const graceRange = `Leave blank for no limit, or a whole number of minutes from ${MIN_GRACE_MINUTES} to ${MAX_GRACE_MINUTES}.`;
+  const graceBefore = optionalMinutesFrom(draft.graceBeforeStartMinutes);
+  if (!graceBefore.ok) errors.graceBeforeStartMinutes = graceRange;
+  const graceAfter = optionalMinutesFrom(draft.graceAfterEndMinutes);
+  if (!graceAfter.ok) errors.graceAfterEndMinutes = graceRange;
+
+  // The `=== undefined` / `!ok` arms narrow the resolved values for the request below; they cannot fire
+  // on their own, because each set an error above. The `errors` check is the real condition and first.
   if (
     Object.keys(errors).length > 0 ||
     startAt === undefined ||
     endAt === undefined ||
-    graceMinutes === undefined
+    graceMinutes === undefined ||
+    !graceBefore.ok ||
+    !graceAfter.ok
   ) {
     return { ok: false, errors };
   }
@@ -353,6 +387,8 @@ export function validate(draft: Draft, origin?: DraftOrigin): Validated {
       endAt: endAt.send,
       attendanceMode: draft.attendanceMode,
       graceMinutes,
+      graceBeforeStartMinutes: graceBefore.value,
+      graceAfterEndMinutes: graceAfter.value,
       requireRegistration: draft.requireRegistration,
       issuesCertificates: draft.issuesCertificates,
     },
@@ -417,6 +453,8 @@ export function requestForCertificatesToggle(
     endAt: event.endAt,
     attendanceMode,
     graceMinutes: event.graceMinutes,
+    graceBeforeStartMinutes: event.graceBeforeStartMinutes ?? null,
+    graceAfterEndMinutes: event.graceAfterEndMinutes ?? null,
     requireRegistration: event.requireRegistration,
     issuesCertificates,
   };

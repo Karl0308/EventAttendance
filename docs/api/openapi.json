@@ -10128,6 +10128,18 @@
           "issuesCertificates": {
             "type": "boolean",
             "description": "Whether this event issues certificates of attendance. A setting only — no certificate is produced\r\nanywhere yet. Always present, never null: an event created before the setting existed reads\r\n`false`.\r\n            \r\n\r\n<b>Read it before a `PUT` if you intend to change it; you do not need it to preserve it.</b>\r\nOmitting `issuesCertificates` from a `PUT /events/{id}` body keeps the stored value, so a\r\nclient that has never heard of this field cannot clear it. Also served to devices on\r\n`GET /events`, where it is informational — it plays no part in capture.\r\n"
+          },
+          "graceBeforeStartMinutes": {
+            "type": "integer",
+            "description": "Per-event grace before start (EventGracePeriod.docx §1), or null for \"no per-event limit\". Read to\r\npreserve on a `PUT` — the write surface is a full replacement.",
+            "format": "int32",
+            "nullable": true
+          },
+          "graceAfterEndMinutes": {
+            "type": "integer",
+            "description": "Per-event grace after end (§3), or null. As above.",
+            "format": "int32",
+            "nullable": true
           }
         },
         "additionalProperties": false,
@@ -10826,6 +10838,7 @@
           },
           "graceMinutes": {
             "type": "integer",
+            "description": "Grace period after start — the Present/Late cutoff (§4.5's original grace).",
             "format": "int32"
           },
           "requireRegistration": {
@@ -10834,6 +10847,18 @@
           "issuesCertificates": {
             "type": "boolean",
             "description": "Whether the event issues certificates of attendance. <b>Optional, and omitting it never changes\r\nanything:</b> on `POST` an omitted or null value creates the event with `false`; on\r\n`PUT` it <em>keeps the stored value</em>. Send `true` or `false` to set it.\r\n            \r\n\r\n<b>Why this one field is not a full replacement like the rest of the body.</b> It was added after\r\nclients of this `PUT` already existed. As a plain boolean, every such client — which sends\r\nthe body it knows, without this field — would reset it to `false` on every edit, silently: a\r\nsuccessful save that turns certificates off. Null is therefore \"not mentioned\", not \"false\".\r\n\r\n<b>Changeable in every status, `Closed` included.</b> It does not affect what any attendance row\r\nmeans. On a `Closed` event a `PUT` is accepted only when it names this field and changes\r\nnothing else — re-sending the current value included, so a retried toggle succeeds; everything else\r\non a closed event stays locked.\r\n",
+            "nullable": true
+          },
+          "graceBeforeStartMinutes": {
+            "type": "integer",
+            "description": "Grace period before start (EventGracePeriod.docx §1), or null. Null means \"no per-event before-start\r\nlimit\"; a value refuses taps earlier than `StartAt − this` as Too Early. Optional and defaulted\r\nnull so callers that predate the field are unchanged.",
+            "format": "int32",
+            "nullable": true
+          },
+          "graceAfterEndMinutes": {
+            "type": "integer",
+            "description": "Grace period after end (EventGracePeriod.docx §3), or null. A value refuses taps later than\r\n`EndAt + this` as Attendance Closed.",
+            "format": "int32",
             "nullable": true
           }
         },

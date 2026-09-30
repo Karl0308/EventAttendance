@@ -371,6 +371,8 @@ describe("The Closed-event certificates toggle", () => {
       endAt: "2026-09-01T05:00:00Z",
       attendanceMode: "Single",
       graceMinutes: 15,
+      graceBeforeStartMinutes: null,
+      graceAfterEndMinutes: null,
       requireRegistration: true,
       issuesCertificates: true,
     });

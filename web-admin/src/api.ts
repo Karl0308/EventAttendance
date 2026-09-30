@@ -1444,6 +1444,8 @@ function toEvent(row: Row, what: string): EventItem {
     endAt: reqStr(row, "endAt", what),
     attendanceMode: reqStr(row, "attendanceMode", what),
     graceMinutes: reqNum(row, "graceMinutes", what),
+    graceBeforeStartMinutes: optNum(row.graceBeforeStartMinutes),
+    graceAfterEndMinutes: optNum(row.graceAfterEndMinutes),
     status: reqStr(row, "status", what),
     // Required: `EventDto.IssuesCertificates` is `bool`, always present, never null — an event
     // created before the setting existed reads `false` server-side rather than omitting the key.

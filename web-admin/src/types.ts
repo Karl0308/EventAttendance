@@ -456,6 +456,10 @@ export interface EventItem {
   endAt: string;
   attendanceMode: string; // Single / TimeInOut
   graceMinutes: number;
+  /** Per-event grace before start (EventGracePeriod.docx §1), or unset for "no per-event limit". */
+  graceBeforeStartMinutes?: number;
+  /** Per-event grace after end (§3), or unset. */
+  graceAfterEndMinutes?: number;
   requireRegistration: boolean;
   status: string; // Draft/Open/Closed/Cancelled
   /**
@@ -534,6 +538,12 @@ export interface EventWriteRequest {
   endAt: string;
   attendanceMode: AttendanceMode;
   graceMinutes: number;
+  /**
+   * Per-event grace before start / after end (EventGracePeriod.docx), or `null` for "no per-event
+   * limit; the school-wide tap window governs". A full-replacement `PUT`, so send what you read.
+   */
+  graceBeforeStartMinutes: number | null;
+  graceAfterEndMinutes: number | null;
   requireRegistration: boolean;
   /**
    * Whether the event issues certificates of attendance (client QA Q20, `#470` B4).

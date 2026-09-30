@@ -240,6 +240,8 @@ describe("validate's answer", () => {
         endAt: "",
         attendanceMode: "Single",
         graceMinutes: String(MAX_GRACE_MINUTES + 1),
+        graceBeforeStartMinutes: "",
+        graceAfterEndMinutes: "",
         requireRegistration: false,
         issuesCertificates: false,
       }),
@@ -279,6 +281,8 @@ describe("lockedFor", () => {
   const ATTENDANCE_RULE_FIELDS: DraftField[] = [
     "attendanceMode",
     "endAt",
+    "graceAfterEndMinutes",
+    "graceBeforeStartMinutes",
     "graceMinutes",
     "requireRegistration",
     "startAt",
@@ -288,7 +292,7 @@ describe("lockedFor", () => {
     expect([...lockedFor("everything")]).toEqual([]);
   });
 
-  it("locks exactly the five fields that decide what an attendance row means", () => {
+  it("locks exactly the fields that decide what an attendance row means", () => {
     expect([...lockedFor("descriptive")].sort()).toEqual(ATTENDANCE_RULE_FIELDS);
   });
 

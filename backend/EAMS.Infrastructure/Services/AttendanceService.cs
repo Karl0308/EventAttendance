@@ -285,6 +285,19 @@ internal sealed class AttendanceService : IAttendanceService
                 serverTime);
         }
 
+        // The per-event grace periods (EventGracePeriod.docx), inside the school-wide window above. Both
+        // are null on events that predate the feature, so this is inert for them. A rejection reuses the
+        // frozen TappedAtOutsideEventWindow token — the same "this tap time is not accepted for this
+        // event" — and carries the spec's own prompt as its message so the capture front end can show it.
+        switch (EventGrace.Evaluate(
+            when, ev.StartAt, ev.EndAt, ev.GraceBeforeStartMinutes, ev.GraceAfterEndMinutes))
+        {
+            case GraceEligibility.TooEarly:
+                return Reject(TapOutcome.TappedAtOutsideEventWindow, EventGrace.TooEarlyMessage, serverTime);
+            case GraceEligibility.Closed:
+                return Reject(TapOutcome.TappedAtOutsideEventWindow, EventGrace.ClosedMessage, serverTime);
+        }
+
         var uid = CardUid.Normalize(req.CardUid);
 
         // `!c.Student!.IsDeleted` is the fix for a tap path that disagreed with every other read.

@@ -68,7 +68,8 @@ internal sealed class EventService : IEventService, IEventSummaryFigures
 
     private static EventDto ToDto(Event e) => new(
         e.Id, e.Name, e.Description, e.Location, e.StartAt, e.EndAt,
-        e.AttendanceMode, e.GraceMinutes, e.RequireRegistration, e.Status, e.IssuesCertificates);
+        e.AttendanceMode, e.GraceMinutes, e.RequireRegistration, e.Status, e.IssuesCertificates,
+        e.GraceBeforeStartMinutes, e.GraceAfterEndMinutes);
 
     // ------------------------------------------------------------------------------------ reads
 
@@ -2122,6 +2123,20 @@ internal sealed class EventService : IEventService, IEventSummaryFigures
                 $"{EventText.MaxGraceMinutes} (got {request.GraceMinutes}).");
         }
 
+        if (!EventText.IsValidOptionalGraceMinutes(request.GraceBeforeStartMinutes))
+        {
+            return Invalid(
+                $"GraceBeforeStartMinutes, when supplied, must be between {EventText.MinGraceMinutes} " +
+                $"and {EventText.MaxGraceMinutes} (got {request.GraceBeforeStartMinutes}).");
+        }
+
+        if (!EventText.IsValidOptionalGraceMinutes(request.GraceAfterEndMinutes))
+        {
+            return Invalid(
+                $"GraceAfterEndMinutes, when supplied, must be between {EventText.MinGraceMinutes} " +
+                $"and {EventText.MaxGraceMinutes} (got {request.GraceAfterEndMinutes}).");
+        }
+
         if (request.AttendanceMode is not null
             && !string.IsNullOrWhiteSpace(request.AttendanceMode)
             && !AttendanceMode.TryNormalize(request.AttendanceMode, out _))
@@ -2158,6 +2173,8 @@ internal sealed class EventService : IEventService, IEventSummaryFigures
         ev.StartAt = UtcTime.Normalize(request.StartAt);
         ev.EndAt = UtcTime.Normalize(request.EndAt);
         ev.GraceMinutes = request.GraceMinutes;
+        ev.GraceBeforeStartMinutes = request.GraceBeforeStartMinutes;
+        ev.GraceAfterEndMinutes = request.GraceAfterEndMinutes;
         ev.RequireRegistration = request.RequireRegistration;
         ev.AttendanceMode = ResolveMode(request.AttendanceMode);
 
@@ -2246,6 +2263,10 @@ internal sealed class EventService : IEventService, IEventSummaryFigures
         if (UtcTime.Normalize(request.StartAt) != ev.StartAt) changed.Add(nameof(Event.StartAt));
         if (UtcTime.Normalize(request.EndAt) != ev.EndAt) changed.Add(nameof(Event.EndAt));
         if (request.GraceMinutes != ev.GraceMinutes) changed.Add(nameof(Event.GraceMinutes));
+        if (request.GraceBeforeStartMinutes != ev.GraceBeforeStartMinutes)
+            changed.Add(nameof(Event.GraceBeforeStartMinutes));
+        if (request.GraceAfterEndMinutes != ev.GraceAfterEndMinutes)
+            changed.Add(nameof(Event.GraceAfterEndMinutes));
         if (ResolveMode(request.AttendanceMode) != ev.AttendanceMode) changed.Add(nameof(Event.AttendanceMode));
         if (request.RequireRegistration != ev.RequireRegistration)
             changed.Add(nameof(Event.RequireRegistration));

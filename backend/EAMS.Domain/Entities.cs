@@ -198,7 +198,27 @@ public class Event : AuditableEntity
     public DateTime StartAt { get; set; }
     public DateTime EndAt { get; set; }
     public string AttendanceMode { get; set; } = "Single"; // see AttendanceMode (DomainValues.cs)
+
+    /// <summary>
+    /// Grace period <b>after start</b> (EventGracePeriod.docx §2): a tap at or before
+    /// <c>StartAt + GraceMinutes</c> is Present, a later one (while still eligible) is Late. §4.5's
+    /// original single grace period; the two below extend it to before-start and after-end.
+    /// </summary>
     public int GraceMinutes { get; set; }
+
+    /// <summary>
+    /// Grace period <b>before start</b> in minutes (EventGracePeriod.docx §1), or null for "no per-event
+    /// limit — the school-wide tap window governs". A tap earlier than <c>StartAt − this</c> is refused
+    /// as Too Early. Additive drift, nullable so existing events are unchanged.
+    /// </summary>
+    public int? GraceBeforeStartMinutes { get; set; }
+
+    /// <summary>
+    /// Grace period <b>after end</b> in minutes (EventGracePeriod.docx §3), or null for "no per-event
+    /// limit". A tap later than <c>EndAt + this</c> is refused as Attendance Closed. Additive drift.
+    /// </summary>
+    public int? GraceAfterEndMinutes { get; set; }
+
     public bool RequireRegistration { get; set; }
     public string Status { get; set; } = "Draft"; // see EventStatus (DomainValues.cs)
     public Guid? OrganizerUserId { get; set; }

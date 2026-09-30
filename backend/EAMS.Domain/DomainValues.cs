@@ -343,6 +343,14 @@ public static class EventText
 
     public static bool IsValidGraceMinutes(int value) =>
         value is >= MinGraceMinutes and <= MaxGraceMinutes;
+
+    /// <summary>
+    /// An optional per-event grace period (EventGracePeriod.docx): <c>null</c> is valid — it means "no
+    /// per-event limit; fall back to the school-wide tap window" — and any supplied value obeys the same
+    /// <see cref="MinGraceMinutes"/>..<see cref="MaxGraceMinutes"/> rule as <see cref="IsValidGraceMinutes"/>.
+    /// </summary>
+    public static bool IsValidOptionalGraceMinutes(int? value) =>
+        value is null || IsValidGraceMinutes(value.Value);
 }
 
 /// <summary>Technical Plan §4.5 — <c>Events.AttendanceMode</c>.</summary>

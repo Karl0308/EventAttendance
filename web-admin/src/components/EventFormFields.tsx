@@ -197,7 +197,7 @@ export function EventFormFields({
 
       <TextField
         id={ids.graceMinutes}
-        label="Grace period (minutes)"
+        label="Grace after start (minutes)"
         type="number"
         value={draft.graceMinutes}
         onChange={(e) => onChange({ graceMinutes: e.target.value })}
@@ -205,7 +205,7 @@ export function EventFormFields({
         error={errorFor("graceMinutes") !== undefined}
         helperText={helper(
           "graceMinutes",
-          `Arrivals within this many minutes of the start count as Present. ${MIN_GRACE_MINUTES}–${MAX_GRACE_MINUTES}.`,
+          `Arrivals within this many minutes of the start count as Present; later ones are Late. ${MIN_GRACE_MINUTES}–${MAX_GRACE_MINUTES}.`,
           errorFor("graceMinutes"),
         )}
         // Advisory only — a number input can still be typed into out of range, and `validate` is what
@@ -213,6 +213,42 @@ export function EventFormFields({
         // hint with.
         slotProps={{ htmlInput: { min: MIN_GRACE_MINUTES, max: MAX_GRACE_MINUTES, step: 1 } }}
         disabled={locked.has("graceMinutes")}
+        fullWidth
+      />
+
+      <TextField
+        id={ids.graceBeforeStartMinutes}
+        label="Grace before start (minutes)"
+        type="number"
+        value={draft.graceBeforeStartMinutes}
+        onChange={(e) => onChange({ graceBeforeStartMinutes: e.target.value })}
+        onBlur={() => onBlur("graceBeforeStartMinutes")}
+        error={errorFor("graceBeforeStartMinutes") !== undefined}
+        helperText={helper(
+          "graceBeforeStartMinutes",
+          "Taps earlier than this many minutes before the start are refused (Too Early). Leave blank for no per-event limit.",
+          errorFor("graceBeforeStartMinutes"),
+        )}
+        slotProps={{ htmlInput: { min: MIN_GRACE_MINUTES, max: MAX_GRACE_MINUTES, step: 1 } }}
+        disabled={locked.has("graceBeforeStartMinutes")}
+        fullWidth
+      />
+
+      <TextField
+        id={ids.graceAfterEndMinutes}
+        label="Grace after end (minutes)"
+        type="number"
+        value={draft.graceAfterEndMinutes}
+        onChange={(e) => onChange({ graceAfterEndMinutes: e.target.value })}
+        onBlur={() => onBlur("graceAfterEndMinutes")}
+        error={errorFor("graceAfterEndMinutes") !== undefined}
+        helperText={helper(
+          "graceAfterEndMinutes",
+          "Taps later than this many minutes after the end are refused (Attendance Closed). Leave blank for no per-event limit.",
+          errorFor("graceAfterEndMinutes"),
+        )}
+        slotProps={{ htmlInput: { min: MIN_GRACE_MINUTES, max: MAX_GRACE_MINUTES, step: 1 } }}
+        disabled={locked.has("graceAfterEndMinutes")}
         fullWidth
       />
 
