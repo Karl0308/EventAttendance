@@ -158,6 +158,101 @@ export interface EventClassificationWriteRequest {
 }
 
 // ---------------------------------------------------------------------------------------------
+// Event Audience (EventAudience.docx) — reusable audience definitions under a classification
+// ---------------------------------------------------------------------------------------------
+
+/**
+ * The nine audience types (EventAudience.docx §2). Kept as a string union mirroring the server's
+ * `AudienceType`; the University-wide Students/Employees/Both split lives in the criteria scope.
+ */
+export type AudienceType =
+  | "UniversityWide"
+  | "Department"
+  | "Program"
+  | "YearLevel"
+  | "Section"
+  | "EmployeeClassification"
+  | "Organization"
+  | "SpecificIndividuals"
+  | "Custom";
+
+/** The scope of a `UniversityWide` audience. */
+export type AudienceScope = "Students" | "Employees" | "Both";
+
+/**
+ * `AudienceCriteriaDto` — the selection that picks an audience's eligible attendees, interpreted per the
+ * definition's `type`. Every field is optional; each type reads the ones that apply (and `Custom` combines
+ * them). References, never duplicated master data.
+ */
+export interface AudienceCriteria {
+  scope?: AudienceScope;
+  departments?: string[];
+  programs?: string[];
+  yearLevels?: string[];
+  sections?: string[];
+  classifications?: string[];
+  organizations?: string[];
+  studentIds?: string[];
+  personnelIds?: string[];
+}
+
+/** `AudienceDefinitionDto` — one reusable audience definition, as the list and by-id reads publish it. */
+export interface AudienceDefinition {
+  id: string;
+  name: string;
+  eventClassificationId: string;
+  eventClassificationName: string;
+  audienceType: AudienceType;
+  criteria: AudienceCriteria;
+  isActive: boolean;
+}
+
+/**
+ * The body of `POST /event-audiences` and `PUT /event-audiences/{id}` — one shape for both. **`isActive`
+ * is deliberately absent**: moving that flag is `PATCH /event-audiences/{id}/active`, the same split
+ * `EventClassificationWriteRequest` draws.
+ */
+export interface AudienceDefinitionWriteRequest {
+  name: string;
+  eventClassificationId: string;
+  audienceType: AudienceType;
+  criteria: AudienceCriteria;
+}
+
+/**
+ * `AudienceOptionsDto` — the distinct Academic Community values the criteria pickers offer, so the form
+ * references existing data rather than duplicating master data.
+ */
+export interface AudienceOptions {
+  departments: string[];
+  programs: string[];
+  yearLevels: string[];
+  sections: string[];
+  classifications: string[];
+  organizations: string[];
+}
+
+/** One resolved attendee of an audience. */
+export interface AudienceAttendee {
+  type: "Student" | "Personnel";
+  id: string;
+  number: string;
+  fullName: string;
+  departmentOrProgram?: string;
+}
+
+/**
+ * `ResolvedAudienceDto` — the people an audience currently resolves to. `attendees` is capped for the
+ * wire; `studentCount`/`personnelCount` are the true totals.
+ */
+export interface ResolvedAudience {
+  audienceDefinitionId: string;
+  studentCount: number;
+  personnelCount: number;
+  attendees: AudienceAttendee[];
+}
+
+// ---------------------------------------------------------------------------------------------
 // §11 User Management (UserWithRBAC.docx) — administrators only
 // ---------------------------------------------------------------------------------------------
 

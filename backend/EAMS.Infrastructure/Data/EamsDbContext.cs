@@ -93,6 +93,13 @@ internal class EamsDbContext : DbContext
     public DbSet<Personnel> Personnel => Set<Personnel>();
 
     /// <summary>
+    /// The reusable Event Audience definitions (EventAudience.docx) — each filed under an
+    /// <see cref="EventClassification"/>, resolving to eligible attendees from the live roster. Additive.
+    /// See <see cref="AudienceDefinition"/>.
+    /// </summary>
+    public DbSet<AudienceDefinition> AudienceDefinitions => Set<AudienceDefinition>();
+
+    /// <summary>
     /// Every <c>DateTime</c> in the model round-trips as UTC. Applied as a convention rather than
     /// per property so entities added later (the ADR-001 D-1 academic layer) inherit it by default
     /// instead of by remembering — the failure mode this closes is silent and invisible in the
@@ -239,6 +246,7 @@ internal class EamsDbContext : DbContext
         ConfigureClassifications(b);
         ConfigureEventClassifications(b);
         ConfigurePersonnel(b);
+        ConfigureAudienceDefinitions(b);
         ConfigureSchoolIdQueryFilters(b);
 
         // Hard deletes are never issued by the application (§4 uses IsDeleted soft delete), and an
@@ -417,6 +425,11 @@ internal class EamsDbContext : DbContext
         // Personnel own a SchoolId directly — filtered like Students. IsDeleted is filtered in the reads,
         // not here, exactly as it is for Students.
         b.Entity<Personnel>().HasQueryFilter(
+            x => _school.CurrentSchoolId == null || x.SchoolId == _school.CurrentSchoolId);
+
+        // Audience definitions own a SchoolId directly — filtered like every other owner. IsActive is a
+        // read concern, not a tenant boundary, so it is not filtered here.
+        b.Entity<AudienceDefinition>().HasQueryFilter(
             x => _school.CurrentSchoolId == null || x.SchoolId == _school.CurrentSchoolId);
     }
 
@@ -841,6 +854,39 @@ internal class EamsDbContext : DbContext
             e.HasIndex(x => new { x.SchoolId, x.RfidUid }).IsUnique()
                 .HasFilter("[IsDeleted] = 0 AND [RfidUid] IS NOT NULL")
                 .HasDatabaseName("UX_Personnel_SchoolId_RfidUid");
+        });
+
+    /// <summary>
+    /// The reusable Event Audience definitions (EventAudience.docx). Not a §4 table — additive.
+    ///
+    /// <para>
+    /// <b>The name index is unfiltered</b>, like <see cref="ConfigureEventClassifications"/>'s: an audience
+    /// name is not re-issuable, so a deactivated one keeps its key and reactivation is
+    /// <c>PATCH /event-audiences/{id}/active</c>, not a duplicate. The FK to the classification is
+    /// <c>Restrict</c> — retiring a classification is a deactivation, never a row delete, so a live audience
+    /// never dangles.
+    /// </para>
+    /// </summary>
+    private static void ConfigureAudienceDefinitions(ModelBuilder b) =>
+        b.Entity<AudienceDefinition>(e =>
+        {
+            e.ToTable("AudienceDefinitions");
+
+            e.Property(x => x.Name).HasMaxLength(AudienceText.NameMaxLength).IsRequired();
+            e.Property(x => x.NameKey).HasMaxLength(AcademicKey.MaxLength).IsRequired();
+            e.Property(x => x.AudienceType).HasMaxLength(40).IsRequired();
+            e.Property(x => x.CriteriaJson).IsRequired();
+            e.Property(x => x.IsActive).HasDefaultValue(true).ValueGeneratedNever();
+
+            e.HasOne(x => x.School).WithMany().HasForeignKey(x => x.SchoolId).IsRequired();
+
+            e.HasOne(x => x.EventClassification).WithMany()
+                .HasForeignKey(x => x.EventClassificationId)
+                .OnDelete(DeleteBehavior.Restrict).IsRequired();
+
+            e.HasIndex(x => new { x.SchoolId, x.NameKey }).IsUnique()
+                .HasFilter(null)
+                .HasDatabaseName("UX_AudienceDefinitions_SchoolId_NameKey");
         });
 
     // §4.2 Schools

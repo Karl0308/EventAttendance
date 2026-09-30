@@ -15,6 +15,7 @@ import EventDetail from "./pages/EventDetail";
 import Devices from "./pages/Devices";
 import Terms from "./pages/Terms";
 import EventClassifications from "./pages/EventClassifications";
+import EventAudiences from "./pages/EventAudiences";
 import Users from "./pages/Users";
 import Roles from "./pages/Roles";
 import Clearance from "./pages/Clearance";
@@ -109,6 +110,14 @@ export default function App() {
         <Route
           path="/event-classifications"
           element={gated(PERMISSIONS.eventsRead, <EventClassifications />)}
+        />
+
+        {/* Event Audience (EventAudience.docx) — reusable audience definitions under a classification.
+            Reuses the events permission pair, the same decision the server's
+            `AudienceDefinitionsController` records. */}
+        <Route
+          path="/event-audiences"
+          element={gated(PERMISSIONS.eventsRead, <EventAudiences />)}
         />
 
         {/* §11 User Management (UserWithRBAC.docx), administrators only. */}

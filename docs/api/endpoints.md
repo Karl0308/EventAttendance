@@ -3,7 +3,7 @@
 <!-- GENERATED FILE — DO NOT EDIT.
      Source: docs/api/openapi.json. Regenerate: node scripts/generate-endpoint-index.mjs --write -->
 
-**Generated from [`openapi.json`](openapi.json) — do not edit by hand.** 99 operations across 20 controllers, all mounted under `/api/v1`. Routes below are written relative to that mount.
+**Generated from [`openapi.json`](openapi.json) — do not edit by hand.** 107 operations across 21 controllers, all mounted under `/api/v1`. Routes below are written relative to that mount.
 
 This page is a **map, not a contract.** It exists so you can find an endpoint; payload shapes, field types and outcome tokens live in [`openapi.json`](openapi.json), which is what you generate a client from. Behaviour a schema cannot state — what your queue does with each outcome, the card-UID and clock rules — is in [`attendance-contract-handoff.md`](attendance-contract-handoff.md).
 
@@ -12,6 +12,7 @@ This page is a **map, not a contract.** It exists so you can find an endpoint; p
 ## Contents
 
 - [Academic](#academic) — 9
+- [AudienceDefinitions](#audiencedefinitions) — 8
 - [Auth](#auth) — 5
 - [Cards](#cards) — 1
 - [Classifications](#classifications) — 7
@@ -45,6 +46,19 @@ This page is a **map, not a contract.** It exists so you can find an endpoint; p
 | `PUT` | `/academic/terms/{id}` | **Bearer** | `400` `404` `409` | Edit a term's authored fields (D-53). |
 | `PATCH` | `/academic/terms/{id}/current` | **Bearer** | `400` `404` | Make this the current term, or retire it (D-53). |
 | `GET` | `/academic/terms/current` | **Bearer** | `404` | The term flagged current, or 404 when none is. |
+
+## AudienceDefinitions
+
+| Method | Route | Auth | Errors | What it does |
+|---|---|---|---|---|
+| `GET` | `/event-audiences` | **Bearer** | *none declared* | The definitions, active first then by name, optionally filtered to one event classification and/or to active only (the event-creation picker passes both). |
+| `POST` | `/event-audiences` | **Bearer** | `400` `409` | Create a definition under an active event classification. |
+| `DELETE` | `/event-audiences/{id}` | **Bearer** | `404` | Remove a definition. |
+| `GET` | `/event-audiences/{id}` | **Bearer** | `404` | One definition, active or not. |
+| `PUT` | `/event-audiences/{id}` | **Bearer** | `400` `404` `409` | A full replacement of the definition's fields. |
+| `PATCH` | `/event-audiences/{id}/active` | **Bearer** | `400` `404` | Deactivate a definition, or bring it back. |
+| `GET` | `/event-audiences/{id}/attendees` | **Bearer** | `404` | The students and personnel this definition currently resolves to, from the live roster. |
+| `GET` | `/event-audiences/options` | **Bearer** | *none declared* | The distinct Academic Community values the criteria pickers are built from, so the form references existing data rather than inventing master data (spec §3/§7). |
 
 ## Auth
 

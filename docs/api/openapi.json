@@ -1377,6 +1377,638 @@
         ]
       }
     },
+    "/api/v1/event-audiences": {
+      "get": {
+        "tags": [
+          "AudienceDefinitions"
+        ],
+        "summary": "`GET /event-audiences` — the definitions, active first then by name, optionally filtered to one\r\n            event classification and/or to active only (the event-creation picker passes both).",
+        "parameters": [
+          {
+            "name": "eventClassificationId",
+            "in": "query",
+            "description": "Only definitions under this classification, when supplied.",
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "includeInactive",
+            "in": "query",
+            "description": "Defaults to false — what the picker wants; a report wants true.",
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "name": "page",
+            "in": "query",
+            "description": "1-based page number, default 1. Out-of-range values are clamped, not refused.",
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          },
+          {
+            "name": "pageSize",
+            "in": "query",
+            "description": "Rows per page. Default 50, maximum 200; a larger value is clamped.",
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "One page of audience definitions, possibly empty.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/AudienceDefinitionDtoPagedResult"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AudienceDefinitionDtoPagedResult"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AudienceDefinitionDtoPagedResult"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "Bearer": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "AudienceDefinitions"
+        ],
+        "summary": "`POST /event-audiences` — create a definition under an active event classification.",
+        "requestBody": {
+          "description": "Name, classification, type, and criteria.",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AudienceDefinitionWriteRequest"
+              }
+            },
+            "text/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AudienceDefinitionWriteRequest"
+              }
+            },
+            "application/*+json": {
+              "schema": {
+                "$ref": "#/components/schemas/AudienceDefinitionWriteRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "The created definition, active. `Location` names it.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/AudienceDefinitionDto"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AudienceDefinitionDto"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AudienceDefinitionDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The name, type, or criteria break a rule.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The name's key is in use, the classification is unavailable, or no school resolved.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "Bearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/event-audiences/options": {
+      "get": {
+        "tags": [
+          "AudienceDefinitions"
+        ],
+        "summary": "`GET /event-audiences/options` — the distinct Academic Community values the criteria pickers are\r\n            built from, so the form references existing data rather than inventing master data (spec §3/§7).",
+        "responses": {
+          "200": {
+            "description": "The option lists (may be empty on a fresh roster).",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/AudienceOptionsDto"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AudienceOptionsDto"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AudienceOptionsDto"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "Bearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/event-audiences/{id}": {
+      "get": {
+        "tags": [
+          "AudienceDefinitions"
+        ],
+        "summary": "`GET /event-audiences/{id}` — one definition, active or not.",
+        "operationId": "GetAudienceDefinition",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The definition.",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The definition.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/AudienceDefinitionDto"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AudienceDefinitionDto"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AudienceDefinitionDto"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such definition in this school.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "Bearer": []
+          }
+        ]
+      },
+      "put": {
+        "tags": [
+          "AudienceDefinitions"
+        ],
+        "summary": "`PUT /event-audiences/{id}` — a full replacement of the definition's fields.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The definition.",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "The new name, classification, type, and criteria.",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AudienceDefinitionWriteRequest"
+              }
+            },
+            "text/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AudienceDefinitionWriteRequest"
+              }
+            },
+            "application/*+json": {
+              "schema": {
+                "$ref": "#/components/schemas/AudienceDefinitionWriteRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The updated definition.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/AudienceDefinitionDto"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AudienceDefinitionDto"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AudienceDefinitionDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The name, type, or criteria break a rule.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such definition.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Another definition holds that name's key, or the classification is unavailable.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "Bearer": []
+          }
+        ]
+      },
+      "delete": {
+        "tags": [
+          "AudienceDefinitions"
+        ],
+        "summary": "`DELETE /event-audiences/{id}` — remove a definition. (No event references one yet.)",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The definition.",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The deleted definition, as it was.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/AudienceDefinitionDto"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AudienceDefinitionDto"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AudienceDefinitionDto"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such definition.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "Bearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/event-audiences/{id}/attendees": {
+      "get": {
+        "tags": [
+          "AudienceDefinitions"
+        ],
+        "summary": "`GET /event-audiences/{id}/attendees` — the students and personnel this definition currently\r\n            resolves to, from the live roster. Counts are the true totals; the attendee list is capped.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The definition.",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The resolved attendees and totals.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ResolvedAudienceDto"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ResolvedAudienceDto"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ResolvedAudienceDto"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such definition in this school.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "Bearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/event-audiences/{id}/active": {
+      "patch": {
+        "tags": [
+          "AudienceDefinitions"
+        ],
+        "summary": "`PATCH /event-audiences/{id}/active` — deactivate a definition, or bring it back.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The definition.",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "`{\"isActive\": false}` to deactivate, `{\"isActive\": true}` to restore.",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AudienceActiveRequest"
+              }
+            },
+            "text/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AudienceActiveRequest"
+              }
+            },
+            "application/*+json": {
+              "schema": {
+                "$ref": "#/components/schemas/AudienceActiveRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The definition, with its new flag.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/AudienceDefinitionDto"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AudienceDefinitionDto"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AudienceDefinitionDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`isActive` was not supplied.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such definition.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "Bearer": []
+          }
+        ]
+      }
+    },
     "/api/v1/auth/login": {
       "post": {
         "tags": [
@@ -9414,6 +10046,197 @@
           "hasMore": false
         }
       },
+      "AudienceActiveRequest": {
+        "type": "object",
+        "properties": {
+          "isActive": {
+            "type": "boolean",
+            "nullable": true
+          }
+        },
+        "additionalProperties": false,
+        "description": "The body of `PATCH /event-audiences/{id}/active`."
+      },
+      "AudienceAttendeeDto": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string",
+            "description": "`Student` or `Personnel`."
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "number": {
+            "type": "string"
+          },
+          "fullName": {
+            "type": "string"
+          },
+          "departmentOrProgram": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "additionalProperties": false,
+        "description": "One resolved attendee of an audience."
+      },
+      "AudienceCriteriaDto": {
+        "type": "object",
+        "properties": {
+          "scope": {
+            "type": "string",
+            "description": "University-wide only: `Students`, `Employees` or `Both`.",
+            "nullable": true
+          },
+          "departments": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "nullable": true
+          },
+          "programs": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "nullable": true
+          },
+          "yearLevels": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "nullable": true
+          },
+          "sections": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "nullable": true
+          },
+          "classifications": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "nullable": true
+          },
+          "organizations": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "nullable": true
+          },
+          "studentIds": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "nullable": true
+          },
+          "personnelIds": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "nullable": true
+          }
+        },
+        "additionalProperties": false,
+        "description": "The selection that picks an audience's eligible attendees, interpreted per the definition's\r\n`AudienceType`. All lists are optional; each type reads the ones that apply to it (and\r\n`Custom` combines them). Stored as JSON on the definition — references, never duplicated data."
+      },
+      "AudienceDefinitionDto": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "name": {
+            "type": "string"
+          },
+          "eventClassificationId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "eventClassificationName": {
+            "type": "string"
+          },
+          "audienceType": {
+            "type": "string"
+          },
+          "criteria": {
+            "$ref": "#/components/schemas/AudienceCriteriaDto"
+          },
+          "isActive": {
+            "type": "boolean"
+          }
+        },
+        "additionalProperties": false,
+        "description": "One reusable Event Audience definition, as the list and by-id reads publish it."
+      },
+      "AudienceDefinitionDtoPagedResult": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AudienceDefinitionDto"
+            },
+            "description": "This page's rows, in the endpoint's documented order. Empty is an ordinary answer — for an empty\r\nfilter and for a page past the end alike."
+          },
+          "page": {
+            "type": "integer",
+            "description": "The 1-based page actually served, which is <em>not</em> necessarily the one requested: an\r\nout-of-range `?page=` is clamped and this is where a client sees that it was.",
+            "format": "int32"
+          },
+          "pageSize": {
+            "type": "integer",
+            "description": "The page size actually applied, after the EAMS.Application.Dtos.Paging.MaxPageSize clamp. The field that\r\nmakes clamping discoverable rather than silent.",
+            "format": "int32"
+          },
+          "total": {
+            "type": "integer",
+            "description": "Rows matching the filter across every page, counted in the database against the same filter that\r\nproduced Items. This is what a grid needs to render a page count; without it a\r\ncaller can only discover the end by walking into it.",
+            "format": "int32"
+          },
+          "hasMore": {
+            "type": "boolean",
+            "description": "Whether another page exists after this one.\r\n            \r\n\r\n<b>Derived here rather than left to the client, because the client gets it wrong.</b>`page * pageSize < total` is right and `items.Count == pageSize` is the version\r\npeople write — which reports a further page whenever the last page happens to be exactly full,\r\nso a paging loop makes one extra request every time the total is a multiple of the page size.\r\nComputing it once, on the side that already holds the total, is a byte on the wire against a\r\nclass of off-by-one nobody finds in review.\r\n",
+            "readOnly": true
+          }
+        },
+        "additionalProperties": false,
+        "description": "One page of an admin list read, plus what the caller needs to ask for the next one.\r\n            \r\n\r\n<b>Every §6.2/§6.3 admin list returns this; `GET /attendance/live/{eventId}` deliberately does\r\nnot.</b> That endpoint pages by cursor (`since`/`cursor`/`hasMore`) because it is a\r\npolling delta rather than a list — a client asks \"what changed after this point\", not \"give me rows\r\n40 to 60\" — and its shape is frozen published contract under D-29/D-30/D-42. Offset paging over a\r\nlive feed also drops rows: an insert below the cursor shifts every subsequent row up by one and the\r\nnext page skips it. The two mechanisms coexisting is correct, not an inconsistency to tidy.\r\n"
+      },
+      "AudienceDefinitionWriteRequest": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "eventClassificationId": {
+            "type": "string",
+            "description": "Must reference an active event classification in this school.",
+            "format": "uuid"
+          },
+          "audienceType": {
+            "type": "string"
+          },
+          "criteria": {
+            "$ref": "#/components/schemas/AudienceCriteriaDto"
+          }
+        },
+        "additionalProperties": false,
+        "description": "The body of `POST /event-audiences` and `PUT /event-audiences/{id}`."
+      },
       "AudienceFilterDto": {
         "type": "object",
         "properties": {
@@ -9432,6 +10255,49 @@
         },
         "additionalProperties": false,
         "description": "One row of the filter builder: a field, and the values selected on it."
+      },
+      "AudienceOptionsDto": {
+        "type": "object",
+        "properties": {
+          "departments": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "programs": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "yearLevels": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "sections": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "classifications": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "organizations": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "additionalProperties": false,
+        "description": "The distinct Academic Community values the audience-criteria pickers offer, so the form references\r\nexisting data rather than duplicating master data (spec §3/§7)."
       },
       "AudienceResolutionDto": {
         "type": "object",
@@ -11608,6 +12474,32 @@
         },
         "additionalProperties": {}
       },
+      "ResolvedAudienceDto": {
+        "type": "object",
+        "properties": {
+          "audienceDefinitionId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "studentCount": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "personnelCount": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "attendees": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AudienceAttendeeDto"
+            },
+            "description": "Capped for the wire; EAMS.Application.Dtos.ResolvedAudienceDto.StudentCount/EAMS.Application.Dtos.ResolvedAudienceDto.PersonnelCount are the true totals."
+          }
+        },
+        "additionalProperties": false,
+        "description": "The people an audience currently resolves to (EventAudience.docx: \"determines the eligible attendees\")."
+      },
       "RoleCreateRequest": {
         "type": "object",
         "properties": {
@@ -12806,6 +13698,10 @@
     {
       "name": "Academic",
       "description": "ADR-001 D-1's academic layer over HTTP — <b>reads, plus D-53's three term-administration writes and\r\nnothing else</b>."
+    },
+    {
+      "name": "AudienceDefinitions",
+      "description": "The Event Audience master (EventAudience.docx) — reusable audience definitions, each filed under an\r\nevent classification, that resolve to eligible attendees from the live Academic Community data."
     },
     {
       "name": "Auth",

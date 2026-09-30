@@ -49,6 +49,14 @@ import type {
   TermWriteRequest,
   EventClassification,
   EventClassificationWriteRequest,
+  AudienceType,
+  AudienceScope,
+  AudienceCriteria,
+  AudienceDefinition,
+  AudienceDefinitionWriteRequest,
+  AudienceOptions,
+  AudienceAttendee,
+  ResolvedAudience,
   AdminUser,
   UserRoleRef,
   UserCreateRequest,
@@ -1397,6 +1405,73 @@ function toEventClassification(row: Row, what: string): EventClassification {
     description: optStr(row.description),
     isActive: reqBool(row, "isActive", what),
     retiredAt: optStr(row.retiredAt),
+  };
+}
+
+/**
+ * `AudienceCriteriaDto` — every field optional and read through `optStrs`, so a criteria object that
+ * omits the dimensions a type does not use (the ordinary case) maps cleanly rather than throwing.
+ */
+function toAudienceCriteria(value: unknown): AudienceCriteria {
+  if (!isRow(value)) return {};
+  return {
+    scope: optStr(value.scope) as AudienceScope | undefined,
+    departments: optStrs(value.departments)?.slice(),
+    programs: optStrs(value.programs)?.slice(),
+    yearLevels: optStrs(value.yearLevels)?.slice(),
+    sections: optStrs(value.sections)?.slice(),
+    classifications: optStrs(value.classifications)?.slice(),
+    organizations: optStrs(value.organizations)?.slice(),
+    studentIds: optStrs(value.studentIds)?.slice(),
+    personnelIds: optStrs(value.personnelIds)?.slice(),
+  };
+}
+
+/** `AudienceDefinitionDto` — one reusable Event Audience definition. */
+function toAudienceDefinition(row: Row, what: string): AudienceDefinition {
+  return {
+    id: reqStr(row, "id", what),
+    name: reqStr(row, "name", what),
+    eventClassificationId: reqStr(row, "eventClassificationId", what),
+    eventClassificationName: reqStr(row, "eventClassificationName", what),
+    audienceType: reqStr(row, "audienceType", what) as AudienceType,
+    criteria: toAudienceCriteria(row.criteria),
+    isActive: reqBool(row, "isActive", what),
+  };
+}
+
+/** `AudienceOptionsDto` — the distinct Academic Community values the criteria pickers are built from. */
+function toAudienceOptions(row: Row, what: string): AudienceOptions {
+  return {
+    departments: reqStrs(row, "departments", what),
+    programs: reqStrs(row, "programs", what),
+    yearLevels: reqStrs(row, "yearLevels", what),
+    sections: reqStrs(row, "sections", what),
+    classifications: reqStrs(row, "classifications", what),
+    organizations: reqStrs(row, "organizations", what),
+  };
+}
+
+/** `AudienceAttendeeDto` — one resolved attendee. */
+function toAudienceAttendee(row: Row, what: string): AudienceAttendee {
+  return {
+    type: reqStr(row, "type", what) as AudienceAttendee["type"],
+    id: reqStr(row, "id", what),
+    number: reqStr(row, "number", what),
+    fullName: reqStr(row, "fullName", what),
+    departmentOrProgram: optStr(row.departmentOrProgram),
+  };
+}
+
+/** `ResolvedAudienceDto` — the people a definition currently resolves to, with the true totals. */
+function toResolvedAudience(row: Row, what: string): ResolvedAudience {
+  return {
+    audienceDefinitionId: reqStr(row, "audienceDefinitionId", what),
+    studentCount: reqNum(row, "studentCount", what),
+    personnelCount: reqNum(row, "personnelCount", what),
+    attendees: asRows(row.attendees, `${what}.attendees`).map((r, i) =>
+      toAudienceAttendee(r, `${what}.attendees[${i}]`),
+    ),
   };
 }
 
@@ -3041,6 +3116,115 @@ async function deleteEventClassification(id: string): Promise<EventClassificatio
 }
 
 /**
+ * `GET /event-audiences` — the reusable audience definitions, optionally filtered to one classification
+ * and/or (by default) to active only. `listAll`: an admin master screen wants the whole set.
+ */
+async function listAudienceDefinitions(options?: {
+  eventClassificationId?: string;
+  includeInactive?: boolean;
+}): Promise<AudienceDefinition[]> {
+  return listAll(
+    "GET /event-audiences",
+    "/event-audiences",
+    {
+      eventClassificationId: options?.eventClassificationId,
+      includeInactive:
+        options?.includeInactive === undefined ? undefined : String(options.includeInactive),
+    },
+    toAudienceDefinition,
+  );
+}
+
+/**
+ * `GET /event-audiences/options` — the distinct Academic Community values the criteria pickers offer, so
+ * the form references existing roster data rather than free-typing master data.
+ */
+async function listAudienceOptions(): Promise<AudienceOptions> {
+  return toAudienceOptions(
+    asRow(await getJson("GET /event-audiences/options", "/event-audiences/options"), "GET /event-audiences/options"),
+    "GET /event-audiences/options",
+  );
+}
+
+/**
+ * `GET /event-audiences/{id}/attendees` — the students and personnel a definition currently resolves to,
+ * from the live roster. Counts are the true totals; the attendee list is capped server-side.
+ */
+async function resolveAudience(id: string): Promise<ResolvedAudience> {
+  const what = "GET /event-audiences/{id}/attendees";
+  return toResolvedAudience(
+    asRow(await getJson(what, `/event-audiences/${encodeURIComponent(id)}/attendees`), what),
+    what,
+  );
+}
+
+/**
+ * `POST /event-audiences` — create a definition under an active classification, always active. Refusals:
+ * **400** for a bad name, unknown type or criteria that do not fit the type; **409** for a duplicate name
+ * (`NameExists`), an unavailable classification (`ClassificationUnavailable`), or no resolvable school.
+ */
+async function createAudienceDefinition(
+  request: AudienceDefinitionWriteRequest,
+): Promise<AudienceDefinition> {
+  return writeJson(
+    "POST /event-audiences",
+    "/event-audiences",
+    { method: "POST", payload: request },
+    "The event audience was created",
+    toAudienceDefinition,
+  );
+}
+
+/**
+ * `PUT /event-audiences/{id}` — a full replacement of the definition's fields. Refusals: **400** as above,
+ * **404** for an unknown definition, **409** for renaming onto another's name or an unavailable classification.
+ */
+async function updateAudienceDefinition(
+  id: string,
+  request: AudienceDefinitionWriteRequest,
+): Promise<AudienceDefinition> {
+  return writeJson(
+    "PUT /event-audiences/{id}",
+    `/event-audiences/${encodeURIComponent(id)}`,
+    { method: "PUT", payload: request },
+    "The change was saved",
+    toAudienceDefinition,
+  );
+}
+
+/**
+ * `PATCH /event-audiences/{id}/active` — the only door into the active flag. `isActive` is required rather
+ * than defaulted for the reason `setEventClassificationActive`'s is: a missing member is a 400, not a
+ * silent deactivation. `false` withdraws it from the picker; `true` brings it back. Idempotent.
+ */
+async function setAudienceDefinitionActive(
+  id: string,
+  isActive: boolean,
+): Promise<AudienceDefinition> {
+  return writeJson(
+    "PATCH /event-audiences/{id}/active",
+    `/event-audiences/${encodeURIComponent(id)}/active`,
+    { method: "PATCH", payload: { isActive } },
+    isActive ? "The event audience was reactivated" : "The event audience was deactivated",
+    toAudienceDefinition,
+  );
+}
+
+/**
+ * `DELETE /event-audiences/{id}` — a hard delete that answers **200 with the deleted row** (so the caller
+ * can re-create it from the response), or **404** for an unknown id. (No event references a definition yet.)
+ */
+async function deleteAudienceDefinition(id: string): Promise<AudienceDefinition> {
+  return writeJson(
+    "DELETE /event-audiences/{id}",
+    `/event-audiences/${encodeURIComponent(id)}`,
+    { method: "DELETE" },
+    "The event audience was deleted",
+    toAudienceDefinition,
+  );
+}
+
+/**
  * Which term a section list was read for — and, when it is not the one that was asked for, the fact
  * that says the rows already fetched have to be thrown away.
  *
@@ -3772,6 +3956,13 @@ export const api = {
   updateEventClassification,
   setEventClassificationActive,
   deleteEventClassification,
+  listAudienceDefinitions,
+  listAudienceOptions,
+  resolveAudience,
+  createAudienceDefinition,
+  updateAudienceDefinition,
+  setAudienceDefinitionActive,
+  deleteAudienceDefinition,
   listPersonnel,
   createPersonnel,
   updatePersonnel,

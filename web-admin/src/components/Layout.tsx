@@ -17,6 +17,7 @@ import PeopleIcon from "@mui/icons-material/People";
 import BadgeIcon from "@mui/icons-material/Badge";
 import EventIcon from "@mui/icons-material/Event";
 import CategoryIcon from "@mui/icons-material/Category";
+import GroupsIcon from "@mui/icons-material/Groups";
 import RouterIcon from "@mui/icons-material/Router";
 import CalendarMonthIcon from "@mui/icons-material/CalendarMonth";
 import AssessmentIcon from "@mui/icons-material/Assessment";
@@ -70,6 +71,12 @@ const nav: readonly NavEntry[] = [
     to: "/event-classifications",
     label: "Event classifications",
     icon: <CategoryIcon />,
+    permission: PERMISSIONS.eventsRead,
+  },
+  {
+    to: "/event-audiences",
+    label: "Event audiences",
+    icon: <GroupsIcon />,
     permission: PERMISSIONS.eventsRead,
   },
   { to: "/devices", label: "Devices", icon: <RouterIcon />, permission: PERMISSIONS.devicesRead },

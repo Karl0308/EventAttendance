@@ -167,6 +167,11 @@ public static class DependencyInjection
         // vocabularies can an administrator edit" stays answerable from this list.
         services.AddScoped<IEventClassificationService, EventClassificationService>();
 
+        // The Event Audience master (EventAudience.docx) — reusable audience definitions filed under an
+        // event classification, resolving to attendees from the live roster. Takes an ISchoolContext for
+        // the same reason: a create files the definition under a school.
+        services.AddScoped<IAudienceDefinitionService, AudienceDefinitionService>();
+
         // The other half of classification: who holds which entry. Registered separately from the
         // vocabulary above rather than folded into it, because the two are different subjects with
         // different lifecycles — a category outlives everybody filed under it — and because this one
