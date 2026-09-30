@@ -172,6 +172,15 @@ public static class DependencyInjection
         // the same reason: a create files the definition under a school.
         services.AddScoped<IAudienceDefinitionService, AudienceDefinitionService>();
 
+        // Live Attendance attendance codes (LiveAttendance.docx §3–§5). Scoped like every DbContext-bound
+        // service; the email seam it depends on is the logging no-op below.
+        services.AddScoped<IAttendanceCodeService, AttendanceCodeService>();
+
+        // The email seam (IEmailSender). No SMTP or provider is wired in this build, so the registered
+        // implementation logs instead of delivering — a singleton because it is stateless, and the one
+        // place a real transport drops in.
+        services.AddSingleton<IEmailSender, LoggingEmailSender>();
+
         // The other half of classification: who holds which entry. Registered separately from the
         // vocabulary above rather than folded into it, because the two are different subjects with
         // different lifecycles — a category outlives everybody filed under it — and because this one

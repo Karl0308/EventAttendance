@@ -253,6 +253,48 @@ export interface ResolvedAudience {
 }
 
 // ---------------------------------------------------------------------------------------------
+// Live Attendance codes (LiveAttendance.docx §3–§5)
+// ---------------------------------------------------------------------------------------------
+
+/** One attendee's attendance code for an event. */
+export interface AttendanceCode {
+  id: string;
+  studentId: string;
+  studentNumber: string;
+  /** `Last, First`, composed by the server. */
+  studentName: string;
+  /** The address the code would be emailed to, or unset. */
+  email?: string;
+  code: string;
+  lastEmailedAt?: string;
+  emailCount: number;
+}
+
+/** The tally a generate returns, with the full code list. */
+export interface AttendanceCodeGenerateResult {
+  created: number;
+  regenerated: number;
+  alreadyHad: number;
+  codes: AttendanceCode[];
+}
+
+/** The body of `POST /events/{id}/attendance-codes/email`. */
+export interface AttendanceCodeEmailRequest {
+  mode: "All" | "Selected";
+  /** Required and non-empty when `mode` is `Selected`. */
+  studentIds?: string[];
+}
+
+/** The per-recipient tally an email send returns. */
+export interface AttendanceCodeEmailResult {
+  requested: number;
+  sent: number;
+  skippedNoEmail: number;
+  skippedNoCode: number;
+  failed: number;
+}
+
+// ---------------------------------------------------------------------------------------------
 // §11 User Management (UserWithRBAC.docx) — administrators only
 // ---------------------------------------------------------------------------------------------
 

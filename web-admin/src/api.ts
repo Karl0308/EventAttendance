@@ -57,6 +57,10 @@ import type {
   AudienceOptions,
   AudienceAttendee,
   ResolvedAudience,
+  AttendanceCode,
+  AttendanceCodeGenerateResult,
+  AttendanceCodeEmailRequest,
+  AttendanceCodeEmailResult,
   AdminUser,
   UserRoleRef,
   UserCreateRequest,
@@ -1472,6 +1476,43 @@ function toResolvedAudience(row: Row, what: string): ResolvedAudience {
     attendees: asRows(row.attendees, `${what}.attendees`).map((r, i) =>
       toAudienceAttendee(r, `${what}.attendees[${i}]`),
     ),
+  };
+}
+
+/** `AttendanceCodeDto` — one attendee's attendance code for an event. */
+function toAttendanceCode(row: Row, what: string): AttendanceCode {
+  return {
+    id: reqStr(row, "id", what),
+    studentId: reqStr(row, "studentId", what),
+    studentNumber: reqStr(row, "studentNumber", what),
+    studentName: reqStr(row, "studentName", what),
+    email: optStr(row.email),
+    code: reqStr(row, "code", what),
+    lastEmailedAt: optStr(row.lastEmailedAt),
+    emailCount: reqNum(row, "emailCount", what),
+  };
+}
+
+/** `AttendanceCodeGenerateResult` — the tally plus the full code list. */
+function toAttendanceCodeGenerateResult(row: Row, what: string): AttendanceCodeGenerateResult {
+  return {
+    created: reqNum(row, "created", what),
+    regenerated: reqNum(row, "regenerated", what),
+    alreadyHad: reqNum(row, "alreadyHad", what),
+    codes: asRows(row.codes, `${what}.codes`).map((r, i) =>
+      toAttendanceCode(r, `${what}.codes[${i}]`),
+    ),
+  };
+}
+
+/** `AttendanceCodeEmailResultDto` — the per-recipient send tally. */
+function toAttendanceCodeEmailResult(row: Row, what: string): AttendanceCodeEmailResult {
+  return {
+    requested: reqNum(row, "requested", what),
+    sent: reqNum(row, "sent", what),
+    skippedNoEmail: reqNum(row, "skippedNoEmail", what),
+    skippedNoCode: reqNum(row, "skippedNoCode", what),
+    failed: reqNum(row, "failed", what),
   };
 }
 
@@ -3225,6 +3266,55 @@ async function deleteAudienceDefinition(id: string): Promise<AudienceDefinition>
 }
 
 /**
+ * `GET /events/{eventId}/attendance-codes` — the attendance codes issued for an event, by attendee name.
+ * A plain array (not paged): one event's attendees fit on the Live Attendance screen.
+ */
+async function listAttendanceCodes(eventId: string): Promise<AttendanceCode[]> {
+  const what = "GET /events/{id}/attendance-codes";
+  const body = await getJson(what, `/events/${encodeURIComponent(eventId)}/attendance-codes`);
+  return asRows(body, what).map((r, i) => toAttendanceCode(r, `${what}[${i}]`));
+}
+
+/**
+ * `POST /events/{eventId}/attendance-codes/generate` — issue a code to every attendee that lacks one.
+ * Idempotent unless `regenerate` is set, which rewrites every attendee's code (the deliberate regeneration
+ * of LiveAttendance.docx §5).
+ */
+async function generateAttendanceCodes(
+  eventId: string,
+  regenerate = false,
+): Promise<AttendanceCodeGenerateResult> {
+  const query = regenerate ? "?regenerate=true" : "";
+  // No request body — the flag is a query parameter. An empty payload keeps this on the JSON arm; the
+  // generate action takes nothing from the body and ignores it.
+  return writeJson(
+    "POST /events/{id}/attendance-codes/generate",
+    `/events/${encodeURIComponent(eventId)}/attendance-codes/generate${query}`,
+    { method: "POST", payload: {} },
+    "The attendance codes were generated",
+    toAttendanceCodeGenerateResult,
+  );
+}
+
+/**
+ * `POST /events/{eventId}/attendance-codes/email` — email the codes to `All` eligible attendees or a
+ * `Selected` subset. Attendees with no address or no code are skipped and tallied. **400** for `Selected`
+ * with no ids or an unknown mode.
+ */
+async function emailAttendanceCodes(
+  eventId: string,
+  request: AttendanceCodeEmailRequest,
+): Promise<AttendanceCodeEmailResult> {
+  return writeJson(
+    "POST /events/{id}/attendance-codes/email",
+    `/events/${encodeURIComponent(eventId)}/attendance-codes/email`,
+    { method: "POST", payload: request },
+    "The attendance code emails were sent",
+    toAttendanceCodeEmailResult,
+  );
+}
+
+/**
  * Which term a section list was read for — and, when it is not the one that was asked for, the fact
  * that says the rows already fetched have to be thrown away.
  *
@@ -3963,6 +4053,9 @@ export const api = {
   updateAudienceDefinition,
   setAudienceDefinitionActive,
   deleteAudienceDefinition,
+  listAttendanceCodes,
+  generateAttendanceCodes,
+  emailAttendanceCodes,
   listPersonnel,
   createPersonnel,
   updatePersonnel,

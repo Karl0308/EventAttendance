@@ -237,6 +237,11 @@ function serve() {
     if (path === `/api/v1/events/${EVENT_ID}/scans`) {
       return Promise.resolve(json(200, SCANS_JSON));
     }
+    // The Live Attendance attendance-codes panel reads this on mount; empty is fine for these tests,
+    // which are about the filter grid, not the codes.
+    if (path === `/api/v1/events/${EVENT_ID}/attendance-codes`) {
+      return Promise.resolve(json(200, []));
+    }
     if (path === `/api/v1/events/${EVENT_ID}/status` && init?.method === "PATCH") {
       const body = JSON.parse(String(init.body)) as { status: string };
       eventStatus = body.status;

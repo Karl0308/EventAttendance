@@ -1377,6 +1377,264 @@
         ]
       }
     },
+    "/api/v1/events/{eventId}/attendance-codes": {
+      "get": {
+        "tags": [
+          "AttendanceCodes"
+        ],
+        "summary": "`GET /events/{eventId}/attendance-codes` — the codes issued for this event, by attendee name.",
+        "parameters": [
+          {
+            "name": "eventId",
+            "in": "path",
+            "description": "The event.",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The codes, possibly empty.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/AttendanceCodeDto"
+                  }
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/AttendanceCodeDto"
+                  }
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/AttendanceCodeDto"
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such event in this school.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "Bearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/events/{eventId}/attendance-codes/generate": {
+      "post": {
+        "tags": [
+          "AttendanceCodes"
+        ],
+        "summary": "`POST /events/{eventId}/attendance-codes/generate` — issue a code to every attendee that lacks\r\n            one. Idempotent unless regenerate is set, which rewrites every attendee's code.",
+        "parameters": [
+          {
+            "name": "eventId",
+            "in": "path",
+            "description": "The event.",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "regenerate",
+            "in": "query",
+            "description": "When true, replaces existing codes (the deliberate regeneration of §5).",
+            "schema": {
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The full code list, with a tally of what the run did.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/AttendanceCodeGenerateResult"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AttendanceCodeGenerateResult"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AttendanceCodeGenerateResult"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such event in this school.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "Bearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/events/{eventId}/attendance-codes/email": {
+      "post": {
+        "tags": [
+          "AttendanceCodes"
+        ],
+        "summary": "`POST /events/{eventId}/attendance-codes/email` — email the codes to `All` eligible\r\n            attendees or a `Selected` subset. Attendees with no address or no code are skipped and tallied.",
+        "parameters": [
+          {
+            "name": "eventId",
+            "in": "path",
+            "description": "The event.",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "The recipient mode and, for `Selected`, the attendee ids.",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AttendanceCodeEmailRequest"
+              }
+            },
+            "text/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AttendanceCodeEmailRequest"
+              }
+            },
+            "application/*+json": {
+              "schema": {
+                "$ref": "#/components/schemas/AttendanceCodeEmailRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The send tally — sent, skipped (no email / no code), failed.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/AttendanceCodeEmailResultDto"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AttendanceCodeEmailResultDto"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AttendanceCodeEmailResultDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`Selected` with no ids, or an unknown mode.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such event in this school.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "Bearer": []
+          }
+        ]
+      }
+    },
     "/api/v1/event-audiences": {
       "get": {
         "tags": [
@@ -9842,6 +10100,136 @@
         "additionalProperties": false,
         "description": "One page of an admin list read, plus what the caller needs to ask for the next one.\r\n            \r\n\r\n<b>Every §6.2/§6.3 admin list returns this; `GET /attendance/live/{eventId}` deliberately does\r\nnot.</b> That endpoint pages by cursor (`since`/`cursor`/`hasMore`) because it is a\r\npolling delta rather than a list — a client asks \"what changed after this point\", not \"give me rows\r\n40 to 60\" — and its shape is frozen published contract under D-29/D-30/D-42. Offset paging over a\r\nlive feed also drops rows: an insert below the cursor shifts every subsequent row up by one and the\r\nnext page skips it. The two mechanisms coexisting is correct, not an inconsistency to tidy.\r\n"
       },
+      "AttendanceCodeDto": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "studentId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "studentNumber": {
+            "type": "string"
+          },
+          "studentName": {
+            "type": "string"
+          },
+          "email": {
+            "type": "string",
+            "nullable": true
+          },
+          "code": {
+            "type": "string"
+          },
+          "lastEmailedAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "emailCount": {
+            "type": "integer",
+            "format": "int32"
+          }
+        },
+        "additionalProperties": false,
+        "description": "One attendee's attendance code, as the list and generate reads publish it."
+      },
+      "AttendanceCodeEmailRequest": {
+        "type": "object",
+        "properties": {
+          "mode": {
+            "type": "string",
+            "description": "`All` emails every attendee with a code and an address; `Selected` emails\r\n            only StudentIds."
+          },
+          "studentIds": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "description": "Required and non-empty when Mode is `Selected`; ignored\r\n            otherwise.",
+            "nullable": true
+          }
+        },
+        "additionalProperties": false,
+        "description": "The body of `POST /events/{eventId}/attendance-codes/email`."
+      },
+      "AttendanceCodeEmailResultDto": {
+        "type": "object",
+        "properties": {
+          "requested": {
+            "type": "integer",
+            "description": "How many attendees the request targeted.",
+            "format": "int32"
+          },
+          "sent": {
+            "type": "integer",
+            "description": "How many emails were actually sent.",
+            "format": "int32"
+          },
+          "skippedNoEmail": {
+            "type": "integer",
+            "description": "Targeted attendees with no email address on file.",
+            "format": "int32"
+          },
+          "skippedNoCode": {
+            "type": "integer",
+            "description": "Targeted attendees that have no code generated yet.",
+            "format": "int32"
+          },
+          "failed": {
+            "type": "integer",
+            "description": "Targeted attendees whose send threw.",
+            "format": "int32"
+          }
+        },
+        "additionalProperties": false,
+        "description": "The outcome of an email send — a per-recipient tally rather than a single boolean, because §4/§5 ask the\r\nscreen to distinguish who was sent to from who was skipped and why."
+      },
+      "AttendanceCodeGenerateResult": {
+        "type": "object",
+        "properties": {
+          "outcome": {
+            "$ref": "#/components/schemas/AttendanceCodeOutcome"
+          },
+          "created": {
+            "type": "integer",
+            "description": "Attendees that had no code and now do.",
+            "format": "int32"
+          },
+          "regenerated": {
+            "type": "integer",
+            "description": "Existing codes replaced (only when `regenerate` was asked).",
+            "format": "int32"
+          },
+          "alreadyHad": {
+            "type": "integer",
+            "description": "Attendees skipped because they already held a code (non-regenerate runs).",
+            "format": "int32"
+          },
+          "codes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AttendanceCodeDto"
+            }
+          }
+        },
+        "additionalProperties": false,
+        "description": "The result of a generate — the full code list, plus what the run did to reach it."
+      },
+      "AttendanceCodeOutcome": {
+        "enum": [
+          0,
+          1,
+          2
+        ],
+        "type": "integer",
+        "description": "The outcome of an attendance-code operation.",
+        "format": "int32"
+      },
       "AttendanceDeltaDto": {
         "type": "object",
         "properties": {
@@ -13698,6 +14086,10 @@
     {
       "name": "Academic",
       "description": "ADR-001 D-1's academic layer over HTTP — <b>reads, plus D-53's three term-administration writes and\r\nnothing else</b>."
+    },
+    {
+      "name": "AttendanceCodes",
+      "description": "The Live Attendance attendance-code surface (LiveAttendance.docx §3–§5) — a unique code per attendee per\r\nevent, listed for the Live Attendance screen and emailed to attendees who have an address on file."
     },
     {
       "name": "AudienceDefinitions",

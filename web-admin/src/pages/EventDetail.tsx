@@ -37,6 +37,7 @@ import EditEventDialog from "../components/EditEventDialog";
 import DeleteEventDialog from "../components/DeleteEventDialog";
 import ChangeEventStatusDialog from "../components/ChangeEventStatusDialog";
 import EventAudiencePanel from "../components/EventAudiencePanel";
+import AttendanceCodesPanel from "../components/AttendanceCodesPanel";
 import UnresolvedScansPanel from "../components/UnresolvedScansPanel";
 import type { ScanLogRead } from "../components/UnresolvedScansPanel";
 import type { AudienceRead, DetachTarget } from "../components/EventAudiencePanel";
@@ -550,6 +551,7 @@ export default function EventDetail() {
    *  read of the database, is the honest thing to gate a control on. */
   const user = useSignedInUser();
   const canWriteEvents = grants(user.permissions, PERMISSIONS.eventsWrite);
+  const canWriteAttendance = grants(user.permissions, PERMISSIONS.attendanceWrite);
 
   /**
    * The Closed-event certificates toggle's write. Kept apart from `edit` above: that mutation sends
@@ -1268,6 +1270,10 @@ export default function EventDetail() {
                   />
                 </div>
               ))}
+
+            {/* LiveAttendance.docx §3–§5: a unique code per attendee, generated here and emailed from
+                here. Self-contained; gated on attendance.write for the write actions. */}
+            <AttendanceCodesPanel eventId={event.id} canWrite={canWriteAttendance} />
           </>
         ))}
 

@@ -100,6 +100,12 @@ internal class EamsDbContext : DbContext
     public DbSet<AudienceDefinition> AudienceDefinitions => Set<AudienceDefinition>();
 
     /// <summary>
+    /// Per-attendee attendance codes for Live Attendance (LiveAttendance.docx §3–§5). Additive. See
+    /// <see cref="EventAttendanceCode"/>.
+    /// </summary>
+    public DbSet<EventAttendanceCode> EventAttendanceCodes => Set<EventAttendanceCode>();
+
+    /// <summary>
     /// Every <c>DateTime</c> in the model round-trips as UTC. Applied as a convention rather than
     /// per property so entities added later (the ADR-001 D-1 academic layer) inherit it by default
     /// instead of by remembering — the failure mode this closes is silent and invisible in the
@@ -247,6 +253,7 @@ internal class EamsDbContext : DbContext
         ConfigureEventClassifications(b);
         ConfigurePersonnel(b);
         ConfigureAudienceDefinitions(b);
+        ConfigureEventAttendanceCodes(b);
         ConfigureSchoolIdQueryFilters(b);
 
         // Hard deletes are never issued by the application (§4 uses IsDeleted soft delete), and an
@@ -430,6 +437,11 @@ internal class EamsDbContext : DbContext
         // Audience definitions own a SchoolId directly — filtered like every other owner. IsActive is a
         // read concern, not a tenant boundary, so it is not filtered here.
         b.Entity<AudienceDefinition>().HasQueryFilter(
+            x => _school.CurrentSchoolId == null || x.SchoolId == _school.CurrentSchoolId);
+
+        // Attendance codes carry a SchoolId denormalized from their event — filtered directly like
+        // AttendanceRecords, so the filter and the code-uniqueness constraint select the same rows.
+        b.Entity<EventAttendanceCode>().HasQueryFilter(
             x => _school.CurrentSchoolId == null || x.SchoolId == _school.CurrentSchoolId);
     }
 
@@ -887,6 +899,37 @@ internal class EamsDbContext : DbContext
             e.HasIndex(x => new { x.SchoolId, x.NameKey }).IsUnique()
                 .HasFilter(null)
                 .HasDatabaseName("UX_AudienceDefinitions_SchoolId_NameKey");
+        });
+
+    /// <summary>
+    /// Per-attendee attendance codes (LiveAttendance.docx). Not a §4 table — additive.
+    ///
+    /// <para>
+    /// <b>Unique two ways.</b> <c>UX_EventAttendanceCodes_EventId_Code</c> keeps a code unique within its
+    /// event; <c>UX_EventAttendanceCodes_EventId_StudentId</c> keeps an attendee to one code per event, so
+    /// regeneration rewrites the code rather than inserting a second row. Neither is filtered — a code is
+    /// not soft-deleted. Every FK is <c>Restrict</c>, like the rest of the model (the loop in
+    /// <see cref="ConfigureSchoolIdQueryFilters"/>'s sibling in <c>OnModelCreating</c>): an event with
+    /// issued codes cannot be hard-deleted, exactly as one with attendance records cannot.
+    /// </para>
+    /// </summary>
+    private static void ConfigureEventAttendanceCodes(ModelBuilder b) =>
+        b.Entity<EventAttendanceCode>(e =>
+        {
+            e.ToTable("EventAttendanceCodes");
+
+            e.Property(x => x.Code).HasMaxLength(AttendanceCode.MaxLength).IsRequired();
+            e.Property(x => x.EmailCount).HasDefaultValue(0).ValueGeneratedNever();
+
+            e.HasOne(x => x.School).WithMany().HasForeignKey(x => x.SchoolId).IsRequired();
+            e.HasOne(x => x.Event).WithMany().HasForeignKey(x => x.EventId).IsRequired();
+            e.HasOne(x => x.Student).WithMany().HasForeignKey(x => x.StudentId).IsRequired();
+
+            e.HasIndex(x => new { x.EventId, x.Code }).IsUnique()
+                .HasDatabaseName("UX_EventAttendanceCodes_EventId_Code");
+
+            e.HasIndex(x => new { x.EventId, x.StudentId }).IsUnique()
+                .HasDatabaseName("UX_EventAttendanceCodes_EventId_StudentId");
         });
 
     // §4.2 Schools
