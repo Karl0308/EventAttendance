@@ -22,7 +22,16 @@ export default defineConfig({
     // which is a worse test of a thing whose whole job is what it renders. Vite transforms JSX with
     // esbuild using `tsconfig.test.json`'s `"jsx": "react-jsx"`; no plugin is involved, which is why
     // this config still deliberately loads none.
-    include: ["test/**/*.test.ts", "test/**/*.test.tsx"],
+    //
+    // `src/**` as well, for specs that sit beside the module they pin (Task 2 Phase 1: `Layout`,
+    // `PersonnelFormDialog`, `PersonnelImportDialog`, `api.organizations`). They are type-checked by
+    // `tsconfig.app.json`, which already covers `src`; `vite build` never bundles them.
+    include: [
+      "test/**/*.test.ts",
+      "test/**/*.test.tsx",
+      "src/**/*.test.ts",
+      "src/**/*.test.tsx",
+    ],
     environment: "node",
 
     // Sets the baseline time zone before any test file is imported. It is a setup file rather than

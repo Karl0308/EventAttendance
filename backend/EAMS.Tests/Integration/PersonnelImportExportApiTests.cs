@@ -165,7 +165,7 @@ public class PersonnelImportExportApiTests : IntegrationTest
         Assert.Equal("text/csv", export.Content.Headers.ContentType?.MediaType);
 
         var text = await export.Content.ReadAsStringAsync();
-        Assert.Contains("PersonnelNumber", text);
+        Assert.Contains("Personnel ID", text);
         Assert.Contains("EMP-0001", text);
         Assert.Contains("EMP-0002", text);
 
@@ -177,5 +177,25 @@ public class PersonnelImportExportApiTests : IntegrationTest
         using var body = JsonDocument.Parse(await reimport.Content.ReadAsStringAsync());
         Assert.Equal(0, body.RootElement.GetProperty("created").GetInt32());
         Assert.Equal(2, body.RootElement.GetProperty("updated").GetInt32());
+    }
+
+    [Fact]
+    public async Task The_export_header_is_the_spec_columns_in_spec_order()
+    {
+        await ArrangeSchoolAsync();
+
+        using var factory = new EamsApiFactory(Sql.ConnectionString);
+        using var client = await SignedInClientAsync(factory);
+
+        var export = await client.GetAsync($"{Route}/export.csv");
+        Assert.Equal(HttpStatusCode.OK, export.StatusCode);
+
+        var text = await export.Content.ReadAsStringAsync();
+        // Drop a possible leading UTF-8 BOM, then take the header line (cells here need no CSV quoting).
+        var firstLine = text.Split("\r\n")[0].TrimStart('﻿');
+        Assert.Equal(
+            "Personnel ID,RFID UID,Last Name,First Name,Middle Name,Email,Classification,Department," +
+            "Organization,Status,Position",
+            firstLine);
     }
 }

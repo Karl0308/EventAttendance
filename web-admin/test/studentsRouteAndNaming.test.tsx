@@ -42,8 +42,11 @@ import { PERMISSIONS } from "../src/permissions";
 import { beginSession, resetSessionForTests } from "../src/authSession";
 import type { AuthUser } from "../src/types";
 
-/** The label all four renamed lines now carry. The URL, the permission and the module do not. */
+/** The page heading and the two import breadcrumbs. The URL, the permission and the module do not change. */
 const ROSTER_LABEL = "Academic Community";
+
+/** The nav entry, which Task 2 D5 renamed to match its route. The page heading above did not change. */
+const NAV_LABEL = "Students";
 
 /** Where it still lives, and what `Layout`'s nav entry still points at. */
 const ROSTER_PATH = "/students";
@@ -88,15 +91,15 @@ afterEach(() => {
 });
 
 describe("the roster screen's name, address and permission", () => {
-  it("is called Academic Community, still lives at /students, and still opens on students.read", () => {
+  it("is headed Academic Community, is called Students in the nav, still lives at /students, and still opens on students.read", () => {
     // Exactly one code. Swap the route's guard to any other and this token is refused, so the
     // assertions below fail — which is the point of granting nothing else.
     beginSession("access-token-1", userWith(PERMISSIONS.studentsRead));
 
     showApp(ROSTER_PATH);
 
-    // 1. The nav entry reads the new label — and still points at the old address.
-    const entry = within(mainNav()).getByRole("link", { name: ROSTER_LABEL });
+    // 1. The nav entry reads "Students" (D5) — the same word as its address.
+    const entry = within(mainNav()).getByRole("link", { name: NAV_LABEL });
     expect(entry.getAttribute("href")).toBe(ROSTER_PATH);
 
     // 2. `/students` is still the path that matches. If the route were renamed, `<Routes>` would
@@ -120,7 +123,7 @@ describe("the roster screen's name, address and permission", () => {
     expect(screen.queryByRole("heading", { name: ROSTER_LABEL })).toBeNull();
     // The nav entry is gated on the same code, so it is not offered either — clicking a link to a
     // refusal is worse than having no link.
-    expect(within(mainNav()).queryByRole("link", { name: ROSTER_LABEL })).toBeNull();
+    expect(within(mainNav()).queryByRole("link", { name: NAV_LABEL })).toBeNull();
   });
 });
 

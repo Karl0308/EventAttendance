@@ -2952,6 +2952,26 @@ async function listPersonnel(): Promise<Personnel[]> {
   return listAll("GET /personnel", "/personnel", {}, toPersonnel);
 }
 
+/**
+ * `GET /personnel/organizations` — the distinct organizations already on the school's personnel, which the
+ * form offers as suggestions (the field still accepts a new one).
+ *
+ * A bare JSON array of strings, not the paged envelope, so it is read with `getJson` and narrowed here. An
+ * element that is not a string throws rather than being coerced: a drifted reply should fail loudly, not
+ * render `[object Object]` in a dropdown.
+ */
+async function listPersonnelOrganizations(): Promise<string[]> {
+  const what = "GET /personnel/organizations";
+  const body = await getJson(what, "/personnel/organizations");
+  if (!Array.isArray(body)) throw offContract(what, `expected an array, got ${describeType(body)}`);
+  return body.map((item: unknown, i) => {
+    if (typeof item !== "string") {
+      throw offContract(what, `\`[${i}]\` should be a string, got ${describeType(item)}`);
+    }
+    return item;
+  });
+}
+
 /** `POST /personnel` — create a record. **409** on a duplicate ID or RFID UID. */
 async function createPersonnel(request: PersonnelWriteRequest): Promise<Personnel> {
   return writeJson(
@@ -4326,6 +4346,7 @@ export const api = {
   getAttendanceAnalytics,
   downloadAttendanceAnalyticsCsv,
   listPersonnel,
+  listPersonnelOrganizations,
   createPersonnel,
   updatePersonnel,
   deletePersonnel,

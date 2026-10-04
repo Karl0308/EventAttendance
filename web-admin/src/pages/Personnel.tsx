@@ -37,6 +37,10 @@ import { saveBlob } from "../sisImport";
 import type { Personnel, PersonnelImportResult, PersonnelWriteRequest } from "../types";
 
 const loadPersonnel = () => api.listPersonnel();
+const loadOrganizations = () => api.listPersonnelOrganizations();
+
+/** Stable empty list, so the dialog's `organizations` prop does not change identity while loading. */
+const NO_ORGANIZATIONS: readonly string[] = [];
 
 const NO_PERSONNEL =
   "This school has no personnel yet. Personnel are faculty and employees — add them here, or import them " +
@@ -53,6 +57,10 @@ const NO_AUTO_HIDE = null;
 
 export default function PersonnelPage() {
   const personnel = useApiResource(loadPersonnel, []);
+  // Server state for the form's suggestions. Its failure must not block the page or the form (the field
+  // takes typed input regardless), but it is shown below rather than swallowed.
+  const organizations = useApiResource(loadOrganizations, []);
+  const organizationOptions = organizations.status === "ready" ? organizations.data : NO_ORGANIZATIONS;
 
   const create = useApiMutation((request: PersonnelWriteRequest) => api.createPersonnel(request));
   const edit = useApiMutation((id: string, request: PersonnelWriteRequest) => api.updatePersonnel(id, request));
@@ -87,6 +95,7 @@ export default function PersonnelPage() {
       if (s.outcome === "ignored") return;
       personnel.reload();
       if (s.outcome === "succeeded") {
+        organizations.reload();
         setCreating(false);
         announce({ severity: "success", text: `${s.data.fullName} was added.` });
       } else if (!createOpen.current) {
@@ -107,6 +116,7 @@ export default function PersonnelPage() {
       if (s.outcome === "succeeded") {
         setImportResult(s.data);
         personnel.reload();
+        organizations.reload();
       }
       // A failure (e.g. empty/oversized batch) surfaces in the dialog via importMut.error.
     });
@@ -124,6 +134,7 @@ export default function PersonnelPage() {
       if (s.outcome === "ignored") return;
       personnel.reload();
       if (s.outcome === "succeeded") {
+        organizations.reload();
         setEditing(undefined);
         announce({ severity: "success", text: `Saved changes to ${s.data.fullName}.` });
       } else if (!editOpen.current) {
@@ -236,6 +247,22 @@ export default function PersonnelPage() {
         for reuse.
       </Typography>
 
+      {organizations.status === "error" && (
+        <Alert
+          severity="warning"
+          role="alert"
+          sx={{ mb: 2 }}
+          action={
+            <Button color="inherit" size="small" onClick={organizations.reload}>
+              Retry
+            </Button>
+          }
+        >
+          Organization suggestions could not be loaded ({describeApiError(organizations.error)}). You can still
+          type an organization when adding or editing personnel.
+        </Alert>
+      )}
+
       {personnel.status === "loading" && <LoadingState label="Loading personnel…" />}
       {personnel.status === "error" && (
         <ErrorState subject="personnel" error={personnel.error} onRetry={personnel.reload} />
@@ -276,6 +303,7 @@ export default function PersonnelPage() {
           onSubmit={submitCreate}
           running={create.status === "running"}
           failure={create.status === "failed" ? { error: create.error } : undefined}
+          organizations={organizationOptions}
         />
       )}
 
@@ -286,6 +314,7 @@ export default function PersonnelPage() {
           onSubmit={(request) => submitEdit(editing.id, request)}
           running={edit.status === "running"}
           failure={edit.status === "failed" ? { error: edit.error } : undefined}
+          organizations={organizationOptions}
         />
       )}
 

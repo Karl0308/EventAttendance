@@ -48,6 +48,21 @@ public class PersonnelController : ControllerBase
             PageRequest.From(page, pageSize), ct));
 
     /// <summary>
+    /// <c>GET /personnel/organizations</c> — the distinct, non-empty organizations in this school, ascending.
+    /// </summary>
+    /// <remarks>
+    /// A literal-segment route, so it never collides with <c>GET /personnel/{id:guid}</c> — the guid
+    /// constraint keeps the word "organizations" off the {id} route.
+    /// </remarks>
+    /// <response code="200">The organizations, possibly empty.</response>
+    [HttpGet("organizations")]
+    [Authorize(AuthenticationSchemes = JwtBearerDefaults.AuthenticationScheme, Policy = EamsPermissions.StudentsRead)]
+    [HasPermissionNotEnforced(EamsPermissions.StudentsRead)]
+    [ProducesResponseType(typeof(string[]), StatusCodes.Status200OK)]
+    public async Task<ActionResult<IReadOnlyList<string>>> Organizations(CancellationToken ct)
+        => Ok(await _personnel.OrganizationsAsync(ct));
+
+    /// <summary>
     /// <c>GET /personnel/{id}</c> — one record.
     /// </summary>
     /// <response code="200">The record.</response>

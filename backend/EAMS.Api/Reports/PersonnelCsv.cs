@@ -10,19 +10,23 @@ namespace EAMS.Api.Reports;
 /// comma or a leading <c>=</c> is written.
 ///
 /// <para>
-/// <b>The header row is exactly the columns <c>POST /personnel/import</c> reads back</b>, so an exported file
-/// round-trips through import unchanged. The composed <c>FullName</c> is deliberately left out — it is
-/// server-derived and not an import field.
+/// <b>The header row is the spec's human-readable columns, in spec order</b> (StudentsEmployees.docx /
+/// MDVault #540). The composed <c>FullName</c> is deliberately left out — it is server-derived and not an
+/// import field. Import takes parsed JSON rows, not this CSV, so these display header names do not affect
+/// the server round-trip; the front-end CSV parser maps these columns back to the import fields.
 /// </para>
 /// </summary>
 internal static class PersonnelCsv
 {
     internal const string ContentType = EventReportCsv.ContentType;
 
-    /// <summary>The import columns, in order. Kept in step with <c>PersonnelWriteRequest</c>.</summary>
+    /// <summary>
+    /// The spec columns in spec order, then <c>Position</c> appended. Position is <b>not</b> a spec column;
+    /// it is kept last so an export does not silently drop data the system holds for every record.
+    /// </summary>
     internal static readonly string[] Header =
-        ["PersonnelNumber", "FirstName", "MiddleName", "LastName", "Email", "Classification",
-         "Department", "Organization", "Position", "RfidUid", "Status"];
+        ["Personnel ID", "RFID UID", "Last Name", "First Name", "Middle Name", "Email",
+         "Classification", "Department", "Organization", "Status", "Position"];
 
     internal static string FileName() => $"EAMS-personnel-{DateTime.UtcNow:yyyy-MM-dd}.csv";
 
@@ -33,10 +37,11 @@ internal static class PersonnelCsv
 
         foreach (var p in rows)
         {
+            // Same order as Header: spec columns, then Position appended (see Header's note).
             Record(csv,
-                p.PersonnelNumber, p.FirstName, p.MiddleName ?? "", p.LastName, p.Email ?? "",
-                p.Classification ?? "", p.Department ?? "", p.Organization ?? "", p.Position ?? "",
-                p.RfidUid ?? "", p.Status);
+                p.PersonnelNumber, p.RfidUid ?? "", p.LastName, p.FirstName, p.MiddleName ?? "",
+                p.Email ?? "", p.Classification ?? "", p.Department ?? "", p.Organization ?? "",
+                p.Status, p.Position ?? "");
         }
 
         var text = csv.ToString();

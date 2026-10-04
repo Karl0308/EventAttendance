@@ -91,6 +91,27 @@ internal sealed class PersonnelService : IPersonnelService
             .FirstOrDefaultAsync(ct);
     }
 
+    public async Task<IReadOnlyList<string>> OrganizationsAsync(CancellationToken ct = default)
+    {
+        // The set of distinct organizations is tiny, so the null/empty filter and SQL-side distinct cut
+        // it to a handful of rows, then the trim, whitespace-only exclusion and final distinct/order run
+        // in memory. Doing the whitespace work in memory is deliberate: SQL Server's TRIM only strips
+        // spaces (not tabs/newlines) and pads trailing spaces away in comparisons, so an all-in-SQL
+        // version would be correct only by accident. "ABC" and "ABC " collapse into one entry here.
+        var raw = await _db.Personnel.AsNoTracking()
+            .Where(p => !p.IsDeleted && p.Organization != null && p.Organization != "")
+            .Select(p => p.Organization!)
+            .Distinct()
+            .ToListAsync(ct);
+
+        return raw
+            .Select(o => o.Trim())
+            .Where(o => o.Length > 0)
+            .Distinct(StringComparer.Ordinal)
+            .OrderBy(o => o, StringComparer.Ordinal)
+            .ToList();
+    }
+
     // --------------------------------------------------------------------------------- create/edit
 
     public async Task<PersonnelWriteResponse> CreateAsync(

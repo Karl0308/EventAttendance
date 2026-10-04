@@ -21,20 +21,50 @@ import {
 import { describeApiError } from "../api";
 import type { PersonnelImportResult, PersonnelWriteRequest } from "../types";
 
-/** The header names the CSV is read by, matched case-insensitively; order is free. */
-const COLUMNS = [
-  "personnelnumber",
-  "firstname",
-  "middlename",
-  "lastname",
-  "email",
-  "classification",
-  "department",
-  "organization",
-  "position",
-  "rfiduid",
-  "status",
-] as const;
+/** The request fields a CSV column can fill. */
+type Column =
+  | "personnelnumber"
+  | "firstname"
+  | "middlename"
+  | "lastname"
+  | "email"
+  | "classification"
+  | "department"
+  | "organization"
+  | "position"
+  | "rfiduid"
+  | "status";
+
+/**
+ * Every header a column is read by. The first name of each is the spec header the export now writes
+ * (e.g. "Personnel ID"); the compact names are what earlier exports wrote, kept so an older file still
+ * imports. Matching is on `normalizeHeader`, so case, surrounding whitespace and runs of inner
+ * whitespace do not matter — which is why these are written in their normalized (lower-case) form.
+ * Column order in the file is free.
+ */
+const HEADER_ALIASES: Record<Column, readonly string[]> = {
+  personnelnumber: ["personnel id", "personnelnumber"],
+  rfiduid: ["rfid uid", "rfiduid"],
+  lastname: ["last name", "lastname"],
+  firstname: ["first name", "firstname"],
+  middlename: ["middle name", "middlename"],
+  email: ["email"],
+  classification: ["classification"],
+  department: ["department"],
+  organization: ["organization"],
+  status: ["status"],
+  position: ["position"],
+};
+
+/** Trim, lower-case and collapse inner whitespace, so " Personnel  ID " and "personnel id" are one header. */
+const normalizeHeader = (h: string): string => h.trim().replace(/\s+/g, " ").toLowerCase();
+
+/** Normalized header text -> the column it fills. Built once from `HEADER_ALIASES`. */
+const COLUMN_BY_HEADER: ReadonlyMap<string, Column> = new Map(
+  (Object.entries(HEADER_ALIASES) as [Column, readonly string[]][]).flatMap(([column, aliases]) =>
+    aliases.map((alias): [string, Column] => [normalizeHeader(alias), column]),
+  ),
+);
 
 /**
  * A minimal RFC-4180-ish CSV parse: handles quoted fields, escaped quotes (<c>""</c>), commas and newlines
@@ -98,22 +128,22 @@ function toRows(text: string): Parsed {
   const grid = parseCsv(text);
   if (grid.length === 0) return { rows: [], error: "The file has no rows." };
 
-  const header = grid[0].map((h) => h.trim().toLowerCase());
-  const index: Partial<Record<(typeof COLUMNS)[number], number>> = {};
-  for (const col of COLUMNS) {
-    const at = header.indexOf(col);
-    if (at >= 0) index[col] = at;
-  }
+  const index: Partial<Record<Column, number>> = {};
+  grid[0].forEach((h, at) => {
+    const col = COLUMN_BY_HEADER.get(normalizeHeader(h));
+    // The first column wins if a file repeats one under two names.
+    if (col !== undefined && index[col] === undefined) index[col] = at;
+  });
   if (index.personnelnumber === undefined) {
     return {
       rows: [],
       error:
-        "The header row must include a PersonnelNumber column. Export the current list to see the " +
+        "The header row must include a Personnel ID column. Export the current list to see the " +
         "expected columns.",
     };
   }
 
-  const cell = (r: string[], col: (typeof COLUMNS)[number]): string | undefined => {
+  const cell = (r: string[], col: Column): string | undefined => {
     const at = index[col];
     return at === undefined ? undefined : r[at];
   };
@@ -177,10 +207,11 @@ export default function PersonnelImportDialog({ onClose, onImport, running, resu
         {result === undefined ? (
           <Stack spacing={2} sx={{ mt: 1 }}>
             <DialogContentText>
-              Choose a CSV file with a header row. The columns match the export (PersonnelNumber, FirstName,
-              MiddleName, LastName, Email, Classification, Department, Organization, Position, RfidUid,
-              Status). Rows are matched to existing records by PersonnelNumber — an existing one is updated,
-              a new one is created.
+              Choose a CSV file with a header row. The columns match the export: Personnel ID, RFID UID, Last
+              Name, First Name, Middle Name, Email, Classification, Department, Organization, Status and
+              Position (optional). Header case and spacing do not matter, and the older compact names
+              (PersonnelNumber, RfidUid, FirstName…) still work. Rows are matched to existing records by
+              Personnel ID — an existing one is updated, a new one is created.
             </DialogContentText>
 
             <Button variant="outlined" component="label">

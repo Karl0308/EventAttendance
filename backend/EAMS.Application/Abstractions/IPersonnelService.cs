@@ -63,6 +63,13 @@ public interface IPersonnelService
     /// <summary><c>GET /personnel/{id}</c> — one record, or null when this tenant has none / it is deleted.</summary>
     Task<PersonnelDto?> GetAsync(Guid id, CancellationToken ct = default);
 
+    /// <summary>
+    /// <c>GET /personnel/organizations</c> — the distinct, non-empty <c>Organization</c> values held by
+    /// this school's live personnel, trimmed and ordered ascending. The Personnel filter's organization
+    /// picker reads it; the empty list is a valid answer. Tenant-scoped by the global query filter.
+    /// </summary>
+    Task<IReadOnlyList<string>> OrganizationsAsync(CancellationToken ct = default);
+
     /// <summary><c>POST /personnel</c> — create a personnel record under the resolved tenant.</summary>
     Task<PersonnelWriteResponse> CreateAsync(PersonnelWriteRequest request, CancellationToken ct = default);
 

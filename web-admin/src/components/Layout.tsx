@@ -56,9 +56,10 @@ const nav: readonly NavEntry[] = [
   { to: "/", label: "Dashboard", icon: <DashboardIcon />, permission: undefined },
   {
     to: "/students",
-    // Label only — the route, the permission code and the underlying module are unchanged. The URL
-    // deliberately keeps saying `/students`; this is confirmed intentional, not a missed rename.
-    label: "Academic Community",
+    // The label now matches the route. It used to read "Academic Community" while the URL stayed
+    // `/students`; the page heading and breadcrumbs still use that name, but the nav says what the
+    // address says. The route and the permission code are unchanged.
+    label: "Students",
     icon: <PeopleIcon />,
     permission: PERMISSIONS.studentsRead,
   },

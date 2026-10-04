@@ -4,6 +4,7 @@
 import { useEffect, useState } from "react";
 import type { FormEvent } from "react";
 import {
+  Autocomplete,
   Button,
   CircularProgress,
   Dialog,
@@ -38,9 +39,11 @@ interface Props {
   onSubmit: (request: PersonnelWriteRequest) => void;
   running: boolean;
   failure: { error: unknown } | undefined;
+  /** Organizations already on file, offered as suggestions. The field still accepts any new value. */
+  organizations: readonly string[];
 }
 
-export default function PersonnelFormDialog({ personnel, onClose, onSubmit, running, failure }: Props) {
+export default function PersonnelFormDialog({ personnel, onClose, onSubmit, running, failure, organizations }: Props) {
   const editing = personnel !== undefined;
   const [draft, setDraft] = useState<PersonnelDraft>(
     personnel ? draftFromPersonnel(personnel) : EMPTY_PERSONNEL_DRAFT,
@@ -162,12 +165,16 @@ export default function PersonnelFormDialog({ personnel, onClose, onSubmit, runn
                 autoComplete="off"
                 fullWidth
               />
-              <TextField
-                label="Organization"
-                value={draft.organization}
-                onChange={(e) => set({ organization: e.target.value })}
-                autoComplete="off"
+              {/* Free-solo: picking a suggestion and typing a new name are the same edit. The typed text
+                  is the value, so `value` is the draft and `onInputChange` writes it back — it fires for
+                  typing, for picking an option and for clearing. */}
+              <Autocomplete
+                freeSolo
                 fullWidth
+                options={organizations}
+                value={draft.organization}
+                onInputChange={(_event, text) => set({ organization: text })}
+                renderInput={(params) => <TextField {...params} label="Organization" autoComplete="off" />}
               />
             </Stack>
             <Stack direction={{ xs: "column", sm: "row" }} spacing={2}>
