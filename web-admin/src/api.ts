@@ -256,7 +256,10 @@ function asRows(value: unknown, what: string): Row[] {
   return value.map((item, i) => asRow(item, `${what}[${i}]`));
 }
 
-const describeType = (value: unknown) => (value === null ? "null" : typeof value);
+// `typeof []` is "object", which made an array read as "expected an object, got object" — a message that
+// contradicts itself and hides the very drift it reports. Name arrays as arrays.
+const describeType = (value: unknown) =>
+  value === null ? "null" : Array.isArray(value) ? "array" : typeof value;
 
 function reqStr(row: Row, key: string, what: string): string {
   const value = row[key];
@@ -3159,9 +3162,17 @@ async function setUserRoles(id: string, roleIds: readonly string[]): Promise<Adm
     { method: "PUT", payload: { roleIds } }, "The roles were updated", toAdminUser);
 }
 
-/** `GET /roles` — the roles the user-management screen assigns from, and Role Management edits. */
+/**
+ * `GET /roles` — the roles the user-management screen assigns from, and Role Management edits.
+ *
+ * The server returns a bare JSON array (`IReadOnlyList<RoleDto>`), not the §6 paged envelope, so this
+ * reads it with `asRows` like `listDevices` rather than through `listAll`/`asPage`, which would demand
+ * an `{ items, ... }` object. The role set is small and fixed in kind; there is nothing to page.
+ */
 async function listRoles(): Promise<Role[]> {
-  return listAll("GET /roles", "/roles", {}, toRole);
+  const what = "GET /roles";
+  const body = await getJson(what, "/roles");
+  return asRows(body, what).map((row, i) => toRole(row, `${what}[${i}]`));
 }
 
 /** `POST /roles` — create a custom role (no permissions yet). **409** on a duplicate name. */
