@@ -84,10 +84,21 @@ public record CardDto(Guid Id, string CardUid, string? Label, bool IsActive);
 /// preserve on a <c>PUT</c> — the write surface is a full replacement.
 /// </param>
 /// <param name="GraceAfterEndMinutes">Per-event grace after end (§3), or null. As above.</param>
+/// <param name="EventClassificationId">
+/// The event's classification, or null for unclassified. The id the FE binds and later filters audience
+/// definitions by.
+/// </param>
+/// <param name="EventClassificationName">
+/// The classification's display name, joined from <c>EventClassifications</c> for the read paths
+/// (<c>GET /events</c>, <c>GET /events/{id}</c>) so a grid can show it without a second request. It is a
+/// projection of the navigation, so it is populated only where that navigation is loaded — the list and
+/// detail reads <c>Include</c> it; it is null when <see cref="EventClassificationId"/> is null.
+/// </param>
 public record EventDto(
     Guid Id, string Name, string? Description, string? Location, DateTime StartAt, DateTime EndAt,
     string AttendanceMode, int GraceMinutes, bool RequireRegistration, string Status,
-    bool IssuesCertificates, int? GraceBeforeStartMinutes, int? GraceAfterEndMinutes);
+    bool IssuesCertificates, int? GraceBeforeStartMinutes, int? GraceAfterEndMinutes,
+    Guid? EventClassificationId = null, string? EventClassificationName = null);
 
 public record AttendanceDto(
     Guid Id, Guid EventId, Guid StudentId, string StudentName, string StudentNumber,

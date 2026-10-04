@@ -1103,6 +1103,18 @@ internal class EamsDbContext : DbContext
 
         e.HasOne(x => x.School).WithMany(s => s.Events).HasForeignKey(x => x.SchoolId).IsRequired();
         e.HasOne(x => x.OrganizerUser).WithMany().HasForeignKey(x => x.OrganizerUserId);
+
+        // Not in §4.5 (Event Audience module). Nullable — an event need not be classified. Restrict is
+        // stated explicitly for the reason AudienceDefinitions' FK states it, even though the
+        // OnModelCreating loop sets it anyway: retiring a classification is a deactivation, never a row
+        // delete, so a classified event never dangles. The index backs both the FK and the FE read that
+        // lists a classification's events / narrows its audience definitions.
+        e.HasOne(x => x.EventClassification).WithMany()
+            .HasForeignKey(x => x.EventClassificationId)
+            .OnDelete(DeleteBehavior.Restrict);
+
+        e.HasIndex(x => x.EventClassificationId)
+            .HasDatabaseName("IX_Events_EventClassificationId");
     });
 
     // §4.6 EventSchedules

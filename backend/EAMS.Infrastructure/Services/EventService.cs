@@ -66,10 +66,16 @@ internal sealed class EventService : IEventService, IEventSummaryFigures
         _live = live;
     }
 
+    // EventClassificationName is read from the navigation, so it is populated only where that navigation
+    // is loaded — the list and detail reads Include it. A write response carries the id and a null name:
+    // the entity post-save holds the scalar FK but not the joined row, and the FE reads the name from the
+    // GET it already follows. ToDto stays a pure in-memory map over the entity, as every other path here
+    // relies on (PagedQuery's materialize-map overload, the write responses).
     private static EventDto ToDto(Event e) => new(
         e.Id, e.Name, e.Description, e.Location, e.StartAt, e.EndAt,
         e.AttendanceMode, e.GraceMinutes, e.RequireRegistration, e.Status, e.IssuesCertificates,
-        e.GraceBeforeStartMinutes, e.GraceAfterEndMinutes);
+        e.GraceBeforeStartMinutes, e.GraceAfterEndMinutes,
+        e.EventClassificationId, e.EventClassification?.Name);
 
     // ------------------------------------------------------------------------------------ reads
 
@@ -87,14 +93,20 @@ internal sealed class EventService : IEventService, IEventSummaryFigures
         var q = _db.Events.AsNoTracking().Where(e => !e.IsDeleted);
         if (!string.IsNullOrWhiteSpace(status)) q = q.Where(e => e.Status == status);
 
+        // Include belongs in the order callback (PagedQuery's own remarks): the join lands on the page
+        // query, never on the COUNT. Optional navigation, so it is a LEFT JOIN — an unclassified event is
+        // not dropped from the list.
         return q.ToPageAsync(
-            ordered => ordered.OrderByDescending(e => e.StartAt).ThenBy(e => e.Id),
+            ordered => ordered.OrderByDescending(e => e.StartAt).ThenBy(e => e.Id)
+                .Include(e => e.EventClassification),
             ToDto, page, ct);
     }
 
     public async Task<EventDto?> GetAsync(Guid id, CancellationToken ct = default)
     {
-        var e = await _db.Events.AsNoTracking().FirstOrDefaultAsync(x => x.Id == id && !x.IsDeleted, ct);
+        var e = await _db.Events.AsNoTracking()
+            .Include(x => x.EventClassification)
+            .FirstOrDefaultAsync(x => x.Id == id && !x.IsDeleted, ct);
         return e is null ? null : ToDto(e);
     }
 
@@ -1517,6 +1529,9 @@ internal sealed class EventService : IEventService, IEventSummaryFigures
                 "the event under.", null);
         }
 
+        if (await ClassificationRefusal(schoolId.Value, request.EventClassificationId, ct) is { } badRef)
+            return badRef;
+
         var ev = new Event
         {
             SchoolId = schoolId.Value,
@@ -1580,6 +1595,15 @@ internal sealed class EventService : IEventService, IEventSummaryFigures
                 "rows they were computed from. Its name, description and location can still be edited; " +
                 "re-send those with the scheduling fields left as they are.", null);
         }
+
+        // Validated only when it actually changes: re-sending the stored classification must keep
+        // succeeding even if that classification has since been deactivated — an event keeps the one it
+        // recorded, exactly as the audience write surface treats its own classification. A change to a
+        // new id (or to null, which ClassificationRefusal always allows) is checked. A classification
+        // change on a Closed event never reaches here: the lock gate above already refused it.
+        if (request.EventClassificationId != ev.EventClassificationId
+            && await ClassificationRefusal(ev.SchoolId, request.EventClassificationId, ct) is { } badRef)
+            return badRef;
 
         Apply(request, ev);
         ev.UpdatedAt = DateTime.UtcNow;
@@ -2084,6 +2108,35 @@ internal sealed class EventService : IEventService, IEventSummaryFigures
     private Task<Event?> FindAsync(Guid id, CancellationToken ct) =>
         _db.Events.FirstOrDefaultAsync(e => e.Id == id && !e.IsDeleted, ct);
 
+    /// <summary>
+    /// A named <see cref="EventClassification"/> must exist, be active, and belong to this event's
+    /// school. A null id is always allowed — an event need not be classified.
+    ///
+    /// <para>
+    /// Unknown, deactivated and another tenant's id all come back as
+    /// <see cref="EventWriteOutcome.UnknownReference"/> (400), the same single outcome the audience write
+    /// surface collapses them into and for the reason that outcome records: distinguishing "deactivated"
+    /// from "no such row" from "another school's row" would confirm the existence of a row in a school
+    /// the caller cannot see. The <c>SchoolId</c> predicate is explicit rather than left to the §11 query
+    /// filter, which is inert whenever no tenant is pinned (design time, the pre-auth build).
+    /// </para>
+    /// </summary>
+    private async Task<EventWriteResponse?> ClassificationRefusal(
+        Guid schoolId, Guid? eventClassificationId, CancellationToken ct)
+    {
+        if (eventClassificationId is not { } id) return null;
+
+        var isActive = await _db.EventClassifications.AsNoTracking()
+            .Where(c => c.Id == id && c.SchoolId == schoolId)
+            .Select(c => (bool?)c.IsActive)
+            .FirstOrDefaultAsync(ct);
+
+        return isActive is true
+            ? null
+            : new EventWriteResponse(EventWriteOutcome.UnknownReference,
+                $"No active event classification in this event's school matches {id}.", null);
+    }
+
     // Which school a new event belongs to: SchoolResolution.ResolveSchoolIdAsync. Shared with the
     // §6.2 student write surface rather than copied, so both agree with the tenant the startup log
     // announced. A null answer becomes EventWriteOutcome.NoSchoolResolved.
@@ -2178,6 +2231,12 @@ internal sealed class EventService : IEventService, IEventSummaryFigures
         ev.RequireRegistration = request.RequireRegistration;
         ev.AttendanceMode = ResolveMode(request.AttendanceMode);
 
+        // A full-replacement field, unlike IssuesCertificates below: null here means "unclassified",
+        // which is a real state rather than "not mentioned", so it is written through. The reference is
+        // validated before Apply is reached (ClassificationRefusal), so assigning the FK here cannot
+        // write a dangling or cross-tenant id.
+        ev.EventClassificationId = request.EventClassificationId;
+
         // Null means "not mentioned" and keeps what is stored — false on a new event. See
         // EventWriteRequest.IssuesCertificates: as a plain bool, every client that predates the field
         // would clear it on every PUT, with a 200.
@@ -2216,6 +2275,12 @@ internal sealed class EventService : IEventService, IEventSummaryFigures
             changed.Add(nameof(Event.Description));
         if (!string.Equals(request.Location, ev.Location, StringComparison.Ordinal))
             changed.Add(nameof(Event.Location));
+        // A descriptive field like name/description/location — not an attendance-rule field (it does not
+        // decide what a tap means), so it is editable on a Cancelled event but locked on a Closed one.
+        // Counting it here is what makes a classification change on a Closed event fail the
+        // certificates-only test and so stay locked.
+        if (request.EventClassificationId != ev.EventClassificationId)
+            changed.Add(nameof(Event.EventClassificationId));
         changed.AddRange(AttendanceRuleChanges(request, ev));
 
         return changed;

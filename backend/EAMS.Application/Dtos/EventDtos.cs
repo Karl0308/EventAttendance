@@ -58,6 +58,20 @@ namespace EAMS.Application.Dtos;
 /// Grace period after end (EventGracePeriod.docx §3), or null. A value refuses taps later than
 /// <c>EndAt + this</c> as Attendance Closed.
 /// </param>
+/// <param name="EventClassificationId">
+/// The event's classification (Institutional, Departmental, Organizational, …), or null for
+/// unclassified. Optional and defaulted null so callers that predate the field are unchanged — an
+/// omitted value is "unclassified" on create and, unlike a full-replacement field, there is nothing to
+/// reset on edit because null legitimately <em>is</em> the no-classification state.
+///
+/// <para>
+/// When non-null it must name an <em>active</em> classification in this event's school, or the write is
+/// refused as <see cref="EAMS.Application.Abstractions.EventWriteOutcome.UnknownReference"/> — unknown,
+/// deactivated and another tenant's id are not distinguished, for the reason that outcome records. On a
+/// <c>Closed</c> event it is a locked field like the rest of the body (only the certificates toggle is
+/// editable there).
+/// </para>
+/// </param>
 public record EventWriteRequest(
     string Name,
     string? Description,
@@ -69,7 +83,8 @@ public record EventWriteRequest(
     bool RequireRegistration,
     bool? IssuesCertificates = null,
     int? GraceBeforeStartMinutes = null,
-    int? GraceAfterEndMinutes = null);
+    int? GraceAfterEndMinutes = null,
+    Guid? EventClassificationId = null);
 
 /// <summary>The body of <c>PATCH /events/{id}/status</c>. See <c>EventStatusTransition</c>.</summary>
 public record EventStatusRequest(string Status);

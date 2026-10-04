@@ -238,6 +238,24 @@ public class Event : AuditableEntity
     /// </summary>
     public bool IssuesCertificates { get; set; }
 
+    /// <summary>
+    /// The event's classification — Institutional, Departmental, Organizational, or whatever the client
+    /// added (see <see cref="EventClassification"/>). Not in §4.5: additive drift, <c>null</c> for
+    /// "unclassified" so every event that existed before the column is unaffected and nothing is forced
+    /// to pick one.
+    ///
+    /// <para>
+    /// This is the <c>Events.EventClassificationId</c> link the <see cref="EventClassification"/> type's
+    /// own remarks anticipated — the first half of the spec's "classification then audience" creation
+    /// flow, and what lets the UI narrow the reusable <c>AudienceDefinitions</c> (each filed under a
+    /// classification) to the ones that fit this event. The FK is <c>Restrict</c> like every other in
+    /// this model — retiring a classification is a deactivation, never a row delete
+    /// (<see cref="EventClassification.IsActive"/>), so a classified event never dangles.
+    /// </para>
+    /// </summary>
+    public Guid? EventClassificationId { get; set; }
+    public EventClassification? EventClassification { get; set; }
+
     public ICollection<AttendanceRecord> AttendanceRecords { get; set; } = new List<AttendanceRecord>();
     public ICollection<EventSchedule> Schedules { get; set; } = new List<EventSchedule>();
 }
