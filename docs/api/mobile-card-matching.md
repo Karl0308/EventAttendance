@@ -165,10 +165,18 @@ tri-state `Known` / `Unknown` / `NotChecked`, with two properties worth knowing:
 - **The server ignores it for every decision** and always resolves the card itself. Its only job is
   to record what the device believed, so a disagreement can be found afterwards.
 
-It is not built, and building it is a bigger change than adding a field. `CardNotFound` currently
-**never reaches the database** - it is a rejection returned to the caller, not a stored row - so
-there is nowhere for a not-found scan to be reported from. Making unmatched scans visible under an
-event needs somewhere to put them, which is a schema change, not a DTO change.
+The `cachedCardMatch` field itself is still **not built**, and adding it is a bigger change than
+adding a field.
+
+> **Updated 2026-10-05:** one premise this section used to rest on has since changed. It previously
+> said `CardNotFound` *"never reaches the database… there is nowhere for a not-found scan to be
+> reported from."* That is **no longer true.** The **UnrecognizedRFIDScans** feature (shipped on the
+> enhancement branch) now **records** an unresolved scan when a tap returns `CardNotFound`, for the
+> back office to review and resolve via `POST /scans/manual-id`. So a not-found scan now *is* stored
+> and visible server-side. That is the server's own record of the scan — **separate** from the
+> device-belief `cachedCardMatch` field above, which remains unbuilt. Nothing changes in what your
+> capture app sends: a `CardNotFound` tap is still a rejection returned to you, and the recording is
+> automatic and server-side.
 
 ---
 
