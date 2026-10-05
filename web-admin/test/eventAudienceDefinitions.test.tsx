@@ -122,6 +122,8 @@ const readyAudience = (over: Partial<EventAudience> = {}): AudienceRead => ({
     students: [],
     definitions: [],
     advisoryPersonnelCount: 0,
+    expectedSource: "Audience",
+    preRegistration: null,
     ...over,
   },
 });

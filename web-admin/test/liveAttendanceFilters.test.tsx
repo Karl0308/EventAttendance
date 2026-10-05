@@ -100,6 +100,8 @@ const AUDIENCE_JSON = {
   students: [],
   definitions: [],
   advisoryPersonnelCount: 0,
+  expectedSource: "Audience",
+  preRegistration: null,
 };
 
 const SCANS_JSON = { eventId: EVENT_ID, totalScans: 0, distinctCards: 0, scans: [] };
@@ -242,6 +244,12 @@ function serve() {
     // The Live Attendance attendance-codes panel reads this on mount; empty is fine for these tests,
     // which are about the filter grid, not the codes.
     if (path === `/api/v1/events/${EVENT_ID}/attendance-codes`) {
+      return Promise.resolve(json(200, []));
+    }
+    // The Pre-registration section's session picker reads this on mount; empty is fine, for the same
+    // reason as the codes above. Left unserved it 404s into a "could not be loaded" notice that these
+    // tests (which assert that phrase is absent) would mistake for the grid's.
+    if (path === "/api/v1/pre-registration/sessions" && (init?.method ?? "GET") === "GET") {
       return Promise.resolve(json(200, []));
     }
     if (path === `/api/v1/events/${EVENT_ID}/status` && init?.method === "PATCH") {

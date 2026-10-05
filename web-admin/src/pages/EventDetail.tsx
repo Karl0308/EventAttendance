@@ -38,6 +38,7 @@ import DeleteEventDialog from "../components/DeleteEventDialog";
 import ChangeEventStatusDialog from "../components/ChangeEventStatusDialog";
 import EventAudiencePanel from "../components/EventAudiencePanel";
 import EventAudienceDefinitionsSection from "../components/EventAudienceDefinitionsSection";
+import EventPreRegistrationSection from "../components/EventPreRegistrationSection";
 import AttendanceCodesPanel from "../components/AttendanceCodesPanel";
 import UnresolvedScansPanel from "../components/UnresolvedScansPanel";
 import type { ScanLogRead } from "../components/UnresolvedScansPanel";
@@ -1070,6 +1071,21 @@ export default function EventDetail() {
               eventStatus={event.status}
               eventClassificationId={event.eventClassificationId}
               eventClassificationName={event.eventClassificationName}
+              read={audienceRead}
+              onChanged={() => {
+                audience.reload();
+                detail.reload();
+              }}
+              onAnnounce={(text) => announce({ severity: "success", text })}
+            />
+
+            {/* Pre-registration sessions linked to this event. Linking one REPLACES the expected set
+                with the pre-registered students, so it sits directly under the two audience cards it
+                overrides and says so. Same re-read as the audience writes: `expected` is on both the
+                audience and the stat cards. */}
+            <EventPreRegistrationSection
+              eventId={event.id}
+              eventStatus={event.status}
               read={audienceRead}
               onChanged={() => {
                 audience.reload();

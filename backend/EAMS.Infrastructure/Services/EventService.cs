@@ -370,6 +370,15 @@ internal sealed class EventService : IEventService, IEventSummaryFigures
         if (EventStatusTransition.HasFrozenAudience(status))
             return AttachedStudentIds(eventId, includeDeleted: true);
 
+        // ADR-008 D-71 — the REPLACE. If ANY pre-registration session is linked to this event, its
+        // student registrants (deduped across sessions, soft-deleted excluded) ARE the live expected set,
+        // instead of the three-source union. The attached sections/definitions are kept but not resolved
+        // while linked. The one "is a session linked?" selector is shared with SnapshotAudienceAsync so the
+        // live read and the freeze cannot disagree (D-15 symmetry).
+        var preRegistered = await LinkedPreRegistrationStudentIdsAsync(
+            eventId, schoolId, includeDeleted: false, ct);
+        if (preRegistered is not null) return preRegistered;
+
         // Live: three sources, de-duplicated in SQL. Sections resolved into current membership,
         // individually-attached students, and attached definitions resolved to their student ids — all
         // excluding the soft-deleted, all UNIONed so a student reached by more than one source counts
@@ -379,6 +388,48 @@ internal sealed class EventService : IEventService, IEventSummaryFigures
 
         var definitions = await DefinitionStudentIdsAsync(eventId, schoolId, includeDeleted: false, ct);
         return definitions is null ? live : live.Union(definitions);
+    }
+
+    /// <summary>
+    /// ADR-008 D-71 — the ONE "is a pre-registration session linked?" selector, used by BOTH the live
+    /// <see cref="ExpectedStudentIdsAsync"/> branch and the <see cref="SnapshotAudienceAsync"/> freeze.
+    /// Returns the linked sessions' student registrants as a composable <c>IQueryable&lt;Guid&gt;</c> when any
+    /// session is linked, or <c>null</c> when none is — so a caller takes the pre-reg branch or falls back to
+    /// its union exactly as it does for <see cref="DefinitionStudentIdsAsync"/>.
+    ///
+    /// <para>
+    /// <b>Null vs empty is load-bearing.</b> "No session linked" (null) means resolve the union; "a session
+    /// is linked but has no student registrants" (a non-null, empty query) means <c>Expected = 0</c> — the
+    /// REPLACE stands even when it empties the denominator (ADR-008 Negative consequence), so the linked
+    /// test and the student set are decided together, here, and never written twice (the D-15 trap).
+    /// </para>
+    ///
+    /// <para>
+    /// <b>The asymmetry the live/frozen pair needs is the one parameter.</b> The live read excludes
+    /// soft-deleted (a student the roster says does not exist cannot be expected); the freeze passes
+    /// <c>includeDeleted: true</c> so a student registered then soft-deleted before close is not retroactively
+    /// removed from a past event's denominator (D-15), exactly as the section and definition sources do.
+    /// </para>
+    ///
+    /// <para>
+    /// The <c>SchoolId</c> predicate is explicit for the reason the denominator's and the definition read's
+    /// are: the §11 global filter is inert whenever no tenant is pinned, and this reaches a fresh person set.
+    /// </para>
+    /// </summary>
+    private async Task<IQueryable<Guid>?> LinkedPreRegistrationStudentIdsAsync(
+        Guid eventId, Guid schoolId, bool includeDeleted, CancellationToken ct)
+    {
+        var anyLinked = await _db.PreRegistrationSessions.AsNoTracking()
+            .AnyAsync(s => s.EventId == eventId && s.SchoolId == schoolId, ct);
+        if (!anyLinked) return null;
+
+        return _db.PreRegistrations
+            .Where(p => p.Session!.EventId == eventId
+                     && p.SchoolId == schoolId
+                     && p.StudentId != null
+                     && (includeDeleted || !p.Student!.IsDeleted))
+            .Select(p => p.StudentId!.Value)
+            .Distinct();
     }
 
     /// <summary>
@@ -555,8 +606,62 @@ internal sealed class EventService : IEventService, IEventSummaryFigures
 
         var (definitions, advisoryPersonnelCount) = await ReadAttachedDefinitionsAsync(id, ev.SchoolId, ct);
 
+        // ADR-008 D-71/D-72 — the pre-registration read signal. A linked session makes ExpectedSource
+        // "PreRegistration"; Expected above already reflects the pre-reg set (the shared selector), and the
+        // advisory figure reflects the PRE-REG personnel rather than the Phase-2 definition advisory.
+        var preRegistration = await ReadLinkedPreRegistrationAsync(id, ev.SchoolId, ct);
+        var expectedSource = preRegistration is null
+            ? ExpectedAudienceSource.Audience
+            : ExpectedAudienceSource.PreRegistration;
+        var advisory = preRegistration?.TotalAdvisoryPersonnelCount ?? advisoryPersonnelCount;
+
         return new EventAudienceDto(
-            ev.Id, ev.Status, isFrozen, expected, groups, students, definitions, advisoryPersonnelCount);
+            ev.Id, ev.Status, isFrozen, expected, groups, students, definitions, advisory,
+            expectedSource, preRegistration);
+    }
+
+    /// <summary>
+    /// The pre-registration sessions linked to this event, their per-session counts, and the deduped
+    /// totals (ADR-008 D-71/D-72). <c>null</c> when none is linked — the signal the audience read uses to
+    /// set <see cref="EventAudienceDto.ExpectedSource"/>.
+    ///
+    /// <para>
+    /// The counts are current/live figures (soft-deleted excluded), the same way
+    /// <see cref="EventAudienceGroupDto.MemberCount"/> and the definition counts are: the link rows are a
+    /// historical record on a terminal event, but the figures beside them describe the sessions as they are
+    /// now. The event's frozen denominator is <see cref="EventAudienceDto.Expected"/>, read from the snapshot;
+    /// these never feed it. Totals dedupe across sessions (a <c>UNION</c>), so a person in two linked sessions
+    /// counts once — matching how the denominator dedupes.
+    /// </para>
+    /// </summary>
+    private async Task<EventPreRegistrationDto?> ReadLinkedPreRegistrationAsync(
+        Guid eventId, Guid schoolId, CancellationToken ct)
+    {
+        var sessions = await _db.PreRegistrationSessions.AsNoTracking()
+            .Where(s => s.EventId == eventId && s.SchoolId == schoolId)
+            .OrderBy(s => s.CreatedAt).ThenBy(s => s.Id)
+            .Select(s => new LinkedPreRegistrationSessionDto(
+                s.Id,
+                s.Name,
+                s.Registrations.Count(r => r.StudentId != null && !r.Student!.IsDeleted),
+                s.Registrations.Count(r => r.PersonnelId != null && !r.Personnel!.IsDeleted)))
+            .ToListAsync(ct);
+
+        if (sessions.Count == 0) return null;
+
+        // Deduped across sessions. The per-session counts above can sum higher than these — the totals are
+        // a UNION, the per-session figures are not — which is why both are published.
+        var totalStudents = await _db.PreRegistrations
+            .Where(p => p.Session!.EventId == eventId && p.SchoolId == schoolId
+                     && p.StudentId != null && !p.Student!.IsDeleted)
+            .Select(p => p.StudentId).Distinct().CountAsync(ct);
+
+        var totalPersonnel = await _db.PreRegistrations
+            .Where(p => p.Session!.EventId == eventId && p.SchoolId == schoolId
+                     && p.PersonnelId != null && !p.Personnel!.IsDeleted)
+            .Select(p => p.PersonnelId).Distinct().CountAsync(ct);
+
+        return new EventPreRegistrationDto(sessions, totalStudents, totalPersonnel);
     }
 
     /// <summary>
@@ -1948,15 +2053,29 @@ internal sealed class EventService : IEventService, IEventSummaryFigures
     private async Task<IReadOnlyList<Guid>> SnapshotAudienceAsync(
         Guid eventId, Guid schoolId, List<object> pending, CancellationToken ct)
     {
-        // All three live sources, resolved once. Attached definitions resolve their STUDENT half with
-        // includeDeleted:true — the same rule the frozen read uses — so the set written down is exactly
-        // the set the frozen read will report (ADR-003 D-15, generalised to definitions by ADR-007). A
-        // definition's personnel are never resolved here: they have no row to be, which is D-70.
-        var baseExpected = GroupMemberStudentIds(eventId)
-            .Union(AttachedStudentIds(eventId, includeDeleted: true));
+        // ADR-008 D-71 freeze parity — the SAME "is a session linked?" selector the live read uses, with
+        // includeDeleted:true (D-15 symmetry). A linked event snapshots the PRE-REGISTERED students, not the
+        // union; the kept sections/definitions are never resolved here while a session drives the audience.
+        var preRegistered = await LinkedPreRegistrationStudentIdsAsync(
+            eventId, schoolId, includeDeleted: true, ct);
 
-        var definitions = await DefinitionStudentIdsAsync(eventId, schoolId, includeDeleted: true, ct);
-        var expectedQuery = definitions is null ? baseExpected : baseExpected.Union(definitions);
+        IQueryable<Guid> expectedQuery;
+        if (preRegistered is not null)
+        {
+            expectedQuery = preRegistered;
+        }
+        else
+        {
+            // All three live sources, resolved once. Attached definitions resolve their STUDENT half with
+            // includeDeleted:true — the same rule the frozen read uses — so the set written down is exactly
+            // the set the frozen read will report (ADR-003 D-15, generalised to definitions by ADR-007). A
+            // definition's personnel are never resolved here: they have no row to be, which is D-70.
+            var baseExpected = GroupMemberStudentIds(eventId)
+                .Union(AttachedStudentIds(eventId, includeDeleted: true));
+
+            var definitions = await DefinitionStudentIdsAsync(eventId, schoolId, includeDeleted: true, ct);
+            expectedQuery = definitions is null ? baseExpected : baseExpected.Union(definitions);
+        }
 
         var expected = await expectedQuery.ToListAsync(ct);
 
@@ -2327,6 +2446,141 @@ internal sealed class EventService : IEventService, IEventSummaryFigures
         return new EventAudienceResponse(EventWriteOutcome.Saved, "Audience updated.",
             new EventAudienceResultDto(id, 0, 0, 0, 0, 0, 0, expected, []));
     }
+
+    // -------------------------------------------------------------------- pre-registration link (ADR-008)
+
+    public async Task<EventPreRegistrationLinkResponse> LinkPreRegistrationSessionAsync(
+        Guid eventId, Guid preRegistrationSessionId, CancellationToken ct = default)
+    {
+        var ev = await FindAsync(eventId, ct);
+        if (ev is null) return PreRegNotFound();
+
+        // Terminal event: refuse (409), mirroring the audience lock and D-14. Once the audience is frozen a
+        // new link would be a kept-but-unresolved row that changes no number — a silent no-op (ADR-008 #2).
+        if (!EventStatusTransition.AcceptsAudienceChanges(ev.Status))
+            return PreRegLocked(ev.Status);
+
+        var session = await _db.PreRegistrationSessions
+            .FirstOrDefaultAsync(s => s.Id == preRegistrationSessionId && s.SchoolId == ev.SchoolId, ct);
+
+        // Unknown, another tenant's, or already linked to a DIFFERENT event (a session links to at most one
+        // event, D-73) → UnknownReference (400), the three collapsed as the audience refs are (D-27). The
+        // explicit SchoolId predicate is why a cross-tenant id reads as "unknown" rather than disclosing it.
+        if (session is null)
+            return PreRegUnknownReference(preRegistrationSessionId);
+        if (session.EventId is { } linkedElsewhere && linkedElsewhere != eventId)
+            return PreRegUnknownReference(preRegistrationSessionId);
+
+        // Re-linking the same session to the same event is an idempotent no-op.
+        if (session.EventId != eventId)
+        {
+            session.EventId = eventId;
+            session.UpdatedAt = DateTime.UtcNow;
+            await _db.SaveChangesAsync(ct);
+        }
+
+        return await PreRegAudienceAsync(eventId, ct);
+    }
+
+    public async Task<EventPreRegistrationLinkResponse> UnlinkPreRegistrationSessionAsync(
+        Guid eventId, Guid preRegistrationSessionId, CancellationToken ct = default)
+    {
+        var ev = await FindAsync(eventId, ct);
+        if (ev is null) return PreRegNotFound();
+
+        if (!EventStatusTransition.AcceptsAudienceChanges(ev.Status))
+            return PreRegLocked(ev.Status);
+
+        // Idempotent: clear EventId only on a session actually linked to THIS event. A session that is
+        // unknown, cross-tenant, or linked to another event is left untouched and the call still succeeds —
+        // the postcondition "this session is not linked to this event" holds either way, so a retry is safe.
+        var session = await _db.PreRegistrationSessions
+            .FirstOrDefaultAsync(s => s.Id == preRegistrationSessionId
+                                   && s.SchoolId == ev.SchoolId
+                                   && s.EventId == eventId, ct);
+        if (session is not null)
+        {
+            session.EventId = null;
+            session.UpdatedAt = DateTime.UtcNow;
+            await _db.SaveChangesAsync(ct);
+        }
+
+        return await PreRegAudienceAsync(eventId, ct);
+    }
+
+    public async Task<EventPreRegistrationLinkResponse> CreatePreRegistrationSessionFromEventAsync(
+        Guid eventId, string? name, CancellationToken ct = default)
+    {
+        var ev = await FindAsync(eventId, ct);
+        if (ev is null) return PreRegNotFound();
+
+        if (!EventStatusTransition.AcceptsAudienceChanges(ev.Status))
+            return PreRegLocked(ev.Status);
+
+        // A session is opened against an AudienceDefinition (its schema requires one, and this slice adds no
+        // second migration to relax that). "Pre-filled from the event" therefore means the event's single
+        // attached audience definition. Zero or several is ambiguous and refused loudly rather than guessed
+        // at — attach exactly one, or create a session directly and link it. (Flagged for JJ: see report.)
+        var attachedDefinitionIds = await _db.EventAudienceDefinitions.AsNoTracking()
+            .Where(link => link.EventId == eventId && link.AudienceDefinition!.SchoolId == ev.SchoolId)
+            .Select(link => link.AudienceDefinitionId)
+            .ToListAsync(ct);
+
+        if (attachedDefinitionIds.Count != 1)
+        {
+            return new EventPreRegistrationLinkResponse(EventWriteOutcome.UnknownReference,
+                "Create-from-event opens the session against the event's attached audience definition, so "
+                + $"the event must have exactly one; this event has {attachedDefinitionIds.Count}. Attach "
+                + "exactly one audience definition, or create a pre-registration session directly and link "
+                + "it with POST /events/{eventId}/pre-registration/sessions.", null);
+        }
+
+        // Capacity seeded from the event's current expected size (the union — no session drives it yet),
+        // floored at 1 so an event resolving to nobody still yields a valid, if empty, session.
+        var expected = await (await ExpectedStudentIdsAsync(eventId, ev.SchoolId, ev.Status, ct)).CountAsync(ct);
+        var capacity = Math.Clamp(expected, 1, PreRegistrationText.MaxCapacity);
+
+        var session = new PreRegistrationSession
+        {
+            SchoolId = ev.SchoolId,
+            AudienceDefinitionId = attachedDefinitionIds[0],
+            Name = PreRegistrationText.IsValidName(name) ? name!.Trim() : DeriveSessionName(ev.Name),
+            Capacity = capacity,
+            EventId = eventId,
+        };
+        _db.PreRegistrationSessions.Add(session);
+        await _db.SaveChangesAsync(ct);
+
+        return await PreRegAudienceAsync(eventId, ct);
+    }
+
+    /// <summary>A session name derived from the event when the caller supplies none — the event name,
+    /// trimmed and bounded to <see cref="PreRegistrationText.NameMaxLength"/>, never blank.</summary>
+    private static string DeriveSessionName(string? eventName)
+    {
+        var trimmed = (eventName ?? "").Trim();
+        if (trimmed.Length == 0) return "Pre-registration";
+        return trimmed.Length <= PreRegistrationText.NameMaxLength
+            ? trimmed
+            : trimmed[..PreRegistrationText.NameMaxLength];
+    }
+
+    private async Task<EventPreRegistrationLinkResponse> PreRegAudienceAsync(Guid eventId, CancellationToken ct) =>
+        new(EventWriteOutcome.Saved, "Pre-registration updated.", await GetAudienceAsync(eventId, ct));
+
+    private static EventPreRegistrationLinkResponse PreRegNotFound() =>
+        new(EventWriteOutcome.NotFound, "Event not found.", null);
+
+    private static EventPreRegistrationLinkResponse PreRegLocked(string status) =>
+        new(EventWriteOutcome.EventLocked,
+            $"Event is {status}. Its audience is frozen, so a pre-registration session cannot be linked or "
+            + "unlinked — doing so would change who was invited after the denominator was written down.",
+            null);
+
+    private static EventPreRegistrationLinkResponse PreRegUnknownReference(Guid sessionId) =>
+        new(EventWriteOutcome.UnknownReference,
+            $"No pre-registration session in this event's school matches {sessionId}, or it is already "
+            + "linked to another event.", null);
 
     // ------------------------------------------------------------------------------- plumbing
 

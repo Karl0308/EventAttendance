@@ -534,6 +534,84 @@ public class EventsController : ControllerBase
         return response.Outcome == EventWriteOutcome.Saved ? NoContent() : AudienceFailure(response);
     }
 
+    // --------------------------------------------------------------------- pre-registration (ADR-008)
+
+    /// <summary>
+    /// <c>POST /events/{eventId}/pre-registration/sessions</c> — link an existing pre-registration session
+    /// to this event (ADR-008 D-71). A linked session REPLACES the section + definition union as the
+    /// expected audience; the attached sections/definitions are kept but not resolved while linked, so this
+    /// is reversible. Returns the refreshed audience read.
+    /// </summary>
+    /// <response code="200">Linked. The body is the event's audience read, now pre-registration-driven.</response>
+    /// <response code="400">The session is unknown, from another tenant, or already linked to another event.</response>
+    /// <response code="404">No such event.</response>
+    /// <response code="409">The event is terminal, so its audience is frozen.</response>
+    [HttpPost("{eventId:guid}/pre-registration/sessions")]
+    [Authorize(AuthenticationSchemes = JwtBearerDefaults.AuthenticationScheme, Policy = EamsPermissions.EventsWrite)]
+    [HasPermissionNotEnforced(EamsPermissions.EventsWrite)]
+    [ProducesResponseType(typeof(EventAudienceDto), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status404NotFound)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status409Conflict)]
+    public async Task<ActionResult<EventAudienceDto>> LinkPreRegistrationSession(
+        Guid eventId, [FromBody] LinkPreRegistrationSessionRequest request, CancellationToken ct)
+    {
+        var response = await _events.LinkPreRegistrationSessionAsync(
+            eventId, request.PreRegistrationSessionId, ct);
+        return PreRegResult(response);
+    }
+
+    /// <summary>
+    /// <c>DELETE /events/{eventId}/pre-registration/sessions/{sessionId}</c> — unlink a session (ADR-008
+    /// D-71). Idempotent: succeeds whether or not the session was linked to this event. Returns the
+    /// refreshed audience read, which reverts to the section + definition union once the last session is
+    /// unlinked.
+    /// </summary>
+    /// <response code="200">Unlinked (or was not linked). The body is the event's audience read.</response>
+    /// <response code="404">No such event.</response>
+    /// <response code="409">The event is terminal, so its audience is frozen.</response>
+    [HttpDelete("{eventId:guid}/pre-registration/sessions/{sessionId:guid}")]
+    [Authorize(AuthenticationSchemes = JwtBearerDefaults.AuthenticationScheme, Policy = EamsPermissions.EventsWrite)]
+    [HasPermissionNotEnforced(EamsPermissions.EventsWrite)]
+    [ProducesResponseType(typeof(EventAudienceDto), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status404NotFound)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status409Conflict)]
+    public async Task<ActionResult<EventAudienceDto>> UnlinkPreRegistrationSession(
+        Guid eventId, Guid sessionId, CancellationToken ct)
+    {
+        var response = await _events.UnlinkPreRegistrationSessionAsync(eventId, sessionId, ct);
+        return PreRegResult(response);
+    }
+
+    /// <summary>
+    /// <c>POST /events/{eventId}/pre-registration/sessions/from-event</c> — create a pre-registration
+    /// session pre-filled from the event (its single attached audience definition, capacity seeded from the
+    /// event's current expected size) and link it in one step (ADR-008 D-71). Returns the refreshed audience
+    /// read.
+    /// </summary>
+    /// <response code="200">Created and linked. The body is the event's audience read.</response>
+    /// <response code="400">The event does not have exactly one attached audience definition to open the session against.</response>
+    /// <response code="404">No such event.</response>
+    /// <response code="409">The event is terminal, so its audience is frozen.</response>
+    [HttpPost("{eventId:guid}/pre-registration/sessions/from-event")]
+    [Authorize(AuthenticationSchemes = JwtBearerDefaults.AuthenticationScheme, Policy = EamsPermissions.EventsWrite)]
+    [HasPermissionNotEnforced(EamsPermissions.EventsWrite)]
+    [ProducesResponseType(typeof(EventAudienceDto), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status404NotFound)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status409Conflict)]
+    public async Task<ActionResult<EventAudienceDto>> CreatePreRegistrationFromEvent(
+        Guid eventId, [FromBody] CreatePreRegistrationFromEventRequest request, CancellationToken ct)
+    {
+        var response = await _events.CreatePreRegistrationSessionFromEventAsync(eventId, request.Name, ct);
+        return PreRegResult(response);
+    }
+
+    private ActionResult<EventAudienceDto> PreRegResult(EventPreRegistrationLinkResponse response) =>
+        response.Outcome == EventWriteOutcome.Saved
+            ? Ok(response.Audience)
+            : Problem(response.Outcome, response.Message);
+
     // --------------------------------------------------------------------------------- mapping
 
     /// <summary>

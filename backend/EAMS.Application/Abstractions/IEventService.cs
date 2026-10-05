@@ -78,6 +78,15 @@ public record EventAudienceResponse(
     EventWriteOutcome Outcome, string Message, EventAudienceResultDto? Result);
 
 /// <summary>
+/// The result of a pre-registration link/unlink/create-from-event (ADR-008 D-71). Reuses
+/// <see cref="EventWriteOutcome"/> — <c>Saved</c> (200), <c>NotFound</c> (404), <c>EventLocked</c> (409 on
+/// a terminal event), <c>UnknownReference</c> (400 for an unknown/cross-tenant/already-linked-elsewhere
+/// session). <paramref name="Audience"/> is the refreshed event audience read, null unless it saved.
+/// </summary>
+public record EventPreRegistrationLinkResponse(
+    EventWriteOutcome Outcome, string Message, EventAudienceDto? Audience);
+
+/// <summary>
 /// What <c>GET /attendance/live/{eventId}</c> decided (Phase 4d, D-29). Its own enum rather than a
 /// member of <see cref="TapOutcome"/> on purpose: that enum is frozen published contract, and a
 /// dashboard read has no business appearing in the mobile capture client's branch table.
@@ -366,6 +375,44 @@ public interface IEventService
     /// </summary>
     Task<EventAudienceResponse> DetachDefinitionAsync(
         Guid id, Guid audienceDefinitionId, CancellationToken ct = default);
+
+    /// <summary>
+    /// <c>POST /events/{eventId}/pre-registration/sessions</c> — link an existing pre-registration session
+    /// to this event (ADR-008 D-71/D-73). A linked session REPLACES the section + definition union as the
+    /// expected set; the attached sections/definitions are kept but not resolved while linked, so unlinking
+    /// restores them with no data loss. N:1 — an event may have many linked sessions; a session links to at
+    /// most one event.
+    ///
+    /// <para>
+    /// Refused on a terminal event (<see cref="EventWriteOutcome.EventLocked"/>, 409), mirroring the
+    /// audience lock — once frozen, a new link would be a kept-but-unresolved row changing no number. An
+    /// unknown session, one from another tenant, or one already linked to a <em>different</em> event is
+    /// <see cref="EventWriteOutcome.UnknownReference"/> (400); re-linking the same session to the same event
+    /// is an idempotent no-op. A missing event is a 404.
+    /// </para>
+    /// </summary>
+    Task<EventPreRegistrationLinkResponse> LinkPreRegistrationSessionAsync(
+        Guid eventId, Guid preRegistrationSessionId, CancellationToken ct = default);
+
+    /// <summary>
+    /// <c>DELETE /events/{eventId}/pre-registration/sessions/{sessionId}</c> — unlink a session (ADR-008
+    /// D-71). Idempotent: succeeds whether or not the session was linked to this event — the postcondition
+    /// ("this session is not linked to this event") holds either way. Refused on a terminal event (409); a
+    /// missing event is a 404. Unlinking the last session restores the section + definition union.
+    /// </summary>
+    Task<EventPreRegistrationLinkResponse> UnlinkPreRegistrationSessionAsync(
+        Guid eventId, Guid preRegistrationSessionId, CancellationToken ct = default);
+
+    /// <summary>
+    /// <c>POST /events/{eventId}/pre-registration/sessions/from-event</c> — create a new pre-registration
+    /// session pre-filled from the event (its single attached audience definition, and a capacity seeded
+    /// from the event's current expected size) and link it in one step (ADR-008 D-71). Refused on a terminal
+    /// event (409); a missing event is a 404. The event must have exactly one attached audience definition
+    /// to open the session against (<see cref="EventWriteOutcome.UnknownReference"/>, 400, otherwise) —
+    /// a session's schema requires a definition and this slice adds no second migration to relax it.
+    /// </summary>
+    Task<EventPreRegistrationLinkResponse> CreatePreRegistrationSessionFromEventAsync(
+        Guid eventId, string? name, CancellationToken ct = default);
 
     /// <summary>
     /// <c>GET /events/{id}/attendees</c> — the read half of the audience write surface above. Null when

@@ -1020,6 +1020,14 @@ internal class EamsDbContext : DbContext
             e.HasOne(x => x.AudienceDefinition).WithMany()
                 .HasForeignKey(x => x.AudienceDefinitionId).IsRequired();
 
+            // ADR-008 D-71/D-73: the nullable link to an Event. Restrict like every other FK — an event
+            // with a linked session cannot be hard-deleted out from under it (events soft-delete anyway).
+            // EF's FK convention adds IX_PreRegistrationSessions_EventId; no second index is created, and
+            // nothing enforces one-session-per-event (N:1 is the natural reading of the bare FK).
+            e.HasOne(x => x.Event).WithMany()
+                .HasForeignKey(x => x.EventId)
+                .OnDelete(DeleteBehavior.Restrict);
+
             e.HasIndex(x => x.SchoolId).HasDatabaseName("IX_PreRegistrationSessions_SchoolId");
         });
 

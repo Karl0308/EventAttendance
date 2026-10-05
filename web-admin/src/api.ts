@@ -6,7 +6,7 @@
 // this is a system boundary, so a payload that drifts from the contract fails loud here instead of
 // arriving three components deep as `undefined`.
 
-import { GROUP_SOURCE_TYPE, GROUP_TYPE_SECTION, SIS_IMPORT_STATUS } from "./types";
+import { EXPECTED_SOURCE, GROUP_SOURCE_TYPE, GROUP_TYPE_SECTION, SIS_IMPORT_STATUS } from "./types";
 import type {
   AuthUser,
   Student,
@@ -31,6 +31,9 @@ import type {
   EventAudienceRequest,
   EventAudienceResult,
   EventAudienceStudent,
+  EventPreRegistration,
+  EventPreRegistrationSession,
+  ExpectedSource,
   EventItem,
   EventStatusName,
   EventWriteRequest,
@@ -1930,6 +1933,42 @@ function toAudienceDefinitionRef(row: Row, what: string): EventAudienceDefinitio
   };
 }
 
+function toLinkedPreRegistrationSession(row: Row, what: string): EventPreRegistrationSession {
+  return {
+    preRegistrationSessionId: reqStr(row, "preRegistrationSessionId", what),
+    name: reqStr(row, "name", what),
+    preRegisteredStudentCount: reqNum(row, "preRegisteredStudentCount", what),
+    advisoryPersonnelCount: reqNum(row, "advisoryPersonnelCount", what),
+  };
+}
+
+function toEventPreRegistration(row: Row, what: string): EventPreRegistration {
+  return {
+    // Required: "no sessions" is an empty array (and then the whole block is `null` upstream), but a
+    // missing key is contract drift — an unreadable list must not render as "nothing is linked".
+    linkedSessions: asRows(row.linkedSessions, `${what}.linkedSessions`).map((session, i) =>
+      toLinkedPreRegistrationSession(session, `${what}.linkedSessions[${i}]`),
+    ),
+    totalPreRegisteredStudentCount: reqNum(row, "totalPreRegisteredStudentCount", what),
+    totalAdvisoryPersonnelCount: reqNum(row, "totalAdvisoryPersonnelCount", what),
+  };
+}
+
+/**
+ * `expectedSource` is required and closed over the two values the contract names. Defaulting a missing
+ * one to `"Audience"` would be the quiet wrong answer: an event whose denominator is the pre-registered
+ * students would then be labelled as coming from the audience union, which is exactly the confusion
+ * this field exists to remove.
+ */
+function reqExpectedSource(row: Row, what: string): ExpectedSource {
+  const value = reqStr(row, "expectedSource", what);
+  if (value === EXPECTED_SOURCE.PreRegistration || value === EXPECTED_SOURCE.Audience) return value;
+  throw offContract(
+    what,
+    `\`expectedSource\` should be "${EXPECTED_SOURCE.PreRegistration}" or "${EXPECTED_SOURCE.Audience}", got "${value}"`,
+  );
+}
+
 function toAudience(row: Row, what: string): EventAudience {
   return {
     eventId: reqStr(row, "eventId", what),
@@ -1952,6 +1991,16 @@ function toAudience(row: Row, what: string): EventAudience {
       toAudienceDefinitionRef(definition, `${what}.definitions[${i}]`),
     ),
     advisoryPersonnelCount: reqNum(row, "advisoryPersonnelCount", what),
+    expectedSource: reqExpectedSource(row, what),
+    // `null` is the contract's "nothing linked" and must be told apart from a missing key or a wrong
+    // type, which are drift: only an explicit `null` collapses to "none".
+    preRegistration:
+      row.preRegistration === null
+        ? null
+        : toEventPreRegistration(
+            asRow(row.preRegistration, `${what}.preRegistration`),
+            `${what}.preRegistration`,
+          ),
   };
 }
 
@@ -2834,6 +2883,45 @@ async function detachEventStudent(eventId: string, studentId: string): Promise<v
     "DELETE /events/{id}/attendees/students/{studentId}",
     `/events/${encodeURIComponent(eventId)}/attendees/students/${encodeURIComponent(studentId)}`,
     { method: "DELETE" },
+  );
+}
+
+/**
+ * `POST /events/{id}/pre-registration/sessions` — link an existing pre-registration session. From the
+ * moment one is linked the event's expected set is the pre-registered students (REPLACE), so callers
+ * must re-read the audience afterwards. **409** on a terminal event.
+ *
+ * The reply body is not read: the contract pins the request, and the audience read is the one source of
+ * truth for what is now linked, so nothing here could usefully be narrowed from it.
+ */
+async function linkPreRegistrationSession(eventId: string, sessionId: string): Promise<void> {
+  return writeNoContent(
+    "POST /events/{id}/pre-registration/sessions",
+    `/events/${encodeURIComponent(eventId)}/pre-registration/sessions`,
+    { method: "POST", payload: { preRegistrationSessionId: sessionId } },
+  );
+}
+
+/** `DELETE /events/{id}/pre-registration/sessions/{sessionId}` — unlink one session. 409 on a terminal event. */
+async function unlinkPreRegistrationSession(eventId: string, sessionId: string): Promise<void> {
+  return writeNoContent(
+    "DELETE /events/{id}/pre-registration/sessions/{sessionId}",
+    `/events/${encodeURIComponent(eventId)}/pre-registration/sessions/${encodeURIComponent(sessionId)}`,
+    { method: "DELETE" },
+  );
+}
+
+/**
+ * `POST /events/{id}/pre-registration/sessions/from-event` — create a pre-registration session from the
+ * event and link it. `name` is optional and is **omitted from the body** when blank, so the server
+ * applies its own default rather than being handed an empty string. 409 on a terminal event.
+ */
+async function createPreRegistrationFromEvent(eventId: string, name?: string): Promise<void> {
+  const trimmed = name?.trim();
+  return writeNoContent(
+    "POST /events/{id}/pre-registration/sessions/from-event",
+    `/events/${encodeURIComponent(eventId)}/pre-registration/sessions/from-event`,
+    { method: "POST", payload: trimmed ? { name: trimmed } : {} },
   );
 }
 
@@ -4348,6 +4436,9 @@ export const api = {
   detachEventGroup,
   detachEventStudent,
   detachAudienceDefinition,
+  linkPreRegistrationSession,
+  unlinkPreRegistrationSession,
+  createPreRegistrationFromEvent,
   listDevices,
   registerDevice,
   updateDevice,

@@ -250,6 +250,8 @@ describe("what the panel's body should be", () => {
     students: [],
     definitions: [],
     advisoryPersonnelCount: 0,
+    expectedSource: "Audience",
+    preRegistration: null,
     ...patch,
   });
 
@@ -378,6 +380,8 @@ describe("audience definitions beside sections", () => {
     students: [],
     definitions: [],
     advisoryPersonnelCount: 0,
+    expectedSource: "Audience",
+    preRegistration: null,
     ...patch,
   });
 

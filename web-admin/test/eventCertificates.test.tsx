@@ -223,6 +223,8 @@ const AUDIENCE_JSON = () => ({
   students: [],
   definitions: [],
   advisoryPersonnelCount: 0,
+  expectedSource: "Audience",
+  preRegistration: null,
 });
 
 const SCANS_JSON = () => ({ eventId: stored.id, totalScans: 0, distinctCards: 0, scans: [] });

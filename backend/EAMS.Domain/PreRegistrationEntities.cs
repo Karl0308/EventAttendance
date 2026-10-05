@@ -19,6 +19,17 @@ public class PreRegistrationSession : AuditableEntity
     public Guid AudienceDefinitionId { get; set; }
     public AudienceDefinition? AudienceDefinition { get; set; }
 
+    /// <summary>
+    /// The <see cref="Event"/> whose expected audience this session's registrants become once linked
+    /// (ADR-008 D-71/D-73), or <c>null</c> while the session is not linked to any event. A session links
+    /// to at most one event (the single FK column); an event may have many linked sessions (N:1), and its
+    /// expected set is the union of their student registrants. Nullable and <c>OnDelete(Restrict)</c>:
+    /// linking is non-destructive and fully reversible — clearing this restores the event's section +
+    /// definition union with no data loss.
+    /// </summary>
+    public Guid? EventId { get; set; }
+    public Event? Event { get; set; }
+
     /// <summary>A short label so an audience with several sessions stays legible.</summary>
     public string Name { get; set; } = "";
 
@@ -60,6 +71,17 @@ public class PreRegistration : AuditableEntity
     public string Method { get; set; } = "";
 
     public DateTime RegisteredAt { get; set; } = DateTime.UtcNow;
+}
+
+/// <summary>
+/// Where an event's expected audience is resolved from, published on the audience read so the numbers
+/// explain themselves (ADR-008 D-71). <see cref="PreRegistration"/> when a session is linked and its
+/// student registrants drive the denominator; <see cref="Audience"/> for the section + definition union.
+/// </summary>
+public static class ExpectedAudienceSource
+{
+    public const string PreRegistration = "PreRegistration";
+    public const string Audience = "Audience";
 }
 
 /// <summary>Which kind of Academic Community member a pre-registration is for.</summary>

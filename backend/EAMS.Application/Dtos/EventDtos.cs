@@ -224,6 +224,19 @@ public record EventAudienceResultDto(
 /// the exclusion is visible rather than silent: an organizer who attaches a personnel-heavy definition
 /// can see what it resolved to even though none of it enters the student denominator.
 /// </param>
+/// <param name="ExpectedSource">
+/// Where <see cref="Expected"/> is resolved from (ADR-008 D-71) — one of
+/// <see cref="EAMS.Domain.ExpectedAudienceSource"/>. <c>"PreRegistration"</c> when one or more
+/// pre-registration sessions are linked to this event, in which case <see cref="Expected"/> is the
+/// linked sessions' deduped student registrants and the attached <see cref="Groups"/>/<see cref="Definitions"/>
+/// are kept but not resolved; otherwise <c>"Audience"</c> and both keep their Phase-2 meaning. The signal
+/// exists so the FE can explain why attached sections may not be counted.
+/// </param>
+/// <param name="PreRegistration">
+/// The linked pre-registration sessions and their counts (ADR-008 D-71/D-72), or <c>null</c> when no
+/// session is linked. When present, <see cref="AdvisoryPersonnelCount"/> reflects the pre-registered
+/// personnel (D-72) rather than the Phase-2 definition advisory; when null, the definition advisory stands.
+/// </param>
 public record EventAudienceDto(
     Guid EventId,
     string Status,
@@ -232,7 +245,50 @@ public record EventAudienceDto(
     IReadOnlyList<EventAudienceGroupDto> Groups,
     IReadOnlyList<EventAudienceStudentDto> Students,
     IReadOnlyList<EventAudienceDefinitionRefDto> Definitions,
+    int AdvisoryPersonnelCount,
+    string ExpectedSource,
+    EventPreRegistrationDto? PreRegistration);
+
+/// <summary>
+/// The pre-registration sessions linked to an event (ADR-008 D-71/D-73), as the audience read publishes
+/// them. Null on <see cref="EventAudienceDto.PreRegistration"/> when nothing is linked.
+/// </summary>
+/// <param name="TotalPreRegisteredStudentCount">
+/// Distinct student registrants across all linked sessions, soft-deleted excluded — a person registered in
+/// two linked sessions counts once (a <c>UNION</c>, matching how the denominator dedupes). On a live linked
+/// event this equals <see cref="EventAudienceDto.Expected"/>.
+/// </param>
+/// <param name="TotalAdvisoryPersonnelCount">
+/// Distinct personnel registrants across all linked sessions, soft-deleted excluded (D-72). Advisory only —
+/// personnel are never in the denominator, the freeze snapshot or attendance, exactly as a definition's
+/// personnel are (D-70).
+/// </param>
+public record EventPreRegistrationDto(
+    IReadOnlyList<LinkedPreRegistrationSessionDto> LinkedSessions,
+    int TotalPreRegisteredStudentCount,
+    int TotalAdvisoryPersonnelCount);
+
+/// <summary>One pre-registration session linked to an event (ADR-008 D-71).</summary>
+/// <param name="PreRegisteredStudentCount">
+/// This session's distinct student registrants, soft-deleted excluded. The per-session figures can sum
+/// higher than <see cref="EventPreRegistrationDto.TotalPreRegisteredStudentCount"/> when a person is in
+/// more than one linked session — the total dedupes, these do not.
+/// </param>
+/// <param name="AdvisoryPersonnelCount">This session's distinct personnel registrants, soft-deleted excluded (advisory only, D-72).</param>
+public record LinkedPreRegistrationSessionDto(
+    Guid PreRegistrationSessionId,
+    string Name,
+    int PreRegisteredStudentCount,
     int AdvisoryPersonnelCount);
+
+/// <summary>The body of <c>POST /events/{eventId}/pre-registration/sessions</c> — link an existing session.</summary>
+public record LinkPreRegistrationSessionRequest(Guid PreRegistrationSessionId);
+
+/// <summary>
+/// The body of <c>POST /events/{eventId}/pre-registration/sessions/from-event</c>. <paramref name="Name"/>
+/// is optional; omitted or blank, the session takes a name derived from the event.
+/// </summary>
+public record CreatePreRegistrationFromEventRequest(string? Name);
 
 /// <summary>
 /// One attached reusable <c>AudienceDefinition</c> (ADR-007 D-69), as the audience read publishes it.

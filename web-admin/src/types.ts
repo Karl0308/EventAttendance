@@ -1042,6 +1042,40 @@ export interface EventAudience {
    * students only — so it is shown as an advisory, clearly apart from that number.
    */
   advisoryPersonnelCount: number;
+  /**
+   * Where `expected` comes from. `"PreRegistration"` means at least one pre-registration session is
+   * linked to the event and the expected set is **replaced** by the pre-registered students — the
+   * sections and definitions above no longer feed it. A real union (unlike `status`) because the
+   * mapper refuses any other value: a source this build cannot name would mislabel the denominator.
+   */
+  expectedSource: ExpectedSource;
+  /** The linked pre-registration sessions and their totals; `null` when nothing is linked. */
+  preRegistration: EventPreRegistration | null;
+}
+
+/** What the event's expected set is read from — see `EventAudience.expectedSource`. */
+export const EXPECTED_SOURCE = {
+  PreRegistration: "PreRegistration",
+  Audience: "Audience",
+} as const;
+
+export type ExpectedSource = (typeof EXPECTED_SOURCE)[keyof typeof EXPECTED_SOURCE];
+
+/** One pre-registration session linked to an event (an event may have several). */
+export interface EventPreRegistrationSession {
+  preRegistrationSessionId: string;
+  name: string;
+  /** Students pre-registered in this session; these form the event's expected set. */
+  preRegisteredStudentCount: number;
+  /** Personnel pre-registered in this session; advisory only, never part of expected. */
+  advisoryPersonnelCount: number;
+}
+
+/** `EventAudience.preRegistration` — the linked sessions and the totals across them. */
+export interface EventPreRegistration {
+  linkedSessions: EventPreRegistrationSession[];
+  totalPreRegisteredStudentCount: number;
+  totalAdvisoryPersonnelCount: number;
 }
 
 /**
