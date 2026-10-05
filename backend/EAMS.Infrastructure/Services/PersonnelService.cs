@@ -94,10 +94,10 @@ internal sealed class PersonnelService : IPersonnelService
     public async Task<IReadOnlyList<string>> OrganizationsAsync(CancellationToken ct = default)
     {
         // The set of distinct organizations is tiny, so the null/empty filter and SQL-side distinct cut
-        // it to a handful of rows, then the trim, whitespace-only exclusion and final distinct/order run
-        // in memory. Doing the whitespace work in memory is deliberate: SQL Server's TRIM only strips
-        // spaces (not tabs/newlines) and pads trailing spaces away in comparisons, so an all-in-SQL
-        // version would be correct only by accident. "ABC" and "ABC " collapse into one entry here.
+        // it to a handful of rows, then the normalization, whitespace-only exclusion and final
+        // case-insensitive dedupe/order run in memory. Doing the whitespace work in memory is deliberate:
+        // SQL Server's TRIM only strips spaces (not tabs/newlines) and pads trailing spaces away in
+        // comparisons, so an all-in-SQL version would be correct only by accident.
         var raw = await _db.Personnel.AsNoTracking()
             .Where(p => !p.IsDeleted && p.Organization != null && p.Organization != "")
             .Select(p => p.Organization!)
@@ -105,10 +105,14 @@ internal sealed class PersonnelService : IPersonnelService
             .ToListAsync(ct);
 
         return raw
-            .Select(o => o.Trim())
-            .Where(o => o.Length > 0)
-            .Distinct(StringComparer.Ordinal)
-            .OrderBy(o => o, StringComparer.Ordinal)
+            .Select(OrganizationText.Normalize)             // trim + collapse, casing preserved
+            .OfType<string>()                               // drops whitespace-only (→ null)
+            .GroupBy(o => o, StringComparer.OrdinalIgnoreCase)
+            // Dedupe case-insensitively so "CICT" and "cict" don't both appear. Representative rule: the
+            // ordinally-first spelling within the case-insensitive group — deterministic regardless of DB
+            // row order (unlike "first seen", which would depend on the unordered Distinct above).
+            .Select(g => g.OrderBy(o => o, StringComparer.Ordinal).First())
+            .OrderBy(o => o, StringComparer.OrdinalIgnoreCase)
             .ToList();
     }
 
@@ -316,7 +320,13 @@ internal sealed class PersonnelService : IPersonnelService
         var email = Trimmed(request.Email, PersonnelText.EmailMaxLength, "e-mail", ref refused);
         var classification = Trimmed(request.Classification, PersonnelText.ClassificationMaxLength, "classification", ref refused);
         var department = Trimmed(request.Department, PersonnelText.DepartmentMaxLength, "department", ref refused);
-        var organization = Trimmed(request.Organization, PersonnelText.OrganizationMaxLength, "organization", ref refused);
+        // Organization is free text but normalized on every write path — create, update, and import all
+        // funnel through here (QA #543, Option A): trim + collapse internal whitespace, preserve casing.
+        // An empty-after-normalize value becomes null (Organization is optional). The length check runs on
+        // the normalized form.
+        var organization = Trimmed(
+            OrganizationText.Normalize(request.Organization),
+            PersonnelText.OrganizationMaxLength, "organization", ref refused);
         var position = Trimmed(request.Position, PersonnelText.PositionMaxLength, "position", ref refused);
         if (refused is not null) return false;
 

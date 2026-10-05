@@ -71,6 +71,15 @@ internal static class AudienceResolution
         List<string> L(IReadOnlyList<string>? v) => v is null ? [] : [.. v];
         List<Guid> G(IReadOnlyList<Guid>? v) => v is null ? [] : [.. v];
 
+        // Organization criteria are matched trim + case-insensitively (QA #543, Option A): a person stored
+        // as "CICT " (trailing space) or "cict" (different case) resolves into a definition whose criterion
+        // is "CICT". The criterion keys are folded in memory via OrganizationText.MatchKey; the stored side
+        // is folded in SQL below with Organization.Trim().ToUpper() (translates to LTRIM(RTRIM(UPPER(..))),
+        // so the match holds regardless of the database collation — not merely by SQL Server's default
+        // case-/trailing-space-insensitive collation, which also misses leading spaces.
+        List<string> OrgKeys(IReadOnlyList<string>? v) =>
+            v is null ? [] : [.. v.Select(OrganizationText.MatchKey).OfType<string>().Distinct()];
+
         switch (type)
         {
             case AudienceType.UniversityWide:
@@ -111,8 +120,8 @@ internal static class AudienceResolution
 
             case AudienceType.Organization:
             {
-                var o = L(c.Organizations);
-                return (null, personnel.Where(p => p.Organization != null && o.Contains(p.Organization)));
+                var o = OrgKeys(c.Organizations);
+                return (null, personnel.Where(p => p.Organization != null && o.Contains(p.Organization.Trim().ToUpper())));
             }
 
             case AudienceType.SpecificIndividuals:
@@ -137,7 +146,7 @@ internal static class AudienceResolution
                 var pq = personnel;
                 if (L(c.Departments) is { Count: > 0 } pd) { pq = pq.Where(p => p.Department != null && pd.Contains(p.Department)); pApplied = true; }
                 if (L(c.Classifications) is { Count: > 0 } pc) { pq = pq.Where(p => p.Classification != null && pc.Contains(p.Classification)); pApplied = true; }
-                if (L(c.Organizations) is { Count: > 0 } po) { pq = pq.Where(p => p.Organization != null && po.Contains(p.Organization)); pApplied = true; }
+                if (OrgKeys(c.Organizations) is { Count: > 0 } po) { pq = pq.Where(p => p.Organization != null && po.Contains(p.Organization.Trim().ToUpper())); pApplied = true; }
                 if (G(c.PersonnelIds) is { Count: > 0 } cpi) { pq = pq.Where(p => cpi.Contains(p.Id)); pApplied = true; }
 
                 return (sApplied ? sq : null, pApplied ? pq : null);
