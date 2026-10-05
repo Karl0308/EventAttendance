@@ -100,6 +100,12 @@ internal class EamsDbContext : DbContext
     public DbSet<AudienceDefinition> AudienceDefinitions => Set<AudienceDefinition>();
 
     /// <summary>
+    /// The links that attach reusable <see cref="AudienceDefinition"/>s to events (ADR-007 D-69) — the
+    /// §4.8-group analogue for definitions. Additive. See <see cref="EventAudienceDefinition"/>.
+    /// </summary>
+    public DbSet<EventAudienceDefinition> EventAudienceDefinitions => Set<EventAudienceDefinition>();
+
+    /// <summary>
     /// Per-attendee attendance codes for Live Attendance (LiveAttendance.docx §3–§5). Additive. See
     /// <see cref="EventAttendanceCode"/>.
     /// </summary>
@@ -260,6 +266,7 @@ internal class EamsDbContext : DbContext
         ConfigureEventClassifications(b);
         ConfigurePersonnel(b);
         ConfigureAudienceDefinitions(b);
+        ConfigureEventAudienceDefinitions(b);
         ConfigureEventAttendanceCodes(b);
         ConfigurePreRegistration(b);
         ConfigureSchoolIdQueryFilters(b);
@@ -446,6 +453,14 @@ internal class EamsDbContext : DbContext
         // read concern, not a tenant boundary, so it is not filtered here.
         b.Entity<AudienceDefinition>().HasQueryFilter(
             x => _school.CurrentSchoolId == null || x.SchoolId == _school.CurrentSchoolId);
+
+        // The event↔definition links carry no SchoolId and reach tenancy through their Event, exactly as
+        // EventGroups does (ADR-007 D-69) — the same dependent-filter pattern. The reads in EventService
+        // additionally predicate the definition's own SchoolId explicitly, because this filter is inert
+        // whenever no tenant is pinned and an audience is the one place a cross-tenant row would be
+        // laundered into a denominator.
+        b.Entity<EventAudienceDefinition>().HasQueryFilter(
+            x => _school.CurrentSchoolId == null || x.Event!.SchoolId == _school.CurrentSchoolId);
 
         // Attendance codes carry a SchoolId denormalized from their event — filtered directly like
         // AttendanceRecords, so the filter and the code-uniqueness constraint select the same rows.
@@ -915,6 +930,41 @@ internal class EamsDbContext : DbContext
             e.HasIndex(x => new { x.SchoolId, x.NameKey }).IsUnique()
                 .HasFilter(null)
                 .HasDatabaseName("UX_AudienceDefinitions_SchoolId_NameKey");
+        });
+
+    /// <summary>
+    /// The event↔definition link table (ADR-007 D-69) — the §4.8-group analogue for a reusable
+    /// <see cref="AudienceDefinition"/>. Not a §4 table — additive.
+    ///
+    /// <para>
+    /// <b>One standard unique index, not a filtered one, and that is the difference from
+    /// <see cref="ConfigureEventGroups"/>.</b> Both link columns are NOT NULL, so there is no XOR and no
+    /// NULL-equals-NULL hazard to defend against — a plain <c>UNIQUE (EventId, AudienceDefinitionId)</c>
+    /// makes a definition attachable at most once per event, which is ADR-003 D-12's
+    /// idempotency-by-constraint carried to the third source. Because the index is unfiltered and leads
+    /// with <c>EventId</c>, the hot read ("which definitions are attached to this event?",
+    /// <c>WHERE EventId = @e</c>) uses it directly — so unlike EventGroups there is no separate
+    /// single-column FK index to re-declare against the scaffolder's drop heuristic.
+    /// </para>
+    ///
+    /// <para>
+    /// No <c>SchoolId</c>; tenancy reaches it through <see cref="Event"/> (the query filter in
+    /// <see cref="ConfigureSchoolIdQueryFilters"/>). Both FKs are <c>Restrict</c> via the loop in
+    /// <see cref="OnModelCreating"/>, like every other FK in the model.
+    /// </para>
+    /// </summary>
+    private static void ConfigureEventAudienceDefinitions(ModelBuilder b) =>
+        b.Entity<EventAudienceDefinition>(e =>
+        {
+            e.ToTable("EventAudienceDefinitions");
+
+            e.HasOne(x => x.Event).WithMany().HasForeignKey(x => x.EventId).IsRequired();
+            e.HasOne(x => x.AudienceDefinition).WithMany()
+                .HasForeignKey(x => x.AudienceDefinitionId).IsRequired();
+
+            e.HasIndex(x => new { x.EventId, x.AudienceDefinitionId }).IsUnique()
+                .HasFilter(null)
+                .HasDatabaseName("UX_EventAudienceDefinitions_Event_Definition");
         });
 
     /// <summary>

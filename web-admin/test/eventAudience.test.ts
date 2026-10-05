@@ -29,16 +29,19 @@ import {
   FROZEN_STUDENTS_ELSEWHERE,
   NO_AUDIENCE_EVER,
   NO_AUDIENCE_YET,
+  advisoryPersonnelText,
   attachSettledText,
   audienceEditability,
   audienceListsState,
   isAudienceLocked,
+  removeDefinitionLabel,
   removeSectionLabel,
   removeStudentLabel,
 } from "../src/eventAudience";
 import { EVENT_STATUS } from "../src/types";
 import type {
   EventAudience,
+  EventAudienceDefinition,
   EventAudienceGroup,
   EventAudienceResult,
   EventAudienceStudent,
@@ -60,6 +63,8 @@ const NOTHING_HAPPENED: EventAudienceResult = {
   studentsAttached: 0,
   groupsAlreadyAttached: 0,
   studentsAlreadyAttached: 0,
+  definitionsAttached: 0,
+  definitionsAlreadyAttached: 0,
   expected: 0,
   warnings: [],
 };
@@ -243,6 +248,8 @@ describe("what the panel's body should be", () => {
     expected: 0,
     groups: [],
     students: [],
+    definitions: [],
+    advisoryPersonnelCount: 0,
     ...patch,
   });
 
@@ -349,5 +356,59 @@ describe("the remove controls name what they remove", () => {
     const label = removeStudentLabel("Maria Cruz Santos", "2021-00042");
     expect(label).toContain("Maria Cruz Santos");
     expect(label).toContain("2021-00042");
+  });
+});
+
+describe("audience definitions beside sections", () => {
+  const DEFINITION: EventAudienceDefinition = {
+    audienceDefinitionId: "d-1",
+    name: "All Freshmen",
+    audienceType: "YearLevel",
+    studentCount: 120,
+    personnelCount: 7,
+    isActive: true,
+  };
+
+  const live = (patch: Partial<EventAudience>): EventAudience => ({
+    eventId: "e",
+    status: EVENT_STATUS.Open,
+    isFrozen: false,
+    expected: 0,
+    groups: [],
+    students: [],
+    definitions: [],
+    advisoryPersonnelCount: 0,
+    ...patch,
+  });
+
+  it("does not call an event empty when its only audience is an attached definition", () => {
+    // Otherwise the sections card prints "expects nobody" beneath its own non-zero expected chip.
+    expect(audienceListsState(live({ expected: 120, definitions: [DEFINITION] }), true).kind).toBe(
+      "lists",
+    );
+    expect(
+      audienceListsState(
+        live({ expected: 120, isFrozen: true, status: EVENT_STATUS.Closed, definitions: [DEFINITION] }),
+        false,
+      ).kind,
+    ).toBe("lists");
+  });
+
+  it("negative control: with no definitions the same event is still empty", () => {
+    expect(audienceListsState(live({}), true).kind).toBe("nothing-invited");
+  });
+
+  it("reports attached and already-attached definitions", () => {
+    expect(attachSettledText(resultOf({ definitionsAttached: 2, expected: 160 }))).toContain(
+      "2 audience definitions attached.",
+    );
+    expect(attachSettledText(resultOf({ definitionsAlreadyAttached: 1, expected: 160 }))).toContain(
+      "already attached",
+    );
+  });
+
+  it("states the advisory as not counted in expected, and names what a remove button removes", () => {
+    expect(advisoryPersonnelText(7)).toBe("7 personnel eligible — not counted in expected");
+    expect(removeDefinitionLabel("All Freshmen")).toContain("All Freshmen");
   });
 });

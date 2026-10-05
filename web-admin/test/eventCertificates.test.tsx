@@ -221,6 +221,8 @@ const AUDIENCE_JSON = () => ({
   expected: 0,
   groups: [],
   students: [],
+  definitions: [],
+  advisoryPersonnelCount: 0,
 });
 
 const SCANS_JSON = () => ({ eventId: stored.id, totalScans: 0, distinctCards: 0, scans: [] });

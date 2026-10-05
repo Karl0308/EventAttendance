@@ -359,6 +359,15 @@ public interface IEventService
         Guid id, Guid studentId, CancellationToken ct = default);
 
     /// <summary>
+    /// Removes an attached reusable <c>AudienceDefinition</c> (ADR-007 D-69), the third attach sub-resource.
+    /// Succeeds whether or not the definition was attached — the postcondition ("this definition is not in
+    /// this event's audience") holds either way, so a retry is safe. A missing <em>event</em> is still a
+    /// 404; a terminal event's audience is locked (409), exactly as the group and student detaches are.
+    /// </summary>
+    Task<EventAudienceResponse> DetachDefinitionAsync(
+        Guid id, Guid audienceDefinitionId, CancellationToken ct = default);
+
+    /// <summary>
     /// <c>GET /events/{id}/attendees</c> — the read half of the audience write surface above. Null when
     /// there is no such event.
     ///

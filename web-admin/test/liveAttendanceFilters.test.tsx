@@ -98,6 +98,8 @@ const AUDIENCE_JSON = {
   expected: 4,
   groups: [],
   students: [],
+  definitions: [],
+  advisoryPersonnelCount: 0,
 };
 
 const SCANS_JSON = { eventId: EVENT_ID, totalScans: 0, distinctCards: 0, scans: [] };

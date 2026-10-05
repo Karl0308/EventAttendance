@@ -506,6 +506,34 @@ public class EventsController : ControllerBase
         return response.Outcome == EventWriteOutcome.Saved ? NoContent() : AudienceFailure(response);
     }
 
+    /// <summary>
+    /// <c>DELETE /events/{id}/attendees/definitions/{definitionId}</c> — detach one reusable audience
+    /// definition from the event's audience (ADR-007 D-69).
+    /// </summary>
+    /// <remarks>
+    /// The third attach sub-resource, symmetric with <see cref="DetachGroup"/> and
+    /// <see cref="DetachStudent"/>. Idempotent: detaching a definition that is not attached is
+    /// <c>204</c>, not <c>404</c>, so a retry is safe. A missing <em>event</em> is still <c>404</c> — that
+    /// one is named by the URL — and a terminal event's audience is locked (<c>409</c>).
+    /// </remarks>
+    /// <param name="id">The event.</param>
+    /// <param name="definitionId">The audience definition to detach.</param>
+    /// <param name="ct">Cancellation token.</param>
+    /// <response code="204">Detached, or was not attached.</response>
+    /// <response code="404">No such event.</response>
+    /// <response code="409">The event's status does not allow an audience change.</response>
+    [HttpDelete("{id:guid}/attendees/definitions/{definitionId:guid}")]
+    [Authorize(AuthenticationSchemes = JwtBearerDefaults.AuthenticationScheme, Policy = EamsPermissions.EventsWrite)]
+    [HasPermissionNotEnforced(EamsPermissions.EventsWrite)]
+    [ProducesResponseType(StatusCodes.Status204NoContent)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    [ProducesResponseType(StatusCodes.Status409Conflict)]
+    public async Task<IActionResult> DetachDefinition(Guid id, Guid definitionId, CancellationToken ct)
+    {
+        var response = await _events.DetachDefinitionAsync(id, definitionId, ct);
+        return response.Outcome == EventWriteOutcome.Saved ? NoContent() : AudienceFailure(response);
+    }
+
     // --------------------------------------------------------------------------------- mapping
 
     /// <summary>

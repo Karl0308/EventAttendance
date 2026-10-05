@@ -98,9 +98,20 @@ public record EventStatusRequest(string Status);
 /// the request was malformed when it was merely empty.
 /// </para>
 /// </summary>
+/// <param name="AudienceDefinitionIds">
+/// Reusable <c>AudienceDefinition</c>s to attach alongside the sections and individuals (ADR-007 D-69).
+/// Optional, like the other two. Each must be an active definition in this event's school <em>and</em>
+/// filed under the event's <c>EventClassificationId</c>; an id that is unknown, another tenant's,
+/// inactive, or outside the event's classification is refused identically as
+/// <see cref="EAMS.Application.Abstractions.EventWriteOutcome.UnknownReference"/> (400), for the same
+/// no-existence-disclosure reason the section and student refs are. The definition's <em>student</em>
+/// half joins the expected denominator; its <em>personnel</em> half is excluded and surfaced as an
+/// advisory count on the audience read (D-70).
+/// </param>
 public record EventAudienceRequest(
     IReadOnlyList<Guid>? StudentGroupIds,
-    IReadOnlyList<Guid>? StudentIds);
+    IReadOnlyList<Guid>? StudentIds,
+    IReadOnlyList<Guid>? AudienceDefinitionIds = null);
 
 /// <summary>
 /// What one call to <c>POST /events/{id}/attendees</c> did.
@@ -120,12 +131,19 @@ public record EventAudienceRequest(
 /// Non-fatal observations about what was attached. Empty on the ordinary case. See
 /// <c>IEventService.AttachAudienceAsync</c> for why a term mismatch warns rather than refuses.
 /// </param>
+/// <param name="DefinitionsAttached">Attached audience definitions this call newly linked (ADR-007 D-69).</param>
+/// <param name="DefinitionsAlreadyAttached">
+/// Audience definitions the request named that were already linked — the observable half of idempotency
+/// for the third source, exactly as <c>GroupsAlreadyAttached</c> is for sections.
+/// </param>
 public record EventAudienceResultDto(
     Guid EventId,
     int GroupsAttached,
     int StudentsAttached,
+    int DefinitionsAttached,
     int GroupsAlreadyAttached,
     int StudentsAlreadyAttached,
+    int DefinitionsAlreadyAttached,
     int Expected,
     IReadOnlyList<string> Warnings);
 
@@ -193,13 +211,53 @@ public record EventAudienceResultDto(
 /// the two figures legitimately differ — this list is the attachment, not the denominator.
 /// </para>
 /// </param>
+/// <param name="Definitions">
+/// Every attached reusable <c>AudienceDefinition</c> (ADR-007 D-69), whatever the event's status. <b>On a
+/// terminal event these are the historical record of which definition was invited</b> — like
+/// <see cref="Groups"/>, no query resolves them any more; the per-definition counts are current (live)
+/// figures for display, the same way <see cref="EventAudienceGroupDto.MemberCount"/> is.
+/// </param>
+/// <param name="AdvisoryPersonnelCount">
+/// The total personnel the attached definitions currently resolve to, de-duplicated across definitions
+/// (ADR-007 D-70). <b>These are NOT in <see cref="Expected"/></b> — the denominator, the freeze snapshot
+/// and attendance are all student-keyed, so personnel have nowhere to be counted. The figure exists so
+/// the exclusion is visible rather than silent: an organizer who attaches a personnel-heavy definition
+/// can see what it resolved to even though none of it enters the student denominator.
+/// </param>
 public record EventAudienceDto(
     Guid EventId,
     string Status,
     bool IsFrozen,
     int Expected,
     IReadOnlyList<EventAudienceGroupDto> Groups,
-    IReadOnlyList<EventAudienceStudentDto> Students);
+    IReadOnlyList<EventAudienceStudentDto> Students,
+    IReadOnlyList<EventAudienceDefinitionRefDto> Definitions,
+    int AdvisoryPersonnelCount);
+
+/// <summary>
+/// One attached reusable <c>AudienceDefinition</c> (ADR-007 D-69), as the audience read publishes it.
+/// </summary>
+/// <param name="StudentCount">
+/// Students the definition currently resolves to in this event's school, soft-deleted excluded — the
+/// portion that enters <see cref="EventAudienceDto.Expected"/> (de-duplicated there against the sections
+/// and individuals).
+/// </param>
+/// <param name="PersonnelCount">
+/// Personnel the definition currently resolves to — advisory only, never in the denominator (D-70). Its
+/// contribution to <see cref="EventAudienceDto.AdvisoryPersonnelCount"/> before cross-definition dedupe.
+/// </param>
+/// <param name="IsActive">
+/// The definition's current active flag. A definition can only be <em>attached</em> while active, but one
+/// deactivated afterwards keeps resolving (the link is what counts, like a group row); this surfaces that
+/// state for display.
+/// </param>
+public record EventAudienceDefinitionRefDto(
+    Guid AudienceDefinitionId,
+    string Name,
+    string AudienceType,
+    int StudentCount,
+    int PersonnelCount,
+    bool IsActive);
 
 /// <summary>One attached §4.7 group.</summary>
 /// <param name="MemberCount">

@@ -79,18 +79,10 @@ internal sealed class AudienceDefinitionService : IAudienceDefinitionService
         r.Id, r.Name, r.ClassificationId, r.ClassificationName, r.AudienceType,
         ParseCriteria(r.CriteriaJson), r.IsActive);
 
-    private static AudienceCriteriaDto ParseCriteria(string json)
-    {
-        if (string.IsNullOrWhiteSpace(json)) return new AudienceCriteriaDto();
-        try
-        {
-            return JsonSerializer.Deserialize<AudienceCriteriaDto>(json, Json) ?? new AudienceCriteriaDto();
-        }
-        catch (JsonException)
-        {
-            return new AudienceCriteriaDto();
-        }
-    }
+    // The single implementation lives in AudienceResolution (ADR-003 D-19 — one copy of a person-set
+    // derivation, so a second cannot drift silently). EventService resolves the same way for the event
+    // denominator and the terminal freeze.
+    private static AudienceCriteriaDto ParseCriteria(string json) => AudienceResolution.ParseCriteria(json);
 
     // --------------------------------------------------------------------------------- create/edit
 
@@ -206,7 +198,8 @@ internal sealed class AudienceDefinitionService : IAudienceDefinitionService
         if (row is null) return null;
 
         var criteria = ParseCriteria(row.CriteriaJson);
-        var (students, personnel) = BuildQueries(row.AudienceType, criteria);
+        var (students, personnel) = AudienceResolution.BuildQueries(
+            _db, row.AudienceType, criteria, includeDeleted: false);
 
         var attendees = new List<AudienceAttendeeDto>();
         var studentCount = 0;
@@ -235,97 +228,6 @@ internal sealed class AudienceDefinitionService : IAudienceDefinitionService
         }
 
         return new ResolvedAudienceDto(id, studentCount, personnelCount, attendees);
-    }
-
-    /// <summary>
-    /// The student and personnel queries a type + criteria select. A null side means that side contributes
-    /// nobody. Criteria lists are materialized to <c>List</c> locals so EF's collection <c>Contains</c>
-    /// translation (inlined as literals on the SQL 2012 dialect) has something to bind.
-    /// </summary>
-    private (IQueryable<Student>? Students, IQueryable<Personnel>? Personnel) BuildQueries(
-        string type, AudienceCriteriaDto c)
-    {
-        var students = _db.Students.AsNoTracking().Where(s => !s.IsDeleted);
-        var personnel = _db.Personnel.AsNoTracking().Where(p => !p.IsDeleted);
-
-        List<string> L(IReadOnlyList<string>? v) => v is null ? [] : [.. v];
-        List<Guid> G(IReadOnlyList<Guid>? v) => v is null ? [] : [.. v];
-
-        switch (type)
-        {
-            case AudienceType.UniversityWide:
-                AudienceScope.TryNormalize(c.Scope, out var scope);
-                return (scope == AudienceScope.Employees ? null : students,
-                        scope == AudienceScope.Students ? null : personnel);
-
-            case AudienceType.Department:
-            {
-                var d = L(c.Departments);
-                return (students.Where(s => s.Course != null && d.Contains(s.Course)),
-                        personnel.Where(p => p.Department != null && d.Contains(p.Department)));
-            }
-
-            case AudienceType.Program:
-            {
-                var pr = L(c.Programs);
-                return (students.Where(s => s.Course != null && pr.Contains(s.Course)), null);
-            }
-
-            case AudienceType.YearLevel:
-            {
-                var y = L(c.YearLevels);
-                return (students.Where(s => s.YearLevel != null && y.Contains(s.YearLevel)), null);
-            }
-
-            case AudienceType.Section:
-            {
-                var se = L(c.Sections);
-                return (students.Where(s => s.Section != null && se.Contains(s.Section)), null);
-            }
-
-            case AudienceType.EmployeeClassification:
-            {
-                var cl = L(c.Classifications);
-                return (null, personnel.Where(p => p.Classification != null && cl.Contains(p.Classification)));
-            }
-
-            case AudienceType.Organization:
-            {
-                var o = L(c.Organizations);
-                return (null, personnel.Where(p => p.Organization != null && o.Contains(p.Organization)));
-            }
-
-            case AudienceType.SpecificIndividuals:
-            {
-                var sids = G(c.StudentIds);
-                var pids = G(c.PersonnelIds);
-                return (sids.Count > 0 ? students.Where(s => sids.Contains(s.Id)) : null,
-                        pids.Count > 0 ? personnel.Where(p => pids.Contains(p.Id)) : null);
-            }
-
-            case AudienceType.Custom:
-            {
-                var sApplied = false;
-                var sq = students;
-                if (L(c.Departments) is { Count: > 0 } cd) { sq = sq.Where(s => s.Course != null && cd.Contains(s.Course)); sApplied = true; }
-                if (L(c.Programs) is { Count: > 0 } cp) { sq = sq.Where(s => s.Course != null && cp.Contains(s.Course)); sApplied = true; }
-                if (L(c.YearLevels) is { Count: > 0 } cy) { sq = sq.Where(s => s.YearLevel != null && cy.Contains(s.YearLevel)); sApplied = true; }
-                if (L(c.Sections) is { Count: > 0 } cs) { sq = sq.Where(s => s.Section != null && cs.Contains(s.Section)); sApplied = true; }
-                if (G(c.StudentIds) is { Count: > 0 } csi) { sq = sq.Where(s => csi.Contains(s.Id)); sApplied = true; }
-
-                var pApplied = false;
-                var pq = personnel;
-                if (L(c.Departments) is { Count: > 0 } pd) { pq = pq.Where(p => p.Department != null && pd.Contains(p.Department)); pApplied = true; }
-                if (L(c.Classifications) is { Count: > 0 } pc) { pq = pq.Where(p => p.Classification != null && pc.Contains(p.Classification)); pApplied = true; }
-                if (L(c.Organizations) is { Count: > 0 } po) { pq = pq.Where(p => p.Organization != null && po.Contains(p.Organization)); pApplied = true; }
-                if (G(c.PersonnelIds) is { Count: > 0 } cpi) { pq = pq.Where(p => cpi.Contains(p.Id)); pApplied = true; }
-
-                return (sApplied ? sq : null, pApplied ? pq : null);
-            }
-
-            default:
-                return (null, null);
-        }
     }
 
     public async Task<AudienceOptionsDto> OptionsAsync(CancellationToken ct = default)

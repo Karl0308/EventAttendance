@@ -52,6 +52,38 @@ public class AudienceDefinition : AuditableEntity
 }
 
 /// <summary>
+/// <b>The link that attaches a reusable <see cref="AudienceDefinition"/> to one <see cref="Event"/></b>
+/// (ADR-007 D-69). The §4.8-group analogue for definitions: an event's expected audience is the deduped
+/// union of its attached sections <em>and</em> its attached definitions, each resolved live until the
+/// terminal freeze.
+///
+/// <para>
+/// <b>A link by id, not pre-resolved rows</b> — exactly the relationship <see cref="EventGroup"/> has to
+/// a <c>StudentGroup</c>. The definition resolves to its current students on every read, so a student
+/// enrolled tomorrow is expected tomorrow; at the transition to a terminal status the resolved students
+/// are flattened into <c>EventGroups.StudentId</c> rows (ADR-003 D-13) and these link rows are
+/// <em>kept</em> as the historical record of which definition was invited — like the group rows, no query
+/// resolves them on a terminal event.
+/// </para>
+///
+/// <para>
+/// <b>A junction, so no <c>CreatedAt</c>/<c>UpdatedAt</c></b> — it extends <see cref="Entity"/>, the same
+/// base <see cref="EventGroup"/> uses. Idempotency is a schema property: <c>UX_EventAudienceDefinitions
+/// _Event_Definition</c> is a standard unique index over the two NOT NULL columns, mirroring ADR-003
+/// D-12's idempotency-by-constraint. No <c>SchoolId</c> column — tenancy reaches it through
+/// <see cref="Event"/>, as it does for <see cref="EventGroup"/>.
+/// </para>
+/// </summary>
+public class EventAudienceDefinition : Entity
+{
+    public Guid EventId { get; set; }
+    public Event? Event { get; set; }
+
+    public Guid AudienceDefinitionId { get; set; }
+    public AudienceDefinition? AudienceDefinition { get; set; }
+}
+
+/// <summary>
 /// The nine audience types (EventAudience.docx §2). <c>string</c> with a set, like every other enum-ish
 /// value in this schema. University-wide's Students/Employees/Both split lives in the criteria's scope
 /// rather than in three separate types, so this stays the documented nine.

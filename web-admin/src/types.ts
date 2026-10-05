@@ -774,6 +774,14 @@ export interface EventItem {
    * `EventDto.IssuesCertificates`'s own note.
    */
   issuesCertificates: boolean;
+  /**
+   * The event's classification (`EventDto.eventClassificationId`), or unset for an unclassified event.
+   * Reusable audience definitions are filtered by it, so it is what the "Add audience" picker keys on.
+   * Read-only on this client so far: the event form does not send it back (see the report on that gap).
+   */
+  eventClassificationId?: string;
+  /** `EventDto.eventClassificationName` — the display name of the above, null/absent when unclassified. */
+  eventClassificationName?: string;
 }
 
 /**
@@ -987,6 +995,24 @@ export interface EventAudienceStudent {
 }
 
 /**
+ * One reusable audience definition attached to an event, as `GET /events/{id}/attendees` lists it
+ * (`definitions[]`). Distinct from `AudienceDefinition`, which is the master record: this is the
+ * attachment, carrying how many people it resolves to *now*.
+ */
+export interface EventAudienceDefinition {
+  audienceDefinitionId: string;
+  name: string;
+  /** `string` for the usual reason — a response cannot prove the `AudienceType` union. */
+  audienceType: string;
+  /** Students the definition resolves to; these feed the event's expected count. */
+  studentCount: number;
+  /** Personnel the definition resolves to; advisory only, never part of the expected count. */
+  personnelCount: number;
+  /** A definition deactivated after it was attached stays attached, and says so. */
+  isActive: boolean;
+}
+
+/**
  * Who an event expects — `GET /events/{id}/attendees`.
  *
  * **`students` being empty on a frozen event is not "nobody was attached".** ADR-003 D-13: reaching a
@@ -1009,6 +1035,13 @@ export interface EventAudience {
   expected: number;
   groups: EventAudienceGroup[];
   students: EventAudienceStudent[];
+  /** Reusable audience definitions attached to the event, alongside the sections above. */
+  definitions: EventAudienceDefinition[];
+  /**
+   * Personnel the attached definitions resolve to. **Not part of `expected`** — the denominator counts
+   * students only — so it is shown as an advisory, clearly apart from that number.
+   */
+  advisoryPersonnelCount: number;
 }
 
 /**
@@ -1021,6 +1054,8 @@ export interface EventAudience {
 export interface EventAudienceRequest {
   studentGroupIds?: string[];
   studentIds?: string[];
+  /** Reusable audience definitions to attach (`AudienceDefinition.id`s). */
+  audienceDefinitionIds?: string[];
 }
 
 /**
@@ -1037,6 +1072,8 @@ export interface EventAudienceResult {
   studentsAttached: number;
   groupsAlreadyAttached: number;
   studentsAlreadyAttached: number;
+  definitionsAttached: number;
+  definitionsAlreadyAttached: number;
   /** The expected count *after* this call, so the denominator can move on screen without a re-read. */
   expected: number;
   /**

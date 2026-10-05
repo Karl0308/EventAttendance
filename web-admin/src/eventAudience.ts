@@ -127,8 +127,11 @@ const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one :
  * write specifically so the denominator can move on screen without a follow-up read.
  */
 export function attachSettledText(result: EventAudienceResult): string {
-  const attached = result.groupsAttached + result.studentsAttached;
-  const already = result.groupsAlreadyAttached + result.studentsAlreadyAttached;
+  const attached = result.groupsAttached + result.studentsAttached + result.definitionsAttached;
+  const already =
+    result.groupsAlreadyAttached +
+    result.studentsAlreadyAttached +
+    result.definitionsAlreadyAttached;
 
   const parts: string[] = [];
   if (result.groupsAttached > 0) {
@@ -136,6 +139,11 @@ export function attachSettledText(result: EventAudienceResult): string {
   }
   if (result.studentsAttached > 0) {
     parts.push(`${plural(result.studentsAttached, "student", "students")} attached.`);
+  }
+  if (result.definitionsAttached > 0) {
+    parts.push(
+      `${plural(result.definitionsAttached, "audience definition", "audience definitions")} attached.`,
+    );
   }
   if (already > 0) {
     parts.push(
@@ -234,7 +242,8 @@ export function audienceListsState(
 ): AudienceListsState {
   if (audience.isFrozen) {
     // Not a list length. See above.
-    const nobodyWasInvited = audience.expected === 0 && audience.groups.length === 0;
+    const nobodyWasInvited =
+      audience.expected === 0 && audience.groups.length === 0 && audience.definitions.length === 0;
     if (nobodyWasInvited) return { kind: "nothing-invited", message: NO_AUDIENCE_EVER };
     // `students` is empty by contract here, so "elsewhere" is the ordinary answer. A non-empty list
     // is still rendered rather than suppressed: it would mean the server changed its mind about that
@@ -245,7 +254,13 @@ export function audienceListsState(
     };
   }
 
-  if (audience.groups.length === 0 && audience.students.length === 0) {
+  // An attached audience definition is an invitation too: an event whose only audience is a definition
+  // must not be told it "expects nobody" beneath its own non-zero expected chip.
+  if (
+    audience.groups.length === 0 &&
+    audience.students.length === 0 &&
+    audience.definitions.length === 0
+  ) {
     return { kind: "nothing-invited", message: canEdit ? NO_AUDIENCE_YET : NO_AUDIENCE_EVER };
   }
 
@@ -258,6 +273,23 @@ export function audienceListsState(
 /** Reads a section row's own label out of context, which is what a screen reader does with a button. */
 export const removeSectionLabel = (name: string) =>
   `Remove section ${name} from this event's audience`;
+
+/** As above, for an attached reusable audience definition. */
+export const removeDefinitionLabel = (name: string) =>
+  `Remove audience definition ${name} from this event's audience`;
+
+/**
+ * The advisory line for the personnel the attached definitions resolve to. **They are not in the
+ * expected count** — the denominator counts students only — so the sentence says so rather than
+ * leaving a reader to add it to the chip beside it. "personnel" has no plural form to inflect.
+ */
+export const advisoryPersonnelText = (count: number) =>
+  `${count} personnel eligible — not counted in expected`;
+
+/** Why the definition picker cannot offer anything: the options are filtered by the event's classification. */
+export const NO_CLASSIFICATION_HINT =
+  "This event has no classification, and audience definitions are filtered by classification. " +
+  "Give the event a classification to attach definitions.";
 
 /** As above, for an individually-attached student. */
 export const removeStudentLabel = (fullName: string, studentNumber: string) =>

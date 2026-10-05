@@ -26,6 +26,7 @@ import type {
   EventAudience,
   EventScan,
   EventScanLog,
+  EventAudienceDefinition,
   EventAudienceGroup,
   EventAudienceRequest,
   EventAudienceResult,
@@ -1700,6 +1701,9 @@ function toEvent(row: Row, what: string): EventItem {
     // Required: `EventDto.IssuesCertificates` is `bool`, always present, never null — an event
     // created before the setting existed reads `false` server-side rather than omitting the key.
     issuesCertificates: reqBool(row, "issuesCertificates", what),
+    // Nullable in the contract (an unclassified event) — null and absent both read as `undefined`.
+    eventClassificationId: optStr(row.eventClassificationId),
+    eventClassificationName: optStr(row.eventClassificationName),
   };
 }
 
@@ -1915,6 +1919,17 @@ function toAudienceStudent(row: Row, what: string): EventAudienceStudent {
   };
 }
 
+function toAudienceDefinitionRef(row: Row, what: string): EventAudienceDefinition {
+  return {
+    audienceDefinitionId: reqStr(row, "audienceDefinitionId", what),
+    name: reqStr(row, "name", what),
+    audienceType: reqStr(row, "audienceType", what),
+    studentCount: reqNum(row, "studentCount", what),
+    personnelCount: reqNum(row, "personnelCount", what),
+    isActive: reqBool(row, "isActive", what),
+  };
+}
+
 function toAudience(row: Row, what: string): EventAudience {
   return {
     eventId: reqStr(row, "eventId", what),
@@ -1931,6 +1946,12 @@ function toAudience(row: Row, what: string): EventAudience {
     students: asRows(row.students, `${what}.students`).map((student, i) =>
       toAudienceStudent(student, `${what}.students[${i}]`),
     ),
+    // Required for the same reason `students` is: "the server attached none" is an answer, a missing
+    // key is a contract drift, and an advisory that silently read as 0 would hide eligible personnel.
+    definitions: asRows(row.definitions, `${what}.definitions`).map((definition, i) =>
+      toAudienceDefinitionRef(definition, `${what}.definitions[${i}]`),
+    ),
+    advisoryPersonnelCount: reqNum(row, "advisoryPersonnelCount", what),
   };
 }
 
@@ -1941,6 +1962,8 @@ function toAudienceResult(row: Row, what: string): EventAudienceResult {
     studentsAttached: reqNum(row, "studentsAttached", what),
     groupsAlreadyAttached: reqNum(row, "groupsAlreadyAttached", what),
     studentsAlreadyAttached: reqNum(row, "studentsAlreadyAttached", what),
+    definitionsAttached: reqNum(row, "definitionsAttached", what),
+    definitionsAlreadyAttached: reqNum(row, "definitionsAlreadyAttached", what),
     expected: reqNum(row, "expected", what),
     warnings: reqStrs(row, "warnings", what),
   };
@@ -2810,6 +2833,18 @@ async function detachEventStudent(eventId: string, studentId: string): Promise<v
   return writeNoContent(
     "DELETE /events/{id}/attendees/students/{studentId}",
     `/events/${encodeURIComponent(eventId)}/attendees/students/${encodeURIComponent(studentId)}`,
+    { method: "DELETE" },
+  );
+}
+
+/**
+ * `DELETE /events/{id}/attendees/definitions/{definitionId}` — detach one reusable audience definition.
+ * Same semantics as the group and student detaches above: bodyless, idempotent, 409 on a locked event.
+ */
+async function detachAudienceDefinition(eventId: string, definitionId: string): Promise<void> {
+  return writeNoContent(
+    "DELETE /events/{id}/attendees/definitions/{definitionId}",
+    `/events/${encodeURIComponent(eventId)}/attendees/definitions/${encodeURIComponent(definitionId)}`,
     { method: "DELETE" },
   );
 }
@@ -4312,6 +4347,7 @@ export const api = {
   attachEventAudience,
   detachEventGroup,
   detachEventStudent,
+  detachAudienceDefinition,
   listDevices,
   registerDevice,
   updateDevice,

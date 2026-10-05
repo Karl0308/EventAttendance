@@ -37,6 +37,7 @@ import EditEventDialog from "../components/EditEventDialog";
 import DeleteEventDialog from "../components/DeleteEventDialog";
 import ChangeEventStatusDialog from "../components/ChangeEventStatusDialog";
 import EventAudiencePanel from "../components/EventAudiencePanel";
+import EventAudienceDefinitionsSection from "../components/EventAudienceDefinitionsSection";
 import AttendanceCodesPanel from "../components/AttendanceCodesPanel";
 import UnresolvedScansPanel from "../components/UnresolvedScansPanel";
 import type { ScanLogRead } from "../components/UnresolvedScansPanel";
@@ -1058,6 +1059,23 @@ export default function EventDetail() {
                 group: removeGroup,
                 student: removeStudent,
               }}
+            />
+
+            {/* "Add audience": reusable definitions, filtered by the event's classification. Beside the
+                sections panel rather than inside it, so that panel's pickers and copy are untouched. A
+                re-read of the audience *and* the stat cards follows every write, as the sections' own
+                attach/detach do — `expected` is on both. */}
+            <EventAudienceDefinitionsSection
+              eventId={event.id}
+              eventStatus={event.status}
+              eventClassificationId={event.eventClassificationId}
+              eventClassificationName={event.eventClassificationName}
+              read={audienceRead}
+              onChanged={() => {
+                audience.reload();
+                detail.reload();
+              }}
+              onAnnounce={(text) => announce({ severity: "success", text })}
             />
 
             {/* Below the roster and the audience, because it is the remainder of what they describe:

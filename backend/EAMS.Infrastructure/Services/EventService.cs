@@ -217,7 +217,7 @@ internal sealed class EventService : IEventService, IEventSummaryFigures
         Event e, long? ceiling, CancellationToken ct)
     {
         var id = e.Id;
-        var expectedIds = ExpectedStudentIds(id, e.Status);
+        var expectedIds = await ExpectedStudentIdsAsync(id, e.SchoolId, e.Status, ct);
 
         var counts = await CountByStatusAsync(id, ceiling, ct);
         var expected = await expectedIds.CountAsync(ct);
@@ -360,10 +360,78 @@ internal sealed class EventService : IEventService, IEventSummaryFigures
     /// same mistake this class just removed from the bucket counts.
     /// </para>
     /// </summary>
-    private IQueryable<Guid> ExpectedStudentIds(Guid eventId, string status) =>
-        EventStatusTransition.HasFrozenAudience(status)
-            ? AttachedStudentIds(eventId, includeDeleted: true)
-            : GroupMemberStudentIds(eventId).Union(AttachedStudentIds(eventId, includeDeleted: false));
+    private async Task<IQueryable<Guid>> ExpectedStudentIdsAsync(
+        Guid eventId, Guid schoolId, string status, CancellationToken ct)
+    {
+        // Frozen: read only the written-down student rows. The terminal freeze (SnapshotAudienceAsync)
+        // has already flattened every section-, individual- AND definition-resolved student into
+        // EventGroups.StudentId rows, and the attached definition links are historical from then on —
+        // no query resolves them (ADR-007 D-69, the §4.8-group read rule extended to the third source).
+        if (EventStatusTransition.HasFrozenAudience(status))
+            return AttachedStudentIds(eventId, includeDeleted: true);
+
+        // Live: three sources, de-duplicated in SQL. Sections resolved into current membership,
+        // individually-attached students, and attached definitions resolved to their student ids — all
+        // excluding the soft-deleted, all UNIONed so a student reached by more than one source counts
+        // once (ADR-007 D-69 / ADR-003 D-12).
+        var live = GroupMemberStudentIds(eventId)
+            .Union(AttachedStudentIds(eventId, includeDeleted: false));
+
+        var definitions = await DefinitionStudentIdsAsync(eventId, schoolId, includeDeleted: false, ct);
+        return definitions is null ? live : live.Union(definitions);
+    }
+
+    /// <summary>
+    /// The students resolved by every <see cref="AudienceDefinition"/> attached to this event, as one
+    /// composable <c>IQueryable&lt;Guid&gt;</c>, or <c>null</c> when none is attached (so the caller leaves
+    /// its existing union untouched rather than UNIONing an empty set).
+    ///
+    /// <para>
+    /// <b>Async because the criteria are JSON on each definition row and cannot be translated to SQL
+    /// without being parsed in memory first</b> — so the attached definitions' type + criteria are read
+    /// here, then each one's student query is built through the single <see cref="AudienceResolution"/>
+    /// implementation (ADR-003 D-19 — no second person-set derivation) and UNIONed. Only the
+    /// <em>construction</em> is async; the returned query is lazy and composes into
+    /// <see cref="ExpectedStudentIdsAsync"/> as one statement.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>Personnel are dropped here, by construction</b> — only the student side of each definition is
+    /// taken. That is ADR-007 D-70: the denominator, the freeze and attendance are student-keyed, so a
+    /// definition's personnel have nowhere to be counted. They are surfaced as an advisory figure on the
+    /// audience read instead of entering any denominator.
+    /// </para>
+    ///
+    /// <para>
+    /// The <c>SchoolId</c> predicate on both the links and the resolved students is explicit for the
+    /// reason <see cref="AttachAudienceAsync"/>'s is: the §11 global filter is inert whenever no tenant is
+    /// pinned, and a definition's criteria resolve a <em>fresh</em> student query that could otherwise
+    /// cross a tenant boundary on a collided value.
+    /// </para>
+    /// </summary>
+    private async Task<IQueryable<Guid>?> DefinitionStudentIdsAsync(
+        Guid eventId, Guid schoolId, bool includeDeleted, CancellationToken ct)
+    {
+        var definitions = await _db.EventAudienceDefinitions.AsNoTracking()
+            .Where(link => link.EventId == eventId
+                        && link.AudienceDefinition!.SchoolId == schoolId)
+            .Select(link => new { link.AudienceDefinition!.AudienceType, link.AudienceDefinition.CriteriaJson })
+            .ToListAsync(ct);
+
+        IQueryable<Guid>? union = null;
+        foreach (var definition in definitions)
+        {
+            var criteria = AudienceResolution.ParseCriteria(definition.CriteriaJson);
+            var (students, _) = AudienceResolution.BuildQueries(
+                _db, definition.AudienceType, criteria, includeDeleted);
+            if (students is null) continue;
+
+            var ids = students.Where(s => s.SchoolId == schoolId).Select(s => s.Id);
+            union = union is null ? ids : union.Union(ids);
+        }
+
+        return union;
+    }
 
     /// <summary>
     /// Students reached through an attached group's current membership. The live half.
@@ -483,9 +551,79 @@ internal sealed class EventService : IEventService, IEventSummaryFigures
         }
 
         // The one denominator query, not a fourth opinion of it — see IEventService.GetAudienceAsync.
-        var expected = await ExpectedStudentIds(id, ev.Status).CountAsync(ct);
+        var expected = await (await ExpectedStudentIdsAsync(id, ev.SchoolId, ev.Status, ct)).CountAsync(ct);
 
-        return new EventAudienceDto(ev.Id, ev.Status, isFrozen, expected, groups, students);
+        var (definitions, advisoryPersonnelCount) = await ReadAttachedDefinitionsAsync(id, ev.SchoolId, ct);
+
+        return new EventAudienceDto(
+            ev.Id, ev.Status, isFrozen, expected, groups, students, definitions, advisoryPersonnelCount);
+    }
+
+    /// <summary>
+    /// The attached <see cref="AudienceDefinition"/> links with a current resolved student/personnel count
+    /// each (ADR-007 D-69), and the deduped advisory personnel total across all of them (D-70).
+    ///
+    /// <para>
+    /// <b>The counts are live even on a terminal event</b>, exactly as
+    /// <see cref="EventAudienceGroupDto.MemberCount"/> is: the link row is a historical record of what was
+    /// invited, but the number beside it describes what the definition resolves to now. The denominator a
+    /// frozen event reports is <see cref="EventAudienceDto.Expected"/>, read from the snapshot — these
+    /// per-definition figures never feed it, and the personnel figure never feeds it in any status.
+    /// </para>
+    ///
+    /// <para>
+    /// The <c>SchoolId</c> predicates are explicit for the same reason the denominator's are — the §11
+    /// filter is inert when no tenant is pinned, and these resolve fresh person queries.
+    /// </para>
+    /// </summary>
+    private async Task<(IReadOnlyList<EventAudienceDefinitionRefDto> Definitions, int AdvisoryPersonnel)>
+        ReadAttachedDefinitionsAsync(Guid eventId, Guid schoolId, CancellationToken ct)
+    {
+        var links = await _db.EventAudienceDefinitions.AsNoTracking()
+            .Where(link => link.EventId == eventId && link.AudienceDefinition!.SchoolId == schoolId)
+            // Ordered before the projection so the sort is the database's; ThenBy(Id) is the total order
+            // for the reason the groups read records — definition names are unique per school, not
+            // globally, and equal sort keys are what a client sees reorder between two identical requests.
+            .OrderBy(link => link.AudienceDefinition!.Name).ThenBy(link => link.AudienceDefinitionId)
+            .Select(link => new
+            {
+                link.AudienceDefinitionId,
+                link.AudienceDefinition!.Name,
+                link.AudienceDefinition.AudienceType,
+                link.AudienceDefinition.CriteriaJson,
+                link.AudienceDefinition.IsActive,
+            })
+            .ToListAsync(ct);
+
+        var definitions = new List<EventAudienceDefinitionRefDto>(links.Count);
+        IQueryable<Guid>? advisoryPersonnel = null;
+
+        foreach (var link in links)
+        {
+            var criteria = AudienceResolution.ParseCriteria(link.CriteriaJson);
+            var (students, personnel) = AudienceResolution.BuildQueries(
+                _db, link.AudienceType, criteria, includeDeleted: false);
+
+            var studentCount = students is null
+                ? 0
+                : await students.Where(s => s.SchoolId == schoolId).CountAsync(ct);
+
+            var personnelIds = personnel?.Where(p => p.SchoolId == schoolId).Select(p => p.Id);
+            var personnelCount = personnelIds is null ? 0 : await personnelIds.CountAsync(ct);
+
+            definitions.Add(new EventAudienceDefinitionRefDto(
+                link.AudienceDefinitionId, link.Name, link.AudienceType,
+                studentCount, personnelCount, link.IsActive));
+
+            if (personnelIds is not null)
+                advisoryPersonnel = advisoryPersonnel is null
+                    ? personnelIds
+                    : advisoryPersonnel.Union(personnelIds);
+        }
+
+        // UNION is distinct, so a person resolved by two definitions counts once in the advisory total.
+        var advisory = advisoryPersonnel is null ? 0 : await advisoryPersonnel.CountAsync(ct);
+        return (definitions, advisory);
     }
 
     // ------------------------------------------------------------------------------ the roster
@@ -624,7 +762,7 @@ internal sealed class EventService : IEventService, IEventSummaryFigures
             .FirstOrDefaultAsync(x => x.Id == id && !x.IsDeleted, ct);
         if (ev is null) return null;
 
-        var expected = ExpectedStudentIds(id, ev.Status);
+        var expected = await ExpectedStudentIdsAsync(id, ev.SchoolId, ev.Status, ct);
         var recorded = _db.AttendanceRecords.Where(a => a.EventId == id).Select(a => a.StudentId);
 
         var rows = await _db.Students.AsNoTracking()
@@ -949,12 +1087,12 @@ internal sealed class EventService : IEventService, IEventSummaryFigures
         // such event" — including an event in another school, which the device's own school_id claim
         // filters out before this query runs, so D-27's no-existence-disclosure rule holds without this
         // method having to know it is enforcing it.
-        var currentStatus = await _db.Events.AsNoTracking()
+        var head = await _db.Events.AsNoTracking()
             .Where(e => e.Id == id && !e.IsDeleted)
-            .Select(e => e.Status)
+            .Select(e => new { e.Status, e.SchoolId })
             .FirstOrDefaultAsync(ct);
 
-        if (RefusalFor(currentStatus) is { } refused) return refused;
+        if (RefusalFor(head?.Status) is { } refused) return refused;
 
         var attachedGroupIds = _db.EventGroups
             .Where(eg => eg.EventId == id && eg.StudentGroupId != null)
@@ -965,8 +1103,10 @@ internal sealed class EventService : IEventService, IEventSummaryFigures
         // the `expected` those three publish for this event, including the ADR-003 D-15 exclusion of
         // soft-deleted students, and ADR-003 D-19 records what a second implementation of it costs.
         // Passed EventStatus.Open rather than the value read above because the refusal check has
-        // already established which one this is, and the live branch is the only one reachable here.
-        var expectedStudentIds = ExpectedStudentIds(id, EventStatus.Open);
+        // already established which one this is, and the live branch is the only one reachable here. The
+        // live branch unions the attached definitions' students too (ADR-007 D-69), so the manifest a
+        // device captures against carries the same expected population every other read reports.
+        var expectedStudentIds = await ExpectedStudentIdsAsync(id, head!.SchoolId, EventStatus.Open, ct);
 
         var composed = await _db.Events.AsNoTracking()
             .Where(e => e.Id == id && !e.IsDeleted)
@@ -1735,7 +1875,7 @@ internal sealed class EventService : IEventService, IEventSummaryFigures
             // denominator still drifts: the two would disagree, and the disagreement would look like an
             // arithmetic bug rather than a missing write.
             var pending = new List<object>();
-            var expected = await SnapshotAudienceAsync(eventId, pending, ct);
+            var expected = await SnapshotAudienceAsync(eventId, schoolId, pending, ct);
             var absentees = materializeAbsentees
                 ? await StageAbsenteesAsync(eventId, schoolId, expected, pending, ct)
                 : 0;
@@ -1806,11 +1946,19 @@ internal sealed class EventService : IEventService, IEventSummaryFigures
     /// </para>
     /// </summary>
     private async Task<IReadOnlyList<Guid>> SnapshotAudienceAsync(
-        Guid eventId, List<object> pending, CancellationToken ct)
+        Guid eventId, Guid schoolId, List<object> pending, CancellationToken ct)
     {
-        var expected = await GroupMemberStudentIds(eventId)
-            .Union(AttachedStudentIds(eventId, includeDeleted: true))
-            .ToListAsync(ct);
+        // All three live sources, resolved once. Attached definitions resolve their STUDENT half with
+        // includeDeleted:true — the same rule the frozen read uses — so the set written down is exactly
+        // the set the frozen read will report (ADR-003 D-15, generalised to definitions by ADR-007). A
+        // definition's personnel are never resolved here: they have no row to be, which is D-70.
+        var baseExpected = GroupMemberStudentIds(eventId)
+            .Union(AttachedStudentIds(eventId, includeDeleted: true));
+
+        var definitions = await DefinitionStudentIdsAsync(eventId, schoolId, includeDeleted: true, ct);
+        var expectedQuery = definitions is null ? baseExpected : baseExpected.Union(definitions);
+
+        var expected = await expectedQuery.ToListAsync(ct);
 
         var alreadyAttached = await AttachedStudentIds(eventId, includeDeleted: true).ToListAsync(ct);
         var missing = expected.Except(alreadyAttached).ToList();
@@ -1903,6 +2051,7 @@ internal sealed class EventService : IEventService, IEventSummaryFigures
 
         var groupIds = Distinct(request.StudentGroupIds);
         var studentIds = Distinct(request.StudentIds);
+        var definitionIds = Distinct(request.AudienceDefinitionIds);
 
         var groups = await _db.StudentGroups.AsNoTracking()
             // The SchoolId predicate is explicit rather than left to the global query filter, which is
@@ -1949,20 +2098,46 @@ internal sealed class EventService : IEventService, IEventSummaryFigures
             return UnknownReference("student", studentIds.Where(s => !found.Contains(s)));
         }
 
-        var delta = await AttachMissingAsync(id, groupIds, studentIds, ct);
+        // A definition reference must resolve to an ACTIVE definition in this event's school that is filed
+        // under the event's own EventClassificationId (ADR-007 D-69). Unknown, another tenant's, inactive,
+        // and out-of-classification are collapsed into one UnknownReference (400) exactly as the group and
+        // student refs are, and for the same reason (ADR-007 D-70 / D-27): distinguishing them would
+        // confirm the existence of a row the caller cannot otherwise see. An unclassified event
+        // (EventClassificationId is null) therefore refuses every definition, since none can be under it.
+        if (definitionIds.Count > 0)
+        {
+            var definitions = await _db.AudienceDefinitions.AsNoTracking()
+                .Where(d => definitionIds.Contains(d.Id)
+                         && d.SchoolId == ev.SchoolId
+                         && d.IsActive
+                         && ev.EventClassificationId != null
+                         && d.EventClassificationId == ev.EventClassificationId)
+                .Select(d => d.Id)
+                .ToListAsync(ct);
+
+            if (definitions.Count != definitionIds.Count)
+            {
+                var found = definitions.ToHashSet();
+                return UnknownReference(
+                    "audience definition", definitionIds.Where(d => !found.Contains(d)));
+            }
+        }
+
+        var delta = await AttachMissingAsync(id, groupIds, studentIds, definitionIds, ct);
 
         var warnings = await TermWarningsAsync(ev.SchoolId, groups.Select(g => (g.Name, g.TermId)), ct);
-        var expected = await ExpectedStudentIds(id, ev.Status).CountAsync(ct);
+        var expected = await (await ExpectedStudentIdsAsync(id, ev.SchoolId, ev.Status, ct)).CountAsync(ct);
 
         return new EventAudienceResponse(EventWriteOutcome.Saved, "Audience updated.",
             new EventAudienceResultDto(
-                id, delta.Groups, delta.Students,
+                id, delta.Groups, delta.Students, delta.Definitions,
                 groupIds.Count - delta.Groups, studentIds.Count - delta.Students,
+                definitionIds.Count - delta.Definitions,
                 expected, warnings));
     }
 
     /// <summary>How much of the requested selection this call actually inserted.</summary>
-    private readonly record struct AudienceDelta(int Groups, int Students);
+    private readonly record struct AudienceDelta(int Groups, int Students, int Definitions);
 
     /// <summary>
     /// Inserts whichever of the requested attachments are not already there, and survives losing that
@@ -1991,7 +2166,8 @@ internal sealed class EventService : IEventService, IEventSummaryFigures
     /// </para>
     /// </summary>
     private async Task<AudienceDelta> AttachMissingAsync(
-        Guid eventId, IReadOnlyList<Guid> groupIds, IReadOnlyList<Guid> studentIds, CancellationToken ct)
+        Guid eventId, IReadOnlyList<Guid> groupIds, IReadOnlyList<Guid> studentIds,
+        IReadOnlyList<Guid> definitionIds, CancellationToken ct)
     {
         for (var attempt = 0; ; attempt++)
         {
@@ -2005,23 +2181,46 @@ internal sealed class EventService : IEventService, IEventSummaryFigures
             var attachedStudents = attached.Where(a => a.StudentId != null)
                 .Select(a => a.StudentId!.Value).ToHashSet();
 
+            // Definitions live in their own junction (ADR-007 D-69) — read beside the EventGroups rows so
+            // the same read-then-insert idempotency, and the same loss-to-a-concurrent-post recovery,
+            // cover the third source. UX_EventAudienceDefinitions_Event_Definition is the backstop the
+            // retry converges against, exactly as the two EventGroups indexes are for the first two.
+            var attachedDefinitions = (await _db.EventAudienceDefinitions.AsNoTracking()
+                .Where(link => link.EventId == eventId)
+                .Select(link => link.AudienceDefinitionId)
+                .ToListAsync(ct)).ToHashSet();
+
             var newGroups = groupIds.Where(g => !attachedGroups.Contains(g)).ToList();
             var newStudents = studentIds.Where(s => !attachedStudents.Contains(s)).ToList();
+            var newDefinitions = definitionIds.Where(d => !attachedDefinitions.Contains(d)).ToList();
 
-            if (newGroups.Count == 0 && newStudents.Count == 0) return new AudienceDelta(0, 0);
+            if (newGroups.Count == 0 && newStudents.Count == 0 && newDefinitions.Count == 0)
+                return new AudienceDelta(0, 0, 0);
 
-            var pending = new List<EventGroup>();
+            var pending = new List<object>();
             foreach (var groupId in newGroups)
-                pending.Add(new EventGroup { EventId = eventId, StudentGroupId = groupId });
+            {
+                var row = new EventGroup { EventId = eventId, StudentGroupId = groupId };
+                _db.EventGroups.Add(row);
+                pending.Add(row);
+            }
             foreach (var studentId in newStudents)
-                pending.Add(new EventGroup { EventId = eventId, StudentId = studentId });
-
-            _db.EventGroups.AddRange(pending);
+            {
+                var row = new EventGroup { EventId = eventId, StudentId = studentId };
+                _db.EventGroups.Add(row);
+                pending.Add(row);
+            }
+            foreach (var definitionId in newDefinitions)
+            {
+                var row = new EventAudienceDefinition { EventId = eventId, AudienceDefinitionId = definitionId };
+                _db.EventAudienceDefinitions.Add(row);
+                pending.Add(row);
+            }
 
             try
             {
                 await _db.SaveChangesAsync(ct);
-                return new AudienceDelta(newGroups.Count, newStudents.Count);
+                return new AudienceDelta(newGroups.Count, newStudents.Count, newDefinitions.Count);
             }
             catch (DbUpdateException ex)
                 when (attempt < AttachRetryLimit && SqlServerErrors.IsUniqueViolation(ex))
@@ -2081,6 +2280,32 @@ internal sealed class EventService : IEventService, IEventSummaryFigures
         Guid id, Guid studentId, CancellationToken ct = default) =>
         DetachAsync(id, eg => eg.StudentId == studentId, ct);
 
+    /// <summary>
+    /// Detaches one reusable <see cref="AudienceDefinition"/> link (ADR-007 D-69), symmetric with
+    /// <see cref="DetachGroupAsync"/> and <see cref="DetachStudentAsync"/>. The link lives in its own
+    /// junction rather than in <c>EventGroups</c>, so it cannot share their <c>DetachAsync</c> helper —
+    /// but the contract is identical: idempotent (204 whether or not it was attached), a missing event is
+    /// a 404, a terminal event's audience is locked (409).
+    /// </summary>
+    public async Task<EventAudienceResponse> DetachDefinitionAsync(
+        Guid id, Guid audienceDefinitionId, CancellationToken ct = default)
+    {
+        var ev = await FindAsync(id, ct);
+        if (ev is null) return AudienceNotFound();
+
+        if (!EventStatusTransition.AcceptsAudienceChanges(ev.Status))
+            return AudienceLocked(ev.Status);
+
+        await _db.EventAudienceDefinitions
+            .Where(link => link.EventId == id && link.AudienceDefinitionId == audienceDefinitionId)
+            .ExecuteDeleteAsync(ct);
+
+        var expected = await (await ExpectedStudentIdsAsync(id, ev.SchoolId, ev.Status, ct)).CountAsync(ct);
+
+        return new EventAudienceResponse(EventWriteOutcome.Saved, "Audience updated.",
+            new EventAudienceResultDto(id, 0, 0, 0, 0, 0, 0, expected, []));
+    }
+
     private async Task<EventAudienceResponse> DetachAsync(
         Guid id,
         System.Linq.Expressions.Expression<Func<EventGroup, bool>> match,
@@ -2097,10 +2322,10 @@ internal sealed class EventService : IEventService, IEventSummaryFigures
         // dangerous elsewhere in this model (the ADR-001 D-2 cache guard lives on Students).
         await _db.EventGroups.Where(eg => eg.EventId == id).Where(match).ExecuteDeleteAsync(ct);
 
-        var expected = await ExpectedStudentIds(id, ev.Status).CountAsync(ct);
+        var expected = await (await ExpectedStudentIdsAsync(id, ev.SchoolId, ev.Status, ct)).CountAsync(ct);
 
         return new EventAudienceResponse(EventWriteOutcome.Saved, "Audience updated.",
-            new EventAudienceResultDto(id, 0, 0, 0, 0, expected, []));
+            new EventAudienceResultDto(id, 0, 0, 0, 0, 0, 0, expected, []));
     }
 
     // ------------------------------------------------------------------------------- plumbing
