@@ -313,3 +313,14 @@ proposal; JJ decides.
       pre-reg personnel count stays advisory so a future reader does not "fix" the exclusion back.
 - [ ] Carried forward, unchanged: ADR-007's open follow-ups and the still-unwritten consolidating ADR
       (ADR-006).
+
+## Amendments
+
+- **2026-10-11 — the session read reports its link.** `GET /pre-registration/sessions` and
+  `GET /pre-registration/sessions/{id}` (`PreRegistrationSessionDto`) now carry `eventId` (the linked
+  event, `null` when unlinked) and `eventName`, appended as required positional members (no C# default,
+  so a construction site that forgets them fails to compile) — purely additive on the wire. This is the
+  read side of D-73's "a session links to at most one event": an event's link picker uses it to show sessions
+  already linked elsewhere as disabled (named by their event), since the link endpoint refuses them with 400. `eventId` is reported even
+  when the linked event is soft-deleted (the link rule still counts it); `eventName` is then `null`, as
+  deleted events are read nowhere else. No schema change. Status above is unchanged.

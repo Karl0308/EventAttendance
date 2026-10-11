@@ -137,6 +137,87 @@ public class EventClassificationLinkApiTests : IntegrationTest
         Assert.Equal("Departmental Events", dto.GetProperty("eventClassificationName").GetString());
     }
 
+    [Fact]
+    public async Task Put_ResendingStoredDeactivatedClassification_Succeeds()
+    {
+        var schoolId = await ArrangeSchoolAsync();
+        var classificationId = await ArrangeClassificationAsync(schoolId, "Institutional Events");
+
+        using var factory = new EamsApiFactory(Sql.ConnectionString);
+        using var client = await SignedInClientAsync(factory, schoolId);
+
+        var created = await client.PostAsJsonAsync(
+            Route, EventBody(classificationId, sendClassification: true));
+        Assert.Equal(HttpStatusCode.Created, created.StatusCode);
+        var id = await CreatedIdAsync(created);
+
+        await using (var db = NewDbContext())
+        {
+            var row = await db.EventClassifications.SingleAsync(c => c.Id == classificationId);
+            row.IsActive = false;
+            await db.SaveChangesAsync();
+        }
+
+        // A Draft edit (rename) that re-sends the stored, since-deactivated classification.
+        var body = EventBody(classificationId, sendClassification: true);
+        body["name"] = "Renamed Convocation";
+        var put = await client.PutAsJsonAsync($"{Route}/{id}", body);
+
+        Assert.Equal(HttpStatusCode.OK, put.StatusCode);
+        var dto = await GetEventAsync(client, id);
+        Assert.Equal("Renamed Convocation", dto.GetProperty("name").GetString());
+        Assert.Equal(classificationId, dto.GetProperty("eventClassificationId").GetGuid());
+    }
+
+    [Fact]
+    public async Task Put_OmittedClassification_ClearsIt()
+    {
+        var schoolId = await ArrangeSchoolAsync();
+        var classificationId = await ArrangeClassificationAsync(schoolId, "Institutional Events");
+
+        using var factory = new EamsApiFactory(Sql.ConnectionString);
+        using var client = await SignedInClientAsync(factory, schoolId);
+
+        var created = await client.PostAsJsonAsync(
+            Route, EventBody(classificationId, sendClassification: true));
+        Assert.Equal(HttpStatusCode.Created, created.StatusCode);
+        var id = await CreatedIdAsync(created);
+
+        // Full-replacement PUT: a body that omits the field means "unclassified", not "leave as is".
+        var put = await client.PutAsJsonAsync($"{Route}/{id}", EventBody());
+        Assert.Equal(HttpStatusCode.OK, put.StatusCode);
+
+        var dto = await GetEventAsync(client, id);
+        Assert.Equal(JsonValueKind.Null, dto.GetProperty("eventClassificationId").ValueKind);
+        Assert.Equal(JsonValueKind.Null, dto.GetProperty("eventClassificationName").ValueKind);
+    }
+
+    [Fact]
+    public async Task Put_ChangeClassificationOnCancelledEvent_Accepted()
+    {
+        var schoolId = await ArrangeSchoolAsync();
+        var original = await ArrangeClassificationAsync(schoolId, "Institutional Events");
+        var other = await ArrangeClassificationAsync(schoolId, "Departmental Events");
+
+        using var factory = new EamsApiFactory(Sql.ConnectionString);
+        using var client = await SignedInClientAsync(factory, schoolId);
+
+        var created = await client.PostAsJsonAsync(
+            Route, EventBody(original, sendClassification: true));
+        Assert.Equal(HttpStatusCode.Created, created.StatusCode);
+        var id = await CreatedIdAsync(created);
+        var cancel = await client.PatchAsJsonAsync($"{Route}/{id}/status", new { status = "Cancelled" });
+        Assert.Equal(HttpStatusCode.OK, cancel.StatusCode);
+
+        var put = await client.PutAsJsonAsync(
+            $"{Route}/{id}", EventBody(other, sendClassification: true));
+
+        Assert.Equal(HttpStatusCode.OK, put.StatusCode);
+        var dto = await GetEventAsync(client, id);
+        Assert.Equal(other, dto.GetProperty("eventClassificationId").GetGuid());
+        Assert.Equal("Departmental Events", dto.GetProperty("eventClassificationName").GetString());
+    }
+
     // -------------------------------------------------------------------------------------- closed events
 
     private async Task DriveToClosedAsync(HttpClient client, Guid id)

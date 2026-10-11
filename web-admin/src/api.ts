@@ -1543,6 +1543,8 @@ function toPreRegistrationSession(row: Row, what: string): PreRegistrationSessio
     registeredCount: reqNum(row, "registeredCount", what),
     isClosed: reqBool(row, "isClosed", what),
     isFull: reqBool(row, "isFull", what),
+    eventId: optStr(row.eventId),
+    eventName: optStr(row.eventName),
   };
 }
 
@@ -2480,7 +2482,7 @@ async function createEvent(request: EventWriteRequest): Promise<EventItem> {
  * `409` — not 400 — when the event's status forbids the change. `Closed` refuses every edit, and
  * `Cancelled` refuses the five fields that decide what an attendance row *means*
  * (`startAt`, `endAt`, `graceMinutes`, `attendanceMode`, `requireRegistration`) while still allowing
- * name, description and location. The server's `detail` names which of them were moved and says to
+ * name, description, location, classification and `issuesCertificates`. The server's `detail` names which of them were moved and says to
  * re-send with the scheduling left alone; `httpError` ranks `detail` first, so that sentence is what
  * reaches the user rather than the fixed title.
  */

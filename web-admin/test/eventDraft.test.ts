@@ -74,6 +74,8 @@ const serverEvent = (overrides: Partial<EventItem> = {}): EventItem => ({
   ...overrides,
 });
 
+const CLASSIFICATION_ID = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+
 const characters = (count: number) => "x".repeat(count);
 
 /** Fails loudly rather than returning a half-answer, so a mis-set-up test cannot read as a pass. */
@@ -244,6 +246,7 @@ describe("validate's answer", () => {
         graceAfterEndMinutes: "",
         requireRegistration: false,
         issuesCertificates: false,
+        eventClassificationId: "",
       }),
     );
 
@@ -270,6 +273,18 @@ describe("validate's answer", () => {
 
   it("carries requireRegistration through untouched", () => {
     expect(requestOf(validate(baseDraft({ requireRegistration: true }))).requireRegistration).toBe(true);
+  });
+
+  it("validate carries the chosen classification id", () => {
+    const request = requestOf(validate(baseDraft({ eventClassificationId: CLASSIFICATION_ID })));
+    expect(request.eventClassificationId).toBe(CLASSIFICATION_ID);
+  });
+
+  it("validate sends null when no classification is chosen", () => {
+    // `""` is the select's "None". Sent as-is the server would try to resolve it as an id; `null` is
+    // the explicit "unclassified" every `PUT` has to state, since an omitted value means the same.
+    const request = requestOf(validate(baseDraft({ eventClassificationId: "" })));
+    expect(request.eventClassificationId).toBeNull();
   });
 });
 
@@ -345,6 +360,22 @@ describe("draftFrom", () => {
     // Last line of defence, not the first: `EventDetail` refuses to open the form at all in this
     // case, because falling back silently rewrites an event's mode on a save meant for its name.
     expect(draftFrom(serverEvent({ attendanceMode: "Hybrid" })).attendanceMode).toBe("Single");
+  });
+
+  it("draft from a classified event round-trips its classification id", () => {
+    const event = serverEvent({
+      eventClassificationId: CLASSIFICATION_ID,
+      eventClassificationName: "Institutional",
+    });
+    const draft = draftFrom(event);
+    expect(draft.eventClassificationId).toBe(CLASSIFICATION_ID);
+    expect(requestOf(validate(draft, { startAt: event.startAt, endAt: event.endAt })).eventClassificationId).toBe(
+      CLASSIFICATION_ID,
+    );
+    // An unclassified event is the empty selection, and goes back as null — not as a missing key.
+    const unclassified = draftFrom(serverEvent());
+    expect(unclassified.eventClassificationId).toBe("");
+    expect(requestOf(validate(unclassified, { startAt: "2026-08-01T01:00:00Z", endAt: "2026-08-01T03:00:00Z" })).eventClassificationId).toBeNull();
   });
 
   it("round-trips an event through the form without moving anything", () => {

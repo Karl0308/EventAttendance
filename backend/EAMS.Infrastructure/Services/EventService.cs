@@ -1837,8 +1837,9 @@ internal sealed class EventService : IEventService, IEventSummaryFigures
             return new EventWriteResponse(EventWriteOutcome.EventLocked,
                 $"Event is {ev.Status}, so {string.Join(", ", changed)} cannot be changed — those are " +
                 "the fields that decide what an attendance row means, and this event may already hold " +
-                "rows they were computed from. Its name, description and location can still be edited; " +
-                "re-send those with the scheduling fields left as they are.", null);
+                "rows they were computed from. Its name, description, location, classification and " +
+                "IssuesCertificates can still be edited; re-send those with the scheduling fields left " +
+                "as they are.", null);
         }
 
         // Validated only when it actually changes: re-sending the stored classification must keep

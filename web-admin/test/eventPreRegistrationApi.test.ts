@@ -216,3 +216,38 @@ describe("api.getEventAudience reads expectedSource and preRegistration", () => 
     expect(error.message).toContain("preRegistration");
   });
 });
+
+describe("api.listPreRegistrationSessions reads the event a session is linked to", () => {
+  const sessionJson = (over: Record<string, unknown> = {}) => ({
+    id: SESSION_ID,
+    name: "Orientation pre-reg",
+    audienceDefinitionId: "d-1",
+    audienceName: "All Freshmen",
+    capacity: 100,
+    registeredCount: 12,
+    isClosed: false,
+    isFull: false,
+    ...over,
+  });
+
+  it("maps eventId and eventName, absent when unlinked", async () => {
+    serve(() =>
+      json(200, [
+        sessionJson({ eventId: EVENT_ID, eventName: "Career Fair" }),
+        // The server serialises an unlinked session's `Guid?` / `string?` as null.
+        sessionJson({ id: "88888888-8888-4888-8888-888888888888", eventId: null, eventName: null }),
+        // ...and a build that predates the fields omits them altogether.
+        sessionJson({ id: "99999999-9999-4999-8999-999999999999" }),
+      ]),
+    );
+
+    const [linked, nulled, omitted] = await api.listPreRegistrationSessions();
+
+    expect(linked.eventId).toBe(EVENT_ID);
+    expect(linked.eventName).toBe("Career Fair");
+    expect(nulled.eventId).toBeUndefined();
+    expect(nulled.eventName).toBeUndefined();
+    expect(omitted.eventId).toBeUndefined();
+    expect(omitted.eventName).toBeUndefined();
+  });
+});

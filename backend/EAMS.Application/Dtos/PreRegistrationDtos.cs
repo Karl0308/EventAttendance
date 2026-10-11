@@ -3,6 +3,12 @@ namespace EAMS.Application.Dtos;
 /// <summary>One pre-registration session, as the list and by-id reads publish it.</summary>
 /// <param name="RegisteredCount">How many attendees are registered — kept in step with the rows.</param>
 /// <param name="IsFull"><c>RegisteredCount &gt;= Capacity</c>, precomputed for the counter display.</param>
+/// <param name="EventId">The event this session is linked to, or <c>null</c> when it is unlinked. A session
+/// links to at most one event (ADR-008 D-73): linking it to a different event is refused while this is set.
+/// Reported even when the linked event has
+/// since been soft-deleted, because the link rule still counts that link.</param>
+/// <param name="EventName">The linked event's name, or <c>null</c> when the session is unlinked <em>or</em> the
+/// linked event is soft-deleted (deleted events are not read anywhere else either).</param>
 public record PreRegistrationSessionDto(
     Guid Id,
     string Name,
@@ -11,7 +17,9 @@ public record PreRegistrationSessionDto(
     int Capacity,
     int RegisteredCount,
     bool IsClosed,
-    bool IsFull);
+    bool IsFull,
+    Guid? EventId,
+    string? EventName);
 
 /// <summary>The body of <c>POST /pre-registration/sessions</c>.</summary>
 public record PreRegistrationSessionCreateRequest(string Name, Guid AudienceDefinitionId, int Capacity);

@@ -24,6 +24,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testi
 import EventAudienceDefinitionsSection from "../src/components/EventAudienceDefinitionsSection";
 import EventAudiencePanel from "../src/components/EventAudiencePanel";
 import type { AudienceRead } from "../src/components/EventAudiencePanel";
+import { NO_CLASSIFICATION_HINT } from "../src/eventAudience";
 import type { EventAudience, EventAudienceDefinition } from "../src/types";
 
 const EVENT_ID = "44444444-4444-4444-8444-444444444444";
@@ -276,6 +277,15 @@ describe("Add audience: an event with no classification, or a locked one", () =>
     expect((picker as HTMLInputElement).disabled).toBe(true);
     expect(screen.getByText(/audience definitions are filtered by classification/i)).toBeTruthy();
     expect(requests.some((r) => r.pathname.endsWith("/event-audiences"))).toBe(false);
+  });
+
+  it("enables the picker, with no classification hint, once the event is classified", async () => {
+    render(section(base));
+
+    const picker = await screen.findByRole("combobox", { name: PICKER_NAME });
+    await waitFor(() => expect((picker as HTMLInputElement).disabled).toBe(false));
+    // The hint that explains why "Add audience" was refused is gone for a classified event.
+    expect(screen.queryByText(NO_CLASSIFICATION_HINT)).toBeNull();
   });
 
   it("disables the picker and the remove controls on a Closed event", async () => {

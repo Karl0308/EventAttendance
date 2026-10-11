@@ -317,4 +317,106 @@ public class PreRegistrationApiTests : IntegrationTest
         Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
         Assert.Equal(nameof(PreRegisterOutcome.AttendeeNotFound), await ErrorCodeAsync(response));
     }
+
+    // ------------------------------------------------------------ the session's event link (ADR-008 D-73)
+    //
+    // The session read publishes which event a session is linked to, so the event page's picker can show
+    // sessions already linked to ANOTHER event as disabled — the link endpoint refuses those with a 400.
+
+    private const string LinkedEventName = "Linked Convocation";
+
+    /// <summary>Puts an event in the arranged school and links <paramref name="sessionId"/> to it directly,
+    /// so these tests exercise the read alone rather than the link endpoint's rules.</summary>
+    private async Task<Guid> LinkSessionToNewEventAsync(Guid sessionId, bool eventDeleted = false)
+    {
+        await using var db = NewDbContext();
+        var schoolId = await db.Schools.Select(s => s.Id).FirstAsync();
+
+        var ev = TestData.NewEvent(schoolId);
+        ev.Name = LinkedEventName;
+        ev.IsDeleted = eventDeleted;
+        db.Events.Add(ev);
+
+        var session = await db.PreRegistrationSessions.FirstAsync(s => s.Id == sessionId);
+        session.EventId = ev.Id;
+        await db.SaveChangesAsync();
+        return ev.Id;
+    }
+
+    private static async Task<JsonElement> ListedSessionAsync(HttpClient client, Guid sessionId)
+    {
+        var response = await client.GetAsync($"{Base}/sessions");
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        using var body = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        return body.RootElement.EnumerateArray()
+            .Single(s => s.GetProperty("id").GetGuid() == sessionId)
+            .Clone();
+    }
+
+    [Fact]
+    public async Task ListSessions_LinkedSession_ReportsEventIdAndName()
+    {
+        var audienceId = await ArrangeAudienceAsync();
+
+        using var factory = new EamsApiFactory(Sql.ConnectionString);
+        using var client = await SignedInClientAsync(factory);
+        var sessionId = await CreateSessionAsync(client, audienceId);
+        var eventId = await LinkSessionToNewEventAsync(sessionId);
+
+        var session = await ListedSessionAsync(client, sessionId);
+        Assert.Equal(eventId, session.GetProperty("eventId").GetGuid());
+        Assert.Equal(LinkedEventName, session.GetProperty("eventName").GetString());
+    }
+
+    [Fact]
+    public async Task ListSessions_UnlinkedSession_ReportsNullEvent()
+    {
+        var audienceId = await ArrangeAudienceAsync();
+
+        using var factory = new EamsApiFactory(Sql.ConnectionString);
+        using var client = await SignedInClientAsync(factory);
+        var sessionId = await CreateSessionAsync(client, audienceId);
+
+        // Present and explicitly null — the picker distinguishes "unlinked" from "field missing".
+        var session = await ListedSessionAsync(client, sessionId);
+        Assert.Equal(JsonValueKind.Null, session.GetProperty("eventId").ValueKind);
+        Assert.Equal(JsonValueKind.Null, session.GetProperty("eventName").ValueKind);
+    }
+
+    [Fact]
+    public async Task GetSession_LinkedSession_ReportsEventIdAndName()
+    {
+        var audienceId = await ArrangeAudienceAsync();
+
+        using var factory = new EamsApiFactory(Sql.ConnectionString);
+        using var client = await SignedInClientAsync(factory);
+        var sessionId = await CreateSessionAsync(client, audienceId);
+        var eventId = await LinkSessionToNewEventAsync(sessionId);
+
+        var response = await client.GetAsync($"{Base}/sessions/{sessionId}");
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        using var body = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        Assert.Equal(eventId, body.RootElement.GetProperty("eventId").GetGuid());
+        Assert.Equal(LinkedEventName, body.RootElement.GetProperty("eventName").GetString());
+    }
+
+    /// <summary>
+    /// A session linked to an event that was later soft-deleted keeps reporting the event's id — the link
+    /// endpoint still counts that FK and refuses the session elsewhere, so hiding it would put the 400 back
+    /// in the picker — but not its name, since a deleted event is read nowhere else either.
+    /// </summary>
+    [Fact]
+    public async Task ListSessions_SessionLinkedToDeletedEvent_ReportsEventIdWithoutName()
+    {
+        var audienceId = await ArrangeAudienceAsync();
+
+        using var factory = new EamsApiFactory(Sql.ConnectionString);
+        using var client = await SignedInClientAsync(factory);
+        var sessionId = await CreateSessionAsync(client, audienceId);
+        var eventId = await LinkSessionToNewEventAsync(sessionId, eventDeleted: true);
+
+        var session = await ListedSessionAsync(client, sessionId);
+        Assert.Equal(eventId, session.GetProperty("eventId").GetGuid());
+        Assert.Equal(JsonValueKind.Null, session.GetProperty("eventName").ValueKind);
+    }
 }

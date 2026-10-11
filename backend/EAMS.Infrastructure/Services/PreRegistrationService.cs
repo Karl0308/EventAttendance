@@ -40,7 +40,8 @@ internal sealed class PreRegistrationService : IPreRegistrationService
             .ThenBy(s => s.Id)
             .Select(s => new PreRegistrationSessionDto(
                 s.Id, s.Name, s.AudienceDefinitionId, s.AudienceDefinition!.Name,
-                s.Capacity, s.Registrations.Count, s.IsClosed, s.Registrations.Count >= s.Capacity))
+                s.Capacity, s.Registrations.Count, s.IsClosed, s.Registrations.Count >= s.Capacity,
+                s.EventId, s.Event != null && !s.Event.IsDeleted ? s.Event.Name : null))
             .ToListAsync(ct);
 
     public async Task<PreRegistrationSessionDto?> GetSessionAsync(Guid id, CancellationToken ct = default) =>
@@ -48,7 +49,8 @@ internal sealed class PreRegistrationService : IPreRegistrationService
             .Where(s => s.Id == id)
             .Select(s => new PreRegistrationSessionDto(
                 s.Id, s.Name, s.AudienceDefinitionId, s.AudienceDefinition!.Name,
-                s.Capacity, s.Registrations.Count, s.IsClosed, s.Registrations.Count >= s.Capacity))
+                s.Capacity, s.Registrations.Count, s.IsClosed, s.Registrations.Count >= s.Capacity,
+                s.EventId, s.Event != null && !s.Event.IsDeleted ? s.Event.Name : null))
             .FirstOrDefaultAsync(ct);
 
     public async Task<PreRegistrationSessionWriteResult> CreateSessionAsync(

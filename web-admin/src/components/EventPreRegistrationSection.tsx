@@ -89,6 +89,13 @@ const REFUSED_BY_STATUS =
   "pre-registration can no longer be changed. Nothing was applied. Reload the page to see the status it " +
   "actually holds.";
 
+/**
+ * Shown when the server reports a session as linked (`eventId` present) but gives no `eventName`. That
+ * is what a session linked to a SOFT-DELETED event looks like: the link row survives, the event's name
+ * does not resolve. Linking it is still refused, so it stays listed and disabled with this generic label.
+ */
+const ANOTHER_EVENT = "another event";
+
 const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
 
 const unlinkLabel = (name: string) => `Unlink pre-registration session ${name} from this event`;
@@ -143,10 +150,20 @@ export default function EventPreRegistrationSection({
 
   const running = write.status === "running";
   const linkedIds = new Set(linked.map((s) => s.preRegistrationSessionId));
+  // Sessions already linked to THIS event are not offered — they are in the list above, and `linkedIds`
+  // (from the audience, which is re-read after every write) is the only thing that excludes them. The
+  // catalogue's own `eventId` is deliberately NOT consulted for that: it is a snapshot that can be older
+  // than the audience, and a session just unlinked from this event must be offered again straight away.
+  // Sessions linked to ANOTHER event are offered but disabled: linking one is always refused (400), and
+  // hiding it would leave an operator hunting for a session they know exists.
+  const linkedElsewhere = (s: PreRegistrationSession) =>
+    s.eventId !== undefined && s.eventId !== eventId;
   const offered = (sessions.status === "ready" ? sessions.data : NO_SESSIONS).filter(
     (s) => !linkedIds.has(s.id),
   );
-  const selected = offered.find((s) => s.id === selectedId) ?? null;
+  // Never a disabled session: it cannot be picked, but a pick made before a re-read showed it linked
+  // elsewhere must not survive to `link()` and send a request that is certain to be refused.
+  const selected = offered.find((s) => s.id === selectedId && !linkedElsewhere(s)) ?? null;
 
   const controlsDisabled = !editable.can || audience === undefined || running;
 
@@ -163,6 +180,9 @@ export default function EventPreRegistrationSection({
       // Either way: a failed write may still have landed, and the re-read is how the card settles on
       // what is actually linked.
       onChanged();
+      // The catalogue too: a created session must appear, an unlinked one must lose its stale link, and a
+      // session linked from another tab must show as taken.
+      sessions.reload();
       if (settled.outcome === "succeeded") {
         afterSuccess?.();
         onAnnounce(settledText);
@@ -319,6 +339,7 @@ export default function EventPreRegistrationSection({
               setSelectedId(next === null ? null : next.id);
             }}
             getOptionLabel={(session) => session.name}
+            getOptionDisabled={linkedElsewhere}
             isOptionEqualToValue={(a, b) => a.id === b.id}
             disabled={controlsDisabled}
             loading={editable.can && sessions.status === "loading"}
@@ -335,6 +356,9 @@ export default function EventPreRegistrationSection({
                     <Typography variant="body2" color="text.secondary">
                       {session.audienceName} · {session.registeredCount} registered
                       {session.isClosed ? " · closed" : ""}
+                      {linkedElsewhere(session)
+                        ? ` · linked to ${session.eventName ?? ANOTHER_EVENT}`
+                        : ""}
                     </Typography>
                   </Box>
                 </li>

@@ -3,7 +3,7 @@
 <!-- GENERATED FILE — DO NOT EDIT.
      Source: docs/api/openapi.json. Regenerate: node scripts/generate-endpoint-index.mjs --write -->
 
-**Generated from [`openapi.json`](openapi.json) — do not edit by hand.** 121 operations across 23 controllers, all mounted under `/api/v1`. Routes below are written relative to that mount.
+**Generated from [`openapi.json`](openapi.json) — do not edit by hand.** 126 operations across 23 controllers, all mounted under `/api/v1`. Routes below are written relative to that mount.
 
 This page is a **map, not a contract.** It exists so you can find an endpoint; payload shapes, field types and outcome tokens live in [`openapi.json`](openapi.json), which is what you generate a client from. Behaviour a schema cannot state — what your queue does with each outcome, the card-UID and clock rules — is in [`attendance-contract-handoff.md`](attendance-contract-handoff.md).
 
@@ -22,7 +22,7 @@ This page is a **map, not a contract.** It exists so you can find an endpoint; p
 - [EventClassifications](#eventclassifications) — 6
 - [EventManifest](#eventmanifest) — 1
 - [Permissions](#permissions) — 1
-- [Personnel](#personnel) — 7
+- [Personnel](#personnel) — 8
 - [PreRegistration](#preregistration) — 7
 - [Reports](#reports) — 7
 - [Roles](#roles) — 6
@@ -32,7 +32,7 @@ This page is a **map, not a contract.** It exists so you can find an endpoint; p
 - [StudentGroups](#studentgroups) — 1
 - [Users](#users) — 6
 - [Attendance](#attendance) — 5
-- [Events](#events) — 14
+- [Events](#events) — 18
 - [Students](#students) — 8
 
 ## Academic
@@ -151,6 +151,7 @@ This page is a **map, not a contract.** It exists so you can find an endpoint; p
 | `PUT` | `/personnel/{id}` | **Bearer** | `400` `404` `409` | A full replacement of the record's fields. |
 | `GET` | `/personnel/export.csv` | **Bearer** | *none declared* | Every record matching the same filters as the list, as a CSV whose columns are exactly the ones `POST /personnel/import` reads, so an export round-trips through import. |
 | `POST` | `/personnel/import` | **Bearer** | `400` | A bulk upsert keyed on `PersonnelNumber`. |
+| `GET` | `/personnel/organizations` | **Bearer** | *none declared* | The distinct, non-empty organizations in this school, ascending. |
 
 ## PreRegistration
 
@@ -245,11 +246,15 @@ This page is a **map, not a contract.** It exists so you can find an endpoint; p
 |---|---|---|---|---|
 | `GET` | `/events` | **Bearer** **DeviceKey** | `401` `403` | The event list, optionally filtered by status. |
 | `POST` | `/events` | **Bearer** | `400` `409` | §6.3 `POST /events`. |
+| `POST` | `/events/{eventId}/pre-registration/sessions` | **Bearer** | `400` `404` `409` | Link an existing pre-registration session to this event (ADR-008 D-71). |
+| `DELETE` | `/events/{eventId}/pre-registration/sessions/{sessionId}` | **Bearer** | `404` `409` | Unlink a session (ADR-008 D-71). |
+| `POST` | `/events/{eventId}/pre-registration/sessions/from-event` | **Bearer** | `400` `404` `409` | Create a pre-registration session pre-filled from the event (its single attached audience definition, capacity seeded from the event's current expected size) and link it in one step (ADR-008 D-71). |
 | `DELETE` | `/events/{id}` | **Bearer** | `404` | §6.3 `DELETE /events/{id}` — soft (§4.5 `IsDeleted`). |
 | `GET` | `/events/{id}` | **Bearer** | `404` | One event. |
 | `PUT` | `/events/{id}` | **Bearer** | `400` `404` `409` | Update an event. |
 | `GET` | `/events/{id}/attendees` | **Bearer** | `404` | What is currently attached to this event's audience. |
 | `POST` | `/events/{id}/attendees` | **Bearer** | `400` `404` `409` | §6.3 `POST /events/{id}/attendees` — associate `{studentGroupIds[], studentIds[]}`. |
+| `DELETE` | `/events/{id}/attendees/definitions/{definitionId}` | **Bearer** | `404` `409` | Detach one reusable audience definition from the event's audience (ADR-007 D-69). |
 | `DELETE` | `/events/{id}/attendees/groups/{studentGroupId}` | **Bearer** | `404` `409` | Detaches one group. |
 | `DELETE` | `/events/{id}/attendees/students/{studentId}` | **Bearer** | `404` `409` | Detach one individually-attached student from the event's audience. |
 | `GET` | `/events/{id}/roster` | **Bearer** | `404` | §6.3 `GET /events/{id}/roster` — expected versus actual, and the source of §12's Absentee Report. |

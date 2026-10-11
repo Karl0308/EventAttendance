@@ -6240,6 +6240,432 @@
         ]
       }
     },
+    "/api/v1/events/{id}/attendees/definitions/{definitionId}": {
+      "delete": {
+        "tags": [
+          "Events"
+        ],
+        "summary": "`DELETE /events/{id}/attendees/definitions/{definitionId}` — detach one reusable audience\r\n            definition from the event's audience (ADR-007 D-69).",
+        "description": "The third attach sub-resource, symmetric with M:EAMS.Api.Controllers.EventsController.DetachGroup(System.Guid,System.Guid,System.Threading.CancellationToken) and\r\nM:EAMS.Api.Controllers.EventsController.DetachStudent(System.Guid,System.Guid,System.Threading.CancellationToken). Idempotent: detaching a definition that is not attached is\r\n`204`, not `404`, so a retry is safe. A missing <em>event</em> is still `404` — that\r\none is named by the URL — and a terminal event's audience is locked (`409`).",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The event.",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "definitionId",
+            "in": "path",
+            "description": "The audience definition to detach.",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Detached, or was not attached."
+          },
+          "404": {
+            "description": "No such event.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The event's status does not allow an audience change.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "Bearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/events/{eventId}/pre-registration/sessions": {
+      "post": {
+        "tags": [
+          "Events"
+        ],
+        "summary": "`POST /events/{eventId}/pre-registration/sessions` — link an existing pre-registration session\r\n            to this event (ADR-008 D-71). A linked session REPLACES the section + definition union as the\r\n            expected audience; the attached sections/definitions are kept but not resolved while linked, so this\r\n            is reversible. Returns the refreshed audience read.",
+        "parameters": [
+          {
+            "name": "eventId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LinkPreRegistrationSessionRequest"
+              }
+            },
+            "text/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LinkPreRegistrationSessionRequest"
+              }
+            },
+            "application/*+json": {
+              "schema": {
+                "$ref": "#/components/schemas/LinkPreRegistrationSessionRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Linked. The body is the event's audience read, now pre-registration-driven.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/EventAudienceDto"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EventAudienceDto"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EventAudienceDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The session is unknown, from another tenant, or already linked to another event.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such event.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The event is terminal, so its audience is frozen.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "Bearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/events/{eventId}/pre-registration/sessions/{sessionId}": {
+      "delete": {
+        "tags": [
+          "Events"
+        ],
+        "summary": "`DELETE /events/{eventId}/pre-registration/sessions/{sessionId}` — unlink a session (ADR-008\r\n            D-71). Idempotent: succeeds whether or not the session was linked to this event. Returns the\r\n            refreshed audience read, which reverts to the section + definition union once the last session is\r\n            unlinked.",
+        "parameters": [
+          {
+            "name": "eventId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "sessionId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Unlinked (or was not linked). The body is the event's audience read.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/EventAudienceDto"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EventAudienceDto"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EventAudienceDto"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such event.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The event is terminal, so its audience is frozen.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "Bearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/events/{eventId}/pre-registration/sessions/from-event": {
+      "post": {
+        "tags": [
+          "Events"
+        ],
+        "summary": "`POST /events/{eventId}/pre-registration/sessions/from-event` — create a pre-registration\r\n            session pre-filled from the event (its single attached audience definition, capacity seeded from the\r\n            event's current expected size) and link it in one step (ADR-008 D-71). Returns the refreshed audience\r\n            read.",
+        "parameters": [
+          {
+            "name": "eventId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreatePreRegistrationFromEventRequest"
+              }
+            },
+            "text/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreatePreRegistrationFromEventRequest"
+              }
+            },
+            "application/*+json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreatePreRegistrationFromEventRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Created and linked. The body is the event's audience read.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/EventAudienceDto"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EventAudienceDto"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EventAudienceDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The event does not have exactly one attached audience definition to open the session against.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such event.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The event is terminal, so its audience is frozen.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "Bearer": []
+          }
+        ]
+      }
+    },
     "/api/v1/permissions": {
       "get": {
         "tags": [
@@ -6466,6 +6892,51 @@
               "text/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "Bearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/personnel/organizations": {
+      "get": {
+        "tags": [
+          "Personnel"
+        ],
+        "summary": "`GET /personnel/organizations` — the distinct, non-empty organizations in this school, ascending.",
+        "description": "A literal-segment route, so it never collides with `GET /personnel/{id:guid}` — the guid\r\nconstraint keeps the word \"organizations\" off the {id} route.",
+        "responses": {
+          "200": {
+            "description": "The organizations, possibly empty.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
                 }
               }
             }
@@ -12497,6 +12968,17 @@
         "additionalProperties": false,
         "description": "One page of an admin list read, plus what the caller needs to ask for the next one.\r\n            \r\n\r\n<b>Every §6.2/§6.3 admin list returns this; `GET /attendance/live/{eventId}` deliberately does\r\nnot.</b> That endpoint pages by cursor (`since`/`cursor`/`hasMore`) because it is a\r\npolling delta rather than a list — a client asks \"what changed after this point\", not \"give me rows\r\n40 to 60\" — and its shape is frozen published contract under D-29/D-30/D-42. Offset paging over a\r\nlive feed also drops rows: an insert below the cursor shifts every subsequent row up by one and the\r\nnext page skips it. The two mechanisms coexisting is correct, not an inconsistency to tidy.\r\n"
       },
+      "CreatePreRegistrationFromEventRequest": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "additionalProperties": false,
+        "description": "The body of `POST /events/{eventId}/pre-registration/sessions/from-event`. Name\r\nis optional; omitted or blank, the session takes a name derived from the event."
+      },
       "DeviceDto": {
         "type": "object",
         "properties": {
@@ -12585,6 +13067,37 @@
         "additionalProperties": false,
         "description": "The body of `POST /devices` and `PUT /devices/{id}`.\r\n            \r\n\r\n<b>`SchoolId` is deliberately absent</b>, exactly as it is on `EventWriteRequest`: the\r\ntenant comes from EAMS.Application.Abstractions.ISchoolContext, never from the\r\nrequest. A caller-supplied tenant on a write is the hole Phase 4b closed on the tap path\r\n(D-27); this surface does not open a second one.\r\n\r\n<b>No key field either.</b> A key is minted by the server or it is not minted — see\r\n`DeviceKey.Issue` for why an operator-chosen key would invalidate the hashing decision.\r\n"
       },
+      "EventAudienceDefinitionRefDto": {
+        "type": "object",
+        "properties": {
+          "audienceDefinitionId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "name": {
+            "type": "string"
+          },
+          "audienceType": {
+            "type": "string"
+          },
+          "studentCount": {
+            "type": "integer",
+            "description": "Students the definition currently resolves to in this event's school, soft-deleted excluded — the\r\nportion that enters EAMS.Application.Dtos.EventAudienceDto.Expected (de-duplicated there against the sections\r\nand individuals).",
+            "format": "int32"
+          },
+          "personnelCount": {
+            "type": "integer",
+            "description": "Personnel the definition currently resolves to — advisory only, never in the denominator (D-70). Its\r\ncontribution to EAMS.Application.Dtos.EventAudienceDto.AdvisoryPersonnelCount before cross-definition dedupe.",
+            "format": "int32"
+          },
+          "isActive": {
+            "type": "boolean",
+            "description": "The definition's current active flag. A definition can only be <em>attached</em> while active, but one\r\ndeactivated afterwards keeps resolving (the link is what counts, like a group row); this surfaces that\r\nstate for display."
+          }
+        },
+        "additionalProperties": false,
+        "description": "One attached reusable `AudienceDefinition` (ADR-007 D-69), as the audience read publishes it."
+      },
       "EventAudienceDto": {
         "type": "object",
         "properties": {
@@ -12618,6 +13131,25 @@
               "$ref": "#/components/schemas/EventAudienceStudentDto"
             },
             "description": "<b>Its meaning depends on EAMS.Application.Dtos.EventAudienceDto.IsFrozen, which is why that flag is published beside it.</b>\r\n\r\n\r\n             While the event is live (`Draft`/`Open`) these are the individually-attached students —\r\n             the handful an organizer named by hand on top of the sections, and the exact set the\r\n             `DELETE .../attendees/students/{studentId}` sub-resource addresses.\r\n             \r\n\r\n\r\n             Once EAMS.Application.Dtos.EventAudienceDto.IsFrozen, <b>this list is empty by contract</b>, and the emptiness does not mean\r\n             \"no students were attached\" — it means \"ask elsewhere\". The freeze writes the whole resolved\r\n             audience down as individual rows (ADR-003 D-13), so the same query that returns three students on a\r\n             live event returns the entire population, unbounded, on a terminal one. That is\r\n             `GET /events/{id}/roster`'s job, and duplicating it here would add a second unbounded response\r\n             where ADR-003 already carries one as an open follow-up. <b>The per-student frozen set is\r\n             `GET /events/{id}/roster`.</b>EAMS.Application.Dtos.EventAudienceDto.Expected and EAMS.Application.Dtos.EventAudienceDto.Groups carry the answer\r\n             for anyone who only needs the size and the cohort.\r\n             \r\n\r\n\r\n             Soft-deleted students are listed on a live event rather than hidden. Their §4.8 row exists and is\r\n             detachable, so hiding it would leave a row no client could see and no organizer could remove, while\r\n             a re-post naming that student would report it as already attached against a panel showing nothing.\r\n             They are excluded from EAMS.Application.Dtos.EventAudienceDto.Expected while the event is live regardless (ADR-003 D-15), so\r\n             the two figures legitimately differ — this list is the attachment, not the denominator.\r\n             "
+          },
+          "definitions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/EventAudienceDefinitionRefDto"
+            },
+            "description": "Every attached reusable `AudienceDefinition` (ADR-007 D-69), whatever the event's status. <b>On a\r\nterminal event these are the historical record of which definition was invited</b> — like\r\nEAMS.Application.Dtos.EventAudienceDto.Groups, no query resolves them any more; the per-definition counts are current (live)\r\nfigures for display, the same way EAMS.Application.Dtos.EventAudienceGroupDto.MemberCount is."
+          },
+          "advisoryPersonnelCount": {
+            "type": "integer",
+            "description": "The total personnel the attached definitions currently resolve to, de-duplicated across definitions\r\n(ADR-007 D-70). <b>These are NOT in EAMS.Application.Dtos.EventAudienceDto.Expected</b> — the denominator, the freeze snapshot\r\nand attendance are all student-keyed, so personnel have nowhere to be counted. The figure exists so\r\nthe exclusion is visible rather than silent: an organizer who attaches a personnel-heavy definition\r\ncan see what it resolved to even though none of it enters the student denominator.",
+            "format": "int32"
+          },
+          "expectedSource": {
+            "type": "string",
+            "description": "Where EAMS.Application.Dtos.EventAudienceDto.Expected is resolved from (ADR-008 D-71) — one of\r\nEAMS.Domain.ExpectedAudienceSource. `\"PreRegistration\"` when one or more\r\npre-registration sessions are linked to this event, in which case EAMS.Application.Dtos.EventAudienceDto.Expected is the\r\nlinked sessions' deduped student registrants and the attached EAMS.Application.Dtos.EventAudienceDto.Groups/EAMS.Application.Dtos.EventAudienceDto.Definitions\r\nare kept but not resolved; otherwise `\"Audience\"` and both keep their Phase-2 meaning. The signal\r\nexists so the FE can explain why attached sections may not be counted."
+          },
+          "preRegistration": {
+            "$ref": "#/components/schemas/EventPreRegistrationDto"
           }
         },
         "additionalProperties": false,
@@ -12675,6 +13207,15 @@
               "format": "uuid"
             },
             "nullable": true
+          },
+          "audienceDefinitionIds": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "description": "Reusable `AudienceDefinition`s to attach alongside the sections and individuals (ADR-007 D-69).\r\nOptional, like the other two. Each must be an active definition in this event's school <em>and</em>\r\nfiled under the event's `EventClassificationId`; an id that is unknown, another tenant's,\r\ninactive, or outside the event's classification is refused identically as\r\nEAMS.Application.Abstractions.EventWriteOutcome.UnknownReference (400), for the same\r\nno-existence-disclosure reason the section and student refs are. The definition's <em>student</em>\r\nhalf joins the expected denominator; its <em>personnel</em> half is excluded and surfaced as an\r\nadvisory count on the audience read (D-70).",
+            "nullable": true
           }
         },
         "additionalProperties": false,
@@ -12695,12 +13236,22 @@
             "type": "integer",
             "format": "int32"
           },
+          "definitionsAttached": {
+            "type": "integer",
+            "description": "Attached audience definitions this call newly linked (ADR-007 D-69).",
+            "format": "int32"
+          },
           "groupsAlreadyAttached": {
             "type": "integer",
             "format": "int32"
           },
           "studentsAlreadyAttached": {
             "type": "integer",
+            "format": "int32"
+          },
+          "definitionsAlreadyAttached": {
+            "type": "integer",
+            "description": "Audience definitions the request named that were already linked — the observable half of idempotency\r\nfor the third source, exactly as `GroupsAlreadyAttached` is for sections.",
             "format": "int32"
           },
           "expected": {
@@ -12923,6 +13474,17 @@
             "description": "Per-event grace after end (§3), or null. As above.",
             "format": "int32",
             "nullable": true
+          },
+          "eventClassificationId": {
+            "type": "string",
+            "description": "The event's classification, or null for unclassified. The id the FE binds and later filters audience\r\ndefinitions by.",
+            "format": "uuid",
+            "nullable": true
+          },
+          "eventClassificationName": {
+            "type": "string",
+            "description": "The classification's display name, joined from `EventClassifications` for the read paths\r\n(`GET /events`, `GET /events/{id}`) so a grid can show it without a second request. It is a\r\nprojection of the navigation, so it is populated only where that navigation is loaded — the list and\r\ndetail reads `Include` it; it is null when EAMS.Application.Dtos.EventDto.EventClassificationId is null.",
+            "nullable": true
           }
         },
         "additionalProperties": false,
@@ -13088,6 +13650,29 @@
         },
         "additionalProperties": false,
         "description": "One §4.7 group attached to the event's audience."
+      },
+      "EventPreRegistrationDto": {
+        "type": "object",
+        "properties": {
+          "linkedSessions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/LinkedPreRegistrationSessionDto"
+            }
+          },
+          "totalPreRegisteredStudentCount": {
+            "type": "integer",
+            "description": "Distinct student registrants across all linked sessions, soft-deleted excluded — a person registered in\r\ntwo linked sessions counts once (a `UNION`, matching how the denominator dedupes). On a live linked\r\nevent this equals EAMS.Application.Dtos.EventAudienceDto.Expected.",
+            "format": "int32"
+          },
+          "totalAdvisoryPersonnelCount": {
+            "type": "integer",
+            "description": "Distinct personnel registrants across all linked sessions, soft-deleted excluded (D-72). Advisory only —\r\npersonnel are never in the denominator, the freeze snapshot or attendance, exactly as a definition's\r\npersonnel are (D-70).",
+            "format": "int32"
+          }
+        },
+        "additionalProperties": false,
+        "description": "The pre-registration sessions linked to an event (ADR-008 D-71/D-73), as the audience read publishes\r\nthem. Null on EAMS.Application.Dtos.EventAudienceDto.PreRegistration when nothing is linked."
       },
       "EventReportAttendeeDto": {
         "type": "object",
@@ -13643,10 +14228,51 @@
             "description": "Grace period after end (EventGracePeriod.docx §3), or null. A value refuses taps later than\r\n`EndAt + this` as Attendance Closed.",
             "format": "int32",
             "nullable": true
+          },
+          "eventClassificationId": {
+            "type": "string",
+            "description": "The event's classification (Institutional, Departmental, Organizational, …), or null for\r\nunclassified. Optional and defaulted null so callers that predate the field are unchanged — an\r\nomitted value is \"unclassified\" on create and, unlike a full-replacement field, there is nothing to\r\nreset on edit because null legitimately <em>is</em> the no-classification state.\r\n            \r\n\r\n\r\nWhen non-null it must name an <em>active</em> classification in this event's school, or the write is\r\nrefused as EAMS.Application.Abstractions.EventWriteOutcome.UnknownReference — unknown,\r\ndeactivated and another tenant's id are not distinguished, for the reason that outcome records. On a\r\n`Closed` event it is a locked field like the rest of the body (only the certificates toggle is\r\neditable there).\r\n",
+            "format": "uuid",
+            "nullable": true
           }
         },
         "additionalProperties": false,
         "description": "The body of `POST /events` and `PUT /events/{id}`.\r\n            \r\n\r\n<b>`Status` is deliberately absent.</b>`PATCH /events/{id}/status` is the only door into\r\nthe column, which is what makes the roster freeze impossible to bypass — an event cannot reach\r\n`Closed` without passing through the one code path that materializes its absentees. A\r\n`status` field here would be a second door, and the first caller to use it would create a\r\nclosed event with no frozen roster and no error.\r\n\r\n<b>`SchoolId` is deliberately absent too.</b> The tenant comes from `ISchoolContext`, not\r\nfrom the request. A caller-supplied `SchoolId` on a write is exactly the hole\r\n`KnownDefectTests.A_device_from_another_school_cannot_record_a_tap` is still open on; this\r\nendpoint does not add a second one.\r\n"
+      },
+      "LinkPreRegistrationSessionRequest": {
+        "type": "object",
+        "properties": {
+          "preRegistrationSessionId": {
+            "type": "string",
+            "format": "uuid"
+          }
+        },
+        "additionalProperties": false,
+        "description": "The body of `POST /events/{eventId}/pre-registration/sessions` — link an existing session."
+      },
+      "LinkedPreRegistrationSessionDto": {
+        "type": "object",
+        "properties": {
+          "preRegistrationSessionId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "name": {
+            "type": "string"
+          },
+          "preRegisteredStudentCount": {
+            "type": "integer",
+            "description": "This session's distinct student registrants, soft-deleted excluded. The per-session figures can sum\r\nhigher than EAMS.Application.Dtos.EventPreRegistrationDto.TotalPreRegisteredStudentCount when a person is in\r\nmore than one linked session — the total dedupes, these do not.",
+            "format": "int32"
+          },
+          "advisoryPersonnelCount": {
+            "type": "integer",
+            "description": "This session's distinct personnel registrants, soft-deleted excluded (advisory only, D-72).",
+            "format": "int32"
+          }
+        },
+        "additionalProperties": false,
+        "description": "One pre-registration session linked to an event (ADR-008 D-71)."
       },
       "LiveOutcomeCode": {
         "enum": [
@@ -14171,6 +14797,17 @@
           "isFull": {
             "type": "boolean",
             "description": "`RegisteredCount >= Capacity`, precomputed for the counter display."
+          },
+          "eventId": {
+            "type": "string",
+            "description": "The event this session is linked to, or `null` when it is unlinked. A session\r\n            links to at most one event (ADR-008 D-73): linking it to a different event is refused while this is set.\r\n            Reported even when the linked event has\r\n            since been soft-deleted, because the link rule still counts that link.",
+            "format": "uuid",
+            "nullable": true
+          },
+          "eventName": {
+            "type": "string",
+            "description": "The linked event's name, or `null` when the session is unlinked <em>or</em> the\r\n            linked event is soft-deleted (deleted events are not read anywhere else either).",
+            "nullable": true
           }
         },
         "additionalProperties": false,

@@ -70,8 +70,8 @@ const lockedNotice = (status: string) =>
   `This event is ${status}, so its schedule, grace period, attendance mode and registration setting ` +
   "cannot be changed. Attendance may already have been recorded against them — the start time and " +
   "the grace period are what decided Present versus Late for every row — and moving them now would " +
-  "change what those rows mean without changing the rows. Its name, description and location can " +
-  "still be edited.";
+  "change what those rows mean without changing the rows. Its name, description, location, " +
+  "classification and whether it issues certificates can still be edited.";
 
 interface EditEventDialogProps {
   /** The event as the page last read it. Snapshotted on open; see `baseline` below. */
@@ -188,6 +188,14 @@ export default function EditEventDialog({
             errorFor={errorFor}
             onBlur={markTouched}
             locked={locked}
+            storedClassification={
+              baseline.eventClassificationId === undefined
+                ? undefined
+                : {
+                    id: baseline.eventClassificationId,
+                    name: baseline.eventClassificationName ?? "Current classification",
+                  }
+            }
           />
         </DialogContent>
 

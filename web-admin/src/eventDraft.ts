@@ -72,6 +72,8 @@ export interface Draft {
   requireRegistration: boolean;
   /** Whether the event issues certificates of attendance. See `EventWriteRequest.issuesCertificates`. */
   issuesCertificates: boolean;
+  /** The chosen event classification's id, or `""` for "None" — a select's value cannot be `null`. */
+  eventClassificationId: string;
 }
 
 export type DraftField = keyof Draft;
@@ -91,6 +93,9 @@ export const EMPTY_DRAFT: Draft = {
   // A new event does not issue certificates until an organizer says otherwise — the same default
   // `EventWriteRequest.IssuesCertificates` applies server-side when a `POST` omits it.
   issuesCertificates: false,
+  // Optional (JJ): an event may be created unclassified, though "Add audience" then has nothing to
+  // filter by until it is given one.
+  eventClassificationId: "",
 };
 
 /**
@@ -137,6 +142,7 @@ export const fieldIdsFor = (prefix: string): Record<DraftField, string> => ({
   graceAfterEndMinutes: `${prefix}-grace-after-end`,
   requireRegistration: `${prefix}-require-registration`,
   issuesCertificates: `${prefix}-issues-certificates`,
+  eventClassificationId: `${prefix}-event-classification`,
 });
 
 // ---------------------------------------------------------------------------------------------
@@ -233,6 +239,7 @@ export function draftFrom(event: EventItem): Draft {
       event.graceAfterEndMinutes == null ? "" : String(event.graceAfterEndMinutes),
     requireRegistration: event.requireRegistration,
     issuesCertificates: event.issuesCertificates,
+    eventClassificationId: event.eventClassificationId ?? "",
   };
 }
 
@@ -391,6 +398,9 @@ export function validate(draft: Draft, origin?: DraftOrigin): Validated {
       graceAfterEndMinutes: graceAfter.value,
       requireRegistration: draft.requireRegistration,
       issuesCertificates: draft.issuesCertificates,
+      // `null`, not `""`: an empty selection is "unclassified", and the server would try to resolve
+      // an empty string as an id.
+      eventClassificationId: draft.eventClassificationId === "" ? null : draft.eventClassificationId,
     },
   };
 }
@@ -457,6 +467,9 @@ export function requestForCertificatesToggle(
     graceAfterEndMinutes: event.graceAfterEndMinutes ?? null,
     requireRegistration: event.requireRegistration,
     issuesCertificates,
+    // Verbatim, like every other field here: this `PUT` must change nothing but the flag, and the
+    // server reads an absent value as "unclassified" — a change, which a `Closed` event refuses.
+    eventClassificationId: event.eventClassificationId ?? null,
   };
 }
 

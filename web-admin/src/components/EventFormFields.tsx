@@ -1,4 +1,4 @@
-// The eight controls an event is described by, rendered once for both the form that creates one and
+// The controls an event is described by, rendered once for both the form that creates one and
 // the form that edits one.
 //
 // The two forms differ in their title, their submit button, what they say before the fields, and which
@@ -28,6 +28,8 @@ import {
   knownMode,
 } from "../eventDraft";
 import type { Draft, DraftField, ValidatedField } from "../eventDraft";
+import { EventClassificationPicker } from "./EventClassificationPicker";
+import type { StoredClassification } from "./EventClassificationPicker";
 
 /**
  * Said on every locked field, beside the alert the dialog puts above them. The alert carries the
@@ -86,6 +88,11 @@ interface EventFormFieldsProps {
    * refused for a field the user never went near.
    */
   locked: ReadonlySet<DraftField>;
+  /**
+   * The classification the event being edited already carries, so the picker can keep offering it
+   * after it is deactivated. Omitted for a create, where there is nothing stored.
+   */
+  storedClassification?: StoredClassification;
 }
 
 export function EventFormFields({
@@ -95,6 +102,7 @@ export function EventFormFields({
   errorFor,
   onBlur,
   locked,
+  storedClassification,
 }: EventFormFieldsProps) {
   /**
    * Helper text, in precedence order: the lock, then the error, then the standing hint. The lock is
@@ -168,6 +176,14 @@ export function EventFormFields({
         )}
         disabled={locked.has("location")}
         fullWidth
+      />
+
+      <EventClassificationPicker
+        id={ids.eventClassificationId}
+        value={draft.eventClassificationId}
+        onChange={(eventClassificationId) => onChange({ eventClassificationId })}
+        stored={storedClassification}
+        disabled={locked.has("eventClassificationId")}
       />
 
       <TextField

@@ -308,6 +308,14 @@ export interface PreRegistrationSession {
   registeredCount: number;
   isClosed: boolean;
   isFull: boolean;
+  /**
+   * The event this session is linked to (`PreRegistrationSessionDto.eventId`), unset when it is linked to
+   * none. A session can serve one event at a time: linking one that already belongs to another event is
+   * refused by the server (400), so the event screen offers such a session disabled rather than not at all.
+   */
+  eventId?: string;
+  /** `PreRegistrationSessionDto.eventName` — the display name of the above, unset when unlinked. */
+  eventName?: string;
 }
 
 /** The body of `POST /pre-registration/sessions`. */
@@ -777,7 +785,8 @@ export interface EventItem {
   /**
    * The event's classification (`EventDto.eventClassificationId`), or unset for an unclassified event.
    * Reusable audience definitions are filtered by it, so it is what the "Add audience" picker keys on.
-   * Read-only on this client so far: the event form does not send it back (see the report on that gap).
+   * Written back through `EventWriteRequest.eventClassificationId`: the event form's picker sets it, and
+   * every other `PUT` re-sends it so an unrelated edit cannot clear it.
    */
   eventClassificationId?: string;
   /** `EventDto.eventClassificationName` — the display name of the above, null/absent when unclassified. */
@@ -871,6 +880,18 @@ export interface EventWriteRequest {
    * site that forgets to set it and silently turns certificates off on every edit.
    */
   issuesCertificates: boolean;
+  /**
+   * The event's classification, or `null` for an unclassified event. A `PUT` is a full replacement and
+   * the server reads an absent or null value as "unclassified", so a construction site that forgot this
+   * would silently clear the classification on every edit — and on a `Closed` event, whose only
+   * accepted `PUT` is the certificates toggle, get refused with a 409 for "changing" it. Required
+   * rather than optional for the same reason `issuesCertificates` is: a forgotten site must be a
+   * compile error.
+   *
+   * Re-sending the stored classification is always accepted, even if it has since been deactivated; the
+   * server refuses only a *change to* a non-active one.
+   */
+  eventClassificationId: string | null;
 }
 
 // ---------------------------------------------------------------------------------------------

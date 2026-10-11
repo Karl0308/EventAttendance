@@ -27,11 +27,13 @@ const EVENT_ID = "44444444-4444-4444-8444-444444444444";
 const LINKED_ID = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
 const OTHER_LINKED_ID = "cccccccc-cccc-4ccc-8ccc-cccccccccccc";
 const FREE_ID = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
+const TAKEN_ID = "dddddddd-dddd-4ddd-8ddd-dddddddddddd";
+const OTHER_EVENT_ID = "55555555-5555-4555-8555-555555555555";
 
 const json = (status: number, body: unknown) =>
   new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
 
-const sessionRow = (id: string, name: string) => ({
+const sessionRow = (id: string, name: string, over: Record<string, unknown> = {}) => ({
   id,
   name,
   audienceDefinitionId: "d-1",
@@ -40,13 +42,18 @@ const sessionRow = (id: string, name: string) => ({
   registeredCount: 12,
   isClosed: false,
   isFull: false,
+  ...over,
 });
 
-/** What `GET /pre-registration/sessions` returns: two already linked, one free to link. */
+/**
+ * What `GET /pre-registration/sessions` returns: two already linked to this event (the server also says
+ * so, on `eventId`), one free to link, and one that belongs to a different event.
+ */
 const CATALOGUE = [
-  sessionRow(LINKED_ID, "Orientation pre-reg"),
-  sessionRow(OTHER_LINKED_ID, "Late pre-reg"),
+  sessionRow(LINKED_ID, "Orientation pre-reg", { eventId: EVENT_ID, eventName: "Orientation" }),
+  sessionRow(OTHER_LINKED_ID, "Late pre-reg", { eventId: EVENT_ID, eventName: "Orientation" }),
   sessionRow(FREE_ID, "Foundation Week pre-reg"),
+  sessionRow(TAKEN_ID, "Career Fair pre-reg", { eventId: OTHER_EVENT_ID, eventName: "Career Fair" }),
 ];
 
 interface Request {
@@ -56,7 +63,7 @@ interface Request {
 }
 let requests: Request[] = [];
 
-function serve(writeReply?: (method: string) => Response): void {
+function serve(writeReply?: (method: string) => Response, catalogue: readonly unknown[] = CATALOGUE): void {
   vi.stubGlobal("fetch", (input: RequestInfo | URL, init?: RequestInit) => {
     const url = new URL(String(input), "http://localhost");
     const method = init?.method ?? "GET";
@@ -67,7 +74,7 @@ function serve(writeReply?: (method: string) => Response): void {
     });
 
     if (method === "GET" && url.pathname.endsWith("/pre-registration/sessions")) {
-      return Promise.resolve(json(200, CATALOGUE));
+      return Promise.resolve(json(200, catalogue));
     }
     if (url.pathname.includes(`/events/${EVENT_ID}/pre-registration/sessions`)) {
       return Promise.resolve(writeReply ? writeReply(method) : new Response(null, { status: 204 }));
@@ -264,6 +271,105 @@ describe("Pre-registration section: linking and unlinking", () => {
     const alert = await screen.findByRole("alert");
     expect(alert.textContent).toContain("“Foundation Week pre-reg” was not linked");
     expect(screen.getByRole("button", { name: /^link pre-registration$/i })).toHaveProperty("disabled", false);
+  });
+});
+
+describe("Pre-registration section: a session linked to another event", () => {
+  it("session linked to another event is shown disabled with its event name", async () => {
+    render(section(linkedAudience()));
+
+    await openPicker();
+
+    // Still listed, so an operator is not left hunting for a session they know exists...
+    const taken = await screen.findByRole("option", { name: /career fair pre-reg/i });
+    // ...but not pickable, and saying why.
+    expect(taken.getAttribute("aria-disabled")).toBe("true");
+    expect(taken.textContent).toContain("linked to Career Fair");
+    // The free one is unaffected, and this event's own sessions are still not offered.
+    const free = screen.getByRole("option", { name: /foundation week pre-reg/i });
+    expect(free.getAttribute("aria-disabled")).not.toBe("true");
+    expect(free.textContent).not.toContain("linked to");
+    expect(screen.queryByRole("option", { name: /orientation pre-reg/i })).toBeNull();
+  });
+
+  it("falls back to a generic name when the server reports a link but no event name (soft-deleted event)", async () => {
+    serve(undefined, [sessionRow(TAKEN_ID, "Career Fair pre-reg", { eventId: OTHER_EVENT_ID, eventName: null })]);
+    render(section(unlinkedAudience()));
+
+    await openPicker();
+
+    const taken = await screen.findByRole("option", { name: /career fair pre-reg/i });
+    expect(taken.textContent).toContain("linked to another event");
+  });
+
+  it("offers a session just unlinked from this event even though the catalogue still says it is linked here", async () => {
+    // The catalogue is a snapshot: it still carries `eventId === EVENT_ID` for LINKED_ID. The audience is
+    // the fresher truth (it no longer lists LINKED_ID), and only `linkedIds` may exclude a session.
+    const withoutOrientation = linkedAudience({
+      preRegistration: {
+        linkedSessions: linkedSessions.filter((s) => s.preRegistrationSessionId !== LINKED_ID),
+        totalPreRegisteredStudentCount: 5,
+        totalAdvisoryPersonnelCount: 1,
+      },
+    });
+    render(section(withoutOrientation));
+
+    await openPicker();
+
+    const offeredAgain = await screen.findByRole("option", { name: /orientation pre-reg/i });
+    expect(offeredAgain.getAttribute("aria-disabled")).not.toBe("true");
+    expect(offeredAgain.textContent).not.toContain("linked to");
+    // Still excluded: the one the audience does list as linked.
+    expect(screen.queryByRole("option", { name: /late pre-reg/i })).toBeNull();
+  });
+
+  it("re-reads the sessions catalogue after every settled write", async () => {
+    const onChanged = vi.fn();
+    render(section(linkedAudience(), "Draft", onChanged));
+
+    await openPicker();
+    const catalogueReads = () =>
+      requests.filter((r) => r.method === "GET" && r.pathname.endsWith("/pre-registration/sessions")).length;
+    expect(catalogueReads()).toBe(1);
+
+    fireEvent.click(screen.getByRole("button", { name: /unlink pre-registration session orientation pre-reg/i }));
+    await waitFor(() => expect(onChanged).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(catalogueReads()).toBe(2));
+
+    fireEvent.change(screen.getByRole("textbox", { name: /new session name/i }), { target: { value: "Fresh" } });
+    fireEvent.click(screen.getByRole("button", { name: /create from event/i }));
+    await waitFor(() => expect(onChanged).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(catalogueReads()).toBe(3));
+  });
+
+  it("re-reads the catalogue after a FAILED write too, since it may have landed", async () => {
+    serve((method) => (method === "DELETE" ? json(500, { title: "boom", status: 500 }) : new Response(null, { status: 204 })));
+    const onChanged = vi.fn();
+    render(section(linkedAudience(), "Draft", onChanged));
+
+    await openPicker();
+    fireEvent.click(screen.getByRole("button", { name: /unlink pre-registration session orientation pre-reg/i }));
+    await waitFor(() => expect(onChanged).toHaveBeenCalledTimes(1));
+    await waitFor(() =>
+      expect(requests.filter((r) => r.method === "GET" && r.pathname.endsWith("/pre-registration/sessions")).length).toBe(2),
+    );
+  });
+
+  it("session linked to another event cannot be linked", async () => {
+    render(section(linkedAudience()));
+
+    await openPicker();
+    // A click is dispatched even at a disabled option here (MUI blocks it with CSS `pointer-events`,
+    // which a DOM test does not apply), so this is what proves the component refuses it by itself.
+    fireEvent.click(await screen.findByRole("option", { name: /career fair pre-reg/i }));
+
+    const linkButton = screen.getByRole("button", { name: /^link pre-registration$/i });
+    expect(linkButton).toHaveProperty("disabled", true);
+    fireEvent.click(linkButton);
+    await act(async () => {});
+
+    expect(requests.some((r) => r.method === "POST")).toBe(false);
+    expect((screen.getByRole("combobox", { name: PICKER_NAME }) as HTMLInputElement).value).toBe("");
   });
 });
 

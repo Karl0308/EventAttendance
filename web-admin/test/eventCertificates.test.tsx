@@ -200,6 +200,8 @@ const eventJson = () => ({
   graceMinutes: stored.graceMinutes,
   status: stored.status,
   issuesCertificates: stored.issuesCertificates,
+  eventClassificationId: stored.eventClassificationId ?? null,
+  eventClassificationName: stored.eventClassificationName ?? null,
 });
 
 const SUMMARY_JSON = () => ({
@@ -256,6 +258,10 @@ function serve() {
       );
     }
     if (path === "/api/v1/attendance") {
+      return Promise.resolve(json(200, { items: [], page: 1, pageSize: 200, total: 0, hasMore: false }));
+    }
+    // Read by the classification picker inside the event form dialogs rendered above.
+    if (path === "/api/v1/event-classifications") {
       return Promise.resolve(json(200, { items: [], page: 1, pageSize: 200, total: 0, hasMore: false }));
     }
     if (path === `/api/v1/events/${EVENT_ID}` && init?.method === "PUT") {
@@ -379,6 +385,7 @@ describe("The Closed-event certificates toggle", () => {
       graceAfterEndMinutes: null,
       requireRegistration: true,
       issuesCertificates: true,
+      eventClassificationId: null,
     });
   });
 
@@ -387,6 +394,24 @@ describe("The Closed-event certificates toggle", () => {
   // send back `requireRegistration: !base.requireRegistration` made that test fail with
   // `requireRegistration: false` where `true` (the stored value) was expected, and reverting the edit
   // (via the Edit tool, not `git checkout --`) restored the green run recorded here.
+
+  it("certificates toggle on a classified event re-sends its classification", async () => {
+    // A `PUT` is a full replacement and an absent classification means "unclassified" — a change,
+    // which a `Closed` event refuses with a 409. So the toggle must carry the stored id verbatim.
+    stored = baseEvent({
+      status: "Closed",
+      issuesCertificates: false,
+      eventClassificationId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      eventClassificationName: "Institutional",
+    });
+    await show();
+
+    fireEvent.click(screen.getByRole("checkbox", { name: CERTIFICATES_SWITCH }));
+    await act(async () => {});
+
+    expect(putBodies).toHaveLength(1);
+    expect(putBodies[0].eventClassificationId).toBe("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa");
+  });
 
   it("echoes the start and end instants byte-for-byte, ticks included", async () => {
     // `datetime-local` has minute resolution; an instant does not. This is what proves the toggle
