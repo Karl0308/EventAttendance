@@ -191,11 +191,12 @@ public class PersonnelImportExportApiTests : IntegrationTest
         Assert.Equal(HttpStatusCode.OK, export.StatusCode);
 
         var text = await export.Content.ReadAsStringAsync();
-        // Drop a possible leading UTF-8 BOM, then take the header line (cells here need no CSV quoting).
+        // Drop a possible leading UTF-8 BOM, then take the header line. Every cell is quoted, so a
+        // spreadsheet set to split on spaces cannot break "Last Name" into two columns.
         var firstLine = text.Split("\r\n")[0].TrimStart('﻿');
         Assert.Equal(
-            "Personnel ID,RFID UID,Last Name,First Name,Middle Name,Email,Classification,Department," +
-            "Organization,Status,Position",
+            "\"Personnel ID\",\"RFID UID\",\"Last Name\",\"First Name\",\"Middle Name\",\"Email\"," +
+            "\"Classification\",\"Department\",\"Organization\",\"Status\",\"Position\"",
             firstLine);
     }
 }

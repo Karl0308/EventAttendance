@@ -105,6 +105,42 @@ describe("PersonnelImportDialog — header aliases", () => {
     ]);
   });
 
+  it("imports a fully quoted export (BOM, every cell quoted, empties as \"\") into the right fields", async () => {
+    // What the server writes since the space-splitting fix: a UTF-8 BOM and a quote around EVERY cell, so
+    // "Last Name" and a surname like "Dela Cruz" stay one cell in a reader that also splits on spaces.
+    const quoted = (cells: string[]) => cells.map((c) => `"${c}"`).join(",");
+    const csv =
+      "\uFEFF" +
+      quoted([
+        "Personnel ID", "RFID UID", "Last Name", "First Name", "Middle Name", "Email",
+        "Classification", "Department", "Organization", "Status", "Position",
+      ]) +
+      "\r\n" +
+      quoted([
+        "P-004", "0012503326", "Dela Cruz", "Maria Clara", "", "",
+        "ACAD", "College of Information Technology", "", "Active", "Assistant Professor",
+      ]) +
+      "\r\n";
+
+    const rows = await importedRows(csv);
+
+    expect(rows).toEqual([
+      {
+        personnelNumber: "P-004",
+        rfidUid: "0012503326",
+        lastName: "Dela Cruz",
+        firstName: "Maria Clara",
+        middleName: null,
+        email: null,
+        classification: "ACAD",
+        department: "College of Information Technology",
+        organization: null,
+        status: "Active",
+        position: "Assistant Professor",
+      },
+    ]);
+  });
+
   it("rejects a header with no personnel id column", async () => {
     const onImport = await chooseCsv("Last Name,First Name,Email\nSantos,Maria,m@usa.edu.ph\n");
 

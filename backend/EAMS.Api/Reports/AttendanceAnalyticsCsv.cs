@@ -7,7 +7,7 @@ namespace EAMS.Api.Reports;
 /// <summary>
 /// CSV export of an attendance-analytics report (RPT-01), one row per group (or event, at the last level),
 /// then a totals row. Reuses <see cref="EventReportCsv"/>'s cell escaping (OWASP formula-injection
-/// neutralisation + RFC 4180 quoting) and UTF-8-with-BOM encoding, so the exports cannot disagree about how
+/// neutralisation + RFC 4180 quoting of every cell) and UTF-8-with-BOM encoding, so the exports cannot disagree about how
 /// a value with a comma or a leading <c>=</c> is written. No PDF: the SPA's Print button is the PDF path.
 /// </summary>
 internal static class AttendanceAnalyticsCsv

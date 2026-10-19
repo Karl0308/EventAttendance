@@ -31,8 +31,17 @@ namespace EAMS.Api.Reports;
 /// <b>Formula injection (OWASP "CSV Injection").</b> Names come from the SIS roster and can hold
 /// anything; a cell beginning with <c>=</c>, <c>+</c>, <c>-</c>, <c>@</c>, tab or carriage return is
 /// executed by Excel as a formula. Every cell that begins with one is prefixed with <c>'</c>, which Excel
-/// shows as text. Then RFC 4180 quoting: a cell holding a comma, a double quote, CR or LF is wrapped in
-/// double quotes with its quotes doubled. Records end in CRLF.
+/// shows as text. Then RFC 4180 quoting: <b>every</b> cell is wrapped in double quotes with its quotes
+/// doubled, not only those holding a comma, a double quote, CR or LF. Records end in CRLF.
+/// </para>
+///
+/// <para>
+/// <b>Why every cell, not only the ones that need it.</b> Excel's text-import wizard, LibreOffice and WPS
+/// remember a ticked Space delimiter, and a reader set that way split the unquoted header
+/// <c>Last Name</c> into <c>Last | Name</c> and a surname like <c>Dela Cruz</c> into two cells, shifting
+/// every later column (client report, personnelimport.docx). A delimiter inside a quoted cell is text to
+/// every such reader, so a fully quoted file opens the same whatever delimiters the reader is set to.
+/// RFC 4180 allows any field to be quoted.
 /// </para>
 ///
 /// <para>
@@ -60,8 +69,6 @@ internal static class EventReportCsv
 
     /// <summary>The prefix that makes a spreadsheet read such a cell as text.</summary>
     private const char FormulaNeutraliser = '\'';
-
-    private static readonly char[] NeedsQuoting = [',', '"', '\r', '\n'];
 
     private const string RecordSeparator = "\r\n";
 
@@ -160,15 +167,16 @@ internal static class EventReportCsv
 
     private static string Number(int value) => value.ToString(CultureInfo.InvariantCulture);
 
-    /// <summary>One cell, neutralised then quoted — in that order, so the <c>'</c> lands inside the quotes.</summary>
+    /// <summary>
+    /// One cell, neutralised then quoted — in that order, so the <c>'</c> lands inside the quotes. Always
+    /// quoted, an empty value included (<c>""</c>): see the class remarks on space-splitting readers.
+    /// </summary>
     internal static string Cell(string value)
     {
         if (value.Length > 0 && Array.IndexOf(FormulaTriggers, value[0]) >= 0)
             value = FormulaNeutraliser + value;
 
-        return value.IndexOfAny(NeedsQuoting) >= 0
-            ? "\"" + value.Replace("\"", "\"\"") + "\""
-            : value;
+        return "\"" + value.Replace("\"", "\"\"") + "\"";
     }
 
     private static void Record(StringBuilder csv, params string[] cells)

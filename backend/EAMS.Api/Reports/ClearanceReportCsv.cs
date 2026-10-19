@@ -6,7 +6,7 @@ namespace EAMS.Api.Reports;
 
 /// <summary>
 /// CSV export of a clearance report (CLR-02), one row per event. Reuses <see cref="EventReportCsv"/>'s
-/// cell escaping (OWASP formula-injection neutralisation + RFC 4180 quoting) and its UTF-8-with-BOM
+/// cell escaping (OWASP formula-injection neutralisation + RFC 4180 quoting of every cell) and its UTF-8-with-BOM
 /// encoding, so the two exports cannot disagree about how a name with a comma or a leading <c>=</c> is
 /// written. No PDF: the SPA's Print button is the PDF path (JJ decision B, recorded on EventReportCsv).
 /// </summary>

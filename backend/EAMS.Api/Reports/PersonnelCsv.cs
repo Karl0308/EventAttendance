@@ -5,9 +5,10 @@ namespace EAMS.Api.Reports;
 
 /// <summary>
 /// CSV export of the Personnel tab (StudentsEmployees.docx), one row per record. Reuses
-/// <see cref="EventReportCsv"/>'s cell escaping (OWASP formula-injection neutralisation + RFC 4180 quoting)
-/// and UTF-8-with-BOM encoding, so this export cannot disagree with the others about how a value with a
-/// comma or a leading <c>=</c> is written.
+/// <see cref="EventReportCsv"/>'s cell escaping (OWASP formula-injection neutralisation + RFC 4180 quoting
+/// of every cell) and UTF-8-with-BOM encoding, so this export cannot disagree with the others about how a
+/// value with a comma or a leading <c>=</c> is written. Every cell is quoted because a spreadsheet set to
+/// split on spaces turned the unquoted <c>Last Name</c> header into <c>Last | Name</c> (personnelimport.docx).
 ///
 /// <para>
 /// <b>The header row is the spec's human-readable columns, in spec order</b> (StudentsEmployees.docx /

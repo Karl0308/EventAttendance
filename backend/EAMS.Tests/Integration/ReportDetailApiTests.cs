@@ -511,8 +511,15 @@ public class ReportDetailApiTests : IntegrationTest
         using var factory = new EamsApiFactory(Sql.ConnectionString);
         using var client = await AdminAsync(factory, schoolId);
 
-        var (_, _, records) = await CsvAsync(client, eventId);
+        var (_, bytes, records) = await CsvAsync(client, eventId);
         var list = ListRows(records, EventReportCsv.TimeInOutListHeader);
+
+        // Byte level: neutralise THEN quote, so the apostrophe sits inside the quotes. The reader above
+        // would accept '"=1+1" too; Excel would not.
+        var raw = Encoding.UTF8.GetString(bytes);
+        Assert.Contains("\"Event\",\"'=1+1\"\r\n", raw);
+        Assert.Contains("\"'+1+1\"", raw);
+        Assert.DoesNotContain("'\"", raw);
 
         Assert.Equal(triggers.Select(t => "'" + t), list.Select(r => r[2]));
         Assert.Equal("'=1+1", Line(records, "Event"));
