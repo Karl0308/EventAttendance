@@ -50,7 +50,7 @@ public class SisImportTemplateTests : IntegrationTest
 
     /// <summary>
     /// The same world, plus an active import profile that maps the four category columns
-    /// (<see cref="CategoryMappingProfile"/>). The built-in version 4 maps none (ADR-009, D-76), so the
+    /// (<see cref="CategoryMappingProfile"/>). The built-in versions 4 and 5 map none (ADR-009, D-76), so the
     /// template's category section and vocabulary — kept for the day the feature returns — are only
     /// reachable through a profile like this one.
     /// </summary>
@@ -152,17 +152,26 @@ public class SisImportTemplateTests : IntegrationTest
     // ============================================================================== the contract
 
     /// <summary>
+    /// The built-in version 5 template, as a literal (ADR-010 D-77): QA's ten columns plus <c>RFID</c>,
+    /// in profile order. Typed out rather than derived from the template entries, so a profile change
+    /// that drops a column — or puts a course, teacher or category column back — fails here.
+    /// </summary>
+    private static readonly IReadOnlyList<string> BuiltInTemplateColumns =
+    [
+        "REGNO", "RFID", "STUDENT FIRST NAME", "STUDENT MIDDLE NAME", "STUDENT LAST NAME", "FULL_NAME",
+        "EMAIL_ID", "USA_EMAIL", "COLLEGE_NAME", "PROGRAM", "SECTION_NAME",
+    ];
+
+    /// <summary>
     /// The template's header row is the importer's own profile rows — read back from the database the
     /// importer pinned the upload to — distinct and in <c>Ordinal</c> order. Pinned to the literal
-    /// 18-column list as well (<see cref="SyntheticRoster.ColumnsWithoutCategories"/>: the 22 of
-    /// <see cref="SisRosterColumns.All"/> less the four category columns built-in version 4 no longer
-    /// maps, ADR-009 D-76), so a profile change that silently drops a column — or puts a category
-    /// column back — fails here too. And the columns whose value the profile requires are the ones
-    /// marked.
+    /// 11-column list as well (<see cref="BuiltInTemplateColumns"/>: built-in version 5, ADR-010 D-77),
+    /// so a profile change that silently drops a column — or puts a course, teacher or category column
+    /// back — fails here too. And the columns whose value the profile requires are the ones marked.
     ///
     /// <para>
-    /// The uploaded file still carries the four category columns, so the template lacking them is the
-    /// profile's doing and not the fixture's.
+    /// The uploaded file still carries the course, teacher and category columns, so the template lacking
+    /// them is the profile's doing and not the fixture's.
     /// </para>
     /// </summary>
     [Fact]
@@ -187,7 +196,7 @@ public class SisImportTemplateTests : IntegrationTest
         var headers = HeadersOf(Roster(template));
 
         Assert.Equal(await ProfileHeadersAsync(profileId), headers);
-        Assert.Equal(SyntheticRoster.ColumnsWithoutCategories, headers);
+        Assert.Equal(BuiltInTemplateColumns, headers);
 
         var marked = Roster(template).Row(1).CellsUsed()
             .Where(c => c.HasComment && c.GetComment().Text.Contains(SisImportTemplateWorkbook.RequiredHeaderComment))
@@ -197,9 +206,79 @@ public class SisImportTemplateTests : IntegrationTest
         Assert.Equal(
             [
                 SisRosterColumns.RegNo, SisRosterColumns.StudentFirstName, SisRosterColumns.StudentLastName,
-                SisRosterColumns.CollegeName, SisRosterColumns.Program, SisRosterColumns.CourseCode,
+                SisRosterColumns.CollegeName, SisRosterColumns.Program,
             ],
             marked);
+    }
+
+    /// <summary>
+    /// <b>AC-2 (ADR-010 D-77). The template names no course or teacher column on either sheet.</b> Not as
+    /// a Roster header, and not in the Instructions sheet as a column to fill in, a vocabulary or a rule:
+    /// the seven columns QA struck and the words for them. The Roster half is pinned exactly by
+    /// <see cref="Template_headers_equal_the_active_profile_source_columns_in_order"/> (AC-1 and AC-3); this
+    /// is the other half, which a header-list assertion cannot see. Every cell and every header comment of
+    /// both sheets is read.
+    /// </summary>
+    [Fact]
+    public async Task Template_names_no_course_or_teacher_column_on_either_sheet()
+    {
+        var world = await ArrangeAsync();
+        using var factory = new EamsApiFactory(Sql.ConnectionString);
+        using var client = await SignedInClientAsync(factory, world.SchoolId);
+
+        using var template = await DownloadAsync(client);
+
+        // Positive control: both sheets exist and have content, so an empty sheet cannot pass this.
+        Assert.NotEmpty(HeadersOf(Roster(template)));
+        Assert.Contains("Columns", InstructionLinesOf(template));
+
+        string[] struck =
+        [
+            SisRosterColumns.CourseCode, SisRosterColumns.CourseName, SisRosterColumns.TeacherFullName,
+            SisRosterColumns.TeacherFirstName, SisRosterColumns.TeacherLastName, SisRosterColumns.TeacherSuffix,
+            SisRosterColumns.TeacherCollege,
+        ];
+        string[] words = ["course", "teacher", "instructor"];
+
+        var texts = new List<string>();
+        foreach (var sheet in template.Worksheets)
+        {
+            foreach (var cell in sheet.CellsUsed())
+            {
+                texts.Add(cell.GetString());
+                if (cell.HasComment) texts.Add(cell.GetComment().Text);
+            }
+        }
+
+        Assert.NotEmpty(texts);
+        foreach (var text in texts)
+        {
+            foreach (var column in struck)
+                Assert.DoesNotContain(column, text, StringComparison.OrdinalIgnoreCase);
+            foreach (var word in words)
+                Assert.DoesNotContain(word, text, StringComparison.OrdinalIgnoreCase);
+        }
+    }
+
+    /// <summary>
+    /// <b>The section-only template tells the school one row per student <em>per section</em>.</b> A
+    /// student in a block section and an NSTP or ROTC section must appear twice, and under section-only
+    /// the old wording ("one row per student") reads as once: a school following it would drop the second
+    /// section's enrollment. The line is pinned to its exact text because the whole value is in the words.
+    /// </summary>
+    [Fact]
+    public async Task Section_only_template_says_one_row_per_student_per_section()
+    {
+        var world = await ArrangeAsync();
+        using var factory = new EamsApiFactory(Sql.ConnectionString);
+        using var client = await SignedInClientAsync(factory, world.SchoolId);
+
+        using var template = await DownloadAsync(client);
+
+        Assert.Contains(
+            "2. One row per student per section. A student in more than one section (for example a block " +
+            "section and an NSTP or ROTC section) appears on one row for each.",
+            InstructionLinesOf(template));
     }
 
     /// <summary>
@@ -207,10 +286,10 @@ public class SisImportTemplateTests : IntegrationTest
     /// importer's own names (ruling 14, #427), and the Instructions sheet lists what goes in each.
     ///
     /// <para>
-    /// <b>Kept for the day the feature returns.</b> Built-in version 4 maps no category column, so this
+    /// <b>Kept for the day the feature returns.</b> Built-in versions 4 and 5 map no category column, so this
     /// runs against a profile that does (<see cref="CategoryMappingProfile"/>): the template follows
     /// the profile, and a profile that maps a category column still gets its section, its vocabulary
-    /// and the three rules that go with them. The contrast — version 4 gets none of it — is
+    /// and the three rules that go with them. The contrast — versions 4 and 5 get none of it — is
     /// <see cref="Instructions_carry_no_category_section_and_no_vocabulary"/>.
     /// </para>
     /// </summary>
@@ -411,7 +490,7 @@ public class SisImportTemplateTests : IntegrationTest
         // template, not a safer one.
         Assert.NotEqual(
             SisImportTemplateWorkbook.TextNumberFormatId,
-            sheet.Cell(2, ColumnOf(sheet, SisRosterColumns.CourseName)).Style.NumberFormat.NumberFormatId);
+            sheet.Cell(2, ColumnOf(sheet, SisRosterColumns.SectionName)).Style.NumberFormat.NumberFormatId);
 
         const string zeroLed = "0012503326";
         FillRow(template, 2, ValidStudentRow(rfid: zeroLed));
@@ -470,7 +549,10 @@ public class SisImportTemplateTests : IntegrationTest
     {
         var world = await ArrangeAsync();
 
-        var omitted = new[] { SisRosterColumns.SectionName, SisRosterColumns.CourseName };
+        // Two headers the reader requires, listed in Required's own order — that is the order they are
+        // appended in. (Version 4's pair was SECTION_NAME and COURSE_NAME; COURSE_NAME is in neither the
+        // version 5 mapping nor Required since ADR-010 D-77.)
+        var omitted = new[] { SisRosterColumns.Program, SisRosterColumns.SectionName };
         var newer = BuiltInMapping().Where(m => !omitted.Contains(m.SourceColumn)).ToList();
         await SeedProfileAsync(world.SchoolId, SisImportProfileTemplate.BuiltInVersion, isActive: false, BuiltInMapping());
         await SeedProfileAsync(world.SchoolId, SisImportProfileTemplate.BuiltInVersion + 1, isActive: true, newer);
@@ -513,19 +595,20 @@ public class SisImportTemplateTests : IntegrationTest
         Assert.Contains(SisImportTemplateWorkbook.PasteRule, lines);
 
         // And the constants say what they must, so pinning them is not pinning a blank.
-        Assert.StartsWith("There is currently no way to import a person who has no college, program and course",
+        Assert.StartsWith("There is currently no way to import a person who has no college and program",
             SisImportTemplateWorkbook.NoClassRule, StringComparison.Ordinal);
         Assert.StartsWith("Do NOT type NA, N/A, NONE", SisImportTemplateWorkbook.NoPlaceholderRule, StringComparison.Ordinal);
         Assert.Contains("leading zeros are part of the value", SisImportTemplateWorkbook.LeadingZerosRuleTail, StringComparison.Ordinal);
     }
 
     /// <summary>
-    /// Every deployed database until its next upload: version 3 active (the one that maps the four
-    /// category columns), version 4 never written. The next upload creates v4 from the built-in
-    /// entries, so the template must be v4's columns — without the categories — and not v3's.
+    /// A database whose next upload has not happened yet: version 3 active (the one that maps the four
+    /// category columns), the built-in version never written. The next upload creates the built-in
+    /// version from its entries, so the template must be that version's columns — version 5's, without
+    /// the categories and the course and teacher columns — and not v3's.
     /// </summary>
     [Fact]
-    public async Task Template_uses_built_in_v4_when_only_an_older_version_is_active()
+    public async Task Template_uses_the_built_in_version_when_only_an_older_version_is_active()
     {
         var world = await ArrangeAsync();
         const int v3 = 3;
@@ -541,13 +624,13 @@ public class SisImportTemplateTests : IntegrationTest
 
         using var template = await DownloadAsync(client);
 
-        Assert.Equal(SyntheticRoster.ColumnsWithoutCategories, HeadersOf(Roster(template)));
+        Assert.Equal(BuiltInTemplateColumns, HeadersOf(Roster(template)));
         Assert.Contains($"version {SisImportProfileTemplate.BuiltInVersion}.", InstructionLinesOf(template)[1], StringComparison.Ordinal);
     }
 
     /// <summary>
     /// The contrast with <see cref="Template_for_a_profile_that_maps_category_columns_still_lists_them"/>:
-    /// the built-in version 4 maps no category column, so its Instructions sheet has no category section
+    /// the built-in version 5 (like 4) maps no category column, so its Instructions sheet has no category section
     /// and no vocabulary — a section explaining columns the file does not have would tell the school to
     /// fill in nothing, and a list of accepted values the import will not apply would be a lie. The
     /// school has a full vocabulary here (<see cref="ArrangeAsync"/> seeds it), so its absence from the

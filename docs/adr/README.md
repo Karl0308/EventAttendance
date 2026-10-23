@@ -13,12 +13,13 @@ it creates one hazard this file exists to close:
 
 | ADR | Title | Status | Notes |
 |---|---|---|---|
-| [001](ADR-001-schema-drift-from-technical-plan.md) | Schema drift from the Technical Plan | **Accepted** | D-1…D-6. **Amended by ADR-002** — do not read its follow-up list as current |
-| [002](ADR-002-phase-1-2-schema-and-import-decisions.md) | Phase 1–2 schema and import decisions | **Accepted** (2026-07-28) | D-7…D-11. Amends ADR-001 by reference; closes four of its follow-ups. **Now immutable** |
+| [001](ADR-001-schema-drift-from-technical-plan.md) | Schema drift from the Technical Plan | **Accepted** | D-1…D-6. **Amended by ADR-002** — do not read its follow-up list as current. D-1/D-2/D-4 also amended by **ADR-010 (D-77)**, proposed |
+| [002](ADR-002-phase-1-2-schema-and-import-decisions.md) | Phase 1–2 schema and import decisions | **Accepted** (2026-07-28) | D-7…D-11. Amends ADR-001 by reference; closes four of its follow-ups. **Now immutable**. D-11 amended by **ADR-010 (D-77)**, proposed: the placeholder course blocks D-11's widening step 2 |
 | [003](ADR-003-phase-3a-event-audience-and-close-freeze.md) | Phase 3a — the event audience and the close-time freeze | **Accepted** (2026-07-29) | D-12…D-21. Amends 001 and 002 by reference; closes GAP 6. The first ADR about *behaviour* rather than schema. **Now immutable** |
 | [004](ADR-004-detaching-the-roster-import-run.md) | Detaching the roster import run from the HTTP request | **Accepted** (2026-08-27) | **D-54** and its eight parts (D-54.1…D-54.8). Amends 001/002/003 by reference. **Not the consolidation** — see the note at the bottom of this file. **Now immutable** |
 | [005](ADR-005-classifying-the-roster.md) | Classifying the roster — what kind of person each row is | **Proposed** (2026-09-17) | **D-55…D-68**. Amends 001/002/003/004 by reference. **Also not the consolidation** — see the note directly below. Freely editable while `Proposed`. D-68 was added *after* the review gate, which is why it sits apart from D-55…D-67 in the document. **D-59 and D-65 superseded by D-76 (ADR-009)**: D-59 for the built-in profile only, D-65 for the `StudentDto` field only (its no-new-permission-code ruling stands) |
 | [009](ADR-009-withdrawing-student-classification.md) | Withdrawing student classification from the product surface (the schema stays) | **Proposed** (2026-10-23) | **D-76**. Supersedes ADR-005 D-59 (profile `BuiltInVersion` 3 → 4, no `*_CATEGORY` mapping) and D-65 (`StudentDto.classifications` removed, `by-card` included). Tables, data, vocabulary endpoints and importer category path kept dormant; no migration. Deploy FE before BE |
+| [010](ADR-010-section-only-roster-import.md) | The roster import becomes section-only (one placeholder course per school) | **Proposed** (2026-10-23) | **D-77**. Builds on ADR-009 and is accepted with it. Profile `BuiltInVersion` 4 → 5 drops the seven course/teacher columns (template: QA's 10 plus `RFID`). Sections hang off one placeholder `Courses` row per school (`CodeKey = "(section)"`). The mode comes from the pinned profile. No migration, no contract schema change. **Amends by reference ADR-001 D-1/D-2/D-4, ADR-002 D-11 (blocks its widening until the placeholder is excluded) and proposed D-47.** Additive drift on `Courses` (ADR-001 D-1). Deploy FE before BE |
 
 Decision numbers run continuously across documents, so `D-9` is unambiguous without naming the ADR.
 
@@ -154,6 +155,7 @@ Deferred to the ADR-006 consolidation at JJ's direction, not forgotten.
 | Why `GET /cards` pages cards rather than students | ADR-005 **D-64** (ADR-001 **D-3** made visible) |
 | Why no `cards.read` / `classifications.read` code was minted | ADR-005 **D-65** (D-45 applied prospectively) |
 | **Why students carry no classification** | ADR-009 **D-76** (supersedes D-59's profile and D-65's `StudentDto` field; the tables stay) |
+| **Why the roster import has no course or teacher columns, and what `(section)` in `Courses` is** | ADR-010 **D-77** (profile v5, one placeholder course per school, mode from the pinned profile) |
 | Why the **import** *is* background work when the freeze is not | ADR-004 **D-54.1** ⚠ (read with D-21 or D-21 looks like a policy) |
 | Why `POST /sis/import/{id}/run` returns `202`, and how a batch is claimed | ADR-004 **D-54**, **D-54.4** |
 | Why there is no `Queued` import status | ADR-004 **D-54.2** ⚠ |

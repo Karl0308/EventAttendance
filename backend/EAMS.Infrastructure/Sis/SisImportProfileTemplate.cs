@@ -61,12 +61,24 @@ internal static class SisImportProfileTemplate
     /// </para>
     ///
     /// <para>
+    /// <b>Bumped to 5 on 2026-10-23 (ADR-010, D-77)</b>, when QA's job order stripped the course and
+    /// teacher columns from the template: version 5 is version 4 without the seven rows for
+    /// <c>COURSE_CODE</c>, <c>COURSE_NAME</c>, <c>UA_FULLNAME</c>, <c>TEACHER FIRST NAME</c>,
+    /// <c>TEACHER LAST NAME</c>, <c>TEACHER SUFFIX</c> and <c>TEACHER COLLEGE</c>. With no
+    /// <see cref="CourseCodeKeyTarget"/> row the mapping is <b>section-only</b>: the pipeline reads no
+    /// course or teacher cell, even from a file that carries them, and files each section under one
+    /// placeholder course per school (<see cref="AcademicKey.SectionPlaceholder"/>). Version 4 and earlier
+    /// are superseded, not deleted, and a batch pinned to one of them still creates courses, instructors
+    /// and assignments — D-4 working, as in ADR-009.
+    /// </para>
+    ///
+    /// <para>
     /// Bumping is not cosmetic in any case. A database still holding version 1 would read the card
     /// serial out of the REGNO column — the exact defect version 2 removes — while a freshly seeded one
     /// would not. A version is what makes the two agree.
     /// </para>
     /// </summary>
-    public const int BuiltInVersion = 4;
+    public const int BuiltInVersion = 5;
 
     /// <summary>
     /// The dotted target that marks the RFID source column, named once because two places must agree
@@ -82,6 +94,29 @@ internal static class SisImportProfileTemplate
     /// Text), and a literal in two places would drift silently.
     /// </summary>
     public const string StudentNumberTarget = "Student.StudentNumber";
+
+    /// <summary>
+    /// The dotted target whose presence makes a profile <b>course mode</b> (ADR-010, D-77). The pipeline
+    /// reads the course code — display value and key — from this row's source column; a profile with no
+    /// such row is section-only and reads no course or teacher cell at all. Named once for the reason
+    /// <see cref="RfidCardUidTarget"/> is: the profile row and the lookup must agree, and a drift between
+    /// two literals would silently turn every course-mode batch section-only.
+    /// </summary>
+    public const string CourseCodeKeyTarget = "Course.CodeKey";
+
+    /// <summary>
+    /// The dotted target of the course title column. Read only in course mode, from this row's source
+    /// column; a course-mode profile without it imports courses with no title.
+    /// </summary>
+    public const string CourseTitleTarget = "Course.Title";
+
+    /// <summary>
+    /// The dotted target the teacher columns map to. In course mode the pipeline reads the teacher cells
+    /// only when the profile maps at least one column here. Which cell is the full name, the first name
+    /// or the last name cannot be told from this target (all three share it), so those cells are still
+    /// read from the <see cref="SisRosterColumns"/> headers.
+    /// </summary>
+    public const string InstructorDisplayNameTarget = "Instructor.DisplayName";
 
     /// <summary>
     /// The dotted target that marks a category column, one per <see cref="ClassificationAxis"/>: the
@@ -111,9 +146,11 @@ internal static class SisImportProfileTemplate
         "Built-in mapping for the CICSS roster export. Version 2 separated the RFID card serial from " +
         "REGNO (the client's 2026-07-30 correction); version 3 added the four Task 5 category columns; " +
         "version 4 removes them again, because student classification was withdrawn from the product " +
-        "(2026-10-23, ADR-009 D-76). Earlier versions are kept, superseded, to explain the batches that " +
-        "ran under them — a version 2 or version 4 batch maps no category column and therefore " +
-        "classifies nobody, which is the guarantee rather than a gap. Seeded from " +
+        "(2026-10-23, ADR-009 D-76); version 5 removes the course and teacher columns and imports " +
+        "sections only, under one placeholder course per school (2026-10-23, ADR-010 D-77). Earlier " +
+        "versions are kept, superseded, to explain the batches that ran under them — a version 2, 4 or 5 " +
+        "batch maps no category column and therefore classifies nobody, and a version 4 or earlier batch " +
+        "still imports courses and teachers, which is the guarantee rather than a gap. Seeded from " +
         nameof(SisImportProfileTemplate) + " so every batch points at the rules that actually ran.";
 
     /// <param name="SourceColumn">The header in the file.</param>
@@ -128,14 +165,14 @@ internal static class SisImportProfileTemplate
     private const string Email = "RosterText.CleanEmail";
     private const string Key = "AcademicKey.NormalizeOrUnspecified";
     private const string Uid = "CardUid.Normalize";
-    private const string Teacher = "TeacherNames.Parse";
     private const string Unused = "(not imported)";
 
     /// <summary>
-    /// All twenty-two columns, in file order. Columns that feed nothing are listed too — an absent row
-    /// is indistinguishable from a forgotten one, and "we read this column and deliberately do nothing
+    /// The eleven template columns, in file order. Columns that feed nothing are listed too — an absent
+    /// row is indistinguishable from a forgotten one, and "we read this column and deliberately do nothing
     /// with it" is the more useful record. The four category columns version 3 added are not listed
-    /// since version 4: a file that still carries them imports with those cells unread.
+    /// since version 4, and the seven course and teacher columns not since version 5: a file that still
+    /// carries them imports with those cells unread.
     /// </summary>
     public static readonly IReadOnlyList<Entry> Entries =
     [
@@ -169,24 +206,9 @@ internal static class SisImportProfileTemplate
         new(SisRosterColumns.Program, "Program.Code", Verbatim, IsRequired: true),
         new(SisRosterColumns.Program, "Program.CodeKey", Key, IsRequired: true),
 
+        // The section is the enrollment's only placement under version 5. Optional as a value (a blank
+        // one writes no offering and no enrollment, and warns), required as a header.
         new(SisRosterColumns.SectionName, "CourseOffering.SectionName", Verbatim, IsRequired: false),
         new(SisRosterColumns.SectionName, "CourseOffering.SectionKey", Key, IsRequired: false),
-
-        new(SisRosterColumns.CourseCode, "Course.Code", Verbatim, IsRequired: true),
-        new(SisRosterColumns.CourseCode, "Course.CodeKey", Key, IsRequired: true),
-        new(SisRosterColumns.CourseName, "Course.Title", Verbatim, IsRequired: false),
-
-        new(SisRosterColumns.TeacherFullName, "Instructor.DisplayName", Teacher, IsRequired: false),
-        new(SisRosterColumns.TeacherFirstName, "Instructor.DisplayName", Teacher, IsRequired: false),
-        new(SisRosterColumns.TeacherLastName, "Instructor.DisplayName", Teacher, IsRequired: false),
-
-        // Read, understood, and deliberately discarded: the column is an honorific despite its name, and
-        // letting it reach Instructor.DisplayName would put "Ms." into NameKey and split one teacher
-        // into two. See TeacherNames.Parse.
-        new(SisRosterColumns.TeacherSuffix, "(none — honorific)", Teacher, IsRequired: false),
-
-        // The teacher's own college, which is not the student's and is not what Courses.CollegeId means.
-        // Storing it there would attribute a course to whichever faculty happened to staff it.
-        new(SisRosterColumns.TeacherCollege, "(none)", Unused, IsRequired: false),
     ];
 }

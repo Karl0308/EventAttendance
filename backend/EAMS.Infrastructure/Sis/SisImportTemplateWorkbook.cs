@@ -53,6 +53,12 @@ internal static class SisImportTemplateWorkbook
     /// reader rejects. An appended header is described by the built-in entries for it, because those are
     /// the rules the importer applies to it (its value columns are read by fixed header names too).
     /// </para>
+    ///
+    /// <para>
+    /// Since built-in version 5 (ADR-010, D-77) that list no longer names a course or teacher column, so a
+    /// section-only profile's template carries none — appending them is what would have defeated QA's
+    /// column list.
+    /// </para>
     /// </summary>
     public static IReadOnlyList<TemplateColumn> ColumnsOf(IReadOnlyList<ProfileRow> rows)
     {
@@ -125,12 +131,15 @@ internal static class SisImportTemplateWorkbook
     {
         var columns = ColumnsOf(rows);
 
+        // The importer's own switch (ADR-010 D-77): no Course.CodeKey row, no course read.
+        var sectionOnly = !rows.Any(r => r.TargetField == SisImportProfileTemplate.CourseCodeKeyTarget);
+
         using var workbook = new XLWorkbook();
         var instructions = workbook.AddWorksheet(InstructionsSheetName);
         var roster = workbook.AddWorksheet(RosterSheetName);
 
         WriteRoster(roster, columns);
-        WriteInstructions(instructions, profileName, profileVersion, columns, vocabulary);
+        WriteInstructions(instructions, profileName, profileVersion, columns, vocabulary, sectionOnly);
         instructions.SetTabActive();
 
         var buffer = new MemoryStream();
@@ -167,9 +176,9 @@ internal static class SisImportTemplateWorkbook
 
     private static void WriteInstructions(
         IXLWorksheet sheet, string profileName, int profileVersion,
-        IReadOnlyList<TemplateColumn> columns, IReadOnlyList<VocabularyEntry> vocabulary)
+        IReadOnlyList<TemplateColumn> columns, IReadOnlyList<VocabularyEntry> vocabulary, bool sectionOnly)
     {
-        var lines = InstructionLines(profileName, profileVersion, columns, vocabulary);
+        var lines = InstructionLines(profileName, profileVersion, columns, vocabulary, sectionOnly);
 
         sheet.Column(1).Width = InstructionsColumnWidth;
         for (var i = 0; i < lines.Count; i++)
@@ -188,10 +197,16 @@ internal static class SisImportTemplateWorkbook
     /// <summary>
     /// The Instructions sheet, one cell per line. Every statement here is a description of what
     /// <c>SisImportService</c> does today — change the importer, change this.
+    ///
+    /// <para>
+    /// <paramref name="sectionOnly"/> is the importer's mode for this profile (ADR-010 D-77): no
+    /// <c>Course.CodeKey</c> row means no course is read, so the sheet asks for one row per student and
+    /// names only the college and program as values that must be filled in.
+    /// </para>
     /// </summary>
     internal static List<(string Text, bool Heading)> InstructionLines(
         string profileName, int profileVersion,
-        IReadOnlyList<TemplateColumn> columns, IReadOnlyList<VocabularyEntry> vocabulary)
+        IReadOnlyList<TemplateColumn> columns, IReadOnlyList<VocabularyEntry> vocabulary, bool sectionOnly)
     {
         var lines = new List<(string, bool)>();
         void Heading(string text) { lines.Add(("", false)); lines.Add((text, true)); }
@@ -202,7 +217,9 @@ internal static class SisImportTemplateWorkbook
             .ToHashSet(StringComparer.Ordinal);
 
         var textColumns = columns.Where(c => c.IsText).Select(c => c.Header).ToList();
-        var placeholderColumns = new[] { SisRosterColumns.CollegeName, SisRosterColumns.Program, SisRosterColumns.CourseCode };
+        var placeholderColumns = sectionOnly
+            ? new[] { SisRosterColumns.CollegeName, SisRosterColumns.Program }
+            : new[] { SisRosterColumns.CollegeName, SisRosterColumns.Program, SisRosterColumns.CourseCode };
         var placeholderList = string.Join(", ", placeholderColumns);
 
         lines.Add(("EAMS roster import template: instructions", true));
@@ -213,8 +230,11 @@ internal static class SisImportTemplateWorkbook
         Line($"1. Fill in the '{RosterSheetName}' sheet, starting on row 2. Keep its first row exactly as it is: " +
              "the import finds the roster by these headings, not by the sheet's name or position. Do not " +
              "delete, rename or reorder a heading. If you have nothing for a column, leave its cells blank.");
-        Line($"2. One row per student per class. The same {SisRosterColumns.RegNo} appears on as many rows as " +
-             "the person has classes.");
+        Line(sectionOnly
+            ? "2. One row per student per section. A student in more than one section (for example a block " +
+              "section and an NSTP or ROTC section) appears on one row for each."
+            : $"2. One row per student per class. The same {SisRosterColumns.RegNo} appears on as many rows as " +
+              "the person has classes.");
         Line("3. Save as an Excel Workbook (.xlsx) and upload it on the Students > Import roster page, choosing " +
              "the term it belongs to.");
         Line($"4. This '{InstructionsSheetName}' sheet can stay in the file. The import ignores any sheet whose " +
@@ -271,8 +291,9 @@ internal static class SisImportTemplateWorkbook
         Line($"{placeholderList} must be filled in on every row. A row with any of them blank is rejected " +
              "as a missing required value and nothing on it is imported. A person whose every row is " +
              "rejected (for example a staff member with no class) is not imported and not enrolled.");
-        Line(NoPlaceholderRule);
-        Line(NoClassRule);
+        Line(sectionOnly ? NoPlaceholderRule : NoPlaceholderRuleCourseMode);
+        Line(sectionOnly ? NoClassRule : NoClassRuleCourseMode);
+        if (sectionOnly) Line(BlankSectionRule);
 
         if (textColumns.Count > 0)
         {
@@ -312,15 +333,40 @@ internal static class SisImportTemplateWorkbook
     /// <summary>The #427 "NA" trap. See <c>SisImportService.ParseRows</c>.</summary>
     internal const string NoPlaceholderRule =
         "Do NOT type NA, N/A, NONE, a dash or any other placeholder into these columns to get round this. " +
+        "The import treats whatever is typed as a real name: typing NA creates a college and program " +
+        "literally called 'NA', files the person under it, and those records then appear beside the real " +
+        "ones wherever colleges and programs are listed or picked, including when choosing an event's " +
+        "audience.";
+
+    /// <summary>
+    /// <see cref="NoPlaceholderRule"/> for a profile that still imports courses (version 4 and earlier, or
+    /// an operator-authored course-mode version).
+    /// </summary>
+    internal const string NoPlaceholderRuleCourseMode =
+        "Do NOT type NA, N/A, NONE, a dash or any other placeholder into these columns to get round this. " +
         "The import treats whatever is typed as a real name: typing NA creates a college, program and " +
         "course literally called 'NA', enrols the person in it, and those records then appear beside the " +
         "real ones wherever colleges, programs and courses are listed or picked, including when choosing " +
         "an event's audience.";
 
-    /// <summary>Staff with no class: there is no supported path today.</summary>
+    /// <summary>Staff with no class: there is no supported path today. Section-only wording.</summary>
     internal const string NoClassRule =
+        "There is currently no way to import a person who has no college and program through this file. " +
+        "Leave such people out of it and raise them with the EAMS administrator.";
+
+    /// <summary><see cref="NoClassRule"/> for a profile that still imports courses.</summary>
+    internal const string NoClassRuleCourseMode =
         "There is currently no way to import a person who has no college, program and course through this " +
         "file. Leave such people out of it and raise them with the EAMS administrator.";
+
+    /// <summary>
+    /// <see cref="SisImportWarningCode.SectionUnspecified"/> under a section-only profile (ADR-010 D-77,
+    /// point 7), in the school's words.
+    /// </summary>
+    internal const string BlankSectionRule =
+        "SECTION_NAME may be left blank, but a student with no section is placed in no section: they are " +
+        "in no section group and cannot be invited as part of one, and the import reports a warning for " +
+        "the row. Fill it in wherever the student has a section.";
 
     internal const string LeadingZerosRuleTail =
         "formatted as Text in this template, because leading zeros are part of the value: RFID card " +

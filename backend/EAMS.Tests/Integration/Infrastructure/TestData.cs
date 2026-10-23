@@ -295,6 +295,21 @@ internal static class TestData
     };
 
     /// <summary>
+    /// The school's section-only placeholder course (ADR-010 D-77): what a built-in version 5 import
+    /// files every section under. <b>Built by hand rather than through <see cref="NewCourse"/></b>, because
+    /// that derives <c>CodeKey</c> with <see cref="AcademicKey.NormalizeOrUnspecified"/>, which strips the
+    /// parentheses and would key it <c>SECTION</c> — a real-looking course, not the placeholder.
+    /// </summary>
+    public static Course NewSectionPlaceholderCourse(Guid schoolId) => new()
+    {
+        SchoolId = schoolId,
+        CollegeId = null,
+        Code = AcademicKey.SectionPlaceholder,
+        CodeKey = AcademicKey.SectionPlaceholder,
+        Title = null,
+    };
+
+    /// <summary>
     /// Defaults to the roster's <c>'TO BE ANNOUNCE'</c> sentinel, because that is what 66 of the
     /// sample's rows actually carry and a fixture that pretends otherwise tests a tidier world than
     /// the one being built for.

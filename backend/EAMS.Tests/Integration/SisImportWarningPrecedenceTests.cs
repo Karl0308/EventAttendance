@@ -104,6 +104,23 @@ public class SisImportWarningPrecedenceTests : IntegrationTest
             });
         }
 
+        // The frozen version 4 section, course and teacher rows, so the batch keeps its course and
+        // instructor findings once the built-in profile goes section-only. Rows only; no RFID or student
+        // rows, so the batch is otherwise exactly as before.
+        foreach (var row in CourseMappingProfile.CourseRows)
+        {
+            write.SisImportProfileColumns.Add(new SisImportProfileColumn
+            {
+                Profile = profile,
+                SourceColumn = row.SourceColumn,
+                SourceColumnKey = SisRosterColumns.HeaderKey(row.SourceColumn),
+                TargetField = row.TargetField,
+                NormalizationRule = row.NormalizationRule,
+                IsRequired = row.IsRequired,
+                Ordinal = ordinal++,
+            });
+        }
+
         var batch = await write.SisImportBatches.IgnoreQueryFilters().SingleAsync(b => b.Id == batchId);
         batch.ImportProfileId = profile.Id;
         await write.SaveChangesAsync();
@@ -228,7 +245,8 @@ public class SisImportWarningPrecedenceTests : IntegrationTest
         // maps the four columns — correctly mapped, which is the point: no ClassificationAxisUnknown
         // anywhere in this batch. The other tests in this file build their own (mistyped) profile.
         await using (var seed = NewDbContext())
-            await CategoryMappingProfile.SeedCategoryMappingProfileAsync(seed, world.SchoolId);
+            await CategoryMappingProfile.SeedCategoryMappingProfileAsync(
+                seed, world.SchoolId, frozenCourseMapping: true);
 
         var rows = SyntheticRoster.Rows();
         ClearCategories(rows, 5);

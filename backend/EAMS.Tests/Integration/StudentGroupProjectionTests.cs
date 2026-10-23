@@ -175,6 +175,93 @@ public class StudentGroupProjectionTests : IntegrationTest
     }
 
     /// <summary>
+    /// <b>AC-11 (ADR-010 D-77). A section group counts a student once when the section is reached through
+    /// both a version 4 course offering and a version 5 section-only offering.</b> Santos is enrolled in
+    /// <c>BSFS 2-A</c> through two real courses and again through the placeholder; Vega only through the
+    /// placeholder. The group is the four distinct people, Santos exactly once, and the section's name is
+    /// the section's, not the placeholder's.
+    /// </summary>
+    [Fact]
+    public async Task Section_group_counts_student_once_across_v4_course_and_v5_section_offerings()
+    {
+        var world = await ArrangeAsync();
+
+        Guid vegaId;
+        await using (var db = NewDbContext())
+        {
+            var placeholder = TestData.NewSectionPlaceholderCourse(world.SchoolId);
+            db.Courses.Add(placeholder);
+            var sectionOnly = TestData.NewOffering(world.TermId, placeholder.Id, "BSFS 2-A");
+            db.CourseOfferings.Add(sectionOnly);
+
+            var vega = TestData.NewStudent(world.SchoolId, "2023-0099", lastName: "Vega");
+            db.Students.Add(vega);
+            db.StudentTermRecords.Add(TestData.NewTermRecord(vega.Id, world.TermId, world.ProgramId, world.CollegeId));
+            db.Enrollments.AddRange(
+                TestData.NewEnrollment(world.SantosId, sectionOnly.Id),
+                TestData.NewEnrollment(vega.Id, sectionOnly.Id));
+            vegaId = vega.Id;
+            await db.SaveChangesAsync();
+        }
+
+        await SyncAsync(world.TermId);
+
+        var bsfs = await ReadGroupAsync(GroupSourceEntityType.Section, "BSFS2A");
+
+        // Santos, Flores, Aquino (v4) and Vega (v5 only): four people, not five memberships.
+        Assert.Equal(4, bsfs.Members.Count);
+        Assert.Equal(4, bsfs.Members.Select(m => m.StudentId).Distinct().Count());
+        Assert.Equal(1, bsfs.Members.Count(m => m.StudentId == world.SantosId));
+        Assert.Contains(bsfs.Members, m => m.StudentId == vegaId);
+        Assert.Contains("BSFS 2-A", bsfs.Name, StringComparison.Ordinal);
+        Assert.DoesNotContain(AcademicKey.SectionPlaceholder, bsfs.Name, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// <b>AC-12 (ADR-010 D-77). A section-only offering projects a Section group and no Course group.</b>
+    /// The Course group would be "(section) — BSCRIM 4-A", a second copy of the section group labelled as a
+    /// course. The three real offerings of the world still get theirs, so the skip is the placeholder's
+    /// and not a projection that stopped making course groups.
+    /// </summary>
+    [Fact]
+    public async Task Section_only_offering_projects_no_course_group()
+    {
+        var world = await ArrangeAsync();
+
+        Guid sectionOnlyOfferingId, zamoraId;
+        await using (var db = NewDbContext())
+        {
+            var placeholder = TestData.NewSectionPlaceholderCourse(world.SchoolId);
+            db.Courses.Add(placeholder);
+            var sectionOnly = TestData.NewOffering(world.TermId, placeholder.Id, "BSCRIM 4-A");
+            db.CourseOfferings.Add(sectionOnly);
+            var zamora = TestData.NewStudent(world.SchoolId, "2023-0098", lastName: "Zamora");
+            db.Students.Add(zamora);
+            db.StudentTermRecords.Add(TestData.NewTermRecord(zamora.Id, world.TermId, world.ProgramId, world.CollegeId));
+            db.Enrollments.Add(TestData.NewEnrollment(zamora.Id, sectionOnly.Id));
+            sectionOnlyOfferingId = sectionOnly.Id;
+            zamoraId = zamora.Id;
+            await db.SaveChangesAsync();
+        }
+
+        await SyncAsync(world.TermId);
+
+        await using var read = NewDbContext();
+        var groups = await read.StudentGroups.AsNoTracking().Include(g => g.Members)
+            .Where(g => g.SourceType == GroupSourceType.Derived).ToListAsync();
+
+        // The section is there, with its student.
+        var section = Assert.Single(groups, g =>
+            g.SourceEntityType == GroupSourceEntityType.Section && g.SourceKey == "BSCRIM4A");
+        Assert.Contains(section.Members, m => m.StudentId == zamoraId);
+
+        // And the offering is not projected as a course.
+        Assert.DoesNotContain(groups, g => g.SourceEntityId == sectionOnlyOfferingId);
+        Assert.DoesNotContain(groups, g => g.Name.Contains(AcademicKey.SectionPlaceholder, StringComparison.Ordinal));
+        Assert.Equal(3, groups.Count(g => g.SourceEntityType == GroupSourceEntityType.CourseOffering));
+    }
+
+    /// <summary>
     /// Section names repeat every year against different students, and an <c>EventGroups</c> row from a
     /// past term still points at the group it was written against. Without the term in the name, an
     /// organizer reading a past event's audience sees a name that now describes a different cohort and

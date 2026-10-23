@@ -106,7 +106,8 @@ included (D-65). Three facts decide how far a removal can go:
 - The importer's category resolution (D-56), first-write-wins (D-60), warn-once memory (D-61), and the
   D-62/D-63 warning codes. **None of these can be reached under v4**, because no category column is
   mapped. All of them come back for any profile that maps category columns. Their tests move to a
-  **v5 category-profile fixture**, so the path stays covered while no shipped profile uses it. The
+  **category-profile fixture one version above the built-in** (`BuiltInVersion + 1`: version 5 when
+  this was written, version 6 since ADR-010 moved the built-in to 5), so the path stays covered while no shipped profile uses it. The
   fixture is `CategoryMappingProfile` (`backend/EAMS.Tests/Integration/Infrastructure/`). It seeds an
   active operator profile at `BuiltInVersion + 1` that maps the four category columns, and
   `SisImportClassificationTests` and the other classification import suites run on it. On that fixture,
@@ -128,7 +129,7 @@ now with no product surface over them.
 
 ### Positive
 - All three QA points are met with no migration, no data loss and no new schema.
-- Fully reversible. **Reversal** is a v5 built-in profile that re-adds the four category rows, plus
+- Fully reversible. **Reversal** is a later built-in profile version that re-adds the four category rows, plus
   the `StudentDto` field. The data is still there.
 - ADR-005's importer logic, its warning codes and its tests are kept. A school whose export does carry
   category columns gets it back as a profile version, not a rebuild.
@@ -150,9 +151,9 @@ now with no product surface over them.
   by a batch uploaded under v4. This is D-4 working as designed (the same shape D-59 recorded for
   version ≤ 2), and it looks like a bug to anyone who does not know the profile moved.
 - Classification code now lives in the tree with no shipped caller of its import path. A reader may
-  delete it as dead code. This document and the v5 fixture tests are what argue against that.
+  delete it as dead code. This document and the category-profile fixture tests are what argue against that.
 - ADR-005 D-61's open recovery question ("decide recovery before this ships") goes quiet rather than
-  away. It cannot fire under v4, and it returns with any v5.
+  away. It cannot fire under v4, and it returns with any profile that maps category columns.
 
 ### Neutral
 - QA's "CSV import" was read as the **roster XLSX template**, since the roster import is XLSX only. The

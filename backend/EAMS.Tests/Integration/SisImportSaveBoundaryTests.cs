@@ -50,25 +50,32 @@ public class SisImportSaveBoundaryTests : IntegrationTest
     private const int ExpectedFanOutChunkSize = 500;
 
     /// <summary>
-    /// How many fan-out rows one clean roster row produces: College, Program, Course, CourseOffering,
-    /// Student, RfidCard, StudentTermRecord, Instructor, CourseOfferingInstructor, Enrollment.
+    /// How many fan-out rows one clean roster row produces: College, Program, CourseOffering, Student,
+    /// RfidCard, StudentTermRecord, Enrollment. Every fixture row carries a card serial (see
+    /// <see cref="CleanRows"/>), so the card touch is always there.
     ///
     /// <para>
-    /// Ten regardless of whether those entities were created or merely referenced — an
+    /// Seven regardless of whether those entities were created or merely referenced — an
     /// <c>Unchanged</c> touch is still a touch — which is what makes the fan-out of an <c>n</c>-row
-    /// clean roster exactly <c>n * 10</c> and therefore something a chunk-boundary test can check
+    /// clean roster exactly <c>n * 7</c> and therefore something a chunk-boundary test can check
     /// against arithmetic rather than against whatever the implementation happened to write.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>It was ten until ADR-010 (D-77).</b> Built-in profile version 5 is section-only: the
+    /// placeholder course records no <c>Course</c> touch, and with no teacher column there is no
+    /// <c>Instructor</c> or <c>CourseOfferingInstructor</c> touch either.
     /// </para>
     ///
     /// <para>
     /// <b>It was eleven between Task 5 and ADR-009 (D-76).</b> Task 5 added the person's
     /// <c>StudentClassification</c> as an eleventh touch; built-in profile version 4 maps no category
-    /// column, so a clean row touches no classification again and the count is back to ten. A profile
-    /// that does map one (see <see cref="CategoryMappingProfile"/>) would make it eleven again — this
-    /// test deliberately runs on the built-in profile.
+    /// column, so a clean row touches no classification again and the count went back to ten. A profile
+    /// that does map one (see <see cref="CategoryMappingProfile"/>) would add one again — this test
+    /// deliberately runs on the built-in profile.
     /// </para>
     /// </summary>
-    private const int FanOutRowsPerCleanRow = 10;
+    private const int FanOutRowsPerCleanRow = 7;
 
     /// <summary>
     /// The most clean source rows whose fan-out fits inside one save. <c>ApplyInChunks</c> never splits
@@ -76,21 +83,28 @@ public class SisImportSaveBoundaryTests : IntegrationTest
     /// a row that lands the chunk on the ceiling exactly still fits.
     ///
     /// <para>
-    /// <b>Arithmetic, at ceiling 500 and 10 per row</b> (it was 45 rows at 11 per row, which is why the
-    /// old 44 / 45 / 46 / 91 stopped meaning anything the moment the count moved):
+    /// <b>Arithmetic, at ceiling 500 and 7 per row</b> (it was 50 rows at 10 per row and 45 at 11, which
+    /// is why literal sizes stop meaning anything the moment the count moves):
     /// </para>
     /// <list type="bullet">
-    /// <item><c>500 / 10 = 50</c> rows per chunk. 50 rows stage 500 fan-out entries, exactly on the
-    /// ceiling, and fit.</item>
-    /// <item><c>49</c> rows: 490 entries, one save, a whole row short of the boundary.</item>
-    /// <item><c>50</c> rows: 500 entries, one save, exactly on the boundary (the off-by-one that
-    /// <c>&gt;</c> versus <c>&gt;=</c> would move).</item>
-    /// <item><c>51</c> rows: the 51st would make 510 &gt; 500, so the chunk cuts after row 50 and a
-    /// second save carries 10 — one past the boundary, two saves.</item>
-    /// <item><c>101</c> rows (<c>50 * 2 + 1</c>): saves of 500, 500 and 10 — one past the second
+    /// <item><c>500 / 7 = 71</c> rows per chunk. 71 rows stage 497 fan-out entries and fit; the 72nd
+    /// would make 504.</item>
+    /// <item><c>70</c> rows: 490 entries, one save, a whole row short of the boundary.</item>
+    /// <item><c>71</c> rows: 497 entries, one save, the last row that fits.</item>
+    /// <item><c>72</c> rows: the 72nd would make 504 &gt; 500, so the chunk cuts after row 71 and a
+    /// second save carries 7 — one past the boundary, two saves.</item>
+    /// <item><c>143</c> rows (<c>71 * 2 + 1</c>): saves of 497, 497 and 7 — one past the second
     /// boundary, three saves.</item>
-    /// <item><c>1001</c> rows: 10,010 entries, 21 saves — the plain volume case.</item>
+    /// <item><c>1001</c> rows: 7,007 entries, 15 saves — the plain volume case.</item>
     /// </list>
+    /// <para>
+    /// <b>Seven does not divide 500, so no count of clean rows lands exactly on the ceiling.</b> The
+    /// <c>&gt;</c> versus <c>&gt;=</c> off-by-one that the 50-row case pinned at ten per row is not
+    /// reachable with a seven-entry row; the 71 / 72 pair pins "the last row that fits" and "the
+    /// first that does not", and
+    /// <c>A_roster_whose_fan_out_lands_exactly_on_the_ceiling_is_one_save</c> reaches the exact landing
+    /// with card-less (six-entry) rows.
+    /// </para>
     /// </summary>
     private const int RowsPerChunk = ExpectedFanOutChunkSize / FanOutRowsPerCleanRow;
 
@@ -259,8 +273,8 @@ public class SisImportSaveBoundaryTests : IntegrationTest
     /// <para>
     /// <b>Derived because the literals silently stopped straddling anything.</b> They were 499 / 500 /
     /// 501 / 1001, correct while a row produced ten fan-out entries; Task 5 made it eleven and every
-    /// one of them landed mid-chunk. ADR-009 (D-76) made it ten again, so the derived sizes are now
-    /// 49 / 50 / 51 / 101 / 1001 (see <see cref="RowsPerChunk"/> for the arithmetic). The <em>arithmetic</em> assertion below still failed, loudly, so
+    /// one of them landed mid-chunk. ADR-009 (D-76) made it ten again and ADR-010 (D-77) seven, so the
+    /// derived sizes are now 70 / 71 / 72 / 143 / 1001 (see <see cref="RowsPerChunk"/> for the arithmetic). The <em>arithmetic</em> assertion below still failed, loudly, so
     /// the change was caught — but had the count moved without the product changing, four boundary
     /// cases would have quietly become four ordinary ones with nothing going red. Tying them to the
     /// constants is what keeps the property rather than the numbers.
@@ -342,6 +356,51 @@ public class SisImportSaveBoundaryTests : IntegrationTest
     }
 
     /// <summary>
+    /// <b>A chunk that lands on the ceiling <em>exactly</em> still fits: one save, not two.</b> This is the
+    /// <c>&gt;</c> versus <c>&gt;=</c> in <c>RowLedger.ApplyInChunks</c>
+    /// (<c>pending + fanOut &gt; fanOutChunkSize</c>), which no whole number of clean rows can reach now:
+    /// 7 does not divide 500, so the 71 / 72 pair straddles the ceiling without ever touching it.
+    ///
+    /// <para>
+    /// A card-less row stages one fewer entity (no <c>RfidCard</c> touch), so a few of them shift the
+    /// running total onto 500 exactly. Four card-less rows (6 each = 24) followed by 68 carded rows
+    /// (7 each = 476) make 500 at the 72nd row. Under <c>&gt;</c> the 72nd row's 493 + 7 is not over the
+    /// ceiling and the whole roster is one save; under <c>&gt;=</c> the 72nd row would cut and there
+    /// would be two. The 500 is asserted from the recording, not assumed, so a change to the per-row
+    /// fan-out makes this fail on the arithmetic rather than quietly stop landing on the ceiling.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public async Task A_roster_whose_fan_out_lands_exactly_on_the_ceiling_is_one_save()
+    {
+        const int cardlessRows = 4;
+        const int rows = 72;
+        var termId = await ArrangeTermAsync();
+
+        var roster = CleanRows(rows);
+        var rfid = SisRosterColumns.All.ToList().IndexOf(SisRosterColumns.RfidCardSerial);
+        foreach (var cardless in roster.Take(cardlessRows)) cardless[rfid] = "";
+
+        CapturingSaveInterceptor saves;
+        await using (var content = SyntheticRoster.Build(roster))
+        {
+            saves = await RecordRunAsync(
+                termId, content, "ceiling-exact.xlsx", SisImportStatus.Completed);
+        }
+
+        var fanOutSaves = saves.Saves.Where(s => s.Count<SisImportRowEntity>(EntityState.Added) > 0).ToList();
+        var total = fanOutSaves.Sum(s => s.Count<SisImportRowEntity>(EntityState.Added));
+
+        // The premise: the fixture really does land on the ceiling.
+        Assert.Equal(ExpectedFanOutChunkSize, total);
+
+        Assert.True(
+            fanOutSaves.Count == 1,
+            $"A roster whose fan-out is exactly {ExpectedFanOutChunkSize} was cut into {fanOutSaves.Count} " +
+            $"saves; a chunk on the ceiling still fits. Saves seen: [{string.Join(" | ", saves.Saves)}]");
+    }
+
+    /// <summary>
     /// <paramref name="count"/> rows that differ only in identity: one REGNO and one card serial each,
     /// every other cell copied from <see cref="SyntheticRoster"/>'s ordinary row.
     ///
@@ -350,7 +409,8 @@ public class SisImportSaveBoundaryTests : IntegrationTest
     /// already agree is clean — same college, programme, section, course code and course title, and a
     /// real named teacher — which is what makes every row insert a student and warn about nothing. Vary
     /// any of those and the per-row fan-out stops being a constant and the arithmetic above stops
-    /// meaning anything.
+    /// meaning anything. Under the section-only built-in profile (ADR-010 D-77) the course and teacher
+    /// cells are still in the file and simply not read.
     /// </para>
     ///
     /// <para>

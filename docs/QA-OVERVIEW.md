@@ -172,14 +172,18 @@ Either way, **you must then bind a card** (§3.4) before any tap can succeed.
 | 8 | Attach a valid `.xlsx`, click Upload | Moves to **Preview** |
 
 **The roster file must contain these columns** (capitalisation and extra spaces do not matter —
-`COURSE_CODE`, `Course Code` and `course  code` are all accepted):
+`SECTION_NAME`, `Section Name` and `section  name` are all accepted):
 
-`REGNO` · `STUDENT FIRST NAME` · `STUDENT LAST NAME` · `COLLEGE_NAME` · `PROGRAM` · `SECTION_NAME` ·
-`COURSE_CODE` · `COURSE_NAME` · `UA_FULLNAME`
+`REGNO` · `STUDENT FIRST NAME` · `STUDENT LAST NAME` · `COLLEGE_NAME` · `PROGRAM` · `SECTION_NAME`
 
-Also read if present: `RFID`, `STUDENT MIDDLE NAME`, `FULL_NAME`, `EMAIL_ID`, `USA_EMAIL`, and the
-teacher name/suffix/college columns. **A file missing a required column should be refused with the
-column named** — test that with a deliberately broken workbook.
+Also read if present: `RFID`, `STUDENT MIDDLE NAME`, `FULL_NAME`, `EMAIL_ID`, `USA_EMAIL`. The
+downloaded template carries exactly these eleven columns. **A file missing a required column should be
+refused with the column named** — test that with a deliberately broken workbook.
+
+The import is **section-only** (import profile version 5, ADR-010): there is no course or teacher column.
+An older file that still carries `COURSE_CODE`, `COURSE_NAME`, `UA_FULLNAME` or the `TEACHER …` columns
+imports, and those columns are ignored. `SECTION_NAME` may be blank on a row, but that student is then
+placed in no section and the row warns *section unspecified*.
 
 ### 3.3 Roster import — steps 2 and 3
 
@@ -202,9 +206,10 @@ column named** — test that with a deliberately broken workbook.
 | 4 | Go back and import the **exact same file** a second time | Rows come back as **Updated** — students are **not** duplicated |
 | 5 | Check the Students list | The imported students are there, with course/year/section filled in |
 
-**Warnings that are normal, not failures:** course title alias, course college adopted, instructor
-placeholder, section spans programs, section unspecified, student identity conflict, RFID card
-revoked, RFID card from legacy mapping, no change.
+**Warnings that are normal, not failures:** section spans programs, section unspecified, student
+identity conflict, RFID card revoked, RFID card from legacy mapping, no change. (Course title alias,
+course college adopted and instructor placeholder appear only on batches uploaded under an
+older, course-mode profile version.)
 
 ### 3.4 Bind an RFID card — the step that makes taps work
 

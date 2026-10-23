@@ -1,5 +1,6 @@
 using System.Net;
 using System.Text.Json;
+using EAMS.Application.Abstractions;
 using EAMS.Domain;
 using EAMS.Infrastructure.Services;
 using EAMS.Tests.Integration.Infrastructure;
@@ -143,6 +144,68 @@ public class ClearanceApiTests : IntegrationTest
         Assert.Contains("2023-5001", csv);
         Assert.Contains("Orientation", csv);
         Assert.Contains("Attended", csv);
+    }
+
+    /// <summary>
+    /// <b>AC-16b (ADR-010 D-77). The clearance info card shows the programme and the section of a student
+    /// imported under version 5.</b> Clearance reads <c>Students.Course</c> (the programme code) and
+    /// <c>Students.Section</c>, the display cache the import refreshes; a section-only import has no course
+    /// to put there, and the card must still be filled from the programme and the section. The college
+    /// comes from the current-term record. Maria's rows span a blank section and three repeats, so the
+    /// card is also what a multi-row student looks like.
+    /// </summary>
+    [Fact]
+    public async Task Clearance_shows_program_and_section_for_v5_student()
+    {
+        Guid schoolId, termId;
+        await using (var db = NewDbContext())
+        {
+            var school = TestData.NewSchool();
+            db.Schools.Add(school);
+            var term = TestData.NewTerm(school.Id);
+            db.Terms.Add(term);
+            await db.SaveChangesAsync();
+            schoolId = school.Id;
+            termId = term.Id;
+        }
+
+        // The eleven-column template file, imported through the real importer under built-in version 5.
+        await using (var file = SyntheticRoster.Build(SyntheticRoster.Rows(), SisRosterColumns.All
+            .Where(c => c is SisRosterColumns.RegNo or SisRosterColumns.RfidCardSerial
+                or SisRosterColumns.StudentFirstName or SisRosterColumns.StudentMiddleName
+                or SisRosterColumns.StudentLastName or SisRosterColumns.FullName or SisRosterColumns.EmailId
+                or SisRosterColumns.UsaEmail or SisRosterColumns.CollegeName or SisRosterColumns.Program
+                or SisRosterColumns.SectionName)
+            .ToList()))
+        {
+            await using var db = NewDbContext();
+            var service = SisImportOn(db);
+            var preview = await service.UploadAsync(new SisImportUploadRequest(file, "roster.xlsx", termId));
+            var batch = await service.RunAsync(preview.Batch.Id, termId);
+            Assert.Equal(0, batch.FailedRows);
+        }
+
+        Guid mariaId;
+        await using (var db = NewDbContext())
+        {
+            mariaId = await db.Students.Where(s => s.StudentNumber == SyntheticRoster.MariaRegNo)
+                .Select(s => s.Id).SingleAsync();
+            // Positive control: this is a section-only world. Nothing but the placeholder is a course.
+            Assert.Equal([AcademicKey.SectionPlaceholder], await db.Courses.Select(c => c.CodeKey).ToListAsync());
+        }
+
+        using var factory = new EamsApiFactory(Sql.ConnectionString);
+        using var client = await SignedInClientAsync(factory, schoolId);
+
+        var response = await client.GetAsync($"/api/v1/clearance/students/{mariaId}");
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+
+        using var body = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        var student = body.RootElement.GetProperty("student");
+        Assert.Equal(SyntheticRoster.PrimaryProgram, student.GetProperty("program").GetString());
+        Assert.Equal(SyntheticRoster.PrimaryProgram, student.GetProperty("department").GetString());
+        Assert.Equal(SyntheticRoster.PrimarySectionName, student.GetProperty("section").GetString());
+        Assert.Equal(SyntheticRoster.CollegeName, student.GetProperty("college").GetString());
     }
 
     [Fact]

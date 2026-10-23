@@ -162,6 +162,47 @@ public class YearLevelProjectionTests : IntegrationTest
             .SingleAsync(g => g.SourceEntityType == sourceEntityType && g.SourceKey == sourceKey);
     }
 
+    // ------------------------------------------------------- section-only enrollments (ADR-010 D-77)
+
+    /// <summary>
+    /// <b>AC-13 (ADR-010 D-77). D-47's year level derives from a section-only enrollment.</b> Zamora is
+    /// enrolled <em>only</em> in <c>BSCRIM 4-A</c> under the school's placeholder course, which is how a
+    /// version 5 import places every student. The rule's input is the enrolled section keys, and they come
+    /// from the placeholder's offerings just as from a real course's: year 4, in an invitable year group.
+    /// Reyes (year 2 through a real course) is unchanged beside it.
+    /// </summary>
+    [Fact]
+    public async Task Year_level_derives_from_section_only_enrollment()
+    {
+        var world = await ArrangeAsync();
+
+        Guid zamoraId;
+        await using (var db = NewDbContext())
+        {
+            var placeholder = TestData.NewSectionPlaceholderCourse(world.SchoolId);
+            db.Courses.Add(placeholder);
+            var sectionOnly = TestData.NewOffering(world.TermId, placeholder.Id, "BSCRIM 4-A");
+            db.CourseOfferings.Add(sectionOnly);
+
+            var zamora = TestData.NewStudent(world.SchoolId, "2023-0098", lastName: "Zamora");
+            db.Students.Add(zamora);
+            db.StudentTermRecords.Add(TestData.NewTermRecord(
+                zamora.Id, world.TermId, world.ProgramId, collegeId: null, yearLevel: null, homeSection: null));
+            db.Enrollments.Add(TestData.NewEnrollment(zamora.Id, sectionOnly.Id));
+            zamoraId = zamora.Id;
+            await db.SaveChangesAsync();
+        }
+
+        await SyncAsync(world.TermId);
+
+        Assert.Equal("4", await ReadYearAsync(zamoraId));
+        Assert.Equal("2", await ReadYearAsync(world.ReyesId));
+
+        var years = await ReadYearGroupsAsync();
+        var fourth = Assert.Single(years, g => g.SourceKey == "4");
+        Assert.Equal([zamoraId], fourth.Members.Select(m => m.StudentId));
+    }
+
     // ------------------------------------------------------------------ the tripwire (D-47)
 
     /// <summary>

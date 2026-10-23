@@ -9,8 +9,8 @@ namespace EAMS.Tests.Integration.Infrastructure;
 ///
 /// <para>
 /// <b>Why a fixture exists at all.</b> Student classification was withdrawn from the product surface
-/// (ADR-009, D-76) and the built-in mapping (<see cref="SisImportProfileTemplate.BuiltInVersion"/> = 4)
-/// maps no <c>StudentClassification.*</c> column. The importer's category code, the tables and the
+/// (ADR-009, D-76) and the built-in mapping (<see cref="SisImportProfileTemplate.BuiltInVersion"/>, and every
+/// built-in version since ADR-009) maps no <c>StudentClassification.*</c> column. The importer's category code, the tables and the
 /// roster template's vocabulary section are kept so the feature can come back, and untested code is not
 /// safe to bring back — so those tests run against an operator-authored profile that maps the four
 /// category columns, which is exactly how the feature would return (a new profile version, not a code
@@ -33,11 +33,16 @@ internal static class CategoryMappingProfile
     /// Seeds the built-in version (inactive) and a newer active version carrying the built-in entries
     /// plus the four category rows. Returns the id of the newer, category-mapping profile.
     /// </summary>
-    public static async Task<Guid> SeedCategoryMappingProfileAsync(EamsDbContext db, Guid schoolId)
+    public static async Task<Guid> SeedCategoryMappingProfileAsync(
+        EamsDbContext db, Guid schoolId, bool frozenCourseMapping = false)
     {
-        var builtIn = SisImportProfileTemplate.Entries
-            .Select(e => (e.SourceColumn, e.TargetField, e.NormalizationRule, e.IsRequired))
-            .ToList();
+        // frozenCourseMapping: start from the frozen version 4 copy (CourseMappingProfile) instead of the
+        // live template, for tests that also assert on courses, instructors or their warnings.
+        var builtIn = frozenCourseMapping
+            ? CourseMappingProfile.Entries.ToList()
+            : SisImportProfileTemplate.Entries
+                .Select(e => (e.SourceColumn, e.TargetField, e.NormalizationRule, e.IsRequired))
+                .ToList();
 
         // Whatever category rows the built-in entries carry are dropped first, so the four below are the
         // only ones: a duplicate (profile, source column, target) row is a unique-index violation.

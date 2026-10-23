@@ -65,6 +65,34 @@ public static class AcademicKey
     public const string Unspecified = "(unspecified)";
 
     /// <summary>
+    /// ADR-010 D-77: the <c>Code</c> and <c>CodeKey</c> of the one placeholder course per school that
+    /// section-only offerings hang off. A section-only import (a batch whose pinned profile maps no
+    /// <c>Course.CodeKey</c>) creates it on first need, with no college and no title, so
+    /// <c>UX_CourseOfferings_Term_Course_Section</c> gives one offering per (term, section).
+    ///
+    /// <para>
+    /// <b>Unforgeable for the same reason as <see cref="Unspecified"/>:</b> <see cref="Normalize"/> keeps
+    /// letters and digits only, so no source course code can normalize onto a key with parentheses. A
+    /// course literally called "(section)" keys as <c>SECTION</c>.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>It is a stand-in, not a course.</b> Every reader that lists courses, offerings or course
+    /// groups asks <see cref="IsSectionPlaceholder"/> (or, inside an EF query, compares against this
+    /// constant, which is the same test) so <c>(section)</c> never surfaces as a course.
+    /// </para>
+    /// </summary>
+    public const string SectionPlaceholder = "(section)";
+
+    /// <summary>
+    /// Whether a course's <c>CodeKey</c> is the ADR-010 section-only placeholder. The one predicate every
+    /// consumer uses in memory; an EF query cannot call a method, so it compares
+    /// <c>CodeKey</c> against <see cref="SectionPlaceholder"/> directly.
+    /// </summary>
+    public static bool IsSectionPlaceholder(string? courseCodeKey) =>
+        string.Equals(courseCodeKey, SectionPlaceholder, StringComparison.Ordinal);
+
+    /// <summary>
     /// The canonical key for a source value: letters and digits only, upper-cased invariantly.
     /// Returns the empty string for null, blank, or punctuation-only input — see
     /// <see cref="NormalizeOrUnspecified"/> for the key-column form that never returns empty.

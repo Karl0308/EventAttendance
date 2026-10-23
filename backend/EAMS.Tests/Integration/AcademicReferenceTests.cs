@@ -1,4 +1,5 @@
 using EAMS.Application.Dtos;
+using EAMS.Domain;
 using EAMS.Tests.Integration.Infrastructure;
 using Microsoft.EntityFrameworkCore;
 using Xunit;
@@ -284,6 +285,78 @@ public class AcademicReferenceTests : IntegrationTest
 
         await using var db = NewDbContext();
         Assert.Single((await AcademicOn(db).ListCoursesAsync(null, null, PageRequest.Default)).Items);
+    }
+
+    /// <summary>
+    /// <b>AC-15a (ADR-010 D-77). The section-only placeholder is never listed as a course.</b> It is a
+    /// stand-in a version 5 import creates, and the course picker feeds an event-audience builder: listing
+    /// it would offer "(section)" as a course that selects everyone a section-only roster placed. Hidden
+    /// from the plain list, from a search that names it by code or by a fragment, and from the total the
+    /// paging reports; the real course beside it is still there.
+    /// </summary>
+    [Fact]
+    public async Task Courses_list_never_includes_section_placeholder()
+    {
+        await using var db = NewDbContext();
+        var school = TestData.NewSchool();
+        db.Schools.Add(school);
+        db.Courses.AddRange(
+            TestData.NewCourse(school.Id, "SSCI 7", "Introduction to Criminology"),
+            TestData.NewSectionPlaceholderCourse(school.Id));
+        await db.SaveChangesAsync();
+
+        var service = AcademicOn(db);
+
+        var all = await service.ListCoursesAsync(null, null, PageRequest.Default);
+        Assert.Equal(["SSCI 7"], all.Items.Select(c => c.Code));
+        Assert.Equal(1, all.Total);
+
+        Assert.Empty((await service.ListCoursesAsync(null, AcademicKey.SectionPlaceholder, PageRequest.Default)).Items);
+        Assert.Empty((await service.ListCoursesAsync(null, "section", PageRequest.Default)).Items);
+
+        // Positive control: the row is really there, so the list hid it rather than it never existing.
+        Assert.True(await db.Courses.AnyAsync(c => c.CodeKey == AcademicKey.SectionPlaceholder));
+    }
+
+    /// <summary>
+    /// <b>AC-15b (ADR-010 D-77). Section-only offerings are not listed as course offerings.</b> A roster
+    /// imported under version 5 files each section under the placeholder; listing those offerings would
+    /// show "(section)" as a course in the offering picker. The real offering is still listed, the
+    /// total agrees, and so does the per-course filter on the placeholder's own id (an empty page, not
+    /// the section-only offerings). The enrolled-student counts of the real offering are untouched.
+    /// </summary>
+    [Fact]
+    public async Task Course_offerings_list_excludes_section_only_offerings()
+    {
+        await using var db = NewDbContext();
+        var school = TestData.NewSchool();
+        db.Schools.Add(school);
+        var term = TestData.NewTerm(school.Id);
+        db.Terms.Add(term);
+
+        var real = TestData.NewCourse(school.Id, "SSCI 7");
+        var placeholder = TestData.NewSectionPlaceholderCourse(school.Id);
+        db.Courses.AddRange(real, placeholder);
+        db.CourseOfferings.AddRange(
+            TestData.NewOffering(term.Id, real.Id, "BSFS 2-A"),
+            TestData.NewOffering(term.Id, placeholder.Id, "BSFS 3-A"),
+            TestData.NewOffering(term.Id, placeholder.Id, "BSFS 4-A"));
+        await db.SaveChangesAsync();
+
+        var service = AcademicOn(db);
+
+        var listed = await service.ListCourseOfferingsAsync(term.Id, null, null, PageRequest.Default);
+        Assert.Equal(["BSFS 2-A"], listed.Items.Select(o => o.SectionName));
+        Assert.Equal(1, listed.Total);
+        Assert.DoesNotContain(listed.Items, o => o.CourseCode == AcademicKey.SectionPlaceholder);
+
+        var byPlaceholder = await service.ListCourseOfferingsAsync(term.Id, placeholder.Id, null, PageRequest.Default);
+        Assert.Empty(byPlaceholder.Items);
+
+        Assert.Empty((await service.ListCourseOfferingsAsync(term.Id, null, "BSFS 3-A", PageRequest.Default)).Items);
+
+        // Positive control: the offerings exist.
+        Assert.Equal(3, await db.CourseOfferings.CountAsync());
     }
 
     // -------------------------------------------------------------------------- course offerings

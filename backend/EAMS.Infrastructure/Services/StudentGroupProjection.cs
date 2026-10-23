@@ -314,10 +314,20 @@ internal sealed class StudentGroupProjection : IStudentGroupProjection
         // the very table EventGroups reads. Every other read in this class carries the same guard;
         // this one is the reason the class doc's "explicit SchoolId everywhere" claim is worth
         // stating. A course that fails it simply falls through to the "?" label below.
-        var courseCodes = await _db.Courses.IgnoreQueryFilters().AsNoTracking()
+        var courses = await _db.Courses.IgnoreQueryFilters().AsNoTracking()
             .Where(c => courseIds.Contains(c.Id) && c.SchoolId == term.SchoolId)
-            .Select(c => new { c.Id, c.Code })
-            .ToDictionaryAsync(c => c.Id, c => c.Code, ct);
+            .Select(c => new { c.Id, c.Code, c.CodeKey })
+            .ToListAsync(ct);
+        var courseCodes = courses.ToDictionary(c => c.Id, c => c.Code);
+
+        // ADR-010 D-77: a section-only offering hangs off the school's placeholder course, which is a
+        // stand-in rather than a course. It feeds the section groups below like any other offering, and
+        // gets no Course-type group of its own — that group would be "(section) — BSIT 2-A", a second
+        // copy of the section group labelled as a course.
+        var sectionOnlyCourseIds = courses
+            .Where(c => AcademicKey.IsSectionPlaceholder(c.CodeKey))
+            .Select(c => c.Id)
+            .ToHashSet();
 
         var sectionKeyByOffering = offerings.ToDictionary(o => o.Id, o => o.SectionKey);
         var groups = new List<DesiredGroup>();
@@ -369,6 +379,8 @@ internal sealed class StudentGroupProjection : IStudentGroupProjection
 
         foreach (var offering in offerings)
         {
+            if (sectionOnlyCourseIds.Contains(offering.CourseId)) continue;
+
             var label = courseCodes.TryGetValue(offering.CourseId, out var code) ? code : "?";
             var section = string.IsNullOrWhiteSpace(offering.SectionName)
                 ? offering.SectionKey

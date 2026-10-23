@@ -1479,6 +1479,18 @@ internal sealed class EventService : IEventService, IEventSummaryFigures
                 return InvalidFilterValue(field, values);
             }
 
+            // ADR-010 D-77. BuildCondition reads syntax only, and an unknown course id matching nobody is
+            // right — but the section-only placeholder is a known id that would match everybody a
+            // section-only roster imported, under a "course" nobody teaches. Refusing it needs to know
+            // which id it is, so this is the one database read on this path: a single EXISTS, issued only
+            // for a Course row.
+            if (field == AudienceField.Course
+                && await _db.Courses.AsNoTracking().AnyAsync(
+                    c => condition.Ids.Contains(c.Id) && c.CodeKey == AcademicKey.SectionPlaceholder, ct))
+            {
+                return SectionPlaceholderFilterValue(values);
+            }
+
             conditions.Add(condition);
         }
 
@@ -1733,6 +1745,21 @@ internal sealed class EventService : IEventService, IEventSummaryFigures
 
     private static AudienceResolveResponse Resolved(AudienceResolutionDto resolution) =>
         new(AudienceResolveOutcome.Ok, "Resolved.", resolution);
+
+    /// <summary>
+    /// The refusal for a <c>Course</c> row naming the section-only placeholder (ADR-010 D-77). Same
+    /// outcome as any value the field cannot hold, with the reason spelled out: the id is well-formed and
+    /// exists, so the generic "every value has to be a GUID" text would be false.
+    /// </summary>
+    private static AudienceResolveResponse SectionPlaceholderFilterValue(IReadOnlyList<string> values) =>
+        new(AudienceResolveOutcome.InvalidAudienceFilterValue,
+            $"'{AudienceField.Course}' cannot be filtered on the values [{string.Join(", ", values)}]. " +
+            $"One of them is the '{AcademicKey.SectionPlaceholder}' placeholder that section-only roster " +
+            "imports file their sections under (ADR-010 D-77). It is a stand-in, not a course: filtering " +
+            $"on it would select every student such an import placed. Filter on '{AudienceField.Section}' " +
+            "instead. The whole row is refused rather than the offending value dropped — a filter that " +
+            "silently stops filtering reports a count for something nobody built.",
+            null);
 
     /// <summary>
     /// The refusal for a value the field cannot hold. It names the field and echoes the values rather

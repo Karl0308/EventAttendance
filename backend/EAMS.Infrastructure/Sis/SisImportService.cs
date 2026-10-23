@@ -381,9 +381,10 @@ internal sealed class SisImportService : ISisImportService
             .ExecuteDeleteAsync(ct);
 
         var ledger = new RowLedger(staged);
-        var parsed = ParseRows(staged, await ResolveMappedColumnsAsync(batch, ct), ledger);
+        var mapped = await ResolveMappedColumnsAsync(batch, ct);
+        var parsed = ParseRows(staged, mapped, ledger);
 
-        var dimensions = await ResolveDimensionsAsync(term, parsed, ledger, ct);
+        var dimensions = await ResolveDimensionsAsync(term, parsed, mapped.SectionOnly, ledger, ct);
         await _db.SaveChangesAsync(ct);
 
         // The fact pass can fail rows of its own — one whose RFID serial belongs to another student —
@@ -451,7 +452,7 @@ internal sealed class SisImportService : ISisImportService
     /// </param>
     /// <param name="ClassificationKeys">
     /// One entry per <see cref="ClassificationAxis"/> the mapping carries a column for. <b>Empty for
-    /// every batch pinned to profile version 2 or earlier, and to version 4</b> (which withdrew the
+    /// every batch pinned to profile version 2 or earlier, and to versions 4 and 5</b> (version 4 withdrew the
     /// category columns again; ADR-009, D-76), which is what makes such a batch classify nobody even
     /// when re-run against a file that has the columns. <c>Column</c> is the
     /// profile's source column as written, carried so a warning can name the header an operator sees.
@@ -469,13 +470,60 @@ internal sealed class SisImportService : ISisImportService
     /// silence as <paramref name="UnknownAxisTargets"/> reached by a different door, so it reports
     /// under the same code.
     /// </param>
+    /// <param name="Course">
+    /// Where the course code, title and teacher cells are read from, or <c>null</c> when the mapping
+    /// names no <see cref="SisImportProfileTemplate.CourseCodeKeyTarget"/> — which makes the batch
+    /// <b>section-only</b> (ADR-010, D-77). Built-in version 5 is that case.
+    /// </param>
     private sealed record MappedColumns(
         string? RfidKey,
         IReadOnlyList<(string Axis, string Key, string Column)> ClassificationKeys,
         IReadOnlyList<string> UnknownAxisTargets,
-        IReadOnlyList<string> UnreadableAxisTargets);
+        IReadOnlyList<string> UnreadableAxisTargets,
+        CourseColumns? Course)
+    {
+        /// <summary>
+        /// ADR-010 D-77: the batch reads no course or teacher cell, files every section under the
+        /// school's placeholder course, and places no enrollment for a row with a blank section.
+        /// </summary>
+        public bool SectionOnly => Course is null;
+    }
 
-    private static readonly MappedColumns NoMappedColumns = new(null, [], [], []);
+    /// <summary>
+    /// A course-mode batch's course columns, resolved from its profile.
+    /// </summary>
+    /// <param name="CodeKey">
+    /// The header key of the <see cref="SisImportProfileTemplate.CourseCodeKeyTarget"/> row's source
+    /// column; both the course's display code and its key are read from it, so the two cannot come from
+    /// different cells. Empty when that row names no readable source column, in which case every row
+    /// fails <see cref="SisImportFailureCode.MissingRequiredValue"/> for the course code — a broken
+    /// course-mode mapping is reported, never silently downgraded to section-only.
+    /// </param>
+    /// <param name="CodeColumn">That source column as written, for the failure message.</param>
+    /// <param name="TitleKey">
+    /// The header key of the <see cref="SisImportProfileTemplate.CourseTitleTarget"/> row's source column,
+    /// or <c>null</c> when the mapping names none: courses then import with no title.
+    /// </param>
+    /// <param name="ReadsTeachers">
+    /// Whether the mapping names any <see cref="SisImportProfileTemplate.InstructorDisplayNameTarget"/>
+    /// row. The teacher cells themselves are still read from the <see cref="SisRosterColumns"/> headers:
+    /// the full, first and last name columns share one target, so the target cannot say which is which.
+    /// </param>
+    private sealed record CourseColumns(
+        string CodeKey, string CodeColumn, string? TitleKey, bool ReadsTeachers);
+
+    /// <summary>
+    /// The columns a batch with <b>no</b> pinned profile reads: no card, no category, and the course
+    /// columns at their fixed headers. Course mode, deliberately (ADR-010 D-77): section-only is a
+    /// property a profile states, never one inferred from the absence of a profile.
+    /// </summary>
+    private static readonly MappedColumns NoMappedColumns = new(
+        null, [], [], [],
+        new CourseColumns(
+            SisRosterColumns.HeaderKey(SisRosterColumns.CourseCode),
+            SisRosterColumns.CourseCode,
+            SisRosterColumns.HeaderKey(SisRosterColumns.CourseName),
+            ReadsTeachers: true));
 
     /// <summary>
     /// Which source columns this batch reads, resolved from its own ADR-001 D-4 profile rows rather
@@ -510,13 +558,20 @@ internal sealed class SisImportService : ISisImportService
 
         var rfidTarget = SisImportProfileTemplate.RfidCardUidTarget;
         var categoryPrefix = SisImportProfileTemplate.ClassificationTargetPrefix;
+        var courseKeyTarget = SisImportProfileTemplate.CourseCodeKeyTarget;
+        var courseTitleTarget = SisImportProfileTemplate.CourseTitleTarget;
+        var teacherTarget = SisImportProfileTemplate.InstructorDisplayNameTarget;
 
-        // One read for both, ordered by Ordinal — so a mapping that lists a target twice, which the
-        // profile's own unique index permits across two different source columns, resolves the same way
-        // on every run rather than by whatever order the server returns rows in.
+        // One read for all of them, ordered by Ordinal — so a mapping that lists a target twice, which
+        // the profile's own unique index permits across two different source columns, resolves the same
+        // way on every run rather than by whatever order the server returns rows in.
         var columns = await _db.SisImportProfileColumns.IgnoreQueryFilters()
             .Where(c => c.ProfileId == profileId
-                        && (c.TargetField == rfidTarget || c.TargetField.StartsWith(categoryPrefix)))
+                        && (c.TargetField == rfidTarget
+                            || c.TargetField.StartsWith(categoryPrefix)
+                            || c.TargetField == courseKeyTarget
+                            || c.TargetField == courseTitleTarget
+                            || c.TargetField == teacherTarget))
             .OrderBy(c => c.Ordinal)
             .ToListAsync(ct);
 
@@ -607,7 +662,22 @@ internal sealed class SisImportService : ISisImportService
             if (!unreadableAxes.Contains(reported, StringComparer.Ordinal)) unreadableAxes.Add(reported);
         }
 
-        return new MappedColumns(rfid, byAxis, unknownAxes, unreadableAxes);
+        // ADR-010 D-77: the Course.CodeKey row is the switch. Absent, the batch is section-only and no
+        // course or teacher cell is read, whatever the file carries. Present, it decides which cell the
+        // course code comes from — first by Ordinal, the RFID row's rule.
+        var courseKeyColumn = columns.FirstOrDefault(c => c.TargetField == courseKeyTarget);
+        CourseColumns? course = null;
+        if (courseKeyColumn is not null)
+        {
+            var titleColumn = columns.FirstOrDefault(c => c.TargetField == courseTitleTarget);
+            course = new CourseColumns(
+                KeyOf(courseKeyColumn) ?? "",
+                courseKeyColumn.SourceColumn,
+                titleColumn is null ? null : KeyOf(titleColumn),
+                ReadsTeachers: columns.Any(c => c.TargetField == teacherTarget));
+        }
+
+        return new MappedColumns(rfid, byAxis, unknownAxes, unreadableAxes, course);
     }
 
     // =========================================================================== parse (per row)
@@ -680,6 +750,10 @@ internal sealed class SisImportService : ISisImportService
     {
         var parsed = new List<ParsedRow>(staged.Count);
         var rfidColumnKey = columns.RfidKey;
+
+        // ADR-010 D-77. Null is section-only: from here on no course or teacher cell is read, even
+        // when the file carries those columns, because the batch's pinned profile does not map them.
+        var course = columns.Course;
 
         // Composed once, outside the loop, because it is one fact about the batch's profile rather than
         // twenty thousand facts about rows — the string is identical on every row it is written to.
@@ -754,13 +828,21 @@ internal sealed class SisImportService : ISisImportService
 
             var collegeName = RosterText.Clean(Raw(SisRosterColumns.CollegeName));
             var programCode = RosterText.Clean(Raw(SisRosterColumns.Program));
-            var courseCode = RosterText.Clean(Raw(SisRosterColumns.CourseCode));
-            if (collegeName is null || programCode is null || courseCode is null)
+
+            // The course cell is read only in course mode, and from the column the profile names. The
+            // section-only branch leaves it null and never looks: an old-format file's COURSE_CODE is
+            // simply not this batch's business.
+            var courseCode = course is null ? null : RosterText.Clean(Raw(course.CodeKey));
+
+            if (collegeName is null || programCode is null || (course is not null && courseCode is null))
             {
                 ledger.Fail(row, SisImportFailureCode.MissingRequiredValue,
-                    $"{SisRosterColumns.CollegeName}, {SisRosterColumns.Program} and " +
-                    $"{SisRosterColumns.CourseCode} are required to place an enrollment; REGNO {regNo} " +
-                    "left at least one blank.");
+                    course is null
+                        ? $"{SisRosterColumns.CollegeName} and {SisRosterColumns.Program} are required " +
+                          $"to place the student; REGNO {regNo} left at least one blank."
+                        : $"{SisRosterColumns.CollegeName}, {SisRosterColumns.Program} and " +
+                          $"{course.CodeColumn} are required to place an enrollment; REGNO {regNo} " +
+                          "left at least one blank.");
                 continue;
             }
 
@@ -769,9 +851,13 @@ internal sealed class SisImportService : ISisImportService
             {
                 [SisRosterColumns.CollegeName] = AcademicKey.NormalizeOrUnspecified(collegeName),
                 [SisRosterColumns.Program] = AcademicKey.NormalizeOrUnspecified(programCode),
-                [SisRosterColumns.CourseCode] = AcademicKey.NormalizeOrUnspecified(courseCode),
                 [SisRosterColumns.SectionName] = AcademicKey.NormalizeOrUnspecified(sectionName),
             };
+
+            // Section-only rows carry the placeholder as their course key. It is a constant well inside
+            // the limit, so it is not length-checked; it is never a key a source cell produced.
+            if (course is not null)
+                keys[course.CodeColumn] = AcademicKey.NormalizeOrUnspecified(courseCode);
 
             // Checked here rather than left to SQL Server, whose truncation error (2628) names neither
             // the row nor the column — see AcademicKey.IsWithinLength.
@@ -784,11 +870,13 @@ internal sealed class SisImportService : ISisImportService
                 continue;
             }
 
-            var teacher = TeacherNames.Parse(
-                Raw(SisRosterColumns.TeacherFullName),
-                Raw(SisRosterColumns.TeacherFirstName),
-                Raw(SisRosterColumns.TeacherLastName),
-                Raw(SisRosterColumns.TeacherSuffix));
+            var teacher = course is { ReadsTeachers: true }
+                ? TeacherNames.Parse(
+                    Raw(SisRosterColumns.TeacherFullName),
+                    Raw(SisRosterColumns.TeacherFirstName),
+                    Raw(SisRosterColumns.TeacherLastName),
+                    Raw(SisRosterColumns.TeacherSuffix))
+                : NoTeacher;
 
             var cardUid = ReadCardUid(rfidColumnKey, cells);
 
@@ -836,9 +924,10 @@ internal sealed class SisImportService : ISisImportService
                 ProgramKey: keys[SisRosterColumns.Program],
                 SectionName: sectionName,
                 SectionKey: keys[SisRosterColumns.SectionName],
-                CourseCode: courseCode,
-                CourseKey: keys[SisRosterColumns.CourseCode],
-                CourseTitle: RosterText.Clean(Raw(SisRosterColumns.CourseName)),
+                // Non-null in course mode by the check above; the placeholder in section-only mode.
+                CourseCode: courseCode ?? AcademicKey.SectionPlaceholder,
+                CourseKey: course is null ? AcademicKey.SectionPlaceholder : keys[course.CodeColumn],
+                CourseTitle: course?.TitleKey is { } titleKey ? RosterText.Clean(Raw(titleKey)) : null,
                 Teacher: teacher,
                 TeacherKey: teacher.DisplayName is null
                     ? null
@@ -849,8 +938,15 @@ internal sealed class SisImportService : ISisImportService
 
             if (sectionName is null)
                 ledger.Warn(row, SisImportWarningCode.SectionUnspecified,
-                    $"{SisRosterColumns.SectionName} is blank; the offering is filed under " +
-                    $"'{AcademicKey.Unspecified}' and its students get no section group.");
+                    course is null
+                        // ADR-010 D-77, point 7: a section-only '(unspecified)' offering would be one
+                        // institution-wide pile per term, so nothing is placed at all.
+                        ? $"{SisRosterColumns.SectionName} is blank. This batch imports sections only " +
+                          "(its import profile maps no course column), so the student was imported " +
+                          "with no section: no section enrollment was written and they are in no " +
+                          "section group. Fill in the section and re-import to place them."
+                        : $"{SisRosterColumns.SectionName} is blank; the offering is filed under " +
+                          $"'{AcademicKey.Unspecified}' and its students get no section group.");
 
             if (teacher.IsPlaceholder)
                 ledger.Warn(row, SisImportWarningCode.InstructorPlaceholder,
@@ -860,6 +956,13 @@ internal sealed class SisImportService : ISisImportService
 
         return parsed;
     }
+
+    /// <summary>
+    /// The teacher of a row whose batch reads no teacher cell — a section-only batch, or a course-mode
+    /// profile that maps no <see cref="SisImportProfileTemplate.InstructorDisplayNameTarget"/>. Not the
+    /// placeholder: nothing was read, so there is nothing to warn about and no instructor to link.
+    /// </summary>
+    private static readonly TeacherName NoTeacher = new(null, null, null, IsPlaceholder: false);
 
     /// <summary>
     /// One row's RFID card serial, or <c>null</c> when the mapping names no RFID column, the file has no
@@ -940,10 +1043,21 @@ internal sealed class SisImportService : ISisImportService
         IReadOnlyDictionary<string, Touched<Course>> Courses,
         IReadOnlyDictionary<string, Touched<Instructor>> Instructors,
         IReadOnlyDictionary<(Guid CourseId, string SectionKey), Touched<CourseOffering>> Offerings,
-        IReadOnlySet<int> CollidedRows);
+        IReadOnlySet<int> CollidedRows,
+        bool SectionOnly);
+
+    /// <summary>
+    /// Whether a row is placed in an offering at all. Always in course mode, where a blank section is
+    /// filed under <see cref="AcademicKey.Unspecified"/>; in section-only mode only when the row named
+    /// a section (ADR-010 D-77, point 7). The one statement of that rule: offering resolution and the
+    /// enrollment pass both call it, so an offering exists for exactly the rows that later look one up.
+    /// </summary>
+    private static bool PlacesEnrollment(bool sectionOnly, ParsedRow row) =>
+        !(sectionOnly && row.SectionKey == AcademicKey.Unspecified);
 
     private async Task<Dimensions> ResolveDimensionsAsync(
-        Term term, IReadOnlyList<ParsedRow> parsed, RowLedger ledger, CancellationToken ct)
+        Term term, IReadOnlyList<ParsedRow> parsed, bool sectionOnly, RowLedger ledger,
+        CancellationToken ct)
     {
         var schoolId = term.SchoolId;
 
@@ -955,29 +1069,85 @@ internal sealed class SisImportService : ISisImportService
             .Where(c => c.SchoolId == schoolId).ToDictionaryAsync(c => c.NameKey, ct);
         var programs = await _db.Programs.IgnoreQueryFilters()
             .Where(p => p.SchoolId == schoolId).ToDictionaryAsync(p => p.CodeKey, ct);
+        // Section-only (ADR-010 D-77) needs one course — the placeholder — and no instructor, so it reads
+        // only that and skips the instructor table outright.
         var courses = await _db.Courses.IgnoreQueryFilters()
-            .Where(c => c.SchoolId == schoolId).ToDictionaryAsync(c => c.CodeKey, ct);
-        var instructors = await _db.Instructors.IgnoreQueryFilters()
-            .Where(i => i.SchoolId == schoolId).ToDictionaryAsync(i => i.NameKey, ct);
+            .Where(c => c.SchoolId == schoolId
+                        && (!sectionOnly || c.CodeKey == AcademicKey.SectionPlaceholder))
+            .ToDictionaryAsync(c => c.CodeKey, ct);
+        var instructors = sectionOnly
+            ? new Dictionary<string, Instructor>(StringComparer.Ordinal)
+            : await _db.Instructors.IgnoreQueryFilters()
+                .Where(i => i.SchoolId == schoolId).ToDictionaryAsync(i => i.NameKey, ct);
 
         var resolvedColleges = ResolveColleges(schoolId, parsed, colleges);
         var resolvedPrograms = ResolvePrograms(schoolId, parsed, programs, resolvedColleges);
-        var (resolvedCourses, collidedRows) =
-            ResolveCourses(schoolId, parsed, courses, resolvedColleges, ledger);
+        var (resolvedCourses, collidedRows) = sectionOnly
+            ? (ResolveSectionPlaceholder(schoolId, parsed, courses), new HashSet<int>())
+            : ResolveCourses(schoolId, parsed, courses, resolvedColleges, ledger);
         var resolvedInstructors = ResolveInstructors(schoolId, parsed, instructors);
 
-        WarnOnSectionsSpanningPrograms(parsed, ledger);
+        WarnOnSectionsSpanningPrograms(parsed, sectionOnly, ledger);
 
         // Offerings depend on the courses above, including ones that do not exist in the database yet.
         // That works because Entity assigns its Id in the initializer, so a pending course already has
         // the value the offering's FK needs and EF orders the two inserts by the graph.
         await _db.SaveChangesAsync(ct);
 
-        var offerings = await ResolveOfferingsAsync(term, parsed, resolvedCourses, collidedRows, ct);
+        var offerings = await ResolveOfferingsAsync(
+            term, parsed, resolvedCourses, collidedRows, sectionOnly, ct);
 
         return new Dimensions(
             resolvedColleges, resolvedPrograms, resolvedCourses, resolvedInstructors,
-            offerings, collidedRows);
+            offerings, collidedRows, sectionOnly);
+    }
+
+    /// <summary>
+    /// ADR-010 D-77: the school's one placeholder course, found or created — and only when some row
+    /// names a section, because a blank-section row in section-only mode is placed in no offering and
+    /// so needs no course. Keyed by <see cref="AcademicKey.SectionPlaceholder"/>, which is every
+    /// section-only row's <c>CourseKey</c>.
+    ///
+    /// <para>
+    /// <b>No college, no title, and never updated</b>: it is a stand-in, not a course, so there is
+    /// nothing for a row to say about it. The fact loop records no <c>Course</c> touch for it.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>Creation race (D-77, point 11).</b> Two first section-only runs for one school can both insert
+    /// it; the loser hits <c>UX_Courses_SchoolId_CodeKey</c>, <see cref="RunAsync"/> marks that batch
+    /// <c>Failed</c>, and a retry finds the row. The same race already exists for every new real course.
+    /// </para>
+    /// </summary>
+    private Dictionary<string, Touched<Course>> ResolveSectionPlaceholder(
+        Guid schoolId, IReadOnlyList<ParsedRow> parsed, Dictionary<string, Course> existing)
+    {
+        var resolved = new Dictionary<string, Touched<Course>>(StringComparer.Ordinal);
+
+        var first = parsed.FirstOrDefault(r => r.SectionKey != AcademicKey.Unspecified);
+        if (first is null) return resolved;
+
+        if (existing.TryGetValue(AcademicKey.SectionPlaceholder, out var placeholder))
+        {
+            resolved[AcademicKey.SectionPlaceholder] = new Touched<Course>(
+                placeholder, SisImportEntityAction.Unchanged, first.Staged.RowNumber);
+            return resolved;
+        }
+
+        placeholder = new Course
+        {
+            SchoolId = schoolId,
+            CollegeId = null,
+            Code = AcademicKey.SectionPlaceholder,
+            CodeKey = AcademicKey.SectionPlaceholder,
+            Title = null,
+        };
+        _db.Courses.Add(placeholder);
+        existing[AcademicKey.SectionPlaceholder] = placeholder;
+        resolved[AcademicKey.SectionPlaceholder] = new Touched<Course>(
+            placeholder, SisImportEntityAction.Inserted, first.Staged.RowNumber);
+
+        return resolved;
     }
 
     private Dictionary<string, Touched<College>> ResolveColleges(
@@ -1233,8 +1403,16 @@ internal sealed class SisImportService : ISisImportService
     /// the leading indicator that the roster has outgrown institution-wide keys, and this is where it
     /// becomes visible before it becomes a merge.
     /// </para>
+    ///
+    /// <para>
+    /// <b>Section-only batches (ADR-010 D-77) keep the warning with different words.</b> The placeholder
+    /// course takes the course out of the key, so programmes sharing a section key now share one
+    /// offering; section audiences do not change, because section groups already merged by key. The
+    /// asymmetry argument above is a course-mode argument and is not repeated there.
+    /// </para>
     /// </summary>
-    private static void WarnOnSectionsSpanningPrograms(IReadOnlyList<ParsedRow> parsed, RowLedger ledger)
+    private static void WarnOnSectionsSpanningPrograms(
+        IReadOnlyList<ParsedRow> parsed, bool sectionOnly, RowLedger ledger)
     {
         var programsBySection = parsed
             .Where(r => r.SectionKey != AcademicKey.Unspecified)
@@ -1248,6 +1426,19 @@ internal sealed class SisImportService : ISisImportService
         {
             if (!programsBySection.TryGetValue(row.SectionKey, out var programCodes)) continue;
             if (programCodes.Count < 2) continue;
+
+            if (sectionOnly)
+            {
+                ledger.Warn(row.Staged, SisImportWarningCode.SectionSpansPrograms,
+                    $"Section '{row.SectionName ?? row.SectionKey}' appears under {programCodes.Count} " +
+                    $"programmes in this file ({string.Join(", ", programCodes)}). This batch imports " +
+                    "sections only (its import profile maps no course column), so a section is keyed " +
+                    "by its name alone and these programmes' students are enrolled in ONE SHARED " +
+                    "section offering for the term. Section audiences are unchanged — a section group already " +
+                    "gathers every student under one section key — but if these are genuinely " +
+                    "different classes, give them distinct section names in the source and re-import.");
+                continue;
+            }
 
             ledger.Warn(row.Staged, SisImportWarningCode.SectionSpansPrograms,
                 $"Section '{row.SectionName ?? row.SectionKey}' appears under {programCodes.Count} " +
@@ -1266,7 +1457,7 @@ internal sealed class SisImportService : ISisImportService
     private async Task<Dictionary<(Guid, string), Touched<CourseOffering>>> ResolveOfferingsAsync(
         Term term, IReadOnlyList<ParsedRow> parsed,
         IReadOnlyDictionary<string, Touched<Course>> courses,
-        IReadOnlySet<int> collidedRows, CancellationToken ct)
+        IReadOnlySet<int> collidedRows, bool sectionOnly, CancellationToken ct)
     {
         var existing = await _db.CourseOfferings.IgnoreQueryFilters()
             .Where(o => o.TermId == term.Id)
@@ -1274,8 +1465,11 @@ internal sealed class SisImportService : ISisImportService
 
         var resolved = new Dictionary<(Guid, string), Touched<CourseOffering>>();
 
+        // A blank-section row in a section-only batch is placed nowhere (ADR-010 D-77, point 7): no
+        // '(unspecified)' offering under the placeholder, which would be one institution-wide pile.
         var eligible = parsed
-            .Where(r => !collidedRows.Contains(r.Staged.RowNumber) && courses.ContainsKey(r.CourseKey))
+            .Where(r => !collidedRows.Contains(r.Staged.RowNumber) && courses.ContainsKey(r.CourseKey)
+                        && PlacesEnrollment(sectionOnly, r))
             .ToList();
 
         foreach (var group in GroupRows(eligible, r => (courses[r.CourseKey].Entity.Id, r.SectionKey)))
@@ -1399,7 +1593,12 @@ internal sealed class SisImportService : ISisImportService
         {
             var rowNumber = row.Staged.RowNumber;
             var student = resolvedStudents[row.RegNo];
-            var offering = dimensions.Offerings[(dimensions.Courses[row.CourseKey].Entity.Id, row.SectionKey)];
+
+            // Null only for a blank-section row of a section-only batch (ADR-010 D-77, point 7): such a
+            // row places no offering and no enrollment, and records neither.
+            var offering = PlacesEnrollment(dimensions.SectionOnly, row)
+                ? dimensions.Offerings[(dimensions.Courses[row.CourseKey].Entity.Id, row.SectionKey)]
+                : null;
 
             ledger.Touch(row.Staged, SisImportEntityType.College,
                 dimensions.Colleges[row.CollegeKey].Entity.Id,
@@ -1407,11 +1606,16 @@ internal sealed class SisImportService : ISisImportService
             ledger.Touch(row.Staged, SisImportEntityType.Program,
                 dimensions.Programs[row.ProgramKey].Entity.Id,
                 dimensions.Programs[row.ProgramKey].ActionFor(rowNumber));
-            ledger.Touch(row.Staged, SisImportEntityType.Course,
-                dimensions.Courses[row.CourseKey].Entity.Id,
-                dimensions.Courses[row.CourseKey].ActionFor(rowNumber));
-            ledger.Touch(row.Staged, SisImportEntityType.CourseOffering,
-                offering.Entity.Id, offering.ActionFor(rowNumber));
+
+            // The placeholder is not a course the row named, so it is not recorded as one (D-77, point 4).
+            if (!AcademicKey.IsSectionPlaceholder(row.CourseKey))
+                ledger.Touch(row.Staged, SisImportEntityType.Course,
+                    dimensions.Courses[row.CourseKey].Entity.Id,
+                    dimensions.Courses[row.CourseKey].ActionFor(rowNumber));
+
+            if (offering is not null)
+                ledger.Touch(row.Staged, SisImportEntityType.CourseOffering,
+                    offering.Entity.Id, offering.ActionFor(rowNumber));
             ledger.Touch(row.Staged, SisImportEntityType.Student,
                 student.Entity.Id, student.ActionFor(rowNumber));
 
@@ -1445,7 +1649,7 @@ internal sealed class SisImportService : ISisImportService
             // the 27 "duplicate" (REGNO, COURSE_CODE) pairs are not duplicates. Both rows of a pair
             // describe one enrollment; only the one naming a real teacher adds an assignment, and the
             // placeholder row correctly adds nothing.
-            if (!row.Teacher.IsPlaceholder && row.TeacherKey is not null
+            if (offering is not null && !row.Teacher.IsPlaceholder && row.TeacherKey is not null
                 && dimensions.Instructors.TryGetValue(row.TeacherKey, out var instructor))
             {
                 ledger.Touch(row.Staged, SisImportEntityType.Instructor,
@@ -1474,6 +1678,8 @@ internal sealed class SisImportService : ISisImportService
                         assignmentId, SisImportEntityAction.Unchanged);
                 }
             }
+
+            if (offering is null) continue;
 
             var enrollmentKey = (student.Entity.Id, offering.Entity.Id);
             if (!enrollments.TryGetValue(enrollmentKey, out var enrollmentId))
@@ -2456,25 +2662,34 @@ internal sealed class SisImportService : ISisImportService
             .Distinct(StringComparer.Ordinal)
             .Count();
 
+        // ADR-010 D-77, point 9: the counts follow the batch's pinned profile, the same columns the run
+        // will read. Under a section-only profile courses and instructors are 0 even for an old-format
+        // file that carries those columns, because the run will read none of them.
+        var course = (await ResolveMappedColumnsAsync(batch, ct)).Course;
+        var readsTeachers = course is { ReadsTeachers: true };
+
         return new SisImportPreviewDto(
             Batch: ToDto(batch, term),
             Columns: file.Columns.Where(c => c.Length > 0).ToList(),
             DistinctStudents: Distinct(SisRosterColumns.RegNo),
             DistinctColleges: Distinct(SisRosterColumns.CollegeName),
             DistinctPrograms: Distinct(SisRosterColumns.Program),
-            DistinctCourses: Distinct(SisRosterColumns.CourseCode),
+            DistinctCourses: course is null ? 0 : Distinct(course.CodeKey),
             DistinctSections: Distinct(SisRosterColumns.SectionName),
             // The placeholder is excluded: reporting 19 teachers when one of them is 'TO BE ANNOUNCE'
             // is the same lie the pipeline refuses to write into the Instructors table.
-            DistinctInstructors: file.Rows
-                .Select(r => AcademicKey.Normalize(r.Raw(SisRosterColumns.TeacherFullName)))
-                .Where(v => v.Length > 0 && v != TeacherNames.PlaceholderKey)
-                .Distinct(StringComparer.Ordinal)
-                .Count(),
+            DistinctInstructors: !readsTeachers
+                ? 0
+                : file.Rows
+                    .Select(r => AcademicKey.Normalize(r.Raw(SisRosterColumns.TeacherFullName)))
+                    .Where(v => v.Length > 0 && v != TeacherNames.PlaceholderKey)
+                    .Distinct(StringComparer.Ordinal)
+                    .Count(),
             BlankSectionRows: file.Rows.Count(r =>
                 AcademicKey.Normalize(r.Raw(SisRosterColumns.SectionName)).Length == 0),
-            PlaceholderInstructorRows: file.Rows.Count(r =>
-                TeacherNames.IsPlaceholder(r.Raw(SisRosterColumns.TeacherFullName))),
+            PlaceholderInstructorRows: !readsTeachers
+                ? 0
+                : file.Rows.Count(r => TeacherNames.IsPlaceholder(r.Raw(SisRosterColumns.TeacherFullName))),
             SampleRows: sample.Select(ToDto).ToList());
     }
 

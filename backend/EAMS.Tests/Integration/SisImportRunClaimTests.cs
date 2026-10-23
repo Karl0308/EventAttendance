@@ -91,6 +91,10 @@ public class SisImportRunClaimTests : IntegrationTest
         db.Classifications.AddRange(TestData.ClassificationVocabulary(school.Id));
 
         await db.SaveChangesAsync();
+
+        // Pinned to the frozen version 4 mapping so the fixture keeps its course and instructor
+        // findings once the built-in profile goes section-only.
+        await CourseMappingProfile.SeedCourseMappingProfileAsync(db, school.Id);
         return new World(school.Id, term.Id);
     }
 

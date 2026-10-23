@@ -654,14 +654,17 @@ function PreviewStep({
   // batch over a casing change would be a worse failure than the one it guards against.
   const termMismatch = batch.termId.toLowerCase() !== termId.toLowerCase();
 
-  const counts: { label: string; value: number }[] = [
+  // Courses and Instructors are not rendered at all when they are 0 (ADR-010): a section-only (v5)
+  // workbook has no such columns, so the API reports 0 and a "0 Courses" tile would read as a defect in
+  // the file. A v4-pinned batch still reports real counts and keeps its tiles.
+  const counts: { label: string; value: number; omitWhenZero?: boolean }[] = [
     { label: "Students", value: preview.distinctStudents },
     { label: "Colleges", value: preview.distinctColleges },
     { label: "Programs", value: preview.distinctPrograms },
-    { label: "Courses", value: preview.distinctCourses },
+    { label: "Courses", value: preview.distinctCourses, omitWhenZero: true },
     { label: "Sections", value: preview.distinctSections },
-    { label: "Instructors", value: preview.distinctInstructors },
-  ];
+    { label: "Instructors", value: preview.distinctInstructors, omitWhenZero: true },
+  ].filter((count) => !(count.omitWhenZero === true && count.value === 0));
 
   return (
     <Paper variant="outlined" sx={{ p: 3 }}>

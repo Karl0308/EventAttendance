@@ -355,6 +355,10 @@ public class AcademicController : ControllerBase
     /// <summary>
     /// <c>GET /academic/courses</c> — courses, optionally narrowed by college and search term.
     /// </summary>
+    /// <remarks>
+    /// The placeholder course that section-only imports file their sections under (code
+    /// <c>(section)</c>, ADR-010 D-77) is a stand-in rather than a course and is never listed.
+    /// </remarks>
     /// <param name="collegeId">
     /// Omit to list them all. A course's college is itself nullable, so an unattributed course matches
     /// no <c>collegeId</c> — which is correct: it is not known to be in one, rather than known not to
@@ -402,6 +406,17 @@ public class AcademicController : ControllerBase
     /// was blank (39 sample rows are); the key is a sentinel rather than null in that case, because a
     /// nullable key component would have capped the table at one blank section under SQL Server's
     /// unique index.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>Section-only offerings are not listed.</b> A roster imported under a section-only profile
+    /// (built-in version 5, ADR-010 D-77) has no course column, and files each section under one
+    /// placeholder course; those offerings are excluded here. Pick a section audience from the
+    /// <c>Section</c> groups of <c>GET /student-groups</c>, which carry every section whatever profile
+    /// imported it. <b>A group's name is not a section value as it stands:</b> it carries a
+    /// <c> (TermCode)</c> suffix and may be clamped, so a consumer must strip the suffix before sending
+    /// it as a <c>Section</c> value. Sent whole, it normalizes to no section and the filter silently
+    /// matches nobody.
     /// </para>
     /// </remarks>
     /// <param name="termId">

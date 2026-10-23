@@ -43,7 +43,25 @@ public class SisImportPipelineTests : IntegrationTest
 
     private sealed record World(Guid SchoolId, Guid TermId);
 
+    /// <summary>
+    /// The default world: school, term, vocabulary and the frozen version 4 course mapping
+    /// (<see cref="CourseMappingProfile"/>), so the course and instructor assertions below keep
+    /// exercising the course path after the built-in profile goes section-only.
+    /// </summary>
     private async Task<World> ArrangeAsync()
+    {
+        var world = await ArrangeBareAsync();
+
+        await using var db = NewDbContext();
+        await CourseMappingProfile.SeedCourseMappingProfileAsync(db, world.SchoolId);
+        return world;
+    }
+
+    /// <summary>
+    /// School, term and vocabulary only — no profile, for tests about profile creation, supersession
+    /// and resolution that seed the profiles themselves.
+    /// </summary>
+    private async Task<World> ArrangeBareAsync()
     {
         await using var db = NewDbContext();
         var school = TestData.NewSchool();
@@ -1059,7 +1077,7 @@ public class SisImportPipelineTests : IntegrationTest
     [Fact]
     public async Task Each_batch_records_the_versioned_mapping_it_ran_under()
     {
-        var world = await ArrangeAsync();
+        var world = await ArrangeBareAsync();
 
         // One stream, imported twice, so the two batches really are the same bytes — see ImportAsync.
         await using var file = SyntheticRoster.Build();
@@ -1158,13 +1176,12 @@ public class SisImportPipelineTests : IntegrationTest
     ];
 
     /// <summary>
-    /// The current built-in mapping, taken from the template. Deriving <em>this</em> one is correct
-    /// where deriving <see cref="VersionOneMapping"/> would not be: it stands in for a version an
-    /// operator would author from what the pipeline does today, so agreeing with the code is the point.
+    /// The frozen version 4 built-in mapping (<see cref="CourseMappingProfile"/>), not the live template:
+    /// these tests assert on courses and instructors, which version 5 no longer maps.
     /// </summary>
     private static List<MappingRow> BuiltInMapping() =>
     [
-        .. SisImportProfileTemplate.Entries.Select(e =>
+        .. CourseMappingProfile.Entries.Select(e =>
             new MappingRow(e.SourceColumn, e.TargetField, e.NormalizationRule, e.IsRequired)),
     ];
 
@@ -1273,7 +1290,7 @@ public class SisImportPipelineTests : IntegrationTest
     [Fact]
     public async Task An_older_active_profile_does_not_supply_the_mapping_for_a_new_upload()
     {
-        var world = await ArrangeAsync();
+        var world = await ArrangeBareAsync();
 
         // The built-in version, present but not live — the state that sends resolution to the fallback.
         await SeedProfileAsync(
@@ -1297,7 +1314,7 @@ public class SisImportPipelineTests : IntegrationTest
     [Fact]
     public async Task An_active_v1_profile_is_superseded_by_v2_and_keeps_every_row_it_had()
     {
-        var world = await ArrangeAsync();
+        var world = await ArrangeBareAsync();
 
         var v1Id = await SeedProfileAsync(world.SchoolId, version: 1, isActive: true, VersionOneMapping);
         var julyBatchId = await SeedCompletedBatchAsync(world.SchoolId, world.TermId, v1Id);
@@ -1379,7 +1396,7 @@ public class SisImportPipelineTests : IntegrationTest
     [Fact]
     public async Task A_batch_pinned_to_v1_executes_v1s_mapping_and_not_the_live_one()
     {
-        var world = await ArrangeAsync();
+        var world = await ArrangeBareAsync();
         var v1Id = await SeedProfileAsync(world.SchoolId, version: 1, isActive: true, VersionOneMapping);
 
         Guid batchId;
@@ -1456,7 +1473,7 @@ public class SisImportPipelineTests : IntegrationTest
     [Fact]
     public async Task A_profile_naming_no_rfid_column_imports_every_student_with_no_card()
     {
-        var world = await ArrangeAsync();
+        var world = await ArrangeBareAsync();
 
         await SeedProfileAsync(
             world.SchoolId, SisImportProfileTemplate.BuiltInVersion, isActive: false, BuiltInMapping());
@@ -1483,6 +1500,142 @@ public class SisImportPipelineTests : IntegrationTest
 
         Assert.All(await RowsOfAsync(batch.Id), r => Assert.DoesNotContain(
             r.Entities, e => e.EntityType == SisImportEntityType.RfidCard));
+    }
+
+    // ===================== ADR-010 D-77: course mode is a property of the profile, not of the built-in
+
+    /// <summary>
+    /// A newer-than-built-in active profile that is the frozen version 4 course mapping with
+    /// <paramref name="mutate"/> applied to each row (return <c>null</c> to drop the row). Seeds the
+    /// built-in version inactive alongside it, for the reason
+    /// <see cref="A_profile_naming_no_rfid_column_imports_every_student_with_no_card"/> documents.
+    /// </summary>
+    private async Task<World> ArrangeMutatedCourseProfileAsync(Func<MappingRow, MappingRow?> mutate)
+    {
+        var world = await ArrangeBareAsync();
+
+        await SeedProfileAsync(
+            world.SchoolId, SisImportProfileTemplate.BuiltInVersion, isActive: false, BuiltInMapping());
+        await SeedProfileAsync(
+            world.SchoolId, SisImportProfileTemplate.BuiltInVersion + 1, isActive: true,
+            [.. BuiltInMapping().Select(mutate).OfType<MappingRow>()]);
+
+        return world;
+    }
+
+    /// <summary>
+    /// <b>A broken course-mode mapping is reported, never silently downgraded to section-only.</b> The
+    /// <c>Course.CodeKey</c> row is the switch that puts a batch in course mode; here it is present but
+    /// names no readable source column. Reading "unreadable" as "absent" would flip the whole batch to
+    /// section-only, import every student into the placeholder course and report a clean run — a
+    /// misconfiguration turned into plausible data. Every row must fail instead, and nothing may be
+    /// filed under a placeholder.
+    /// </summary>
+    [Fact]
+    public async Task A_course_code_key_row_with_an_unreadable_source_fails_every_row_and_never_falls_back_to_section_only()
+    {
+        var world = await ArrangeMutatedCourseProfileAsync(m =>
+            m.TargetField == SisImportProfileTemplate.CourseCodeKeyTarget ? m with { SourceColumn = "" } : m);
+
+        var batch = await ImportAsync(world.TermId);
+
+        Assert.Equal(SyntheticRoster.DataRowCount, batch.TotalRows);
+        Assert.Equal(batch.TotalRows, batch.FailedRows);
+        Assert.True(batch.CountersReconcile);
+
+        var rows = await RowsOfAsync(batch.Id);
+        Assert.All(rows, r =>
+        {
+            Assert.Equal(SisImportRowResult.Failed, r.Result);
+            Assert.Contains(SisImportFailureCode.MissingRequiredValue, r.ErrorMessage!, StringComparison.Ordinal);
+        });
+
+        await using var read = NewDbContext();
+        Assert.Equal(0, await read.Courses.IgnoreQueryFilters().CountAsync());
+        Assert.False(await read.Courses.IgnoreQueryFilters()
+            .AnyAsync(c => c.CodeKey == AcademicKey.SectionPlaceholder));
+        Assert.Equal(0, await read.Enrollments.IgnoreQueryFilters().CountAsync());
+    }
+
+    /// <summary>
+    /// The course code is read from the column the profile's <c>Course.Code</c> / <c>Course.CodeKey</c>
+    /// rows name, not from the <see cref="SisRosterColumns.CourseCode"/> constant. Here both rows point
+    /// at the course-name column, so the courses that result are named after the titles and none after
+    /// the codes the file also carries.
+    /// </summary>
+    [Fact]
+    public async Task A_course_code_key_mapped_from_a_non_default_header_reads_that_column()
+    {
+        var world = await ArrangeMutatedCourseProfileAsync(m =>
+            m.TargetField is "Course.Code" or "Course.CodeKey"
+                ? m with { SourceColumn = SisRosterColumns.CourseName }
+                : m);
+
+        var batch = await ImportAsync(world.TermId);
+
+        Assert.Equal(0, batch.FailedRows);
+
+        await using var read = NewDbContext();
+        var codes = await read.Courses.IgnoreQueryFilters().Select(c => c.Code).ToListAsync();
+
+        Assert.Contains("Life and Works of Rizal", codes);
+        Assert.Contains("Criminalistics 2", codes);
+        Assert.Contains("Military Science 32", codes);
+        Assert.Contains("National Service Training Program 2", codes);
+
+        // The default column's values appear nowhere, and neither does the placeholder.
+        Assert.DoesNotContain(codes, c => c.Contains("SSCI", StringComparison.OrdinalIgnoreCase));
+        Assert.DoesNotContain(codes, c => c.StartsWith("MS", StringComparison.Ordinal));
+        Assert.DoesNotContain(codes, c => c.StartsWith("NSTP", StringComparison.Ordinal));
+        Assert.DoesNotContain(AcademicKey.SectionPlaceholder, codes);
+    }
+
+    /// <summary>
+    /// A course-mode profile with no <c>Instructor.DisplayName</c> row reads no teacher cell, even though
+    /// the file is full of them. No instructor, no assignment — and no placeholder-teacher warning either,
+    /// because nothing was read to be a placeholder.
+    /// </summary>
+    [Fact]
+    public async Task A_course_mode_profile_without_an_instructor_row_creates_no_instructors()
+    {
+        var world = await ArrangeMutatedCourseProfileAsync(m =>
+            m.TargetField == SisImportProfileTemplate.InstructorDisplayNameTarget ? null : m);
+
+        var batch = await ImportAsync(world.TermId);
+
+        Assert.Equal(0, batch.FailedRows);
+
+        await using var read = NewDbContext();
+        Assert.Equal(ExpectedCourses, await read.Courses.IgnoreQueryFilters().CountAsync());
+        Assert.Equal(0, await read.Instructors.IgnoreQueryFilters().CountAsync());
+        Assert.Equal(0, await read.CourseOfferingInstructors.IgnoreQueryFilters().CountAsync());
+
+        var rows = await RowsOfAsync(batch.Id);
+        Assert.DoesNotContain(rows, r => r.WarningCode == SisImportWarningCode.InstructorPlaceholder);
+        Assert.DoesNotContain(rows, r => r.SkipReason == SisImportSkipReason.InstructorPlaceholder);
+        Assert.All(rows, r => Assert.DoesNotContain(
+            r.Entities, e => e.EntityType == SisImportEntityType.Instructor));
+    }
+
+    /// <summary>
+    /// A course-mode profile with no <c>Course.Title</c> row imports every course with no title: the
+    /// title cell is optional, and its absence from the mapping is not a reason to fail or to guess.
+    /// </summary>
+    [Fact]
+    public async Task A_course_mode_profile_without_a_title_row_imports_courses_with_no_title()
+    {
+        var world = await ArrangeMutatedCourseProfileAsync(m =>
+            m.TargetField == SisImportProfileTemplate.CourseTitleTarget ? null : m);
+
+        var batch = await ImportAsync(world.TermId);
+
+        Assert.Equal(0, batch.FailedRows);
+
+        await using var read = NewDbContext();
+        var courses = await read.Courses.IgnoreQueryFilters().ToListAsync();
+
+        Assert.Equal(ExpectedCourses, courses.Count);
+        Assert.All(courses, c => Assert.Null(c.Title));
     }
 
     // ============================================ CRITICAL 1: the fan-out points where it says it does

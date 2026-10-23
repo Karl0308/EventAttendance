@@ -227,7 +227,7 @@ export const TERM_IS_NOT_INFERRED =
 const PHASE_LABELS: Record<string, string> = {
   [IMPORT_PHASES.ClearingPreviousRun]: "Clearing the previous run",
   [IMPORT_PHASES.ParsingRows]: "Reading the workbook",
-  [IMPORT_PHASES.ResolvingDimensions]: "Matching colleges, programs and courses",
+  [IMPORT_PHASES.ResolvingDimensions]: "Matching colleges, programs and sections",
   [IMPORT_PHASES.ResolvingFacts]: "Matching sections, students and enrolments",
   [IMPORT_PHASES.WritingFacts]: "Writing sections, students and enrolments",
   [IMPORT_PHASES.RecordingRowResults]: "Recording what each row did",

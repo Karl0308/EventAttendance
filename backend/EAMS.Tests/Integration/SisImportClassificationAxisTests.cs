@@ -72,6 +72,8 @@ public class SisImportClassificationAxisTests : IntegrationTest
 
             await using (var db = NewDbContext())
             {
+                // Category rows only, so this batch is section-only by design (ADR-010 D-77: no
+                // Course.CodeKey row). These tests assert on classification warnings, not on courses.
                 var profile = new SisImportProfile
                 {
                     SchoolId = world.SchoolId,

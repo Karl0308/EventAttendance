@@ -112,7 +112,9 @@ internal sealed class AcademicReferenceService : IAcademicReferenceService
     public Task<PagedResult<CourseDto>> ListCoursesAsync(
         Guid? collegeId, string? search, PageRequest page, CancellationToken ct = default)
     {
-        var query = _db.Courses.AsNoTracking();
+        // ADR-010 D-77: the section-only placeholder is a stand-in, not a course, and is never listed.
+        // The query form of AcademicKey.IsSectionPlaceholder — EF cannot translate a method call.
+        var query = _db.Courses.AsNoTracking().Where(c => c.CodeKey != AcademicKey.SectionPlaceholder);
 
         if (collegeId is { } college) query = query.Where(c => c.CollegeId == college);
 
@@ -183,7 +185,10 @@ internal sealed class AcademicReferenceService : IAcademicReferenceService
             return new PagedResult<CourseOfferingDto>([], page.Page, page.PageSize, Total: 0);
         }
 
-        var query = _db.CourseOfferings.AsNoTracking().Where(o => o.TermId == scopedTerm);
+        // ADR-010 D-77: section-only offerings (under the placeholder course) are not listed. A section
+        // audience is picked from the section student groups instead; see AudienceField.Section.
+        var query = _db.CourseOfferings.AsNoTracking()
+            .Where(o => o.TermId == scopedTerm && o.Course!.CodeKey != AcademicKey.SectionPlaceholder);
 
         if (courseId is { } course) query = query.Where(o => o.CourseId == course);
 

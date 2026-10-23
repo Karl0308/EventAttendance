@@ -39,7 +39,7 @@ namespace EAMS.Domain;
 ///   <item><term><see cref="College"/></term><description><c>GET /academic/colleges</c> — values are college ids.</description></item>
 ///   <item><term><see cref="Program"/></term><description><c>GET /academic/programs</c> — values are programme ids.</description></item>
 ///   <item><term><see cref="YearLevel"/></term><description>the distinct derived years (D-47) — values are bare digits, <c>"2"</c>.</description></item>
-///   <item><term><see cref="Section"/></term><description><c>GET /academic/course-offerings</c> — values are <c>sectionKey</c>.</description></item>
+///   <item><term><see cref="Section"/></term><description>the <c>Section</c> groups of <c>GET /student-groups</c>, one per section in the term — values are the section's name or key, normalized before comparison (<c>BSFS 2-A</c>). Not <c>GET /academic/course-offerings</c>: it excludes section-only offerings (ADR-010 D-77), so every section a section-only roster imported is missing from it. <b>A group's name is not a value as it stands:</b> it carries a <c> (TermCode)</c> suffix and may be clamped, so strip the suffix before sending it as a <see cref="Section"/> value. Sent whole, it normalizes to no section and the filter silently matches nobody.</description></item>
 ///   <item><term><see cref="Course"/></term><description><c>GET /academic/courses</c> — values are course ids.</description></item>
 /// </list>
 ///

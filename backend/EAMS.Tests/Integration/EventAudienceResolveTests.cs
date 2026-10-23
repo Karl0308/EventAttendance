@@ -518,6 +518,95 @@ public class EventAudienceResolveTests : IntegrationTest
     }
 
     /// <summary>
+    /// Adds Mendoza to the world: a current-term student placed in <c>BSCRIM 2-A</c> <em>only</em> through
+    /// the school's section-only placeholder course, which is how a version 5 import places everyone
+    /// (ADR-010 D-77). Returns Mendoza's id and the placeholder course's.
+    /// </summary>
+    private async Task<(Guid MendozaId, Guid PlaceholderId)> AddSectionOnlyStudentAsync(World world)
+    {
+        await using var db = NewDbContext();
+
+        var placeholder = TestData.NewSectionPlaceholderCourse(world.SchoolId);
+        db.Courses.Add(placeholder);
+        var offering = TestData.NewOffering(world.CurrentTermId, placeholder.Id, SecondYearSection);
+        db.CourseOfferings.Add(offering);
+
+        var mendoza = NewStudent(world.SchoolId, "2025-0012", "Mendoza", NursingSection);
+        db.Students.Add(mendoza);
+        db.StudentTermRecords.Add(TestData.NewTermRecord(
+            mendoza.Id, world.CurrentTermId, world.CriminologyProgramId, world.CriminologyCollegeId,
+            "2", SecondYearSection));
+        db.Enrollments.Add(TestData.NewEnrollment(mendoza.Id, offering.Id));
+
+        await db.SaveChangesAsync();
+        return (mendoza.Id, placeholder.Id);
+    }
+
+    /// <summary>
+    /// <b>AC-14a (ADR-010 D-77). The Section filter matches a version 5 student as it matches a version 4
+    /// one.</b> The section arm resolves through <c>Enrollments -> CourseOfferings.SectionKey</c> and does
+    /// not care which course the offering hangs off, so Mendoza (placeholder offering only) joins the four
+    /// real second-years under any spelling, and the Course arm for the real second-year course still
+    /// resolves only the four who take it.
+    /// </summary>
+    [Fact]
+    public async Task Section_filter_matches_v5_student()
+    {
+        var world = await ArrangeAsync();
+        var (mendoza, _) = await AddSectionOnlyStudentAsync(world);
+
+        using var factory = new EamsApiFactory(Sql.ConnectionString);
+        using var client = await SignedInClientAsync(factory);
+
+        AssertResolvesTo(
+            await ResolveAsync(client, Body(null, Filter("Section", SecondYearSection))),
+            [.. world.SecondYears, mendoza]);
+        AssertResolvesTo(
+            await ResolveAsync(client, Body(null, Filter("Section", "bscrim-2a"))),
+            [.. world.SecondYears, mendoza]);
+
+        // The v5 student is not in the real course, so the course arm is exactly what it was.
+        AssertResolvesTo(
+            await ResolveAsync(client, Body(null, Filter("Course", world.SecondYearCourseId.ToString()))),
+            world.SecondYears);
+    }
+
+    /// <summary>
+    /// <b>AC-14b (ADR-010 D-77). The Course filter refuses the section-only placeholder's id.</b> It is a
+    /// well-formed, existing id that would select every student a version 5 import placed, under a
+    /// "course" nobody teaches, so the whole row is refused rather than the value dropped. The refusal
+    /// is the one a value the field cannot hold gets, with a reason that names the placeholder; a good
+    /// course beside it does not rescue the row; and a random unknown id is still a 200 that matches
+    /// nobody, so the refusal is the placeholder's and not a tightening of the field.
+    /// </summary>
+    [Fact]
+    public async Task Course_filter_refuses_section_placeholder_course_id()
+    {
+        var world = await ArrangeAsync();
+        var (_, placeholderId) = await AddSectionOnlyStudentAsync(world);
+
+        using var factory = new EamsApiFactory(Sql.ConnectionString);
+        using var client = await SignedInClientAsync(factory);
+
+        var refusal = await RefusedAsync(
+            client, Body(null, Filter("Course", placeholderId.ToString())),
+            AudienceResolveOutcome.InvalidAudienceFilterValue);
+        var detail = refusal.GetProperty("detail").GetString()!;
+        Assert.Contains(AcademicKey.SectionPlaceholder, detail, StringComparison.Ordinal);
+        Assert.Contains("Section", detail, StringComparison.Ordinal);
+
+        // A good course beside it: the whole row is refused, not the offending value dropped.
+        await RefusedAsync(
+            client,
+            Body(null, Filter("Course", world.SecondYearCourseId.ToString(), placeholderId.ToString())),
+            AudienceResolveOutcome.InvalidAudienceFilterValue);
+
+        // Not a tightening of the field: an unknown id still matches nobody, with a 200.
+        var unknown = await ResolveAsync(client, Body(null, Filter("Course", Guid.NewGuid().ToString())));
+        Assert.Equal(0, unknown.Count);
+    }
+
+    /// <summary>
     /// Rows intersect across <em>different</em> fields (D-51) — <c>Program is BSCRIM</c> plus
     /// <c>Year is 1</c> is the first-year criminology cohort, not their union.
     ///

@@ -52,22 +52,23 @@ public class SisImportClassificationTests : IntegrationTest
 
     /// <summary>
     /// The world these tests run in: the school, its term, its vocabulary, <b>and an active profile that
-    /// maps the four category columns</b> (<see cref="CategoryMappingProfile"/>). Built-in version 4 maps
+    /// maps the four category columns</b> (<see cref="CategoryMappingProfile"/>). Built-in versions 4 and 5 map
     /// none (ADR-009, D-76), so without that profile there would be nothing for the dormant importer's
     /// category handling to do, and nothing here to protect for the day the feature returns.
     /// </summary>
-    private async Task<World> ArrangeAsync()
+    private async Task<World> ArrangeAsync(bool frozenCourseMapping = false)
     {
         var world = await ArrangeBuiltInAsync();
 
         await using var db = NewDbContext();
-        await CategoryMappingProfile.SeedCategoryMappingProfileAsync(db, world.SchoolId);
+        await CategoryMappingProfile.SeedCategoryMappingProfileAsync(
+            db, world.SchoolId, frozenCourseMapping);
         return world;
     }
 
     /// <summary>
     /// The school, term and vocabulary only: no profile seeded, so an upload creates the built-in
-    /// version 4 itself. What the shipped product does, and what the v4 tests below want.
+    /// version 5 itself (ADR-010, D-77). What the shipped product does, and what the built-in-profile tests below want.
     /// </summary>
     private async Task<World> ArrangeBuiltInAsync()
     {
@@ -154,8 +155,8 @@ public class SisImportClassificationTests : IntegrationTest
 
     /// <summary>
     /// <b>Every <c>StudentClassification</c> fan-out touch points into <c>StudentClassifications.Id</c>.</b>
-    /// The pipeline suite's whole-table id check can no longer cover this type: built-in v4 maps no
-    /// category, so its default roster records no such touch. Here the v5 category fixture does, and two
+    /// The pipeline suite's whole-table id check can no longer cover this type: built-in v4 and v5 map no
+    /// category, so its default roster records no such touch. Here the category fixture (built-in version + 1) does, and two
     /// imports exercise both recording branches: the first <c>Inserted</c>, the second <c>Unchanged</c>.
     /// The Unchanged branch is the one that once risked recording the vocabulary id instead.
     /// </summary>
@@ -442,7 +443,7 @@ public class SisImportClassificationTests : IntegrationTest
     [Fact]
     public async Task A_blank_category_on_a_later_import_leaves_the_stored_one_alone()
     {
-        var world = await ArrangeAsync();
+        var world = await ArrangeAsync(frozenCourseMapping: true);
         await ImportAsync(world.TermId);
 
         await using var blanked = SyntheticRoster.Build(SyntheticRoster.RowsWithoutCategories());
@@ -608,7 +609,7 @@ public class SisImportClassificationTests : IntegrationTest
     [Fact]
     public async Task A_roster_carrying_no_category_column_assigns_nothing_and_warns_about_nothing()
     {
-        var world = await ArrangeAsync();
+        var world = await ArrangeAsync(frozenCourseMapping: true);
 
         await using var legacy = SyntheticRoster.BuildWithoutCategoryColumns();
         var batch = await ImportAsync(world.TermId, legacy);
@@ -790,7 +791,7 @@ public class SisImportClassificationTests : IntegrationTest
     [Fact]
     public async Task The_same_disagreement_is_reported_once_and_then_stays_quiet()
     {
-        var world = await ArrangeAsync();
+        var world = await ArrangeAsync(frozenCourseMapping: true);
         await ImportAsync(world.TermId);
 
         var studentId = await ReassignPedroAsync("ACAD");
@@ -981,14 +982,15 @@ public class SisImportClassificationTests : IntegrationTest
     // ============================================================= ADR-001 D-4: the profile decides
 
     /// <summary>
-    /// <b>The built-in profile is version 4 and maps no category column</b> (ADR-009, D-76), and version
-    /// 3, which did, is superseded rather than deleted. The AC2 pin at the profile level: the import
+    /// <b>The built-in profile is version 5 and maps no category column</b> (ADR-009 D-76 withdrew the
+    /// category columns in version 4; ADR-010 D-77's version 5 keeps them out), and version 3, which
+    /// mapped them, is superseded rather than deleted. The AC2 pin at the profile level: the import
     /// template and the importer both read the category mapping from this table, so a
     /// <c>StudentClassification.*</c> row creeping back into the built-in entries is what would put the
     /// classification mapping back.
     /// </summary>
     [Fact]
-    public async Task The_built_in_profile_is_version_4_and_maps_no_category_column()
+    public async Task The_built_in_profile_is_version_5_and_maps_no_category_column()
     {
         var world = await ArrangeBuiltInAsync();
         await ImportAsync(world.TermId);
@@ -999,7 +1001,7 @@ public class SisImportClassificationTests : IntegrationTest
             .SingleAsync(p => p.SchoolId == world.SchoolId && p.IsActive);
 
         // The literal as well as the constant: asserting BuiltInVersion against itself would pass at any value.
-        Assert.Equal(4, profile.Version);
+        Assert.Equal(5, profile.Version);
         Assert.Equal(SisImportProfileTemplate.BuiltInVersion, profile.Version);
 
         var columns = await read.SisImportProfileColumns.IgnoreQueryFilters()
@@ -1159,24 +1161,26 @@ public class SisImportClassificationTests : IntegrationTest
 
     /// <summary>
     /// <b>The no-data-loss test for ADR-009 D-76.</b> A database that is on version 3, which mapped the
-    /// four category columns, upgrades to version 4 on its next upload. Version 3 must be superseded and
+    /// four category columns, upgrades to the built-in version (4 when ADR-009 shipped; 5 since ADR-010
+    /// D-77) on its next upload. Version 3 must be superseded and
     /// not deleted, its column rows must be left exactly as they were, and every classification a person
     /// already holds must still be held afterwards: the tables are kept so the feature can come back,
     /// and a version bump that quietly cleared them would make "kept" a word.
     ///
     /// <para>
     /// The held assignments include one for a person who is <em>in</em> the uploaded file and whose row
-    /// names a different category, because the failure that matters is a version 4 batch touching what
-    /// version 3 had written, not an unrelated person being left alone.
+    /// names a different category, because the failure that matters is a built-in-version batch touching
+    /// what version 3 had written, not an unrelated person being left alone.
     /// </para>
     /// </summary>
     [Fact]
-    public async Task Upgrading_to_v4_supersedes_v3_and_preserves_its_rows_and_every_held_classification()
+    public async Task Upgrading_to_the_built_in_version_supersedes_v3_and_preserves_its_rows_and_every_held_classification()
     {
         var world = await ArrangeBuiltInAsync();
 
-        // Version 3 as it was deployed: the built-in entries plus the four category rows, active.
-        var v3Mapping = SisImportProfileTemplate.Entries
+        // Version 3 as it was deployed: the frozen course-carrying entries (CourseMappingProfile, not the
+        // live template, which went section-only in version 5) plus the four category rows, active.
+        var v3Mapping = CourseMappingProfile.Entries
             .Where(e => !e.TargetField.StartsWith(SisImportProfileTemplate.ClassificationTargetPrefix, StringComparison.Ordinal))
             .Select(e => (e.SourceColumn, e.TargetField, e.NormalizationRule, e.IsRequired))
             .Concat(SisRosterColumns.ClassificationColumns.Select(c => (
@@ -1250,17 +1254,18 @@ public class SisImportClassificationTests : IntegrationTest
             .OrderBy(p => p.Version)
             .ToListAsync();
 
-        Assert.Equal([3, 4], profiles.Select(p => p.Version).ToList());
+        var builtIn = SisImportProfileTemplate.BuiltInVersion;
+        Assert.Equal([3, builtIn], profiles.Select(p => p.Version).ToList());
         Assert.False(profiles.Single(p => p.Version == 3).IsActive);
-        Assert.True(profiles.Single(p => p.Version == 4).IsActive);
+        Assert.True(profiles.Single(p => p.Version == builtIn).IsActive);
         Assert.Equal(v3Id, profiles.Single(p => p.Version == 3).Id);
 
         // v3 is kept as it was: every column row, in order, unchanged.
         Assert.Equal(v3ColumnsBefore, await ColumnRowsOfAsync(v3Id));
 
-        // The batch ran under v4 ...
+        // The batch ran under the built-in version ...
         Assert.Equal(
-            profiles.Single(p => p.Version == 4).Id,
+            profiles.Single(p => p.Version == builtIn).Id,
             (await read.SisImportBatches.IgnoreQueryFilters().SingleAsync(b => b.Id == batch.Id)).ImportProfileId);
 
         // ... and every held classification is exactly as it was: none removed, none added, Maria's row

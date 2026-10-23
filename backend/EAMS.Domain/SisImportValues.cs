@@ -272,21 +272,24 @@ public static class SisImportWarningCode
     /// first-seen title was kept. <c>'GE Elect 2'</c> carries two titles in the sample, so one of them is
     /// necessarily lost from <c>Courses.Title</c>; the warning message names both, and the row's own
     /// <c>RawData</c> keeps the original verbatim. The alternative — merging with no trace — is the
-    /// failure this code exists to make impossible.
+    /// failure this code exists to make impossible. Unreachable under a section-only profile (built-in
+    /// version 5, ADR-010 D-77), which reads no course cell; kept because course-mode batches raise it.
     /// </summary>
     public const string CourseTitleAlias = "CourseTitleAlias";
 
     /// <summary>
     /// An existing course had no college recorded and this row supplied one, so it was adopted. Distinct
     /// from a collision (which fails the row): filling a blank is an enrichment, but it still changes
-    /// what a shared row means, so it leaves a trace.
+    /// what a shared row means, so it leaves a trace. Unreachable under a section-only profile (ADR-010
+    /// D-77).
     /// </summary>
     public const string CourseCollegeAdopted = "CourseCollegeAdopted";
 
     /// <summary>
     /// The row's teacher is <c>'TO BE ANNOUNCE'</c>, so the offering was left unstaffed and no instructor
     /// row was created. 66 of the sample's 536 rows carry this; it is the single most common warning and
-    /// is the honest report of a real gap in the source.
+    /// is the honest report of a real gap in the source. Unreachable under a section-only profile
+    /// (ADR-010 D-77), which reads no teacher cell.
     /// </summary>
     public const string InstructorPlaceholder = "InstructorPlaceholder";
 
@@ -295,6 +298,13 @@ public static class SisImportWarningCode
     /// is only ever resolved together with a course — but it is the leading indicator of the collision
     /// <see cref="SisImportFailureCode.CourseCollegeCollision"/> guards against, so it is surfaced before
     /// it becomes one.
+    ///
+    /// <para>
+    /// <b>Under a section-only profile (ADR-010 D-77) the programmes sharing the key share one
+    /// offering</b>, because the placeholder course leaves the section key as the offering's only
+    /// distinguishing part. Section audiences do not change — section groups already merged by key — and
+    /// the message says which reading applies.
+    /// </para>
     /// </summary>
     public const string SectionSpansPrograms = "SectionSpansPrograms";
 
@@ -302,6 +312,12 @@ public static class SisImportWarningCode
     /// The row named no section, so its offering was filed under <see cref="AcademicKey.Unspecified"/>.
     /// 39 sample rows do this. Not an error — the offering is real and its students are enrolled — but
     /// those students get no section group from the projection, which is worth an operator knowing.
+    ///
+    /// <para>
+    /// <b>Under a section-only profile (ADR-010 D-77) the row writes no offering and no enrollment.</b>
+    /// A section-only <c>(unspecified)</c> offering would be one institution-wide pile per term with no
+    /// course to separate it. The student, the term record and any card still import.
+    /// </para>
     /// </summary>
     public const string SectionUnspecified = "SectionUnspecified";
 
@@ -575,6 +591,8 @@ public static class SisImportSkipReason
     /// only which of two accurate reasons is printed differs. Pinning it would mean ranking the pair by
     /// something the source does not order them by — a rule invented to buy a cosmetic property.
     /// </para>
+    ///
+    /// <para>Unreachable under a section-only profile (ADR-010 D-77), which reads no teacher cell.</para>
     /// </summary>
     public const string InstructorPlaceholder = "InstructorPlaceholder";
 
@@ -606,6 +624,11 @@ public static class SisImportFailureCode
     /// the source is fixed. A silent merge loses the distinction permanently, and nothing in the system
     /// would ever report it. See the remarks on <see cref="Course"/> for the widening to
     /// <c>UNIQUE(SchoolId, CollegeId, CodeKey)</c> that this failure is the trigger to schedule.
+    /// </para>
+    ///
+    /// <para>
+    /// Course-mode batches only: a section-only profile (ADR-010 D-77) reads no course cell, so a row
+    /// that failed with this under version 4 imports under version 5.
     /// </para>
     /// </summary>
     public const string CourseCollegeCollision = "COURSE_COLLEGE_COLLISION";
@@ -847,16 +870,26 @@ public static class SisRosterColumns
     ///
     /// <para>
     /// <b>This is how the workbook's second sheet is skipped at batch level rather than per row.</b> The
-    /// sample's <c>Sheet1</c> is a three-column projection of names and e-mails; it has no course, no
-    /// section and no teacher, so it fails this test and is never opened. Skipping it per row would mean
-    /// 536 more staged rows, 536 more skip reasons, and a batch whose <c>TotalRows</c> is twice the
+    /// sample's <c>Sheet1</c> is a three-column projection of names and e-mails; it has no college, no
+    /// programme and no section, so it fails this test and is never opened. Skipping it per row would
+    /// mean 536 more staged rows, 536 more skip reasons, and a batch whose <c>TotalRows</c> is twice the
     /// roster.
     /// </para>
     ///
     /// <para>
     /// Deliberately not all eighteen: a required-column list that includes every optional column turns
-    /// a harmless export change into a total failure. These nine are the ones without which a row cannot
-    /// be placed.
+    /// a harmless export change into a total failure. These six are the ones without which a row cannot
+    /// be placed under the built-in profile.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>Profile-independent, which is why it shrank with built-in version 5 (ADR-010, D-77).</b> It
+    /// picks the worksheet on every upload, and the roster template appends any header in it the pinned
+    /// profile omits — so while it listed <c>COURSE_CODE</c>, <c>COURSE_NAME</c> and <c>UA_FULLNAME</c>,
+    /// QA's section-only template could not exist: the template would put them back and the reader
+    /// would reject a file without them. A course-mode profile still reads those columns when the file
+    /// has them; a row missing the course code then fails at run time, not at upload. The constants
+    /// stay, and so does <see cref="All"/>.
     /// </para>
     ///
     /// <para>
@@ -867,8 +900,7 @@ public static class SisRosterColumns
     /// </summary>
     public static readonly IReadOnlyList<string> Required =
     [
-        RegNo, StudentFirstName, StudentLastName,
-        CollegeName, Program, SectionName, CourseCode, CourseName, TeacherFullName,
+        RegNo, StudentFirstName, StudentLastName, CollegeName, Program, SectionName,
     ];
 
     /// <summary>
