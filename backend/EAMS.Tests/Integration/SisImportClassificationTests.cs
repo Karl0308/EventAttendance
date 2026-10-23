@@ -50,7 +50,26 @@ public class SisImportClassificationTests : IntegrationTest
 
     private sealed record World(Guid SchoolId, Guid TermId);
 
+    /// <summary>
+    /// The world these tests run in: the school, its term, its vocabulary, <b>and an active profile that
+    /// maps the four category columns</b> (<see cref="CategoryMappingProfile"/>). Built-in version 4 maps
+    /// none (ADR-009, D-76), so without that profile there would be nothing for the dormant importer's
+    /// category handling to do, and nothing here to protect for the day the feature returns.
+    /// </summary>
     private async Task<World> ArrangeAsync()
+    {
+        var world = await ArrangeBuiltInAsync();
+
+        await using var db = NewDbContext();
+        await CategoryMappingProfile.SeedCategoryMappingProfileAsync(db, world.SchoolId);
+        return world;
+    }
+
+    /// <summary>
+    /// The school, term and vocabulary only: no profile seeded, so an upload creates the built-in
+    /// version 4 itself. What the shipped product does, and what the v4 tests below want.
+    /// </summary>
+    private async Task<World> ArrangeBuiltInAsync()
     {
         await using var db = NewDbContext();
         var school = TestData.NewSchool();
@@ -131,6 +150,39 @@ public class SisImportClassificationTests : IntegrationTest
     {
         foreach (var (_, column) in SisRosterColumns.ClassificationColumns)
             SetCell(rows, rowIndex, column, "");
+    }
+
+    /// <summary>
+    /// <b>Every <c>StudentClassification</c> fan-out touch points into <c>StudentClassifications.Id</c>.</b>
+    /// The pipeline suite's whole-table id check can no longer cover this type: built-in v4 maps no
+    /// category, so its default roster records no such touch. Here the v5 category fixture does, and two
+    /// imports exercise both recording branches: the first <c>Inserted</c>, the second <c>Unchanged</c>.
+    /// The Unchanged branch is the one that once risked recording the vocabulary id instead.
+    /// </summary>
+    [Fact]
+    public async Task Every_StudentClassification_touch_names_a_row_in_StudentClassifications()
+    {
+        var world = await ArrangeAsync();
+        await ImportAsync(world.TermId);
+        await ImportAsync(world.TermId);
+
+        await using var read = NewDbContext();
+
+        var assignmentIds = (await read.StudentClassifications.Select(a => a.Id).ToListAsync()).ToHashSet();
+        var touches = await read.SisImportRowEntities
+            .Where(e => e.EntityType == SisImportEntityType.StudentClassification)
+            .ToListAsync();
+
+        // Non-vacuity: both branches recorded something, or the loop below proves nothing.
+        Assert.True(touches.Count(t => t.Action == SisImportEntityAction.Inserted) > 0,
+            "No Inserted StudentClassification touch was recorded.");
+        Assert.True(touches.Count(t => t.Action == SisImportEntityAction.Unchanged) > 0,
+            "No Unchanged StudentClassification touch was recorded.");
+
+        Assert.All(touches, t => Assert.True(
+            assignmentIds.Contains(t.EntityId),
+            $"A {t.Action} StudentClassification touch records {t.EntityId}, which is not a " +
+            "StudentClassifications.Id."));
     }
 
     // ================================================================== the thing Task 5 asked for
@@ -929,14 +981,16 @@ public class SisImportClassificationTests : IntegrationTest
     // ============================================================= ADR-001 D-4: the profile decides
 
     /// <summary>
-    /// The built-in profile records a source column for every axis, at
-    /// <see cref="SisImportProfileTemplate.BuiltInVersion"/> — and the previous version is superseded
-    /// rather than deleted, so the batches that ran under it are still explained by it.
+    /// <b>The built-in profile is version 4 and maps no category column</b> (ADR-009, D-76), and version
+    /// 3, which did, is superseded rather than deleted. The AC2 pin at the profile level: the import
+    /// template and the importer both read the category mapping from this table, so a
+    /// <c>StudentClassification.*</c> row creeping back into the built-in entries is what would put the
+    /// classification mapping back.
     /// </summary>
     [Fact]
-    public async Task The_built_in_profile_maps_one_source_column_per_axis()
+    public async Task The_built_in_profile_is_version_4_and_maps_no_category_column()
     {
-        var world = await ArrangeAsync();
+        var world = await ArrangeBuiltInAsync();
         await ImportAsync(world.TermId);
 
         await using var read = NewDbContext();
@@ -944,18 +998,23 @@ public class SisImportClassificationTests : IntegrationTest
         var profile = await read.SisImportProfiles.IgnoreQueryFilters()
             .SingleAsync(p => p.SchoolId == world.SchoolId && p.IsActive);
 
+        // The literal as well as the constant: asserting BuiltInVersion against itself would pass at any value.
+        Assert.Equal(4, profile.Version);
         Assert.Equal(SisImportProfileTemplate.BuiltInVersion, profile.Version);
 
-        var targets = await read.SisImportProfileColumns.IgnoreQueryFilters()
-            .Where(c => c.ProfileId == profile.Id
-                     && c.TargetField.StartsWith(SisImportProfileTemplate.ClassificationTargetPrefix))
-            .Select(c => c.TargetField)
+        var columns = await read.SisImportProfileColumns.IgnoreQueryFilters()
+            .Where(c => c.ProfileId == profile.Id)
+            .Select(c => new { c.SourceColumn, c.TargetField })
             .ToListAsync();
 
-        Assert.Equal(
-            ClassificationAxis.All.Select(SisImportProfileTemplate.ClassificationTargetFor)
-                .Order(StringComparer.Ordinal).ToList(),
-            targets.Order(StringComparer.Ordinal).ToList());
+        // Not vacuous: the profile has its other columns, including the RFID one version 2 introduced.
+        Assert.Equal(SisImportProfileTemplate.Entries.Count, columns.Count);
+        Assert.Contains(columns, c => c.TargetField == SisImportProfileTemplate.RfidCardUidTarget);
+
+        Assert.DoesNotContain(columns, c =>
+            c.TargetField.StartsWith(SisImportProfileTemplate.ClassificationTargetPrefix, StringComparison.Ordinal));
+        foreach (var (_, column) in SisRosterColumns.ClassificationColumns)
+            Assert.DoesNotContain(columns, c => c.SourceColumn == column);
     }
 
     /// <summary>
@@ -995,7 +1054,9 @@ public class SisImportClassificationTests : IntegrationTest
                 SchoolId = world.SchoolId,
                 Name = SisImportProfileTemplate.ProfileName,
                 NameKey = AcademicKey.NormalizeOrUnspecified(SisImportProfileTemplate.ProfileName),
-                Version = SisImportProfileTemplate.BuiltInVersion - 1,
+                // The literal, not BuiltInVersion - 1: that stopped meaning "pre-Task 5" when the built-in
+                // version moved on to 4 (ADR-009, D-76), and version 3 is the one that DID map categories.
+                Version = 2,
                 Source = SisImportSource.Excel,
                 // Superseded, exactly as EnsureBuiltInProfileAsync leaves it — two active versions is
                 // not a shape UX_SisImportProfiles_School_Name_Active permits.
@@ -1039,5 +1100,172 @@ public class SisImportClassificationTests : IntegrationTest
         // the category mapping rather than about a batch that did nothing.
         Assert.Equal(8, await read.Students.CountAsync());
         Assert.Equal(8, await read.RfidCards.CountAsync());
+    }
+
+    // ================================================== ADR-009 D-76: version 4 and the data it leaves
+
+    /// <summary>
+    /// <b>AC2, end to end: a file that still carries all four category columns imports under version 4
+    /// and classifies nobody, without a single warning about it.</b>
+    ///
+    /// <para>
+    /// This is what every school's next upload looks like after the withdrawal: the SIS export has not
+    /// changed, so the four columns are still in the file and still filled in. The importer must neither
+    /// read them nor complain that it did not. <c>Completed</c> and not <c>CompletedWithWarnings</c> is
+    /// the sharp half: a pipeline that kept resolving categories and warned
+    /// <c>ClassificationUnavailable</c> on every row would still classify nobody and would pass every
+    /// weaker assertion here. The file is <see cref="SyntheticRoster.RowsWithoutWarnings"/> (so no other
+    /// finding can turn the status), with one row given a value in every category column so there is
+    /// something for a stale mapping to pick up.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public async Task A_v4_batch_over_a_file_carrying_all_four_category_columns_classifies_nobody_and_warns_nothing()
+    {
+        var world = await ArrangeBuiltInAsync();
+
+        var rows = SyntheticRoster.RowsWithoutWarnings();
+        SetCell(rows, 0, SisRosterColumns.StudentCategory, SyntheticRoster.StudentCategory);
+        SetCell(rows, 0, SisRosterColumns.PersonnelCategory, SyntheticRoster.PersonnelCategory);
+        SetCell(rows, 0, SisRosterColumns.FriarsCategory, "USA FRIARS");
+        SetCell(rows, 0, SisRosterColumns.SpecialCategory, SyntheticRoster.SpecialCategory);
+        await using var file = SyntheticRoster.Build(rows);
+
+        var batch = await ImportAsync(world.TermId, file);
+
+        // Positive control: the batch did real work.
+        Assert.Equal(rows.Count, batch.TotalRows);
+        Assert.Equal(rows.Count, batch.InsertedRows);
+
+        Assert.Equal(SisImportStatus.Completed, batch.Status);
+        Assert.Equal(0, batch.WarningRows);
+        Assert.Equal(0, batch.FailedRows);
+
+        var batchRows = await RowsOfAsync(batch.Id);
+        Assert.DoesNotContain(batchRows, r => r.WarningCode is not null);
+        Assert.DoesNotContain(batchRows, r =>
+            r.Entities.Any(e => e.EntityType == SisImportEntityType.StudentClassification));
+
+        await using var read = NewDbContext();
+        Assert.Equal(0, await read.StudentClassifications.CountAsync());
+        Assert.Equal(
+            0,
+            await read.SisImportRowEntities.IgnoreQueryFilters()
+                .CountAsync(e => e.EntityType == SisImportEntityType.StudentClassification));
+
+        // The vocabulary is there and untouched, so "nobody classified" is not "nothing to classify with".
+        Assert.Equal(ClassificationSeedValues.All.Count, await read.Classifications.CountAsync());
+    }
+
+    /// <summary>
+    /// <b>The no-data-loss test for ADR-009 D-76.</b> A database that is on version 3, which mapped the
+    /// four category columns, upgrades to version 4 on its next upload. Version 3 must be superseded and
+    /// not deleted, its column rows must be left exactly as they were, and every classification a person
+    /// already holds must still be held afterwards: the tables are kept so the feature can come back,
+    /// and a version bump that quietly cleared them would make "kept" a word.
+    ///
+    /// <para>
+    /// The held assignments include one for a person who is <em>in</em> the uploaded file and whose row
+    /// names a different category, because the failure that matters is a version 4 batch touching what
+    /// version 3 had written, not an unrelated person being left alone.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public async Task Upgrading_to_v4_supersedes_v3_and_preserves_its_rows_and_every_held_classification()
+    {
+        var world = await ArrangeBuiltInAsync();
+
+        // Version 3 as it was deployed: the built-in entries plus the four category rows, active.
+        var v3Mapping = SisImportProfileTemplate.Entries
+            .Where(e => !e.TargetField.StartsWith(SisImportProfileTemplate.ClassificationTargetPrefix, StringComparison.Ordinal))
+            .Select(e => (e.SourceColumn, e.TargetField, e.NormalizationRule, e.IsRequired))
+            .Concat(SisRosterColumns.ClassificationColumns.Select(c => (
+                SourceColumn: c.Column,
+                TargetField: SisImportProfileTemplate.ClassificationTargetFor(c.Axis),
+                NormalizationRule: "RosterClassification.Resolve",
+                IsRequired: false)))
+            .ToList();
+
+        Guid v3Id;
+        await using (var db = NewDbContext())
+        {
+            v3Id = await CategoryMappingProfile.SeedProfileAsync(
+                db, world.SchoolId, version: 3, isActive: true, v3Mapping);
+
+            var vocabulary = await db.Classifications.ToListAsync();
+            var nap = vocabulary.Single(c => c.Name == SyntheticRoster.PersonnelCategory);
+            var special = vocabulary.Single(c => c.Name == SyntheticRoster.SpecialCategory);
+
+            // Maria is in the file (and her row says STUDENT); a second person is not.
+            var maria = TestData.NewStudent(world.SchoolId, SyntheticRoster.MariaRegNo, "Maria", null, "Santos");
+            var bystander = TestData.NewStudent(world.SchoolId, "BYSTANDER-1", "Bea", null, "Stander");
+            db.Students.AddRange(maria, bystander);
+            db.StudentClassifications.AddRange(
+                TestData.NewStudentClassification(maria.Id, nap),
+                TestData.NewStudentClassification(bystander.Id, special));
+            await db.SaveChangesAsync();
+        }
+
+        async Task<List<string>> HeldAsync()
+        {
+            await using var db = NewDbContext();
+            var held = await db.StudentClassifications
+                .Select(a => a.Student!.StudentNumber + ":" + a.Classification!.Name)
+                .ToListAsync();
+            return [.. held.Order(StringComparer.Ordinal)];
+        }
+
+        async Task<List<string>> ColumnRowsOfAsync(Guid profileId)
+        {
+            await using var db = NewDbContext();
+            return await db.SisImportProfileColumns.IgnoreQueryFilters()
+                .Where(c => c.ProfileId == profileId)
+                .OrderBy(c => c.Ordinal)
+                .Select(c => c.Ordinal + "|" + c.SourceColumn + "|" + c.SourceColumnKey + "|" + c.TargetField
+                             + "|" + c.NormalizationRule + "|" + c.IsRequired)
+                .ToListAsync();
+        }
+
+        var heldBefore = await HeldAsync();
+        var v3ColumnsBefore = await ColumnRowsOfAsync(v3Id);
+
+        // Not vacuous: two assignments, and a v3 that really does map the four categories.
+        Assert.Equal(
+            new[] { $"{SyntheticRoster.MariaRegNo}:{SyntheticRoster.PersonnelCategory}", $"BYSTANDER-1:{SyntheticRoster.SpecialCategory}" }
+                .Order(StringComparer.Ordinal).ToList(),
+            heldBefore);
+        Assert.Equal(v3Mapping.Count, v3ColumnsBefore.Count);
+        Assert.Equal(
+            SisRosterColumns.ClassificationColumns.Count,
+            v3Mapping.Count(m => m.TargetField.StartsWith(
+                SisImportProfileTemplate.ClassificationTargetPrefix, StringComparison.Ordinal)));
+
+        // The upgrade: the next upload, and the run that follows it.
+        var batch = await ImportAsync(world.TermId);
+
+        await using var read = NewDbContext();
+
+        var profiles = await read.SisImportProfiles.IgnoreQueryFilters()
+            .Where(p => p.SchoolId == world.SchoolId)
+            .OrderBy(p => p.Version)
+            .ToListAsync();
+
+        Assert.Equal([3, 4], profiles.Select(p => p.Version).ToList());
+        Assert.False(profiles.Single(p => p.Version == 3).IsActive);
+        Assert.True(profiles.Single(p => p.Version == 4).IsActive);
+        Assert.Equal(v3Id, profiles.Single(p => p.Version == 3).Id);
+
+        // v3 is kept as it was: every column row, in order, unchanged.
+        Assert.Equal(v3ColumnsBefore, await ColumnRowsOfAsync(v3Id));
+
+        // The batch ran under v4 ...
+        Assert.Equal(
+            profiles.Single(p => p.Version == 4).Id,
+            (await read.SisImportBatches.IgnoreQueryFilters().SingleAsync(b => b.Id == batch.Id)).ImportProfileId);
+
+        // ... and every held classification is exactly as it was: none removed, none added, Maria's row
+        // saying STUDENT notwithstanding.
+        Assert.Equal(heldBefore, await HeldAsync());
+        Assert.Equal(2, await read.StudentClassifications.CountAsync());
     }
 }

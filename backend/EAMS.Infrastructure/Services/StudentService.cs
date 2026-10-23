@@ -54,27 +54,12 @@ internal sealed class StudentService : IStudentService
         _logger = logger;
     }
 
-    /// <summary>
-    /// <b><paramref name="classifications"/> is a required argument and has no default, which is the
-    /// point of the signature.</b>
-    ///
-    /// <para>
-    /// Every path that produces a <see cref="StudentDto"/> has to say where this person's categories
-    /// came from. A defaulted empty list would have let a caller forget — and forgetting produces
-    /// <c>classifications: []</c>, which does not read as "nobody asked", it reads as "this person has
-    /// none". That is true of thirty-four people in the roster and false of the rest, and nothing
-    /// anywhere would have said which. It is the exact failure ADR-001 D-2 records for the
-    /// <c>Course</c>/<c>Section</c> cache, and the compiler is what stops it recurring here.
-    /// </para>
-    /// </summary>
-    internal static StudentDto ToDto(
-        Student s, IReadOnlyList<StudentClassificationDto> classifications) => new(
+    internal static StudentDto ToDto(Student s) => new(
         s.Id, s.StudentNumber, s.FullName,
         s.FirstName, s.MiddleName, s.LastName,
         s.Email, s.Gender, s.PhotoUrl,
         s.Course, s.YearLevel, s.Section, s.Status,
-        s.Cards.Select(ToDto).ToList(),
-        classifications);
+        s.Cards.Select(ToDto).ToList());
 
     internal static CardDto ToDto(RfidCard c) => new(c.Id, c.CardUid, c.Label, c.IsActive);
 
@@ -84,35 +69,13 @@ internal sealed class StudentService : IStudentService
     /// <inheritdoc cref="IStudentService.ListAsync" path="/summary"/>
     /// </summary>
     /// <remarks>
-    /// <para>
     /// Counted and paged through <see cref="PagedQuery.ToPageAsync{TEntity, TDto}(IQueryable{TEntity},
     /// Func{IQueryable{TEntity}, IQueryable{TEntity}}, Func{TEntity, TDto}, PageRequest,
     /// CancellationToken)"/>, which is the single seam all nine admin lists share — a total built from
     /// a filter that has drifted from the one that produced the rows is the paging bug that never
     /// looks like one, and having one implementation of the pairing is what removes the chance.
-    /// </para>
-    ///
-    /// <para>
-    /// <b>The classifications column is one extra query for the whole page, issued after the page is
-    /// known and keyed by the ids actually served.</b> Three properties matter and this shape has all
-    /// three: it is never a query per row, it never runs for the rows the <c>COUNT</c> discards, and it
-    /// does not touch the paged query at all — so the <c>ORDER BY</c>
-    /// <c>PaginationTests.Every_paged_list_query_orders_by_a_unique_column</c> asserts on is byte for
-    /// byte what it was.
-    /// </para>
-    ///
-    /// <para>
-    /// <b>Why not the correlated subquery <c>ClassificationService.ListAsync</c> uses.</b> That one
-    /// projects a scalar <c>COUNT</c> inside a DTO built in SQL. This read cannot build its DTO in SQL —
-    /// <c>Student.FullName</c> is computed in the domain and <c>Ignore</c>d by the model, and
-    /// <c>Cards</c> is a materialized navigation — so it uses the entity-mapping overload, where there
-    /// is no SQL projection for a subquery to sit in. The available alternative was a second collection
-    /// <c>Include</c> beside <c>Cards</c>, and that multiplies rows: a student with three cards and two
-    /// classifications returns six. Two collection <c>Include</c>s on one page query is the cartesian
-    /// blow-up EF warns about by name, and it would have been paid on the roster's busiest read.
-    /// </para>
     /// </remarks>
-    public async Task<PagedResult<StudentDto>> ListAsync(
+    public Task<PagedResult<StudentDto>> ListAsync(
         string? search, string? course, string? status, PageRequest page,
         CancellationToken ct = default)
     {
@@ -145,11 +108,7 @@ internal sealed class StudentService : IStudentService
         if (!string.IsNullOrWhiteSpace(course)) q = q.Where(s => s.Course == course);
         if (!string.IsNullOrWhiteSpace(status)) q = q.Where(s => s.Status == status);
 
-        // Mapped to the entity rather than to the DTO here, because the DTO needs a value this query
-        // does not have yet. Still through ToPageAsync, so the count and the page are still built from
-        // one queryable — that guarantee is the reason the helper exists and is not worth trading for a
-        // shorter method.
-        var students = await q.ToPageAsync(
+        return q.ToPageAsync(
             // Include here rather than on the filter, so the join lands on the page and not on the
             // COUNT. ThenBy(Id) is the total order: surnames are not unique — a roster of fifty-two
             // has several — and SQL Server may return equal keys in a different order on every
@@ -158,39 +117,14 @@ internal sealed class StudentService : IStudentService
             ordered => ordered
                 .Include(s => s.Cards)
                 .OrderBy(s => s.LastName).ThenBy(s => s.Id),
-            s => s, page, ct);
-
-        // One query for the page's classifications, keyed by the ids actually served — never one per
-        // row, and never for a row the COUNT discarded.
-        var held = await StudentClassificationReads.ForStudentsAsync(
-            _db, students.Items.Select(s => s.Id).ToList(), ct);
-
-        return new PagedResult<StudentDto>(
-            students.Items.Select(s => ToDto(s, Held(held, s.Id))).ToList(),
-            students.Page, students.PageSize, students.Total);
+            ToDto, page, ct);
     }
-
-    /// <summary>
-    /// This student's row out of the page's lookup, or none.
-    ///
-    /// <para>
-    /// A student who holds nothing is absent from the dictionary rather than present with an empty
-    /// list, so the miss is the ordinary case and not an anomaly — thirty-four people in the sampled
-    /// roster are uncategorised.
-    /// </para>
-    /// </summary>
-    private static IReadOnlyList<StudentClassificationDto> Held(
-        IReadOnlyDictionary<Guid, IReadOnlyList<StudentClassificationDto>> page, Guid studentId) =>
-        page.TryGetValue(studentId, out var held) ? held : [];
 
     public async Task<StudentDto?> GetAsync(Guid id, CancellationToken ct = default)
     {
         var s = await _db.Students.Include(x => x.Cards)
             .FirstOrDefaultAsync(x => x.Id == id && !x.IsDeleted, ct);
-
-        return s is null
-            ? null
-            : ToDto(s, await StudentClassificationReads.ForStudentAsync(_db, s.Id, ct));
+        return s is null ? null : ToDto(s);
     }
 
     /// <summary>
@@ -221,15 +155,7 @@ internal sealed class StudentService : IStudentService
         var uid = CardUid.Normalize(cardUid);
         var card = await _db.RfidCards.Include(c => c.Student!).ThenInclude(s => s.Cards)
             .FirstOrDefaultAsync(c => c.CardUid == uid && c.IsActive && !c.Student!.IsDeleted, ct);
-        if (card?.Student is null) return null;
-
-        // The scan screen gets the same truthful collection every other student read returns. It is one
-        // indexed seek — UX_StudentClassifications_Student_Axis leads on StudentId — and the alternative
-        // was publishing a field that is always empty on this one route, which reads as "this person has
-        // no classifications" rather than as "this endpoint does not answer that".
-        return ToDto(
-            card.Student,
-            await StudentClassificationReads.ForStudentAsync(_db, card.Student.Id, ct));
+        return card?.Student is null ? null : ToDto(card.Student);
     }
 
     /// <summary>
@@ -382,7 +308,7 @@ internal sealed class StudentService : IStudentService
             return DerivedGuardTripped(ex);
         }
 
-        return await SavedAsync(student, "Student created.", ct);
+        return Saved(student, "Student created.");
     }
 
     public async Task<StudentWriteResponse> UpdateAsync(
@@ -426,7 +352,7 @@ internal sealed class StudentService : IStudentService
             return DerivedGuardTripped(ex);
         }
 
-        return await SavedAsync(student, "Student updated.", ct);
+        return Saved(student, "Student updated.");
     }
 
     /// <summary>
@@ -469,7 +395,7 @@ internal sealed class StudentService : IStudentService
             return DerivedGuardTripped(ex);
         }
 
-        return await SavedAsync(student, "Student deleted.", ct);
+        return Saved(student, "Student deleted.");
     }
 
     // ---------------------------------------------------------------------------------- cards
@@ -850,21 +776,8 @@ internal sealed class StudentService : IStudentService
         return clash is null ? null : Duplicate(number, clash.IsDeleted);
     }
 
-    /// <summary>
-    /// A saved student, with the classifications they actually hold.
-    ///
-    /// <para>
-    /// <b>Async, and it costs a query these three write paths did not use to pay.</b> The alternative
-    /// was answering a <c>PUT /students/{id}</c> with <c>classifications: []</c> for somebody who holds
-    /// two — a response that contradicts the <c>GET</c> the client just made, on the exact round trip an
-    /// edit form uses to refresh itself. A create genuinely holds none and reads the empty result
-    /// honestly; nothing here writes the junction table either way.
-    /// </para>
-    /// </summary>
-    private async Task<StudentWriteResponse> SavedAsync(
-        Student student, string message, CancellationToken ct) =>
-        new(StudentWriteOutcome.Saved, message,
-            ToDto(student, await StudentClassificationReads.ForStudentAsync(_db, student.Id, ct)));
+    private static StudentWriteResponse Saved(Student student, string message) =>
+        new(StudentWriteOutcome.Saved, message, ToDto(student));
 
     private static StudentWriteResponse NotFound() =>
         new(StudentWriteOutcome.NotFound, "Student not found.", null);

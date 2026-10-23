@@ -52,7 +52,8 @@ public class SisImportPipelineTests : IntegrationTest
         db.Terms.Add(term);
 
         // The vocabulary a booted host seeds and InitializeAsync deletes. The fixture's rows carry
-        // category columns, so without it every row would report ClassificationUnavailable.
+        // category columns, but built-in v4 maps none (ADR-009), so nothing here reads the vocabulary;
+        // it is seeded to mirror a booted host and is no longer needed to avoid ClassificationUnavailable.
         db.Classifications.AddRange(TestData.ClassificationVocabulary(school.Id));
 
         await db.SaveChangesAsync();
@@ -934,9 +935,12 @@ public class SisImportPipelineTests : IntegrationTest
         var rows = await RowsOfAsync(batch.Id);
 
         // Row 2 creates the world: college, programme, course, offering, instructor, assignment,
-        // student, card, term record, enrollment — and, since Task 5, Maria's STUDENT classification.
+        // student, card, term record, enrollment. Ten — it was eleven between Task 5 and ADR-009
+        // (D-76), when Maria's STUDENT classification was the eleventh; built-in profile version 4
+        // maps no category column, so no classification is touched.
         var first = Row(rows, 2);
-        Assert.Equal(11, first.Entities.Count);
+        Assert.Equal(10, first.Entities.Count);
+        Assert.DoesNotContain(first.Entities, e => e.EntityType == SisImportEntityType.StudentClassification);
         Assert.All(first.Entities, e => Assert.Equal(SisImportEntityAction.Inserted, e.Action));
         Assert.Contains(first.Entities, e => e.EntityType == SisImportEntityType.Course);
         Assert.Contains(first.Entities, e => e.EntityType == SisImportEntityType.RfidCard);

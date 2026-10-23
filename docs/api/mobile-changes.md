@@ -7,6 +7,36 @@ matching has its own page: [`mobile-card-matching.md`](mobile-card-matching.md).
 
 ---
 
+## 2026-10-23
+
+### `classifications` is gone from `GET /students/by-card/{cardUid}` - a release is needed only if you read it
+
+Student classification has been withdrawn from the product. `StudentDto` no longer carries a
+`classifications` array, so the card lookup your scan screen calls now answers with every field it had
+before **except** that one:
+
+```jsonc
+{
+  "id": "6b1d…",
+  "studentNumber": "2023-0001",
+  "fullName": "…",
+  // …every other field you already read, unchanged…
+  "cards": [ /* unchanged */ ]
+  // "classifications": [...]   removed - not empty, not null: absent
+}
+```
+
+The same field is gone from every other read that returns a student (`GET /students`,
+`GET /students/{id}`) and from the student write responses; the kiosk does not call those.
+
+**If your client reads `classifications`, stop.** It is not coming back as `[]` or `null` - the member is
+simply not in the body, and nothing replaces it. A client that never read it sees no change: no other
+field was renamed, removed or retyped, and taps, batches, the manifest and the event picker are
+untouched. A client **generated from the previous `openapi.json`** that treats `classifications` as a
+required member will fail to parse the lookup until it is regenerated from the current contract.
+
+---
+
 ## 2026-09-21
 
 ### Double taps are ignored, and the last tap is the time out - no release needed

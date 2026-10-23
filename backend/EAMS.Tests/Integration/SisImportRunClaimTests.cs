@@ -86,7 +86,8 @@ public class SisImportRunClaimTests : IntegrationTest
         db.Terms.Add(term);
 
         // The vocabulary a booted host seeds and InitializeAsync deletes. The fixture's rows carry
-        // category columns, so without it every row would report ClassificationUnavailable.
+        // category columns, but built-in v4 maps none (ADR-009), so nothing here reads the vocabulary;
+        // it is seeded to mirror a booted host and is no longer needed to avoid ClassificationUnavailable.
         db.Classifications.AddRange(TestData.ClassificationVocabulary(school.Id));
 
         await db.SaveChangesAsync();

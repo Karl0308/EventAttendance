@@ -52,12 +52,21 @@ internal static class SisImportProfileTemplate
     /// </para>
     ///
     /// <para>
-    /// Bumping is not cosmetic in either case. A database still holding version 1 would read the card
+    /// <b>Bumped to 4 on 2026-10-23 (ADR-009, D-76)</b>, when student classification was withdrawn from
+    /// the product surface: version 4 is version 3 without the four category rows. With no
+    /// <c>StudentClassification.*</c> target in the mapping, a version 4 batch reads no category cell,
+    /// assigns no classification and warns about none — exactly as a version 2 batch does. Version 3 is
+    /// superseded, not deleted, and stays behind to explain the batches that ran under it, as version 2
+    /// does; the classification tables and their data are untouched.
+    /// </para>
+    ///
+    /// <para>
+    /// Bumping is not cosmetic in any case. A database still holding version 1 would read the card
     /// serial out of the REGNO column — the exact defect version 2 removes — while a freshly seeded one
     /// would not. A version is what makes the two agree.
     /// </para>
     /// </summary>
-    public const int BuiltInVersion = 3;
+    public const int BuiltInVersion = 4;
 
     /// <summary>
     /// The dotted target that marks the RFID source column, named once because two places must agree
@@ -80,6 +89,12 @@ internal static class SisImportProfileTemplate
     /// "this source column holds Personnel-axis categories".
     ///
     /// <para>
+    /// <b>Kept although <see cref="Entries"/> no longer maps one.</b> Version 3 batches, and any
+    /// operator-authored version that maps a category column, are still read through it by the importer
+    /// and the roster template.
+    /// </para>
+    ///
+    /// <para>
     /// <b>The axis lives in the <c>TargetField</c> rather than in a column of its own</b> because
     /// <c>SisImportProfileColumns</c> has no axis column and adding one would be a migration in service
     /// of a single mapping. Dotted targets are already how this table names a destination
@@ -94,10 +109,11 @@ internal static class SisImportProfileTemplate
 
     public const string Description =
         "Built-in mapping for the CICSS roster export. Version 2 separated the RFID card serial from " +
-        "REGNO (the client's 2026-07-30 correction); version 3 adds the four Task 5 category columns, " +
-        "one per classification axis. Earlier versions are kept, superseded, to explain the batches " +
-        "that ran under them — a version 2 batch maps no category column and therefore classifies " +
-        "nobody, which is the guarantee rather than a gap. Seeded from " +
+        "REGNO (the client's 2026-07-30 correction); version 3 added the four Task 5 category columns; " +
+        "version 4 removes them again, because student classification was withdrawn from the product " +
+        "(2026-10-23, ADR-009 D-76). Earlier versions are kept, superseded, to explain the batches that " +
+        "ran under them — a version 2 or version 4 batch maps no category column and therefore " +
+        "classifies nobody, which is the guarantee rather than a gap. Seeded from " +
         nameof(SisImportProfileTemplate) + " so every batch points at the rules that actually ran.";
 
     /// <param name="SourceColumn">The header in the file.</param>
@@ -113,13 +129,13 @@ internal static class SisImportProfileTemplate
     private const string Key = "AcademicKey.NormalizeOrUnspecified";
     private const string Uid = "CardUid.Normalize";
     private const string Teacher = "TeacherNames.Parse";
-    private const string Category = "RosterClassification.Resolve";
     private const string Unused = "(not imported)";
 
     /// <summary>
     /// All twenty-two columns, in file order. Columns that feed nothing are listed too — an absent row
     /// is indistinguishable from a forgotten one, and "we read this column and deliberately do nothing
-    /// with it" is the more useful record.
+    /// with it" is the more useful record. The four category columns version 3 added are not listed
+    /// since version 4: a file that still carries them imports with those cells unread.
     /// </summary>
     public static readonly IReadOnlyList<Entry> Entries =
     [
@@ -172,24 +188,5 @@ internal static class SisImportProfileTemplate
         // The teacher's own college, which is not the student's and is not what Courses.CollegeId means.
         // Storing it there would attribute a course to whichever faculty happened to staff it.
         new(SisRosterColumns.TeacherCollege, "(none)", Unused, IsRequired: false),
-
-        // ------------------------------------------------------------- Task 5: the category columns
-        //
-        // The rows that make this table load-bearing for classification, exactly as the RfidCard row
-        // above does for cards: the pipeline finds each category column by looking for THESE
-        // TargetFields among the batch's profile columns, so a client export that spells the header
-        // 'PERSONNEL' rather than 'PERSONNEL_CATEGORY' is a new profile version and not a line of code.
-        //
-        // OPTIONAL, every one of them. A Required addition would reject every roster file that exists
-        // today, all of which predate these columns — and a person with no category is a first-class
-        // outcome that reports itself (SisImportWarningCode.ClassificationMissing) rather than an error
-        // that loses the row.
-        //
-        // The NormalizationRule names RosterClassification.Resolve rather than a text cleaner, because
-        // the interesting rule is not how the cell is tidied but how the four cells are read together:
-        // the column value wins, the 720000 registration-number prefix is only a fallback, and neither
-        // ever defaults to STUDENT.
-        .. SisRosterColumns.ClassificationColumns.Select(c =>
-            new Entry(c.Column, ClassificationTargetFor(c.Axis), Category, IsRequired: false)),
     ];
 }

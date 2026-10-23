@@ -51,29 +51,46 @@ public class SisImportSaveBoundaryTests : IntegrationTest
 
     /// <summary>
     /// How many fan-out rows one clean roster row produces: College, Program, Course, CourseOffering,
-    /// Student, RfidCard, StudentTermRecord, Instructor, CourseOfferingInstructor, Enrollment — and,
-    /// since Task 5, the person's <c>StudentClassification</c>.
+    /// Student, RfidCard, StudentTermRecord, Instructor, CourseOfferingInstructor, Enrollment.
     ///
     /// <para>
-    /// Eleven regardless of whether those entities were created or merely referenced — an
+    /// Ten regardless of whether those entities were created or merely referenced — an
     /// <c>Unchanged</c> touch is still a touch — which is what makes the fan-out of an <c>n</c>-row
-    /// clean roster exactly <c>n * 11</c> and therefore something a chunk-boundary test can check
+    /// clean roster exactly <c>n * 10</c> and therefore something a chunk-boundary test can check
     /// against arithmetic rather than against whatever the implementation happened to write.
     /// </para>
     ///
     /// <para>
-    /// <b>One classification and not four</b>, because a clean row here is a student: it carries
-    /// <c>STUDENT_CATEGORY</c> and leaves the other three category columns blank, which is the shape of
-    /// 20,857 of the export's 21,497 rows. The ceiling is four, and
-    /// <c>RowLedger.ApplyInChunks</c>'s bound is written against that rather than against this.
+    /// <b>It was eleven between Task 5 and ADR-009 (D-76).</b> Task 5 added the person's
+    /// <c>StudentClassification</c> as an eleventh touch; built-in profile version 4 maps no category
+    /// column, so a clean row touches no classification again and the count is back to ten. A profile
+    /// that does map one (see <see cref="CategoryMappingProfile"/>) would make it eleven again — this
+    /// test deliberately runs on the built-in profile.
     /// </para>
     /// </summary>
-    private const int FanOutRowsPerCleanRow = 11;
+    private const int FanOutRowsPerCleanRow = 10;
 
     /// <summary>
     /// The most clean source rows whose fan-out fits inside one save. <c>ApplyInChunks</c> never splits
-    /// a source row, so this is a floor division rather than a ratio — at 500 and 11 it is 45 rows
-    /// (495 fan-out entries), and the 46th crosses.
+    /// a source row and cuts when <c>pending + fanOut &gt; ceiling</c>, so this is a floor division and
+    /// a row that lands the chunk on the ceiling exactly still fits.
+    ///
+    /// <para>
+    /// <b>Arithmetic, at ceiling 500 and 10 per row</b> (it was 45 rows at 11 per row, which is why the
+    /// old 44 / 45 / 46 / 91 stopped meaning anything the moment the count moved):
+    /// </para>
+    /// <list type="bullet">
+    /// <item><c>500 / 10 = 50</c> rows per chunk. 50 rows stage 500 fan-out entries, exactly on the
+    /// ceiling, and fit.</item>
+    /// <item><c>49</c> rows: 490 entries, one save, a whole row short of the boundary.</item>
+    /// <item><c>50</c> rows: 500 entries, one save, exactly on the boundary (the off-by-one that
+    /// <c>&gt;</c> versus <c>&gt;=</c> would move).</item>
+    /// <item><c>51</c> rows: the 51st would make 510 &gt; 500, so the chunk cuts after row 50 and a
+    /// second save carries 10 — one past the boundary, two saves.</item>
+    /// <item><c>101</c> rows (<c>50 * 2 + 1</c>): saves of 500, 500 and 10 — one past the second
+    /// boundary, three saves.</item>
+    /// <item><c>1001</c> rows: 10,010 entries, 21 saves — the plain volume case.</item>
+    /// </list>
     /// </summary>
     private const int RowsPerChunk = ExpectedFanOutChunkSize / FanOutRowsPerCleanRow;
 
@@ -100,7 +117,8 @@ public class SisImportSaveBoundaryTests : IntegrationTest
         db.Terms.Add(term);
 
         // The vocabulary a booted host seeds and InitializeAsync deletes. The fixture's rows carry
-        // category columns, so without it every row would report ClassificationUnavailable.
+        // category columns, but built-in v4 maps none (ADR-009), so nothing here reads the vocabulary;
+        // it is seeded to mirror a booted host and is no longer needed to avoid ClassificationUnavailable.
         db.Classifications.AddRange(TestData.ClassificationVocabulary(school.Id));
 
         await db.SaveChangesAsync();
@@ -241,7 +259,8 @@ public class SisImportSaveBoundaryTests : IntegrationTest
     /// <para>
     /// <b>Derived because the literals silently stopped straddling anything.</b> They were 499 / 500 /
     /// 501 / 1001, correct while a row produced ten fan-out entries; Task 5 made it eleven and every
-    /// one of them landed mid-chunk. The <em>arithmetic</em> assertion below still failed, loudly, so
+    /// one of them landed mid-chunk. ADR-009 (D-76) made it ten again, so the derived sizes are now
+    /// 49 / 50 / 51 / 101 / 1001 (see <see cref="RowsPerChunk"/> for the arithmetic). The <em>arithmetic</em> assertion below still failed, loudly, so
     /// the change was caught — but had the count moved without the product changing, four boundary
     /// cases would have quietly become four ordinary ones with nothing going red. Tying them to the
     /// constants is what keeps the property rather than the numbers.

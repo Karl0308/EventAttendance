@@ -38,6 +38,10 @@ public class SisImportMergedCategoryWarningTests : IntegrationTest
         db.Terms.Add(term);
         db.Classifications.AddRange(TestData.ClassificationVocabulary(school.Id));
         await db.SaveChangesAsync();
+
+        // Built-in version 4 maps no category column (ADR-009, D-76); this file exercises the dormant
+        // importer's category handling, so it runs under a profile that does.
+        await CategoryMappingProfile.SeedCategoryMappingProfileAsync(db, school.Id);
         return new World(school.Id, term.Id);
     }
 

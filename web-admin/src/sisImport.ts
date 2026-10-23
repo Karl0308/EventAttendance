@@ -374,6 +374,8 @@ const WARNING_LABELS: Record<string, string> = {
   StudentIdentityConflict: "Student details disagree",
   RfidCardRevoked: "Card was withdrawn",
   RfidCardFromLegacyMapping: "Card from an old mapping",
+  // Kept although the built-in v4 profile maps no category column (ADR-009 D-76): batches that ran
+  // under v3, or any profile that maps category columns, still carry these codes in their history.
   ClassificationUnavailable: "Category not recognized",
   ClassificationConflict: "Category already set",
   ClassificationMissing: "No category",

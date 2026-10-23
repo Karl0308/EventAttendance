@@ -7,7 +7,8 @@ namespace EAMS.Infrastructure.Sis;
 
 /// <summary>
 /// Task 5's downloadable roster template. Reads the profile the school's next upload will be pinned to
-/// and the school's classification vocabulary, and hands both to <see cref="SisImportTemplateWorkbook"/>.
+/// and — only when that profile maps a category column — the school's classification vocabulary, and
+/// hands both to <see cref="SisImportTemplateWorkbook"/>.
 ///
 /// <para>
 /// <b>A separate service rather than a fifth method on <c>SisImportService</c></b>, because the two need
@@ -63,14 +64,21 @@ internal sealed class SisImportTemplateService : ISisImportTemplateService
             profileVersion = profile.Version;
         }
 
+        // The vocabulary is listed only beside a category column, and the built-in mapping has had none
+        // since version 4 (ADR-009, D-76) — so for it there is nothing to list and nothing to query.
+        // Asked through ColumnsOf so this and the workbook agree on what counts as a category column.
+        var mapsCategoryColumn = SisImportTemplateWorkbook.ColumnsOf(rows).Any(c => c.Axis is not null);
+
         // Only what an import can actually assign: a retired or merged-away entry is refused by the
         // importer (ClassificationAssignment.IsAssignable), so listing it as accepted would be a lie.
-        var vocabulary = await _db.Classifications.IgnoreQueryFilters()
-            .AsNoTracking()
-            .Where(c => c.SchoolId == schoolId.Value && c.IsActive && c.MergedIntoClassificationId == null)
-            .OrderBy(c => c.Name)
-            .Select(c => new SisImportTemplateWorkbook.VocabularyEntry(c.Axis, c.Name))
-            .ToListAsync(ct);
+        IReadOnlyList<SisImportTemplateWorkbook.VocabularyEntry> vocabulary = mapsCategoryColumn
+            ? await _db.Classifications.IgnoreQueryFilters()
+                .AsNoTracking()
+                .Where(c => c.SchoolId == schoolId.Value && c.IsActive && c.MergedIntoClassificationId == null)
+                .OrderBy(c => c.Name)
+                .Select(c => new SisImportTemplateWorkbook.VocabularyEntry(c.Axis, c.Name))
+                .ToListAsync(ct)
+            : [];
 
         return SisImportTemplateWorkbook.Build(profileName, profileVersion, rows, vocabulary);
     }

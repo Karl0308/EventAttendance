@@ -10,12 +10,12 @@ namespace EAMS.Infrastructure.Services;
 /// read in the system that answers it.</b>
 ///
 /// <para>
-/// <b>It exists because there are now three callers and they must not disagree.</b> The students grid
-/// renders a Classification column, <c>GET /students/{id}</c> and the edit form it opens render the same
-/// values, and <c>GET /students/{id}/classifications</c> is what the form saves against. If the grid
-/// ordered by name and the form by axis, the same person would show their two categories in a different
-/// order in two places on one screen — and if one of them filtered retired entries and the other did
-/// not, opening the form would silently drop a classification and saving would commit the drop.
+/// <b>Its one caller today is <c>GET /students/{id}/classifications</c>.</b> Student classification was
+/// withdrawn from the product surface on 2026-10-23 (ADR-009, D-76): <see cref="StudentDto"/> no longer
+/// carries it, so the students grid, <c>GET /students/{id}</c>, <c>GET /students/by-card/{uid}</c> and
+/// the student write responses stopped calling here. The tables and this dormant route stay. Were the
+/// field ever to return to a student read, it should come back through this class, so the same person's
+/// categories cannot be ordered or filtered differently in two places.
 /// </para>
 ///
 /// <para>
@@ -31,10 +31,10 @@ internal static class StudentClassificationReads
     /// Every classification held by any of <paramref name="studentIds"/>, keyed by student.
     ///
     /// <para>
-    /// <b>One query for the whole page — the N+1 this repository's own lessons are about.</b> The
-    /// students list calls this once with the ids of the rows it actually served, so the cost is a
-    /// single round trip whether the page holds one student or two hundred, and it runs for the page
-    /// only rather than for the rows the <c>COUNT</c> discards.
+    /// <b>One query for any number of students — the N+1 this repository's own lessons are about.</b>
+    /// Shaped for a page read (one round trip whether it holds one student or two hundred); since
+    /// 2026-10-23 its only caller is <see cref="ForStudentAsync"/>, after the students list stopped
+    /// returning classifications.
     /// </para>
     ///
     /// <para>

@@ -48,6 +48,20 @@ public class SisImportTemplateTests : IntegrationTest
         return new World(school.Id, term.Id);
     }
 
+    /// <summary>
+    /// The same world, plus an active import profile that maps the four category columns
+    /// (<see cref="CategoryMappingProfile"/>). The built-in version 4 maps none (ADR-009, D-76), so the
+    /// template's category section and vocabulary — kept for the day the feature returns — are only
+    /// reachable through a profile like this one.
+    /// </summary>
+    private async Task<World> ArrangeWithCategoryMappingAsync()
+    {
+        var world = await ArrangeAsync();
+        await using var db = NewDbContext();
+        await CategoryMappingProfile.SeedCategoryMappingProfileAsync(db, world.SchoolId);
+        return world;
+    }
+
     /// <summary>Downloads the template, asserting the file-response contract on the way.</summary>
     private static async Task<XLWorkbook> DownloadAsync(HttpClient client)
     {
@@ -140,8 +154,16 @@ public class SisImportTemplateTests : IntegrationTest
     /// <summary>
     /// The template's header row is the importer's own profile rows — read back from the database the
     /// importer pinned the upload to — distinct and in <c>Ordinal</c> order. Pinned to the literal
-    /// 22-column list as well, so a profile change that silently drops a column fails here too. And the
-    /// columns whose value the profile requires are the ones marked.
+    /// 18-column list as well (<see cref="SyntheticRoster.ColumnsWithoutCategories"/>: the 22 of
+    /// <see cref="SisRosterColumns.All"/> less the four category columns built-in version 4 no longer
+    /// maps, ADR-009 D-76), so a profile change that silently drops a column — or puts a category
+    /// column back — fails here too. And the columns whose value the profile requires are the ones
+    /// marked.
+    ///
+    /// <para>
+    /// The uploaded file still carries the four category columns, so the template lacking them is the
+    /// profile's doing and not the fixture's.
+    /// </para>
     /// </summary>
     [Fact]
     public async Task Template_headers_equal_the_active_profile_source_columns_in_order()
@@ -165,7 +187,7 @@ public class SisImportTemplateTests : IntegrationTest
         var headers = HeadersOf(Roster(template));
 
         Assert.Equal(await ProfileHeadersAsync(profileId), headers);
-        Assert.Equal(SisRosterColumns.All, headers);
+        Assert.Equal(SyntheticRoster.ColumnsWithoutCategories, headers);
 
         var marked = Roster(template).Row(1).CellsUsed()
             .Where(c => c.HasComment && c.GetComment().Text.Contains(SisImportTemplateWorkbook.RequiredHeaderComment))
@@ -183,11 +205,19 @@ public class SisImportTemplateTests : IntegrationTest
     /// <summary>
     /// QA #470 B1 asked for STUDENT, PERSONNEL and SPECIAL; #472 Q1 added FRIARS. The columns carry the
     /// importer's own names (ruling 14, #427), and the Instructions sheet lists what goes in each.
+    ///
+    /// <para>
+    /// <b>Kept for the day the feature returns.</b> Built-in version 4 maps no category column, so this
+    /// runs against a profile that does (<see cref="CategoryMappingProfile"/>): the template follows
+    /// the profile, and a profile that maps a category column still gets its section, its vocabulary
+    /// and the three rules that go with them. The contrast — version 4 gets none of it — is
+    /// <see cref="Instructions_carry_no_category_section_and_no_vocabulary"/>.
+    /// </para>
     /// </summary>
     [Fact]
-    public async Task Template_includes_all_four_category_columns_including_FRIARS()
+    public async Task Template_for_a_profile_that_maps_category_columns_still_lists_them()
     {
-        var world = await ArrangeAsync();
+        var world = await ArrangeWithCategoryMappingAsync();
         using var factory = new EamsApiFactory(Sql.ConnectionString);
         using var client = await SignedInClientAsync(factory, world.SchoolId);
 
@@ -199,19 +229,37 @@ public class SisImportTemplateTests : IntegrationTest
         Assert.Contains(SisRosterColumns.FriarsCategory, headers);
         Assert.Contains(SisRosterColumns.SpecialCategory, headers);
 
-        var instructions = template.Worksheet(SisImportTemplateWorkbook.InstructionsSheetName)
-            .Column(1).CellsUsed().Select(c => c.GetString()).ToList();
+        var instructions = InstructionLinesOf(template);
 
+        Assert.Contains("Category columns", instructions);
         Assert.Contains($"- {SisRosterColumns.FriarsCategory} (Friars): USA FRIARS", instructions);
         Assert.Contains($"- {SisRosterColumns.PersonnelCategory} (Personnel): ACAD, ANT, NAP, SUPERVISORY/MANAGERIAL", instructions);
         Assert.Contains($"- {SisRosterColumns.SpecialCategory} (Special): C2B2, CFI", instructions);
         Assert.Contains($"- {SisRosterColumns.StudentCategory} (Student): STUDENT", instructions);
+
+        // The three category rules travel with the section. QA's blocker was that these sentences stop
+        // the school hurting itself, so they are pinned exactly — and the constants are pinned to say
+        // what they must, so pinning them is not pinning a blank.
+        Assert.Contains(SisImportTemplateWorkbook.NeverReplacesRule, instructions);
+        Assert.Contains(SisImportTemplateWorkbook.BlankCategoriesRule, instructions);
+        Assert.Contains(SisImportTemplateWorkbook.WrongColumnRule, instructions);
+        Assert.StartsWith("An import never replaces a category a person already has",
+            SisImportTemplateWorkbook.NeverReplacesRule, StringComparison.Ordinal);
+        Assert.EndsWith("Nobody is ever defaulted to STUDENT.", SisImportTemplateWorkbook.BlankCategoriesRule, StringComparison.Ordinal);
+        Assert.StartsWith("A value typed in another group's column is not applied",
+            SisImportTemplateWorkbook.WrongColumnRule, StringComparison.Ordinal);
     }
 
     /// <summary>
     /// The round trip, and the only test that proves the template's promise: download it, fill in one
     /// valid student row, upload it through the real endpoint, run it, and see it import cleanly — no
-    /// missing-column rejection at upload, no <c>MissingRequiredValue</c> at run, and the category applied.
+    /// missing-column rejection at upload, no <c>MissingRequiredValue</c> at run.
+    ///
+    /// <para>
+    /// <b>No classification is applied</b> (ADR-009, D-76): the template carries no category column, so
+    /// the <c>STUDENT</c> that <see cref="ValidStudentRow"/> offers has nowhere to go and is not
+    /// written, and nothing is held for the person afterwards.
+    /// </para>
     /// </summary>
     [Fact]
     public async Task A_template_filled_with_one_valid_row_imports_with_no_missing_column_errors()
@@ -253,7 +301,7 @@ public class SisImportTemplateTests : IntegrationTest
             .Where(a => a.StudentId == student.Id)
             .Select(a => a.Axis)
             .ToListAsync();
-        Assert.Equal([ClassificationAxis.Student], held);
+        Assert.Empty(held);
     }
 
     /// <summary>
@@ -444,7 +492,9 @@ public class SisImportTemplateTests : IntegrationTest
 
     /// <summary>
     /// QA's blocker: the sentences that stop the school hurting itself are pinned exactly, so a later edit
-    /// cannot soften or drop one without a red test.
+    /// cannot soften or drop one without a red test. The three category rules left this list with the
+    /// category section (ADR-009, D-76); they are pinned, for the profile that still shows them, in
+    /// <see cref="Template_for_a_profile_that_maps_category_columns_still_lists_them"/>.
     /// </summary>
     [Fact]
     public async Task Instructions_tell_the_school_the_rules_that_matter()
@@ -458,9 +508,6 @@ public class SisImportTemplateTests : IntegrationTest
 
         Assert.Contains(SisImportTemplateWorkbook.NoClassRule, lines);
         Assert.Contains(SisImportTemplateWorkbook.NoPlaceholderRule, lines);
-        Assert.Contains(SisImportTemplateWorkbook.NeverReplacesRule, lines);
-        Assert.Contains(SisImportTemplateWorkbook.BlankCategoriesRule, lines);
-        Assert.Contains(SisImportTemplateWorkbook.WrongColumnRule, lines);
         Assert.Contains(
             "The REGNO and RFID columns are " + SisImportTemplateWorkbook.LeadingZerosRuleTail, lines);
         Assert.Contains(SisImportTemplateWorkbook.PasteRule, lines);
@@ -469,51 +516,80 @@ public class SisImportTemplateTests : IntegrationTest
         Assert.StartsWith("There is currently no way to import a person who has no college, program and course",
             SisImportTemplateWorkbook.NoClassRule, StringComparison.Ordinal);
         Assert.StartsWith("Do NOT type NA, N/A, NONE", SisImportTemplateWorkbook.NoPlaceholderRule, StringComparison.Ordinal);
-        Assert.StartsWith("An import never replaces a category a person already has",
-            SisImportTemplateWorkbook.NeverReplacesRule, StringComparison.Ordinal);
-        Assert.EndsWith("Nobody is ever defaulted to STUDENT.", SisImportTemplateWorkbook.BlankCategoriesRule, StringComparison.Ordinal);
-        Assert.StartsWith("A value typed in another group's column is not applied",
-            SisImportTemplateWorkbook.WrongColumnRule, StringComparison.Ordinal);
         Assert.Contains("leading zeros are part of the value", SisImportTemplateWorkbook.LeadingZerosRuleTail, StringComparison.Ordinal);
     }
 
     /// <summary>
-    /// Every deployed database until its next upload: version 2 active, version 3 never written. The next
-    /// upload creates v3 from the built-in entries, so the template must be v3's columns, not v2's.
+    /// Every deployed database until its next upload: version 3 active (the one that maps the four
+    /// category columns), version 4 never written. The next upload creates v4 from the built-in
+    /// entries, so the template must be v4's columns — without the categories — and not v3's.
     /// </summary>
     [Fact]
-    public async Task Template_uses_built_in_v3_when_only_an_older_version_is_active()
+    public async Task Template_uses_built_in_v4_when_only_an_older_version_is_active()
     {
         var world = await ArrangeAsync();
-        var v2 = BuiltInMapping()
+        const int v3 = 3;
+        var v3Mapping = BuiltInMapping()
             .Where(m => !m.TargetField.StartsWith(SisImportProfileTemplate.ClassificationTargetPrefix, StringComparison.Ordinal))
+            .Concat(SisRosterColumns.ClassificationColumns.Select(c => (
+                c.Column, SisImportProfileTemplate.ClassificationTargetFor(c.Axis), "RosterClassification.Resolve", false)))
             .ToList();
-        await SeedProfileAsync(world.SchoolId, SisImportProfileTemplate.BuiltInVersion - 1, isActive: true, v2);
+        await SeedProfileAsync(world.SchoolId, v3, isActive: true, v3Mapping);
 
         using var factory = new EamsApiFactory(Sql.ConnectionString);
         using var client = await SignedInClientAsync(factory, world.SchoolId);
 
         using var template = await DownloadAsync(client);
 
-        Assert.Equal(SisRosterColumns.All, HeadersOf(Roster(template)));
+        Assert.Equal(SyntheticRoster.ColumnsWithoutCategories, HeadersOf(Roster(template)));
         Assert.Contains($"version {SisImportProfileTemplate.BuiltInVersion}.", InstructionLinesOf(template)[1], StringComparison.Ordinal);
     }
 
     /// <summary>
-    /// v3 present but inactive, an older v2 active: the importer refuses the older one and pins to v3's
-    /// stored rows, so the template reads those rows — told apart from the built-in entries by a marker.
+    /// The contrast with <see cref="Template_for_a_profile_that_maps_category_columns_still_lists_them"/>:
+    /// the built-in version 4 maps no category column, so its Instructions sheet has no category section
+    /// and no vocabulary — a section explaining columns the file does not have would tell the school to
+    /// fill in nothing, and a list of accepted values the import will not apply would be a lie. The
+    /// school has a full vocabulary here (<see cref="ArrangeAsync"/> seeds it), so its absence from the
+    /// sheet is the template's doing and not an empty table's.
     /// </summary>
     [Fact]
-    public async Task Template_uses_v3_when_it_exists_but_is_inactive_and_an_older_one_is_active()
+    public async Task Instructions_carry_no_category_section_and_no_vocabulary()
+    {
+        var world = await ArrangeAsync();
+        using var factory = new EamsApiFactory(Sql.ConnectionString);
+        using var client = await SignedInClientAsync(factory, world.SchoolId);
+
+        using var template = await DownloadAsync(client);
+        var lines = InstructionLinesOf(template);
+
+        // Positive control: the sheet is there and has its other sections.
+        Assert.Contains("Columns", lines);
+
+        Assert.DoesNotContain("Category columns", lines);
+        Assert.DoesNotContain(lines, l => l.Contains("NAP", StringComparison.Ordinal));
+        Assert.DoesNotContain(lines, l => l.Contains("USA FRIARS", StringComparison.Ordinal));
+        Assert.DoesNotContain(lines, l => l.Contains("SUPERVISORY/MANAGERIAL", StringComparison.Ordinal));
+        Assert.DoesNotContain(SisImportTemplateWorkbook.NeverReplacesRule, lines);
+        Assert.DoesNotContain(SisImportTemplateWorkbook.BlankCategoriesRule, lines);
+        Assert.DoesNotContain(SisImportTemplateWorkbook.WrongColumnRule, lines);
+        foreach (var (_, column) in SisRosterColumns.ClassificationColumns)
+            Assert.DoesNotContain(lines, l => l.Contains(column, StringComparison.Ordinal));
+    }
+
+    /// <summary>
+    /// Built-in version present but inactive, an older one active: the importer refuses the older one and pins to the built-in's
+    /// stored rows, so the template reads those rows (told apart from the built-in entries by a marker).
+    /// </summary>
+    [Fact]
+    public async Task Template_uses_the_built_in_version_when_it_exists_but_is_inactive_and_an_older_one_is_active()
     {
         var world = await ArrangeAsync();
         const string marker = "V3 MARKER";
         var v3 = BuiltInMapping().Append((marker, "(none)", "(not imported)", false)).ToList();
-        var v2 = BuiltInMapping()
-            .Where(m => !m.TargetField.StartsWith(SisImportProfileTemplate.ClassificationTargetPrefix, StringComparison.Ordinal))
-            .ToList();
+        var older = BuiltInMapping().ToList();
         var v3Id = await SeedProfileAsync(world.SchoolId, SisImportProfileTemplate.BuiltInVersion, isActive: false, v3);
-        await SeedProfileAsync(world.SchoolId, SisImportProfileTemplate.BuiltInVersion - 1, isActive: true, v2);
+        await SeedProfileAsync(world.SchoolId, SisImportProfileTemplate.BuiltInVersion - 1, isActive: true, older);
 
         using var factory = new EamsApiFactory(Sql.ConnectionString);
         using var client = await SignedInClientAsync(factory, world.SchoolId);
@@ -557,7 +633,7 @@ public class SisImportTemplateTests : IntegrationTest
     [Fact]
     public async Task Retired_and_merged_classifications_are_not_listed_as_accepted_values()
     {
-        var world = await ArrangeAsync();
+        var world = await ArrangeWithCategoryMappingAsync();
         await using (var db = NewDbContext())
         {
             var vocabulary = await db.Classifications.IgnoreQueryFilters()
@@ -582,7 +658,7 @@ public class SisImportTemplateTests : IntegrationTest
     [Fact]
     public async Task A_school_with_no_classifications_says_so_per_group()
     {
-        var world = await ArrangeAsync();
+        var world = await ArrangeWithCategoryMappingAsync();
         await using (var db = NewDbContext())
         {
             db.Classifications.RemoveRange(
@@ -604,7 +680,7 @@ public class SisImportTemplateTests : IntegrationTest
     [Fact]
     public async Task Round_trip_with_personnel_and_two_categories_on_one_row_applies_both()
     {
-        var world = await ArrangeAsync();
+        var world = await ArrangeWithCategoryMappingAsync();
         using var factory = new EamsApiFactory(Sql.ConnectionString);
         using var client = await SignedInClientAsync(factory, world.SchoolId);
 
@@ -650,7 +726,7 @@ public class SisImportTemplateTests : IntegrationTest
     [Fact]
     public async Task A_classification_named_like_a_formula_is_written_as_text()
     {
-        var world = await ArrangeAsync();
+        var world = await ArrangeWithCategoryMappingAsync();
         const string formulaLike = "=1+1";
         await using (var db = NewDbContext())
         {

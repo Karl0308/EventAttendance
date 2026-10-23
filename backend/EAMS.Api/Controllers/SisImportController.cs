@@ -112,15 +112,17 @@ public class SisImportController : ControllerBase
     /// <remarks>
     /// Task 5 (QA MDVault #470 B1, #472 Q1/Q2). An <c>.xlsx</c> with two sheets: <b>Instructions</b>,
     /// and <b>Roster</b>, whose header row is the source columns of the import profile this school's next
-    /// upload will be pinned to (ADR-001 D-4), in profile order — the roster's own headers plus the four
-    /// category columns <c>STUDENT_CATEGORY</c>, <c>PERSONNEL_CATEGORY</c>, <c>FRIARS_CATEGORY</c> and
-    /// <c>SPECIAL_CATEGORY</c>. Any header the reader requires to recognise the roster sheet that the
-    /// profile omits is appended, so the template is always accepted as a roster. A newer active profile
+    /// upload will be pinned to (ADR-001 D-4), in profile order. The built-in mapping (version 4) carries
+    /// the roster's own headers only; it maps no category column, because student classification was
+    /// withdrawn from the product (ADR-009, D-76). Only a profile that maps a category column gets the
+    /// Instructions sheet's category section and this school's classification list. Any header the
+    /// reader requires to recognise the roster sheet that the profile omits is appended, so the template
+    /// is always accepted as a roster. A newer active profile
     /// version changes the template's columns; it does not change which headers the reader requires or
     /// the fixed headers the importer reads the core values from. Headers whose value is required carry a
     /// comment; the card-serial and student-number columns are formatted as Text so leading zeros
-    /// survive. Sent with <c>Cache-Control: no-store</c>, because it embeds the school's current
-    /// classification list.
+    /// survive. Sent with <c>Cache-Control: no-store</c>, because it describes the school's current
+    /// import profile — and, where that profile maps a category column, its current classification list.
     /// </remarks>
     /// <param name="ct">Cancellation token.</param>
     /// <response code="200">The workbook, as an attachment.</response>
@@ -137,11 +139,12 @@ public class SisImportController : ControllerBase
             return Conflict(ImportProblem(
                 StatusCodes.Status409Conflict,
                 "No school could be resolved.",
-                "The template is built from this school's import profile and classification list, and " +
+                "The template is built from this school's import profile, and " +
                 "no school could be resolved for this request."));
 
-        // Never cached: the file lists this school's classification vocabulary as of now, and a cached
-        // copy would advertise a category an administrator has since retired.
+        // Never cached: the file describes this school's import profile as of now — and, when that profile
+        // maps a category column, its classification vocabulary — so a cached copy could advertise a
+        // heading the import no longer reads, or a category an administrator has since retired.
         Response.Headers.CacheControl = "no-store";
 
         // FileStreamResult disposes the stream after writing it, and writes it asynchronously.

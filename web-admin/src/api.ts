@@ -16,9 +16,6 @@ import type {
   Card,
   CardMatch,
   CardSearchPage,
-  Classification,
-  StudentClassification,
-  StudentClassificationWriteResult,
   Device,
   DeviceKeyIssued,
   IssuedKeyDevice,
@@ -1297,37 +1294,6 @@ function toCard(row: Row, what: string): Card {
   };
 }
 
-/**
- * `StudentClassificationDto` — one classification a person holds, on one axis.
- *
- * `isActive` is `reqBool` deliberately: it is the classification's own retired flag and the contract
- * says it must be rendered, not filtered, so a drift that dropped it would be silently un-showable —
- * exactly the failure `StudentDto.classifications`'s own note warns an empty-filtered read is.
- */
-function toStudentClassification(row: Row, what: string): StudentClassification {
-  return {
-    classificationId: reqStr(row, "classificationId", what),
-    name: reqStr(row, "name", what),
-    axis: reqStr(row, "axis", what),
-    isActive: reqBool(row, "isActive", what),
-    assignedAt: reqStr(row, "assignedAt", what),
-  };
-}
-
-/** `ClassificationDto` — one entry in the vocabulary `GET /classifications` lists. */
-function toClassification(row: Row, what: string): Classification {
-  return {
-    id: reqStr(row, "id", what),
-    name: reqStr(row, "name", what),
-    nameKey: reqStr(row, "nameKey", what),
-    axis: reqStr(row, "axis", what),
-    isActive: reqBool(row, "isActive", what),
-    retiredAt: optStr(row.retiredAt),
-    mergedIntoClassificationId: optStr(row.mergedIntoClassificationId),
-    studentCount: reqNum(row, "studentCount", what),
-  };
-}
-
 /** `ManualIdEntryDto` — one recorded manual ID entry for an unrecognized scan. */
 function toManualIdEntry(row: Row, what: string): ManualIdEntry {
   return {
@@ -1612,22 +1578,6 @@ function analyticsQuery(query: AttendanceAnalyticsQuery): Record<string, string 
 }
 
 /**
- * `StudentClassificationWriteResult` — the body of a successful assign or clear. `replacedClassificationId`
- * is `optStr`: `PUT` sends it when it displaced something and `DELETE` never does, and both are
- * ordinary, not drift.
- */
-function toStudentClassificationWriteResult(row: Row, what: string): StudentClassificationWriteResult {
-  return {
-    studentId: reqStr(row, "studentId", what),
-    classifications: asRows(row.classifications, `${what}.classifications`).map((item, i) =>
-      toStudentClassification(item, `${what}.classifications[${i}]`),
-    ),
-    replacedClassificationId: optStr(row.replacedClassificationId),
-    message: reqStr(row, "message", what),
-  };
-}
-
-/**
  * `CardMatchDto` — one row of `GET /cards?cardUid=`. `isActive`/`deactivatedAt` are read the same way
  * `Card.isActive` is: `false` is an ordinary, expected match (QA Q5), not an error state, so nothing
  * here treats it specially.
@@ -1674,13 +1624,6 @@ function toStudent(row: Row, what: string): Student {
     section: optStr(row.section),
     status: reqStr(row, "status", what),
     cards: asRows(row.cards, `${what}.cards`).map((card, i) => toCard(card, `${what}.cards[${i}]`)),
-    // Read for the same reason `cards` is: `StudentDto.classifications` is populated on every read
-    // that returns a student, per the contract, and an edit form opened from a row that read `[]`
-    // here would have nothing to fall back on to tell "no classifications" from "this build dropped
-    // them" apart. Empty is an ordinary answer (34 of the sampled roster), not a missing key.
-    classifications: asRows(row.classifications, `${what}.classifications`).map((item, i) =>
-      toStudentClassification(item, `${what}.classifications[${i}]`),
-    ),
   };
 }
 
@@ -2373,74 +2316,6 @@ async function searchCards(cardUid: string, page: number, pageSize: number): Pro
   // Renamed, not spread — as `listStudentsPage`: `PageOf` is internal, and `hasMore` answers "is there
   // a page after this one" where this dialog needs "how many matches are there in total".
   return { cards: read.items, page: read.page, pageSize: read.pageSize, total: read.total };
-}
-
-/**
- * `GET /classifications` — the vocabulary a per-axis picker is built from.
- *
- * `listAll` rather than `getPage`: the seeded vocabulary is eight rows and a picker needs the whole
- * set to group by axis, not a page of it. `includeRetired` defaults to `false` here too — matching the
- * contract's own default — because a picker offering a retired category would let an administrator
- * file someone new under one deliberately withdrawn; a caller wanting the retired ones for a report
- * passes `true` explicitly.
- */
-async function listClassifications(includeRetired?: boolean): Promise<Classification[]> {
-  return listAll(
-    "GET /classifications",
-    "/classifications",
-    { includeRetired: includeRetired === undefined ? undefined : String(includeRetired) },
-    toClassification,
-  );
-}
-
-/**
- * `PUT /students/{studentId}/classifications/{classificationId}` — give this person this
- * classification, replacing whatever this axis already held.
- *
- * No request body: both ids are already in the URL and the contract defines none, so `payload: {}` is
- * sent rather than nothing — ASP.NET does not bind a body for this action, and a bodyless `PUT` is the
- * shape `RequestBody`'s union exists to make unrepresentable (`DELETE` is the only member allowed no
- * payload; see the type's own note). An empty object is inert either way.
- *
- * **409** when the classification is retired or was merged away, or when somebody else changed this
- * axis at the same instant — nothing is written either way, and `advise()` reads a non-401/403/429/5xx
- * `http` failure as `retryable: "safe"`, so the form is free to offer the same call again once the
- * cause has cleared.
- */
-async function assignClassification(
-  studentId: string,
-  classificationId: string,
-): Promise<StudentClassificationWriteResult> {
-  return writeJson(
-    "PUT /students/{studentId}/classifications/{classificationId}",
-    `/students/${encodeURIComponent(studentId)}/classifications/${encodeURIComponent(classificationId)}`,
-    { method: "PUT", payload: {} },
-    "The classification was assigned",
-    toStudentClassificationWriteResult,
-  );
-}
-
-/**
- * `DELETE /students/{studentId}/classifications/{classificationId}` — take this classification off
- * this person. Routed through `writeJson`, not `writeNoContent`: unlike most deletes on this API, this
- * one answers **200** with the person's remaining classifications rather than 204, precisely so a
- * caller can see the other axes survived.
- *
- * The classification itself is never touched — only the assignment row. **409** when another request
- * is changing this person's classifications at the same instant; nothing is removed, and re-sending is
- * safe for the same reason it is on the assign side.
- */
-async function clearClassification(
-  studentId: string,
-  classificationId: string,
-): Promise<StudentClassificationWriteResult> {
-  return writeJson(
-    "DELETE /students/{studentId}/classifications/{classificationId}",
-    `/students/${encodeURIComponent(studentId)}/classifications/${encodeURIComponent(classificationId)}`,
-    { method: "DELETE" },
-    "The classification was cleared",
-    toStudentClassificationWriteResult,
-  );
 }
 
 async function listEvents(status?: string): Promise<EventItem[]> {
@@ -4420,9 +4295,6 @@ export const api = {
   addStudentCard,
   removeStudentCard,
   searchCards,
-  listClassifications,
-  assignClassification,
-  clearClassification,
   listEvents,
   createEvent,
   updateEvent,

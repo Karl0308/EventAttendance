@@ -15,7 +15,7 @@
 // file nothing anywhere said so. All four renamed lines could be reverted and the suite stayed green.
 //
 // The gate is the half that is easy to pin badly. `authRouting.test.tsx` builds its own `<Route>`
-// table, and `studentsPaging.test.tsx` / `studentsClassificationWiring.test.tsx` render `<Students />`
+// table, and `studentsPaging.test.tsx` renders `<Students />`
 // straight under a `MemoryRouter`. All three are right for what they test and none of them can see
 // `App.tsx`: the real path and the real `PermissionGuard` pairing live there and only there, so a
 // test that restates them in its own JSX is testing its own fixture. Hence `<App />`, whole, with the
@@ -33,7 +33,7 @@
 // no timer or microtask left for a later test to trip over.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, render, screen, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 
 import App from "../src/App";
@@ -148,5 +148,72 @@ describe("the import breadcrumbs", () => {
 
     const crumb = screen.getByRole("link", { name: ROSTER_LABEL });
     expect(crumb.getAttribute("href")).toBe(ROSTER_PATH);
+  });
+});
+
+describe("the roster page's card lookup", () => {
+  // Moved here word for word from `studentsClassificationWiring.test.tsx` when student classification
+  // was withdrawn (ADR-009, D-76) and that file was deleted: this test was never about classification,
+  // it just rendered the real page, and it is the only thing that drives the "Find by card" button.
+  // The one line it lost is `vocabulary: VOCAB` — the page no longer reads a classification list.
+
+  const OPERATOR: AuthUser = userWith(PERMISSIONS.studentsRead, PERMISSIONS.studentsWrite);
+
+  const json = (status: number, body: unknown) =>
+    new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
+
+  const studentJson = () => ({
+    id: "00000000-0000-4000-8000-000000000001",
+    studentNumber: "2026000001",
+    fullName: "Ana Cruz",
+    firstName: "Ana",
+    lastName: "Cruz",
+    middleName: null,
+    email: null,
+    gender: null,
+    photoUrl: null,
+    course: "BSCS",
+    yearLevel: "1",
+    section: "A",
+    status: "Active",
+    cards: [],
+  });
+
+  /** Serves `GET /students` from `studentsReply`; any other request is a test failure. */
+  function serve(opts: { studentsReply: () => { items: unknown[]; total: number } }): void {
+    vi.stubGlobal("fetch", (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.includes("/students")) {
+        const answer = opts.studentsReply();
+        return Promise.resolve(
+          json(200, { items: answer.items, page: 1, pageSize: 25, total: answer.total, hasMore: false }),
+        );
+      }
+      throw new Error(`the students screen asked for something unexpected: ${init?.method ?? "GET"} ${url}`);
+    });
+  }
+
+  async function show() {
+    const rendered = showApp(ROSTER_PATH);
+    await act(async () => {});
+    return rendered;
+  }
+
+  beforeEach(() => {
+    beginSession("access-token-1", OPERATOR);
+  });
+
+  it("opens the card lookup dialog from the Find by card button", async () => {
+    serve({
+      studentsReply: () => ({ items: [studentJson()], total: 1 }),
+    });
+
+    await show();
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /find by card/i }));
+    });
+
+    expect(screen.getByRole("heading", { name: /find a person by card/i })).toBeTruthy();
   });
 });

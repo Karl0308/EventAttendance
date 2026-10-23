@@ -223,11 +223,17 @@ public class SisImportWarningPrecedenceTests : IntegrationTest
     {
         var world = await ArrangeAsync();
 
+        // Built-in version 4 maps no category column (ADR-009, D-76), so a blank category could not warn
+        // under it. This is the dormant importer's single-finding row, so it runs under a profile that
+        // maps the four columns — correctly mapped, which is the point: no ClassificationAxisUnknown
+        // anywhere in this batch. The other tests in this file build their own (mistyped) profile.
+        await using (var seed = NewDbContext())
+            await CategoryMappingProfile.SeedCategoryMappingProfileAsync(seed, world.SchoolId);
+
         var rows = SyntheticRoster.Rows();
         ClearCategories(rows, 5);
         await using var file = SyntheticRoster.Build(rows);
 
-        // Default, correctly mapped profile — no ClassificationAxisUnknown anywhere in this batch.
         await using var db = NewDbContext();
         var preview = await SisImportOn(db).UploadAsync(
             new SisImportUploadRequest(file, "Copy-of-CCJ.xlsx", world.TermId));

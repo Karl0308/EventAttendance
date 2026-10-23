@@ -9620,7 +9620,7 @@
           "SisImport"
         ],
         "summary": "`GET /sis/import/template` — the roster template the school fills in and uploads back.",
-        "description": "Task 5 (QA MDVault #470 B1, #472 Q1/Q2). An `.xlsx` with two sheets: <b>Instructions</b>,\r\nand <b>Roster</b>, whose header row is the source columns of the import profile this school's next\r\nupload will be pinned to (ADR-001 D-4), in profile order — the roster's own headers plus the four\r\ncategory columns `STUDENT_CATEGORY`, `PERSONNEL_CATEGORY`, `FRIARS_CATEGORY` and\r\n`SPECIAL_CATEGORY`. Any header the reader requires to recognise the roster sheet that the\r\nprofile omits is appended, so the template is always accepted as a roster. A newer active profile\r\nversion changes the template's columns; it does not change which headers the reader requires or\r\nthe fixed headers the importer reads the core values from. Headers whose value is required carry a\r\ncomment; the card-serial and student-number columns are formatted as Text so leading zeros\r\nsurvive. Sent with `Cache-Control: no-store`, because it embeds the school's current\r\nclassification list.",
+        "description": "Task 5 (QA MDVault #470 B1, #472 Q1/Q2). An `.xlsx` with two sheets: <b>Instructions</b>,\r\nand <b>Roster</b>, whose header row is the source columns of the import profile this school's next\r\nupload will be pinned to (ADR-001 D-4), in profile order. The built-in mapping (version 4) carries\r\nthe roster's own headers only; it maps no category column, because student classification was\r\nwithdrawn from the product (ADR-009, D-76). Only a profile that maps a category column gets the\r\nInstructions sheet's category section and this school's classification list. Any header the\r\nreader requires to recognise the roster sheet that the profile omits is appended, so the template\r\nis always accepted as a roster. A newer active profile\r\nversion changes the template's columns; it does not change which headers the reader requires or\r\nthe fixed headers the importer reads the core values from. Headers whose value is required carry a\r\ncomment; the card-serial and student-number columns are formatted as Text so leading zeros\r\nsurvive. Sent with `Cache-Control: no-store`, because it describes the school's current\r\nimport profile — and, where that profile maps a category column, its current classification list.",
         "responses": {
           "200": {
             "description": "The workbook, as an attachment.",
@@ -15376,13 +15376,6 @@
             "items": {
               "$ref": "#/components/schemas/CardDto"
             }
-          },
-          "classifications": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/StudentClassificationDto"
-            },
-            "description": "<b>What this person is classified as — a collection, because a person holds one classification per\r\n             axis and may hold several axes at once</b> (QA Q2). Ordered by axis then display name, so the same\r\n             person's categories never reshuffle between requests.\r\n            \r\n             \r\n<b>Empty is an ordinary state, not a null to guard against.</b> Thirty-four people in the sampled\r\n             roster carry no category at all, most carry exactly one, and three carry two. A scalar field could\r\n             have described only the middle case — answering the two-axis people with one of their two values,\r\n             non-empty and plausible and wrong, which is the failure ADR-001 D-2 documents for\r\n             Course and Section right above.\r\n             \r\n<b>It is populated on every read that returns a student, and that is deliberate rather than\r\n             thorough.</b> A field that came back `[]` on the detail read while the grid showed two\r\n             categories would be the same silently-wrong answer in a new place — and worse here, because the edit\r\n             form opens from a grid row and would save the empty version back.\r\n             \r\n\r\n             Read-only on this DTO. Assignment is\r\n             `PUT /students/{studentId}/classifications/{classificationId}`; sending this collection back on\r\n             a `PUT /students/{id}` is ignored exactly as `id` and `cards` are, because a\r\n             classification is not a column of the student row.\r\n             "
           }
         },
         "additionalProperties": false,

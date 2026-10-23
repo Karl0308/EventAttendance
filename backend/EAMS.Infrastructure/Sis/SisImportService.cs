@@ -451,8 +451,9 @@ internal sealed class SisImportService : ISisImportService
     /// </param>
     /// <param name="ClassificationKeys">
     /// One entry per <see cref="ClassificationAxis"/> the mapping carries a column for. <b>Empty for
-    /// every batch pinned to profile version 2 or earlier</b>, which is what makes a pre-Task-5 batch
-    /// classify nobody even when re-run against a file that has the columns. <c>Column</c> is the
+    /// every batch pinned to profile version 2 or earlier, and to version 4</b> (which withdrew the
+    /// category columns again; ADR-009, D-76), which is what makes such a batch classify nobody even
+    /// when re-run against a file that has the columns. <c>Column</c> is the
     /// profile's source column as written, carried so a warning can name the header an operator sees.
     /// </param>
     /// <param name="UnknownAxisTargets">
@@ -1693,7 +1694,9 @@ internal sealed class SisImportService : ISisImportService
         var resolved = new Dictionary<string, List<Touched<StudentClassification>>>(
             StringComparer.Ordinal);
 
-        // No category column in this batch — either the profile predates Task 5 or the file has none.
+        // No category column in this batch — the profile predates Task 5, is the built-in version 4
+        // (which maps none since student classification was withdrawn; ADR-009, D-76), or the file has
+        // none.
         // Nothing is read, nothing is written and NOTHING IS WARNED, which is the whole of why the
         // flag is carried on the row rather than inferred from the cells being blank. Today's roster is
         // this case, and a warning on 100% of its rows would make CompletedWithWarnings the permanent

@@ -238,34 +238,39 @@ internal static class SisImportTemplateWorkbook
             Line($"- {column.Header}: {rule}{note}");
         }
 
-        Heading("Category columns");
+        // Only when the profile maps a category column. The built-in mapping has mapped none since
+        // version 4 (ADR-009, D-76), and a section explaining columns the file does not have — with a
+        // vocabulary list the import will not apply — would tell the school to fill in nothing.
         var categoryColumns = columns.Where(c => c.Axis is not null).ToList();
-        Line("A person can have one value in each category column, and values in several columns at once " +
-             "(for example STUDENT in the Student column and NAP in the Personnel column). Type each value in " +
-             "the column for its group. Accepted values, from this school's classification list when this " +
-             "file was downloaded:");
-        foreach (var axis in ClassificationAxis.All)
+        if (categoryColumns.Count > 0)
         {
-            var column = categoryColumns.FirstOrDefault(c => c.Axis == axis);
-            var names = vocabulary.Where(v => v.Axis == axis).Select(v => v.Name).ToList();
-            var accepted = names.Count == 0 ? "(none defined yet; ask an EAMS administrator)" : string.Join(", ", names);
-            Line(column is null
-                ? $"- {axis}: this import profile has no column for this group, so the import cannot set it."
-                : $"- {column.Header} ({axis}): {accepted}");
+            Heading("Category columns");
+            Line("A person can have one value in each category column, and values in several columns at once " +
+                 "(for example STUDENT in the Student column and NAP in the Personnel column). Type each value in " +
+                 "the column for its group. Accepted values, from this school's classification list when this " +
+                 "file was downloaded:");
+            foreach (var axis in ClassificationAxis.All)
+            {
+                var column = categoryColumns.FirstOrDefault(c => c.Axis == axis);
+                var names = vocabulary.Where(v => v.Axis == axis).Select(v => v.Name).ToList();
+                var accepted = names.Count == 0 ? "(none defined yet; ask an EAMS administrator)" : string.Join(", ", names);
+                Line(column is null
+                    ? $"- {axis}: this import profile has no column for this group, so the import cannot set it."
+                    : $"- {column.Header} ({axis}): {accepted}");
+            }
+            Line("Values are matched ignoring upper and lower case, spaces and punctuation. The import never " +
+                 "creates a new category: a value that is not in the list above is not applied, the person is " +
+                 "still imported, and the import reports a warning for the row. Only an EAMS administrator can " +
+                 "add or reactivate a category.");
+            Line(NeverReplacesRule);
+            Line(WrongColumnRule);
+            Line(BlankCategoriesRule);
         }
-        Line("Values are matched ignoring upper and lower case, spaces and punctuation. The import never " +
-             "creates a new category: a value that is not in the list above is not applied, the person is " +
-             "still imported, and the import reports a warning for the row. Only an EAMS administrator can " +
-             "add or reactivate a category.");
-        Line(NeverReplacesRule);
-        Line(WrongColumnRule);
-        Line(BlankCategoriesRule);
 
         Heading($"Staff and other people with no class: {placeholderList}");
         Line($"{placeholderList} must be filled in on every row. A row with any of them blank is rejected " +
              "as a missing required value and nothing on it is imported. A person whose every row is " +
-             "rejected (for example a staff member with no class) is not imported, not enrolled and not " +
-             "classified at all.");
+             "rejected (for example a staff member with no class) is not imported and not enrolled.");
         Line(NoPlaceholderRule);
         Line(NoClassRule);
 

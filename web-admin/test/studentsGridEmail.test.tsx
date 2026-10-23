@@ -18,7 +18,7 @@
 // about the *form* — the column could be deleted outright and nothing went red.
 //
 // Assertions reach for `[data-field="email"]` rather than for the text. The dash is shared with the
-// Classification and RFID columns, so `getByText("—")` would pass against a row whose email column
+// RFID column, so `getByText("—")` would pass against a row whose email column
 // had been removed entirely, matching a neighbour's sentinel instead. Addressing the cell by field is
 // what makes the assertion be about this column.
 
@@ -144,8 +144,8 @@ describe("the roster grid's Email column", () => {
     await show();
 
     // The production case: every imported row looks like this one. `email` arrived as JSON `null`,
-    // became `undefined` at the seam, and must reach the cell as the same sentinel the RFID and
-    // Classification columns use.
+    // became `undefined` at the seam, and must reach the cell as the same sentinel the RFID
+    // column uses.
     const cell = emailCellOf(WITHOUT_EMAIL_ID);
     expect(cell.textContent).toBe(NO_VALUE);
     expect(cell.textContent).not.toBe("");
