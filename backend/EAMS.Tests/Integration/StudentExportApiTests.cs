@@ -105,7 +105,7 @@ public class StudentExportApiTests : IntegrationTest
 
     /// <summary>
     /// The unfiltered export is the header plus every non-deleted student in list order (last name, then
-    /// id), each row carrying all eleven D-83 columns, Organization among them.
+    /// id), each row carrying all eleven D-83 columns plus Task 4's Department, Organization among them.
     /// </summary>
     [Fact]
     public async Task The_export_lists_every_filtered_student_with_organization()
@@ -119,17 +119,17 @@ public class StudentExportApiTests : IntegrationTest
         Assert.Equal(StudentCsv.Header, records[0]);
         Assert.Equal(
             ["Student No.", "RFID UID (active)", "Last Name", "First Name", "Middle Name", "Email",
-             "Course", "Year Level", "Section", "Organization", "Status"],
+             "Course", "Year Level", "Section", "Department", "Organization", "Status"],
             records[0]);
         Assert.Equal(["EXP-001", "EXP-002", "EXP-004"], NumbersOf(records));
 
         Assert.Equal(
             ["EXP-001", "", "Alpha", "Maria Clara", "Reyes", "EXP-001@test.local", "BSIT", "3rd Year", "A",
-             "CICT Society", "Active"],
+             "", "CICT Society", "Active"],
             records[1]);
-        Assert.Equal("", records[2][9]);          // Bravo: no organization is an empty cell
-        Assert.Equal("Inactive", records[2][10]); // and the status filter column is the student's own
-        Assert.All(records, r => Assert.Equal(11, r.Count));
+        Assert.Equal("", records[2][10]);         // Bravo: no organization is an empty cell
+        Assert.Equal("Inactive", records[2][11]); // and the status filter column is the student's own
+        Assert.All(records, r => Assert.Equal(12, r.Count));
     }
 
     /// <summary>
@@ -279,7 +279,7 @@ public class StudentExportApiTests : IntegrationTest
         using var factory = new EamsApiFactory(Sql.ConnectionString);
         using var client = await SignedInClientAsync(factory, world.SchoolId);
 
-        var cells = (await ExportAsync(client)).Skip(1).Select(r => r[9]).ToList();
+        var cells = (await ExportAsync(client)).Skip(1).Select(r => r[10]).ToList();
 
         Assert.Equal(3, cells.Count);
         Assert.All(cells, c => Assert.StartsWith("'", c));

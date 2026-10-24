@@ -1640,6 +1640,9 @@ function toStudent(row: Row, what: string): Student {
     // that predates the field sends no key at all — `undefined`, same as `null`. `nullableStr` rather
     // than `optStr` so a non-string fails loud instead of quietly vanishing.
     organization: nullableStr(row, "organization", what),
+    // Derived by the server from the student's programme (its college); read-only, never written back.
+    // Nullable and strict for the same reasons as `organization` above.
+    department: nullableStr(row, "department", what),
     status: reqStr(row, "status", what),
     cards: asRows(row.cards, `${what}.cards`).map((card, i) => toCard(card, `${what}.cards[${i}]`)),
   };

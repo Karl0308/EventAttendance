@@ -283,11 +283,11 @@ public class CsvExportSpaceSplittingTests : IntegrationTest
         Assert.Equal(StudentCsv.Header, records[0]);
         Assert.Equal(
             ["2023-0001", "04A1; 04B2", "Dela Cruz", "Maria Clara", "Reyes Santos", "2023-0001@test.local",
-             "BS Information Technology", "3rd Year", "A", "College of Information Technology Society",
+             "BS Information Technology", "3rd Year", "A", "", "College of Information Technology Society",
              "Active"],
             records[1]);
-        Assert.Equal(11, records[2].Count);
+        Assert.Equal(12, records[2].Count);
         Assert.Equal("", records[2][1]);
-        Assert.Equal("", records[2][9]);
+        Assert.Equal("", records[2][10]);
     }
 }

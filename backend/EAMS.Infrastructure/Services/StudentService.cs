@@ -54,15 +54,93 @@ internal sealed class StudentService : IStudentService
         _logger = logger;
     }
 
-    internal static StudentDto ToDto(Student s) => new(
+    /// <summary>
+    /// The department is a parameter rather than read off the entity because it is not on the entity:
+    /// it is resolved by <see cref="DepartmentsAsync"/>, so every caller has to have asked for it.
+    /// </summary>
+    internal static StudentDto ToDto(Student s, string? department) => new(
         s.Id, s.StudentNumber, s.FullName,
         s.FirstName, s.MiddleName, s.LastName,
         s.Email, s.Gender, s.PhotoUrl,
         s.Course, s.YearLevel, s.Section, s.Status,
         s.Cards.Select(ToDto).ToList(),
-        s.Organization);
+        s.Organization,
+        department);
 
     internal static CardDto ToDto(RfidCard c) => new(c.Id, c.CardUid, c.Label, c.IsActive);
+
+    /// <summary>One student read, with its department resolved by a one-row lookup.</summary>
+    private async Task<StudentDto> ToDtoAsync(Student s, CancellationToken ct)
+    {
+        var departments = await DepartmentsAsync([(s.SchoolId, s.Course)], ct);
+        return ToDto(s, DepartmentOf(departments, s.SchoolId, s.Course));
+    }
+
+    // ------------------------------------------------------------------------------ department
+
+    /// <summary>
+    /// BACKOFFICE Task 4: a student's department is the <c>College.Name</c> of the programme its
+    /// <c>Course</c> names — derived at read time, never stored, so it cannot go stale against the
+    /// programme table.
+    ///
+    /// <para>
+    /// <b><c>Course</c> holds the programme's display code, so it is matched on the normalized key.</b>
+    /// EF cannot translate <see cref="AcademicKey.Normalize"/>, so the distinct values are normalized here
+    /// and resolved in one set-based query, never one per row. Keyed by school as well as code:
+    /// <c>UNIQUE(SchoolId, CodeKey)</c> is per tenant, and with no tenant pinned (ADR-001 D-6) a read spans
+    /// schools, where a code-only key would pick an arbitrary college or collide.
+    /// </para>
+    /// </summary>
+    /// <returns>College name by (school, raw <c>Course</c> value), for the values that resolved.</returns>
+    private async Task<IReadOnlyDictionary<(Guid SchoolId, string Course), string>> DepartmentsAsync(
+        IEnumerable<(Guid SchoolId, string? Course)> students, CancellationToken ct)
+    {
+        // A non-null key implies a non-null Course, so the "" never reaches the result.
+        var wanted = students
+            .Select(s => (s.SchoolId, Course: s.Course ?? "", Key: ProgramKey(s.Course)))
+            .Where(s => s.Key is not null)
+            .Distinct()
+            .ToList();
+        if (wanted.Count == 0) return new Dictionary<(Guid, string), string>();
+
+        var schoolIds = wanted.Select(w => w.SchoolId).Distinct().ToList();
+        var keys = wanted.Select(w => w.Key!).Distinct(StringComparer.Ordinal).ToList();
+
+        var colleges = await _db.Programs.AsNoTracking()
+            .Where(p => schoolIds.Contains(p.SchoolId) && keys.Contains(p.CodeKey))
+            .Select(p => new { p.SchoolId, p.CodeKey, College = p.College!.Name })
+            .ToListAsync(ct);
+
+        var byKey = colleges.ToDictionary(c => (c.SchoolId, c.CodeKey), c => c.College);
+
+        var departments = new Dictionary<(Guid, string), string>();
+        foreach (var w in wanted)
+        {
+            if (byKey.TryGetValue((w.SchoolId, w.Key!), out var college))
+                departments[(w.SchoolId, w.Course)] = college;
+        }
+        return departments;
+    }
+
+    private static string? DepartmentOf(
+        IReadOnlyDictionary<(Guid SchoolId, string Course), string> departments, Guid schoolId, string? course) =>
+        course is not null && departments.TryGetValue((schoolId, course), out var college) ? college : null;
+
+    /// <summary>
+    /// The programme <c>CodeKey</c> a <c>Course</c> value would match, or null when it must never resolve:
+    /// blank or punctuation-only (whose key would be <see cref="AcademicKey.Unspecified"/> — every blank-
+    /// coded programme files there, so it names no particular one), or a placeholder sentinel stored
+    /// verbatim. The sentinels are checked raw, because <c>"(section)"</c> normalizes to <c>SECTION</c>,
+    /// which a real programme could be called.
+    /// </summary>
+    private static string? ProgramKey(string? course)
+    {
+        var trimmed = course?.Trim();
+        if (trimmed is AcademicKey.SectionPlaceholder or AcademicKey.Unspecified) return null;
+
+        var key = AcademicKey.Normalize(course);
+        return key.Length == 0 ? null : key;
+    }
 
     // ------------------------------------------------------------------------------------ reads
 
@@ -75,26 +153,38 @@ internal sealed class StudentService : IStudentService
     /// CancellationToken)"/>, which is the single seam all nine admin lists share — a total built from
     /// a filter that has drifted from the one that produced the rows is the paging bug that never
     /// looks like one, and having one implementation of the pairing is what removes the chance.
+    ///
+    /// <para>
+    /// The page is served as entities and mapped here, so the department lookup covers this page's
+    /// distinct programmes in one query and the shared helper stays unchanged.
+    /// </para>
     /// </remarks>
-    public Task<PagedResult<StudentDto>> ListAsync(
+    public async Task<PagedResult<StudentDto>> ListAsync(
         string? search, string? course, string? status, PageRequest page,
         CancellationToken ct = default)
     {
-        return FilteredQuery(search, course, status).ToPageAsync(
+        var rows = await FilteredQuery(search, course, status).ToPageAsync(
             // Include here rather than on the filter, so the join lands on the page and not on the
             // COUNT. ThenBy(Id) is the total order: surnames are not unique — a roster of fifty-two
             // has several — and SQL Server may return equal keys in a different order on every
             // execution, so without a unique tiebreaker page 2 can repeat a row page 1 already served
             // and skip one entirely. Nothing about that failure is visible in a single page.
             ordered => Ordered(ordered.Include(s => s.Cards)),
-            ToDto, page, ct);
+            s => s, page, ct);
+
+        var departments = await DepartmentsAsync(rows.Items.Select(s => (s.SchoolId, s.Course)), ct);
+
+        return new PagedResult<StudentDto>(
+            rows.Items.Select(s => ToDto(s, DepartmentOf(departments, s.SchoolId, s.Course))).ToList(),
+            rows.Page, rows.PageSize, rows.Total);
     }
 
     /// <inheritdoc/>
     /// <remarks>
-    /// A projection rather than <c>Include</c> plus <see cref="ToDto(Student)"/>: the export reads only the
-    /// columns it writes, and only the active cards. The ordinal sort of the card serials runs in memory,
-    /// because a SQL <c>ORDER BY</c> would sort by the database collation instead.
+    /// A projection rather than <c>Include</c> plus <see cref="ToDto(Student, string?)"/>: the export reads
+    /// only the columns it writes, and only the active cards. The ordinal sort of the card serials runs in
+    /// memory, because a SQL <c>ORDER BY</c> would sort by the database collation instead. Departments are
+    /// one lookup over the file's distinct programmes, not one per row.
     /// </remarks>
     public async Task<IReadOnlyList<StudentExportRow>> ExportAsync(
         string? search, string? course, string? status, CancellationToken ct = default)
@@ -102,6 +192,7 @@ internal sealed class StudentService : IStudentService
         var rows = await Ordered(FilteredQuery(search, course, status).AsNoTracking())
             .Select(s => new
             {
+                s.SchoolId,
                 s.StudentNumber,
                 ActiveCardUids = s.Cards.Where(c => c.IsActive).Select(c => c.CardUid).ToList(),
                 s.LastName,
@@ -116,12 +207,16 @@ internal sealed class StudentService : IStudentService
             })
             .ToListAsync(ct);
 
+        var departments = await DepartmentsAsync(rows.Select(r => (r.SchoolId, r.Course)), ct);
+
         return rows
             .Select(r => new StudentExportRow(
                 r.StudentNumber,
                 r.ActiveCardUids.Order(StringComparer.Ordinal).ToList(),
                 r.LastName, r.FirstName, r.MiddleName, r.Email,
-                r.Course, r.YearLevel, r.Section, r.Organization, r.Status))
+                r.Course, r.YearLevel, r.Section,
+                DepartmentOf(departments, r.SchoolId, r.Course),
+                r.Organization, r.Status))
             .ToList();
     }
 
@@ -171,7 +266,7 @@ internal sealed class StudentService : IStudentService
     {
         var s = await _db.Students.Include(x => x.Cards)
             .FirstOrDefaultAsync(x => x.Id == id && !x.IsDeleted, ct);
-        return s is null ? null : ToDto(s);
+        return s is null ? null : await ToDtoAsync(s, ct);
     }
 
     /// <summary>
@@ -202,7 +297,7 @@ internal sealed class StudentService : IStudentService
         var uid = CardUid.Normalize(cardUid);
         var card = await _db.RfidCards.Include(c => c.Student!).ThenInclude(s => s.Cards)
             .FirstOrDefaultAsync(c => c.CardUid == uid && c.IsActive && !c.Student!.IsDeleted, ct);
-        return card?.Student is null ? null : ToDto(card.Student);
+        return card?.Student is null ? null : await ToDtoAsync(card.Student, ct);
     }
 
     /// <summary>
@@ -355,7 +450,7 @@ internal sealed class StudentService : IStudentService
             return DerivedGuardTripped(ex);
         }
 
-        return Saved(student, "Student created.");
+        return await SavedAsync(student, "Student created.", ct);
     }
 
     public async Task<StudentWriteResponse> UpdateAsync(
@@ -399,7 +494,7 @@ internal sealed class StudentService : IStudentService
             return DerivedGuardTripped(ex);
         }
 
-        return Saved(student, "Student updated.");
+        return await SavedAsync(student, "Student updated.", ct);
     }
 
     /// <summary>
@@ -442,7 +537,7 @@ internal sealed class StudentService : IStudentService
             return DerivedGuardTripped(ex);
         }
 
-        return Saved(student, "Student deleted.");
+        return await SavedAsync(student, "Student deleted.", ct);
     }
 
     // ---------------------------------------------------------------------------------- cards
@@ -823,8 +918,8 @@ internal sealed class StudentService : IStudentService
         return clash is null ? null : Duplicate(number, clash.IsDeleted);
     }
 
-    private static StudentWriteResponse Saved(Student student, string message) =>
-        new(StudentWriteOutcome.Saved, message, ToDto(student));
+    private async Task<StudentWriteResponse> SavedAsync(Student student, string message, CancellationToken ct) =>
+        new(StudentWriteOutcome.Saved, message, await ToDtoAsync(student, ct));
 
     private static StudentWriteResponse NotFound() =>
         new(StudentWriteOutcome.NotFound, "Student not found.", null);

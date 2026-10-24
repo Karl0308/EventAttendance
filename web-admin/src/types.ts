@@ -554,6 +554,12 @@ export interface Student {
    * importer set. Absent for a student with none, and for an older server that predates the field.
    */
   organization?: string;
+  /**
+   * The student's department — the college of their programme, derived by the server and **read-only
+   * here**: it is not on `StudentWriteRequest`, so no form sends it. Absent for a student with no
+   * programme, and for an older server that predates the field.
+   */
+  department?: string;
   status: string; // one of StudentStatusName below; `string` on the wire
   /**
    * Every card the student has ever been issued, **including deactivated ones**. `DELETE

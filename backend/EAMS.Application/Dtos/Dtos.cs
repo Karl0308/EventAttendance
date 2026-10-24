@@ -25,13 +25,19 @@ namespace EAMS.Application.Dtos;
 /// carry it, so a value echoed back on <c>PUT</c> is ignored. Null when the roster never said. Last in the
 /// record so the addition is purely additive.
 /// </param>
+/// <param name="Department">
+/// <b>Read-only. Derived at read time, never stored</b> (BACKOFFICE Task 4): the <c>College.Name</c> of the
+/// programme <c>Course</c> names, matched on its normalized code. Null when <c>Course</c> is blank,
+/// names no known programme, or is a placeholder. Ignored if echoed back on a write. Last, so additive.
+/// </param>
 public record StudentDto(
     Guid Id, string StudentNumber, string FullName,
     string FirstName, string? MiddleName, string LastName,
     string? Email, string? Gender, string? PhotoUrl,
     string? Course, string? YearLevel, string? Section, string Status,
     IEnumerable<CardDto> Cards,
-    string? Organization);
+    string? Organization,
+    string? Department);
 
 public record CardDto(Guid Id, string CardUid, string? Label, bool IsActive);
 

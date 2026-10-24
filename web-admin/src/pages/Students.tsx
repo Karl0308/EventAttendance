@@ -564,6 +564,13 @@ export default function Students() {
     { field: "yearLevel", headerName: "Year", width: 110 },
     { field: "section", headerName: "Sec", width: 70 },
     {
+      field: "department",
+      headerName: "Department",
+      width: 160,
+      // The college of the student's programme, derived server-side and read-only; unset without one.
+      valueGetter: (_v, row) => row.department || NO_VALUE,
+    },
+    {
       field: "organization",
       headerName: "Organization",
       width: 160,

@@ -15435,6 +15435,11 @@
             "type": "string",
             "description": "<b>Read-only here.</b> Written by the SIS import only (ADR-011 D-81). `StudentWriteRequest` does not\r\n            carry it, so a value echoed back on `PUT` is ignored. Null when the roster never said. Last in the\r\n            record so the addition is purely additive.",
             "nullable": true
+          },
+          "department": {
+            "type": "string",
+            "description": "<b>Read-only. Derived at read time, never stored</b> (BACKOFFICE Task 4): the `College.Name` of the\r\n            programme `Course` names, matched on its normalized code. Null when `Course` is blank,\r\n            names no known programme, or is a placeholder. Ignored if echoed back on a write. Last, so additive.",
+            "nullable": true
           }
         },
         "additionalProperties": false,

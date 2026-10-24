@@ -101,6 +101,34 @@ describe("the Student's organization (ADR-011 D-81)", () => {
   });
 });
 
+describe("the Student's department (derived from the programme's college)", () => {
+  const ID = "00000000-0000-4000-8000-000000000001";
+
+  it("narrows department: absent, null or string; a non-string fails loud", async () => {
+    // A string is read as itself.
+    serve(studentJson({ department: "College of Engineering" }));
+    expect((await api.getStudent(ID))?.department).toBe("College of Engineering");
+
+    // JSON null — what the endpoint sends for a student with no programme.
+    serve(studentJson({ department: null }));
+    expect((await api.getStudent(ID))?.department).toBeUndefined();
+
+    // Absent — an older server that predates the field. `studentJson()` carries no such key.
+    serve(studentJson());
+    expect((await api.getStudent(ID))?.department).toBeUndefined();
+
+    // Anything else is drift, and is refused by name rather than dropped to `undefined`.
+    for (const drifted of [42, true, { name: "College of Engineering" }, ["College of Engineering"]]) {
+      serve(studentJson({ department: drifted }));
+      await expect(api.getStudent(ID)).rejects.toMatchObject({
+        name: "ApiError",
+        kind: "malformed",
+        message: expect.stringContaining("department"),
+      });
+    }
+  });
+});
+
 describe("api.exportStudentsCsv", () => {
   const csvOk = () =>
     new Response("Student No.\r\n", {

@@ -7,6 +7,38 @@ matching has its own page: [`mobile-card-matching.md`](mobile-card-matching.md).
 
 ---
 
+## 2026-10-24
+
+### `department` on `GET /students/by-card/{cardUid}` - no release needed, unless your client is strict
+
+Each student now carries a department: the college of the programme in its `course`, looked up when the
+student is read (it is not stored). It appears on the card lookup your scan screen calls, last in the
+body, after `organization`:
+
+```jsonc
+{
+  "id": "6b1d…",
+  "studentNumber": "2023-0001",
+  // …every field you already read, unchanged…
+  "organization": "CICT",
+  "department": "College of Information and Computer Studies"   // new; null when it does not resolve
+}
+```
+
+It is null when the student has no `course`, when the `course` names no known programme, or when it is a
+placeholder. The same field is on every other read that returns a student (`GET /students`,
+`GET /students/{id}`) and on the student write responses; the kiosk does not call those. Sending it back
+on a write is ignored.
+
+**Additive, and nothing is asked of you.** No field was renamed, removed or retyped; taps, batches, the
+manifest and the event picker are untouched, and the value plays no part in a tap.
+
+**The strict-client caveat from 2026-10-23 applies again:** `StudentDto` is a closed schema
+(`additionalProperties: false`), so a client generated from the previous `openapi.json` with strict
+deserialization will fail to parse the lookup until it is regenerated.
+
+---
+
 ## 2026-10-23
 
 ### `organization` on `GET /students/by-card/{cardUid}` - no release needed, unless your client is strict

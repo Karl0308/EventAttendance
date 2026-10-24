@@ -23,10 +23,13 @@ internal static class StudentCsv
     /// <summary>What joins a student's several active card serials into the one RFID cell.</summary>
     internal const string CardUidSeparator = "; ";
 
-    /// <summary>The display columns, in ADR-011 D-83's order.</summary>
+    /// <summary>
+    /// The display columns, in ADR-011 D-83's order, with Task 4's derived <c>Department</c> immediately
+    /// before <c>Organization</c>.
+    /// </summary>
     internal static readonly string[] Header =
         ["Student No.", "RFID UID (active)", "Last Name", "First Name", "Middle Name", "Email",
-         "Course", "Year Level", "Section", "Organization", "Status"];
+         "Course", "Year Level", "Section", "Department", "Organization", "Status"];
 
     internal static string FileName() => $"EAMS-students-{DateTime.UtcNow:yyyy-MM-dd}.csv";
 
@@ -41,7 +44,7 @@ internal static class StudentCsv
             Record(csv,
                 s.StudentNumber, string.Join(CardUidSeparator, s.ActiveCardUids), s.LastName, s.FirstName,
                 s.MiddleName ?? "", s.Email ?? "", s.Course ?? "", s.YearLevel ?? "", s.Section ?? "",
-                s.Organization ?? "", s.Status);
+                s.Department ?? "", s.Organization ?? "", s.Status);
         }
 
         var text = csv.ToString();

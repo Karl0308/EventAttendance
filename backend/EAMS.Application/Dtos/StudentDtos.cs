@@ -92,6 +92,10 @@ public record StudentCardRequest(string CardUid, string? Label);
 /// <param name="Course">The ADR-001 D-2 single-valued display cache, exactly as the grid shows it.</param>
 /// <param name="YearLevel"><inheritdoc cref="Course"/></param>
 /// <param name="Section"><inheritdoc cref="Course"/></param>
+/// <param name="Department">
+/// The college of the programme <paramref name="Course"/> names, resolved at export time exactly as
+/// <see cref="StudentDto.Department"/> is. Null when it does not resolve.
+/// </param>
 public record StudentExportRow(
     string StudentNumber,
     IReadOnlyList<string> ActiveCardUids,
@@ -102,5 +106,6 @@ public record StudentExportRow(
     string? Course,
     string? YearLevel,
     string? Section,
+    string? Department,
     string? Organization,
     string Status);
