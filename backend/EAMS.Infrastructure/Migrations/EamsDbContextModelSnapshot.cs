@@ -1689,6 +1689,10 @@ namespace EAMS.Infrastructure.Migrations
                         .HasMaxLength(100)
                         .HasColumnType("nvarchar(100)");
 
+                    b.Property<string>("Organization")
+                        .HasMaxLength(150)
+                        .HasColumnType("nvarchar(150)");
+
                     b.Property<string>("PhotoUrl")
                         .HasMaxLength(1000)
                         .HasColumnType("nvarchar(1000)");

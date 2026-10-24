@@ -73,12 +73,20 @@ internal static class SisImportProfileTemplate
     /// </para>
     ///
     /// <para>
+    /// <b>Bumped to 6 on 2026-10-23 (ADR-011, D-80)</b>, when QA's job order added Organization to
+    /// students: version 6 is version 5 plus one last row, <see cref="SisRosterColumns.Organization"/>
+    /// to <see cref="StudentOrganizationTarget"/>. A batch pinned to version 5 or earlier maps no
+    /// organization column and reads no organization cell, even from a file that carries one — D-4
+    /// working, as for the RFID and category rows.
+    /// </para>
+    ///
+    /// <para>
     /// Bumping is not cosmetic in any case. A database still holding version 1 would read the card
     /// serial out of the REGNO column — the exact defect version 2 removes — while a freshly seeded one
     /// would not. A version is what makes the two agree.
     /// </para>
     /// </summary>
-    public const int BuiltInVersion = 5;
+    public const int BuiltInVersion = 6;
 
     /// <summary>
     /// The dotted target that marks the RFID source column, named once because two places must agree
@@ -94,6 +102,14 @@ internal static class SisImportProfileTemplate
     /// Text), and a literal in two places would drift silently.
     /// </summary>
     public const string StudentNumberTarget = "Student.StudentNumber";
+
+    /// <summary>
+    /// The dotted target of the organization column (ADR-011, D-80). The pipeline reads a student's
+    /// organization only when the batch's profile maps a column here, first by ordinal as for
+    /// <see cref="RfidCardUidTarget"/>; named once for the same reason, so the profile row and the lookup
+    /// cannot drift apart.
+    /// </summary>
+    public const string StudentOrganizationTarget = "Student.Organization";
 
     /// <summary>
     /// The dotted target whose presence makes a profile <b>course mode</b> (ADR-010, D-77). The pipeline
@@ -147,8 +163,9 @@ internal static class SisImportProfileTemplate
         "REGNO (the client's 2026-07-30 correction); version 3 added the four Task 5 category columns; " +
         "version 4 removes them again, because student classification was withdrawn from the product " +
         "(2026-10-23, ADR-009 D-76); version 5 removes the course and teacher columns and imports " +
-        "sections only, under one placeholder course per school (2026-10-23, ADR-010 D-77). Earlier " +
-        "versions are kept, superseded, to explain the batches that ran under them — a version 2, 4 or 5 " +
+        "sections only, under one placeholder course per school (2026-10-23, ADR-010 D-77); version 6 " +
+        "adds the optional ORGANIZATION column (2026-10-23, ADR-011 D-80). Earlier " +
+        "versions are kept, superseded, to explain the batches that ran under them — a version 2, 4, 5 or 6 " +
         "batch maps no category column and therefore classifies nobody, and a version 4 or earlier batch " +
         "still imports courses and teachers, which is the guarantee rather than a gap. Seeded from " +
         nameof(SisImportProfileTemplate) + " so every batch points at the rules that actually ran.";
@@ -165,10 +182,11 @@ internal static class SisImportProfileTemplate
     private const string Email = "RosterText.CleanEmail";
     private const string Key = "AcademicKey.NormalizeOrUnspecified";
     private const string Uid = "CardUid.Normalize";
+    private const string Organization = "OrganizationText.Normalize";
     private const string Unused = "(not imported)";
 
     /// <summary>
-    /// The eleven template columns, in file order. Columns that feed nothing are listed too — an absent
+    /// The twelve template columns, in file order. Columns that feed nothing are listed too — an absent
     /// row is indistinguishable from a forgotten one, and "we read this column and deliberately do nothing
     /// with it" is the more useful record. The four category columns version 3 added are not listed
     /// since version 4, and the seven course and teacher columns not since version 5: a file that still
@@ -210,5 +228,10 @@ internal static class SisImportProfileTemplate
         // one writes no offering and no enrollment, and warns), required as a header.
         new(SisRosterColumns.SectionName, "CourseOffering.SectionName", Verbatim, IsRequired: false),
         new(SisRosterColumns.SectionName, "CourseOffering.SectionKey", Key, IsRequired: false),
+
+        // Version 6 (ADR-011, D-80). Last, so every earlier column keeps its ordinal. Optional as a
+        // header and as a value: a blank cell keeps the stored organization, and a file without the
+        // column (every Task 2 file) still selects the worksheet and imports.
+        new(SisRosterColumns.Organization, StudentOrganizationTarget, Organization, IsRequired: false),
     ];
 }

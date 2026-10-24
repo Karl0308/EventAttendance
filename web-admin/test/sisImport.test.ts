@@ -564,10 +564,11 @@ describe("describeImportWarning — the mapped set", () => {
     "ClassificationRegNoSuggestsPersonnel",
     "ClassificationAxisUnknown",
     "ClassificationWrongAxis",
+    "OrganizationTooLong",
   ];
 
-  it("mirrors exactly 14 codes — the count changes only when the backend's list does", () => {
-    expect(KNOWN_WARNING_CODES).toHaveLength(14);
+  it("mirrors exactly 15 codes — the count changes only when the backend's list does", () => {
+    expect(KNOWN_WARNING_CODES).toHaveLength(15);
   });
 
   it.each(KNOWN_WARNING_CODES)("maps %s to words, not the raw token", (code) => {
@@ -580,6 +581,12 @@ describe("describeImportWarning — the mapped set", () => {
     // move it rather than to look it up. A label that collapsed the two would undo the reason the
     // backend split them into separate codes in the first place.
     expect(describeImportWarning("ClassificationWrongAxis")).toBe("Category in the wrong column");
+  });
+
+  it("gives OrganizationTooLong a label that says the stored organization was kept", () => {
+    expect(describeImportWarning("OrganizationTooLong")).toBe(
+      "Organization too long (kept the stored one)",
+    );
   });
 
   it("falls back to the raw token for a code this build has never heard of", () => {

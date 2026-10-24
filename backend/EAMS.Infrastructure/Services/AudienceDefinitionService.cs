@@ -242,8 +242,14 @@ internal sealed class AudienceDefinitionService : IAudienceDefinitionService
             .Where(p => !p.IsDeleted && p.Department != null).Select(p => p.Department!).Distinct().OrderBy(x => x).ToListAsync(ct);
         var classifications = await _db.Personnel.AsNoTracking()
             .Where(p => !p.IsDeleted && p.Classification != null).Select(p => p.Classification!).Distinct().OrderBy(x => x).ToListAsync(ct);
-        var orgs = await _db.Personnel.AsNoTracking()
-            .Where(p => !p.IsDeleted && p.Organization != null).Select(p => p.Organization!).Distinct().OrderBy(x => x).ToListAsync(ct);
+        // Organizations span both rosters too (ADR-011 D-82), folded by the one display rule (D-78). No SQL
+        // DISTINCT: under the database's case-insensitive collation it keeps ONE arbitrary spelling of
+        // "CICT" / "cict", which would make DistinctForDisplay's ordinally-first pick depend on row order.
+        var studentOrgs = await _db.Students.AsNoTracking()
+            .Where(s => !s.IsDeleted && s.Organization != null).Select(s => s.Organization).ToListAsync(ct);
+        var personnelOrgs = await _db.Personnel.AsNoTracking()
+            .Where(p => !p.IsDeleted && p.Organization != null).Select(p => p.Organization).ToListAsync(ct);
+        var orgs = OrganizationText.DistinctForDisplay(studentOrgs.Concat(personnelOrgs));
 
         // Departments span both rosters: a student's Course and a personnel Department are both "department"
         // in the audience sense.

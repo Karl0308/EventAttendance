@@ -386,6 +386,9 @@ const WARNING_LABELS: Record<string, string> = {
   // all): this one names a real category, just in the wrong place, which is why the label says "wrong
   // column" rather than "not recognized" — the operator's fix is to move the value, not to look it up.
   ClassificationWrongAxis: "Category in the wrong column",
+  // ADR-011: the sheet's ORGANIZATION cell exceeded the column's length. The row still imported; the
+  // student keeps the organization already on file, which is why the label says so.
+  OrganizationTooLong: "Organization too long (kept the stored one)",
 };
 
 /**

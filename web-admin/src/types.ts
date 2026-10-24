@@ -548,6 +548,12 @@ export interface Student {
   course?: string;
   yearLevel?: string;
   section?: string;
+  /**
+   * The student's organization (ADR-011 D-81), written by the roster import and **read-only here**:
+   * it is not on `StudentWriteRequest`, so no form sends it and a manual edit cannot blank what the
+   * importer set. Absent for a student with none, and for an older server that predates the field.
+   */
+  organization?: string;
   status: string; // one of StudentStatusName below; `string` on the wire
   /**
    * Every card the student has ever been issued, **including deactivated ones**. `DELETE

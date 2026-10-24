@@ -236,10 +236,15 @@ public class ClassificationMigrationTests : IntegrationTest
             Assert.False(await TableExistsAsync(connectionString, "Classifications"));
             Assert.False(await TableExistsAsync(connectionString, "StudentClassifications"));
 
+            // Up to the last classification migration, not head: a later, unrelated migration
+            // (StudentOrganization, ADR-011 D-79) legitimately adds a Students column, and this
+            // test's claim is about the classification migrations alone.
+            const string LastClassificationMigration = "ClassificationReportedRosterValue";
+
             await using (var db = SqlServerFixture.NewDbContextOn(
                 connectionString, new TestSchoolContext()))
             {
-                await db.Database.MigrateAsync();
+                await db.GetService<IMigrator>().MigrateAsync(LastClassificationMigration);
             }
 
             // Nothing that was there moved.

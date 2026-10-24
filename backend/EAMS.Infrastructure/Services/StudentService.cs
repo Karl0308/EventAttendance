@@ -59,7 +59,8 @@ internal sealed class StudentService : IStudentService
         s.FirstName, s.MiddleName, s.LastName,
         s.Email, s.Gender, s.PhotoUrl,
         s.Course, s.YearLevel, s.Section, s.Status,
-        s.Cards.Select(ToDto).ToList());
+        s.Cards.Select(ToDto).ToList(),
+        s.Organization);
 
     internal static CardDto ToDto(RfidCard c) => new(c.Id, c.CardUid, c.Label, c.IsActive);
 
@@ -78,6 +79,61 @@ internal sealed class StudentService : IStudentService
     public Task<PagedResult<StudentDto>> ListAsync(
         string? search, string? course, string? status, PageRequest page,
         CancellationToken ct = default)
+    {
+        return FilteredQuery(search, course, status).ToPageAsync(
+            // Include here rather than on the filter, so the join lands on the page and not on the
+            // COUNT. ThenBy(Id) is the total order: surnames are not unique — a roster of fifty-two
+            // has several — and SQL Server may return equal keys in a different order on every
+            // execution, so without a unique tiebreaker page 2 can repeat a row page 1 already served
+            // and skip one entirely. Nothing about that failure is visible in a single page.
+            ordered => Ordered(ordered.Include(s => s.Cards)),
+            ToDto, page, ct);
+    }
+
+    /// <inheritdoc/>
+    /// <remarks>
+    /// A projection rather than <c>Include</c> plus <see cref="ToDto(Student)"/>: the export reads only the
+    /// columns it writes, and only the active cards. The ordinal sort of the card serials runs in memory,
+    /// because a SQL <c>ORDER BY</c> would sort by the database collation instead.
+    /// </remarks>
+    public async Task<IReadOnlyList<StudentExportRow>> ExportAsync(
+        string? search, string? course, string? status, CancellationToken ct = default)
+    {
+        var rows = await Ordered(FilteredQuery(search, course, status).AsNoTracking())
+            .Select(s => new
+            {
+                s.StudentNumber,
+                ActiveCardUids = s.Cards.Where(c => c.IsActive).Select(c => c.CardUid).ToList(),
+                s.LastName,
+                s.FirstName,
+                s.MiddleName,
+                s.Email,
+                s.Course,
+                s.YearLevel,
+                s.Section,
+                s.Organization,
+                s.Status,
+            })
+            .ToListAsync(ct);
+
+        return rows
+            .Select(r => new StudentExportRow(
+                r.StudentNumber,
+                r.ActiveCardUids.Order(StringComparer.Ordinal).ToList(),
+                r.LastName, r.FirstName, r.MiddleName, r.Email,
+                r.Course, r.YearLevel, r.Section, r.Organization, r.Status))
+            .ToList();
+    }
+
+    /// <summary>The list order, shared with the export so the file is in the order the grid shows.</summary>
+    private static IOrderedQueryable<Student> Ordered(IQueryable<Student> q) =>
+        q.OrderBy(s => s.LastName).ThenBy(s => s.Id);
+
+    /// <summary>
+    /// The list/export filter, shared so a CSV export and the paged screen cannot drift apart (ADR-011 D-83,
+    /// the shape <c>PersonnelService.FilteredQuery</c> already has). Soft-deleted students are excluded.
+    /// </summary>
+    private IQueryable<Student> FilteredQuery(string? search, string? course, string? status)
     {
         var q = _db.Students.Where(s => !s.IsDeleted);
 
@@ -108,16 +164,7 @@ internal sealed class StudentService : IStudentService
         if (!string.IsNullOrWhiteSpace(course)) q = q.Where(s => s.Course == course);
         if (!string.IsNullOrWhiteSpace(status)) q = q.Where(s => s.Status == status);
 
-        return q.ToPageAsync(
-            // Include here rather than on the filter, so the join lands on the page and not on the
-            // COUNT. ThenBy(Id) is the total order: surnames are not unique — a roster of fifty-two
-            // has several — and SQL Server may return equal keys in a different order on every
-            // execution, so without a unique tiebreaker page 2 can repeat a row page 1 already served
-            // and skip one entirely. Nothing about that failure is visible in a single page.
-            ordered => ordered
-                .Include(s => s.Cards)
-                .OrderBy(s => s.LastName).ThenBy(s => s.Id),
-            ToDto, page, ct);
+        return q;
     }
 
     public async Task<StudentDto?> GetAsync(Guid id, CancellationToken ct = default)

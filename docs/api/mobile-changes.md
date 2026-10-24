@@ -9,6 +9,36 @@ matching has its own page: [`mobile-card-matching.md`](mobile-card-matching.md).
 
 ## 2026-10-23
 
+### `organization` on `GET /students/by-card/{cardUid}` - no release needed, unless your client is strict
+
+Each student now carries the organization the SIS roster gives them. It appears on the card lookup your
+scan screen calls, last in the body:
+
+```jsonc
+{
+  "id": "6b1d…",
+  "studentNumber": "2023-0001",
+  // …every field you already read, unchanged…
+  "cards": [ /* unchanged */ ],
+  "organization": "CICT"      // new; null when the roster never said
+}
+```
+
+The same field is on every other read that returns a student (`GET /students`, `GET /students/{id}`) and
+on the student write responses; the kiosk does not call those.
+
+**Additive, and nothing is asked of you.** No field was renamed, removed or retyped, and taps, batches,
+the manifest and the event picker are untouched. The value is informational for the capture app: it
+plays no part in a tap. "Untouched" means the manifest's *schema*: after the first roster import on the
+new profile (v6), the manifests of events with an Organization audience, or a Custom audience that
+names organizations, gain attendees and their version moves. A re-sync at that point is expected, not a
+bug.
+
+**But `StudentDto` is a closed schema** (`additionalProperties: false` in `openapi.json`). A client that
+tolerates unknown JSON members - the default for most JSON libraries - sees nothing. A client
+**generated from the previous `openapi.json` with strict deserialization** (unknown members rejected) will
+**fail to parse the lookup** until it is regenerated from the current contract.
+
 ### `classifications` is gone from `GET /students/by-card/{cardUid}` - a release is needed only if you read it
 
 Student classification has been withdrawn from the product. `StudentDto` no longer carries a

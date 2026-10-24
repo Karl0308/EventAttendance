@@ -1,5 +1,6 @@
 using EAMS.Api.Authorization;
 using EAMS.Api.RateLimiting;
+using EAMS.Api.Reports;
 using EAMS.Application.Abstractions;
 using EAMS.Application.Dtos;
 using EAMS.Domain;
@@ -64,6 +65,35 @@ public class StudentsController : ControllerBase
         CancellationToken ct)
         => Ok(await _students.ListAsync(
             search, course, status, PageRequest.From(page, pageSize), ct));
+
+    /// <summary>
+    /// <c>GET /students/export.csv</c> — every student matching the same filters as the list, unpaged and in
+    /// the list's order, as a CSV (ADR-011 D-83). Soft-deleted students are excluded, as on the list.
+    /// </summary>
+    /// <remarks>
+    /// Not re-importable: the roster import takes XLSX only, and these are display headers. Course, Year
+    /// Level and Section are the ADR-001 D-2 single-valued cache, as on the grid.
+    /// </remarks>
+    /// <param name="search">As on <c>GET /students</c>.</param>
+    /// <param name="course">As on <c>GET /students</c> — the D-2 cache, so as lossy as the grid's filter.</param>
+    /// <param name="status">As on <c>GET /students</c>.</param>
+    /// <param name="ct">Cancellation token.</param>
+    /// <response code="200">The CSV.</response>
+    [HttpGet("export.csv")]
+    [Authorize(AuthenticationSchemes = JwtBearerDefaults.AuthenticationScheme, Policy = EamsPermissions.StudentsRead)]
+    [HasPermissionNotEnforced(EamsPermissions.StudentsRead)]
+    [ProducesResponseType(typeof(FileContentResult), StatusCodes.Status200OK, StudentCsv.ContentType)]
+    public async Task<IActionResult> ExportCsv(
+        [FromQuery] string? search, [FromQuery] string? course, [FromQuery] string? status,
+        CancellationToken ct)
+    {
+        var rows = await _students.ExportAsync(search, course, status, ct);
+
+        // Student data names people; do not let a browser or intermediary keep a copy.
+        Response.Headers.CacheControl = "no-store";
+
+        return File(StudentCsv.Write(rows), StudentCsv.ContentType, StudentCsv.FileName());
+    }
 
     /// <summary><c>GET /students/{id}</c> — one student by primary key.</summary>
     /// <remarks>

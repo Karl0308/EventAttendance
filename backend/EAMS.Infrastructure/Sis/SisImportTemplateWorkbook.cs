@@ -138,8 +138,15 @@ internal static class SisImportTemplateWorkbook
         var instructions = workbook.AddWorksheet(InstructionsSheetName);
         var roster = workbook.AddWorksheet(RosterSheetName);
 
+        // The importer's own lookup (ADR-011 D-80): the first row mapping Student.Organization, by profile
+        // order. Null when the profile maps none, and then the sheet says nothing about it.
+        var organizationHeader = rows
+            .FirstOrDefault(r => r.TargetField == SisImportProfileTemplate.StudentOrganizationTarget)
+            ?.SourceColumn.Trim();
+
         WriteRoster(roster, columns);
-        WriteInstructions(instructions, profileName, profileVersion, columns, vocabulary, sectionOnly);
+        WriteInstructions(
+            instructions, profileName, profileVersion, columns, vocabulary, sectionOnly, organizationHeader);
         instructions.SetTabActive();
 
         var buffer = new MemoryStream();
@@ -176,9 +183,11 @@ internal static class SisImportTemplateWorkbook
 
     private static void WriteInstructions(
         IXLWorksheet sheet, string profileName, int profileVersion,
-        IReadOnlyList<TemplateColumn> columns, IReadOnlyList<VocabularyEntry> vocabulary, bool sectionOnly)
+        IReadOnlyList<TemplateColumn> columns, IReadOnlyList<VocabularyEntry> vocabulary, bool sectionOnly,
+        string? organizationHeader)
     {
-        var lines = InstructionLines(profileName, profileVersion, columns, vocabulary, sectionOnly);
+        var lines = InstructionLines(
+            profileName, profileVersion, columns, vocabulary, sectionOnly, organizationHeader);
 
         sheet.Column(1).Width = InstructionsColumnWidth;
         for (var i = 0; i < lines.Count; i++)
@@ -203,10 +212,16 @@ internal static class SisImportTemplateWorkbook
     /// <c>Course.CodeKey</c> row means no course is read, so the sheet asks for one row per student and
     /// names only the college and program as values that must be filled in.
     /// </para>
+    ///
+    /// <para>
+    /// <paramref name="organizationHeader"/> is the header the profile maps to
+    /// <c>Student.Organization</c>, or <c>null</c> when it maps none (ADR-011, D-80).
+    /// </para>
     /// </summary>
     internal static List<(string Text, bool Heading)> InstructionLines(
         string profileName, int profileVersion,
-        IReadOnlyList<TemplateColumn> columns, IReadOnlyList<VocabularyEntry> vocabulary, bool sectionOnly)
+        IReadOnlyList<TemplateColumn> columns, IReadOnlyList<VocabularyEntry> vocabulary, bool sectionOnly,
+        string? organizationHeader)
     {
         var lines = new List<(string, bool)>();
         void Heading(string text) { lines.Add(("", false)); lines.Add((text, true)); }
@@ -257,6 +272,8 @@ internal static class SisImportTemplateWorkbook
                     : "";
             Line($"- {column.Header}: {rule}{note}");
         }
+
+        if (organizationHeader is not null) Line(organizationHeader + OrganizationRuleTail);
 
         // Only when the profile maps a category column. The built-in mapping has mapped none since
         // version 4 (ADR-009, D-76), and a section explaining columns the file does not have — with a
@@ -367,6 +384,15 @@ internal static class SisImportTemplateWorkbook
         "SECTION_NAME may be left blank, but a student with no section is placed in no section: they are " +
         "in no section group and cannot be invited as part of one, and the import reports a warning for " +
         "the row. Fill it in wherever the student has a section.";
+
+    /// <summary>
+    /// The organization column's blank-cell rule (ADR-011, D-80), after the mapped header:
+    /// <c>SisImportService.ResolveStudents</c> writes it through <c>AssignIfPresent</c>.
+    /// </summary>
+    internal static readonly string OrganizationRuleTail =
+        $" is optional, up to {OrganizationText.MaxLength} characters. A blank cell keeps the organization already stored for the " +
+        "student; a filled-in cell replaces it, and a longer value is not applied and is reported. For a " +
+        "student on several rows, the first filled-in cell is used.";
 
     internal const string LeadingZerosRuleTail =
         "formatted as Text in this template, because leading zeros are part of the value: RFID card " +

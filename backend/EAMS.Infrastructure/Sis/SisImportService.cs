@@ -473,14 +473,21 @@ internal sealed class SisImportService : ISisImportService
     /// <param name="Course">
     /// Where the course code, title and teacher cells are read from, or <c>null</c> when the mapping
     /// names no <see cref="SisImportProfileTemplate.CourseCodeKeyTarget"/> — which makes the batch
-    /// <b>section-only</b> (ADR-010, D-77). Built-in version 5 is that case.
+    /// <b>section-only</b> (ADR-010, D-77). Built-in versions 5 and 6 are that case.
+    /// </param>
+    /// <param name="OrganizationKey">
+    /// Where the student's organization is read from, or <c>null</c> when the mapping names no
+    /// <see cref="SisImportProfileTemplate.StudentOrganizationTarget"/> row — every batch pinned to
+    /// built-in version 5 or earlier, and every batch with no profile (ADR-011, D-80). Null means no
+    /// organization cell is read and every stored organization is left as it is.
     /// </param>
     private sealed record MappedColumns(
         string? RfidKey,
         IReadOnlyList<(string Axis, string Key, string Column)> ClassificationKeys,
         IReadOnlyList<string> UnknownAxisTargets,
         IReadOnlyList<string> UnreadableAxisTargets,
-        CourseColumns? Course)
+        CourseColumns? Course,
+        string? OrganizationKey)
     {
         /// <summary>
         /// ADR-010 D-77: the batch reads no course or teacher cell, files every section under the
@@ -513,9 +520,9 @@ internal sealed class SisImportService : ISisImportService
         string CodeKey, string CodeColumn, string? TitleKey, bool ReadsTeachers);
 
     /// <summary>
-    /// The columns a batch with <b>no</b> pinned profile reads: no card, no category, and the course
-    /// columns at their fixed headers. Course mode, deliberately (ADR-010 D-77): section-only is a
-    /// property a profile states, never one inferred from the absence of a profile.
+    /// The columns a batch with <b>no</b> pinned profile reads: no card, no category, no organization,
+    /// and the course columns at their fixed headers. Course mode, deliberately (ADR-010 D-77):
+    /// section-only is a property a profile states, never one inferred from the absence of a profile.
     /// </summary>
     private static readonly MappedColumns NoMappedColumns = new(
         null, [], [], [],
@@ -523,7 +530,8 @@ internal sealed class SisImportService : ISisImportService
             SisRosterColumns.HeaderKey(SisRosterColumns.CourseCode),
             SisRosterColumns.CourseCode,
             SisRosterColumns.HeaderKey(SisRosterColumns.CourseName),
-            ReadsTeachers: true));
+            ReadsTeachers: true),
+        OrganizationKey: null);
 
     /// <summary>
     /// Which source columns this batch reads, resolved from its own ADR-001 D-4 profile rows rather
@@ -561,6 +569,7 @@ internal sealed class SisImportService : ISisImportService
         var courseKeyTarget = SisImportProfileTemplate.CourseCodeKeyTarget;
         var courseTitleTarget = SisImportProfileTemplate.CourseTitleTarget;
         var teacherTarget = SisImportProfileTemplate.InstructorDisplayNameTarget;
+        var organizationTarget = SisImportProfileTemplate.StudentOrganizationTarget;
 
         // One read for all of them, ordered by Ordinal — so a mapping that lists a target twice, which
         // the profile's own unique index permits across two different source columns, resolves the same
@@ -571,7 +580,8 @@ internal sealed class SisImportService : ISisImportService
                             || c.TargetField.StartsWith(categoryPrefix)
                             || c.TargetField == courseKeyTarget
                             || c.TargetField == courseTitleTarget
-                            || c.TargetField == teacherTarget))
+                            || c.TargetField == teacherTarget
+                            || c.TargetField == organizationTarget))
             .OrderBy(c => c.Ordinal)
             .ToListAsync(ct);
 
@@ -677,7 +687,12 @@ internal sealed class SisImportService : ISisImportService
                 ReadsTeachers: columns.Any(c => c.TargetField == teacherTarget));
         }
 
-        return new MappedColumns(rfid, byAxis, unknownAxes, unreadableAxes, course);
+        // ADR-011 D-80: first by Ordinal, then KeyOf — the RFID row's rule exactly, for the reason given
+        // there. No row (version 5 or earlier) reads no organization cell, whatever the file carries.
+        var organizationColumn = columns.FirstOrDefault(c => c.TargetField == organizationTarget);
+        var organization = organizationColumn is null ? null : KeyOf(organizationColumn);
+
+        return new MappedColumns(rfid, byAxis, unknownAxes, unreadableAxes, course, organization);
     }
 
     // =========================================================================== parse (per row)
@@ -721,7 +736,12 @@ internal sealed class SisImportService : ISisImportService
         // Axis -> the header the profile maps for it, as written. One instance shared by every row of the
         // batch; carried so SisImportWarningCode.ClassificationWrongAxis can name both the column a value
         // was typed in and the column it belongs in.
-        IReadOnlyDictionary<string, string> CategoryColumnNames);
+        IReadOnlyDictionary<string, string> CategoryColumnNames,
+        // The row's organization, through OrganizationText.Normalize (ADR-011, D-80) — or null when the
+        // profile maps no organization column, the file has none, the cell is blank, or the value was
+        // too long to store (SisImportWarningCode.OrganizationTooLong). Null always means "this row does
+        // not say": ResolveStudents keeps the stored value for it.
+        string? Organization);
 
     /// <summary>
     /// Interprets the staged rows. <paramref name="rfidColumnKey"/> is the
@@ -934,7 +954,8 @@ internal sealed class SisImportService : ISisImportService
                     : AcademicKey.NormalizeOrUnspecified(teacher.DisplayName),
                 Categories: RosterClassification.Resolve(regNo, categoryCells),
                 CategoryColumnsPresent: categoryColumnsPresent,
-                CategoryColumnNames: categoryColumnNames));
+                CategoryColumnNames: categoryColumnNames,
+                Organization: ReadOrganization(columns.OrganizationKey, cells, row, ledger)));
 
             if (sectionName is null)
                 ledger.Warn(row, SisImportWarningCode.SectionUnspecified,
@@ -1006,6 +1027,37 @@ internal sealed class SisImportService : ISisImportService
 
         var normalized = CardUid.Normalize(cleaned);
         return normalized.Length == 0 ? null : normalized;
+    }
+
+    /// <summary>
+    /// One row's organization (ADR-011, D-80), or <c>null</c> when this row does not say — the mapping
+    /// names no organization column, the file has none, the cell is blank, or the value is too long.
+    ///
+    /// <para>
+    /// <see cref="RosterText.Clean"/> first, for the invisible characters every other column sheds, then
+    /// <see cref="OrganizationText.Normalize"/> — the one rule both rosters store and match by. The length
+    /// is checked on the normalized value because that is what would be stored. Over
+    /// <see cref="OrganizationText.MaxLength"/> the cell is treated as blank, so the stored value is kept,
+    /// and the row is warned (<see cref="SisImportWarningCode.OrganizationTooLong"/>) and still imports.
+    /// </para>
+    /// </summary>
+    private static string? ReadOrganization(
+        string? organizationColumnKey, IReadOnlyDictionary<string, string> cells,
+        SisImportRow row, RowLedger ledger)
+    {
+        if (organizationColumnKey is null) return null;
+        if (!cells.TryGetValue(organizationColumnKey, out var raw)) return null;
+
+        var organization = OrganizationText.Normalize(RosterText.Clean(raw));
+        if (organization is null) return null;
+        if (organization.Length <= OrganizationText.MaxLength) return organization;
+
+        ledger.Warn(row, SisImportWarningCode.OrganizationTooLong,
+            $"The organization cell is {organization.Length} characters long once its spaces are tidied, " +
+            $"over the {OrganizationText.MaxLength}-character limit, so it was not applied: the student's " +
+            "stored organization was kept and the row was imported. Shorten the value in the file and " +
+            "re-import to set it.");
+        return null;
     }
 
     private static Dictionary<string, string> ReadCells(SisImportRow row)
@@ -1790,7 +1842,16 @@ internal sealed class SisImportService : ISisImportService
         foreach (var group in GroupRows(parsed, r => r.RegNo))
         {
             var first = group.First;
-            WarnOnIdentityConflicts(group, ledger);
+
+            // ADR-011 D-80 point 5: the first row of the group that CARRIES an organization, not
+            // group.First. The two differ whenever the student's first row leaves the cell blank, and
+            // reading group.First would then turn "this row does not say" into "keep what is stored"
+            // while a later row of the same file says plainly what it is. The per-axis rule
+            // ResolveClassificationsAsync uses, applied to one field.
+            var organizationRow = FirstCarryingOrganization(group);
+            var organization = organizationRow?.Organization;
+
+            WarnOnIdentityConflicts(group, organizationRow, ledger);
 
             if (existing.TryGetValue(first.RegNo, out var student))
             {
@@ -1812,6 +1873,13 @@ internal sealed class SisImportService : ISisImportService
                 changed |= AssignIfPresent(student.Email, first.Email, v => student.Email = v);
                 changed |= AssignIfPresent(
                     student.AlternateEmail, first.AlternateEmail, v => student.AlternateEmail = v);
+
+                // Organization (ADR-011 D-80) is AssignIfPresent too: a blank cell keeps the stored
+                // value. Assign compares ordinally, so a case-only change in the file ('cict' over a
+                // stored 'CICT') is an overwrite and reports Updated. NOT a derived-cache column, so it
+                // is written here, outside the refresh scope, and must never join
+                // Student.DerivedAcademicPropertyNames.
+                changed |= AssignIfPresent(student.Organization, organization, v => student.Organization = v);
 
                 // Deliberately NOT written here: Course, YearLevel and Section. They are the ADR-001
                 // D-2 derived cache and the SaveChanges guard refuses them outside the refresh scope —
@@ -1846,6 +1914,7 @@ internal sealed class SisImportService : ISisImportService
                 LastName = first.LastName,
                 Email = first.Email,
                 AlternateEmail = first.AlternateEmail,
+                Organization = organization,
                 Status = "Active",
                 LastSyncedAt = DateTime.UtcNow,
             };
@@ -2289,8 +2358,18 @@ internal sealed class SisImportService : ISisImportService
     /// counts — one row naming <c>NAP</c> where another is blank is the ordinary shape of a file whose
     /// grain is the enrollment, and treating it as a conflict would warn on most of the roster.
     /// </para>
+    ///
+    /// <para>
+    /// <b>Organization is compared against <paramref name="organizationRow"/>, not the first row</b>
+    /// (ADR-011, D-80 point 5): the value kept is the first one any of the student's rows carries, so
+    /// that is the row a contradiction is reported against and the row the message names. Compared by
+    /// <see cref="OrganizationText.MatchKey"/>, so a case-only or whitespace-only variant is the same
+    /// organization and not a conflict. When the kept row is not the first row, the organization line is
+    /// its own sentence naming that row, so the first row's line still says only what it means.
+    /// </para>
     /// </summary>
-    private static void WarnOnIdentityConflicts(RowGroup group, RowLedger ledger)
+    private static void WarnOnIdentityConflicts(
+        RowGroup group, ParsedRow? organizationRow, RowLedger ledger)
     {
         var first = group.First;
 
@@ -2319,14 +2398,48 @@ internal sealed class SisImportService : ISisImportService
                 differences.Add($"{axis} category '{here}' vs '{there}'");
             }
 
-            if (differences.Count == 0) continue;
+            // Only where both rows carry one, for the reason the category axes above give.
+            (string Text, int KeptRow)? organizationClash = null;
+            if (organizationRow is not null && row.Organization is not null
+                && row.Staged.RowNumber != organizationRow.Staged.RowNumber
+                && !string.Equals(
+                    OrganizationText.MatchKey(row.Organization),
+                    OrganizationText.MatchKey(organizationRow.Organization),
+                    StringComparison.Ordinal))
+            {
+                var clash = $"organization '{row.Organization}' vs '{organizationRow.Organization}'";
+                if (organizationRow.Staged.RowNumber == first.Staged.RowNumber) differences.Add(clash);
+                else organizationClash = (clash, organizationRow.Staged.RowNumber);
+            }
+
+            if (differences.Count == 0 && organizationClash is null) continue;
+
+            var sentences = new List<string>(2);
+            if (differences.Count > 0)
+                sentences.Add(
+                    $"REGNO {row.RegNo} is described differently here than on row " +
+                    $"{first.Staged.RowNumber}: {string.Join("; ", differences)}. The first row's values " +
+                    "were kept.");
+
+            if (organizationClash is { } separate)
+                sentences.Add(
+                    (differences.Count > 0
+                        ? $"It also differs from row {separate.KeptRow}: "
+                        : $"REGNO {row.RegNo} is described differently here than on row {separate.KeptRow}: ") +
+                    $"{separate.Text}. Row {separate.KeptRow}'s organization was kept, as the first of " +
+                    "this student's rows to carry one.");
 
             ledger.Warn(row.Staged, SisImportWarningCode.StudentIdentityConflict,
-                $"REGNO {row.RegNo} is described differently here than on row " +
-                $"{first.Staged.RowNumber}: {string.Join("; ", differences)}. The first row's values " +
-                "were kept.");
+                string.Join(" ", sentences));
         }
     }
+
+    /// <summary>
+    /// The first of a student's rows, in worksheet order, that carries an organization — or <c>null</c>
+    /// when none does, in which case the stored organization is kept (ADR-011, D-80).
+    /// </summary>
+    private static ParsedRow? FirstCarryingOrganization(RowGroup group) =>
+        group.All.FirstOrDefault(r => r.Organization is not null);
 
     /// <summary>
     /// This row's category on one axis, or <c>null</c> when it named none. Deliberately <em>not</em> a

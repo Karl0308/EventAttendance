@@ -6,7 +6,7 @@
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { api } from "../src/api";
+import { ApiError, api } from "../src/api";
 
 const json = (status: number, body: unknown) =>
   new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
@@ -70,5 +70,83 @@ describe("the Student the API seam returns", () => {
     expect(student?.fullName).toBe("Ana Cruz");
     // Not carried onto the mapped object at all — neither as the array nor as an empty default.
     expect(student).not.toHaveProperty("classifications");
+  });
+});
+
+describe("the Student's organization (ADR-011 D-81)", () => {
+  const ID = "00000000-0000-4000-8000-000000000001";
+
+  it("narrows organization: absent, null or string; a non-string fails loud", async () => {
+    // A string is read as itself.
+    serve(studentJson({ organization: "Computer Society" }));
+    expect((await api.getStudent(ID))?.organization).toBe("Computer Society");
+
+    // JSON null — what the endpoint sends for a student with none.
+    serve(studentJson({ organization: null }));
+    expect((await api.getStudent(ID))?.organization).toBeUndefined();
+
+    // Absent — an older server that predates the field. `studentJson()` carries no such key.
+    serve(studentJson());
+    expect((await api.getStudent(ID))?.organization).toBeUndefined();
+
+    // Anything else is drift, and is refused by name rather than dropped to `undefined`.
+    for (const drifted of [42, true, { name: "Computer Society" }, ["Computer Society"]]) {
+      serve(studentJson({ organization: drifted }));
+      await expect(api.getStudent(ID)).rejects.toMatchObject({
+        name: "ApiError",
+        kind: "malformed",
+        message: expect.stringContaining("organization"),
+      });
+    }
+  });
+});
+
+describe("api.exportStudentsCsv", () => {
+  const csvOk = () =>
+    new Response("Student No.\r\n", {
+      status: 200,
+      headers: {
+        "Content-Type": "text/csv; charset=utf-8",
+        "Content-Disposition": "attachment; filename=EAMS-students-2026-10-24.csv",
+      },
+    });
+
+  it("asks /students/export.csv with the filter and returns the blob and the server's filename", async () => {
+    let requested = "";
+    vi.stubGlobal("fetch", (input: RequestInfo | URL) => {
+      requested = String(input);
+      return Promise.resolve(csvOk());
+    });
+
+    const file = await api.exportStudentsCsv({ search: "Santos", status: "Active" });
+
+    const url = new URL(requested, "http://localhost");
+    expect(url.pathname.endsWith("/students/export.csv")).toBe(true);
+    expect(url.searchParams.get("search")).toBe("Santos");
+    expect(url.searchParams.get("status")).toBe("Active");
+    expect(url.searchParams.has("course")).toBe(false);
+    expect(file.filename).toBe("EAMS-students-2026-10-24.csv");
+    expect(file.blob.size).toBeGreaterThan(0);
+  });
+
+  it("raises ApiError on non-2xx", async () => {
+    for (const status of [400, 403, 500]) {
+      vi.stubGlobal("fetch", () =>
+        Promise.resolve(
+          new Response(
+            JSON.stringify({ type: "about:blank", title: "Failed.", status, detail: "No.", traceId: "t-1" }),
+            { status, headers: { "Content-Type": "application/problem+json" } },
+          ),
+        ),
+      );
+
+      const failure = await api.exportStudentsCsv({}).then(
+        () => undefined,
+        (cause: unknown) => cause,
+      );
+
+      expect(failure).toBeInstanceOf(ApiError);
+      expect((failure as ApiError).status).toBe(status);
+    }
   });
 });

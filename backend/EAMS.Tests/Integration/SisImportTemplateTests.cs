@@ -152,20 +152,20 @@ public class SisImportTemplateTests : IntegrationTest
     // ============================================================================== the contract
 
     /// <summary>
-    /// The built-in version 5 template, as a literal (ADR-010 D-77): QA's ten columns plus <c>RFID</c>,
-    /// in profile order. Typed out rather than derived from the template entries, so a profile change
+    /// The built-in version 6 template, as a literal (ADR-010 D-77, ADR-011 D-80): QA's ten columns plus
+    /// <c>RFID</c> and <c>ORGANIZATION</c>, in profile order. Typed out rather than derived from the template entries, so a profile change
     /// that drops a column — or puts a course, teacher or category column back — fails here.
     /// </summary>
     private static readonly IReadOnlyList<string> BuiltInTemplateColumns =
     [
         "REGNO", "RFID", "STUDENT FIRST NAME", "STUDENT MIDDLE NAME", "STUDENT LAST NAME", "FULL_NAME",
-        "EMAIL_ID", "USA_EMAIL", "COLLEGE_NAME", "PROGRAM", "SECTION_NAME",
+        "EMAIL_ID", "USA_EMAIL", "COLLEGE_NAME", "PROGRAM", "SECTION_NAME", "ORGANIZATION",
     ];
 
     /// <summary>
     /// The template's header row is the importer's own profile rows — read back from the database the
     /// importer pinned the upload to — distinct and in <c>Ordinal</c> order. Pinned to the literal
-    /// 11-column list as well (<see cref="BuiltInTemplateColumns"/>: built-in version 5, ADR-010 D-77),
+    /// 12-column list as well (<see cref="BuiltInTemplateColumns"/>: built-in version 6, ADR-011 D-80),
     /// so a profile change that silently drops a column — or puts a course, teacher or category column
     /// back — fails here too. And the columns whose value the profile requires are the ones marked.
     ///
@@ -658,6 +658,54 @@ public class SisImportTemplateTests : IntegrationTest
         Assert.DoesNotContain(SisImportTemplateWorkbook.WrongColumnRule, lines);
         foreach (var (_, column) in SisRosterColumns.ClassificationColumns)
             Assert.DoesNotContain(lines, l => l.Contains(column, StringComparison.Ordinal));
+    }
+
+    /// <summary>
+    /// The organization rule line (ADR-011, D-80) is written only when the profile maps
+    /// <c>Student.Organization</c>. The v6 built-in carries it, with the mapped header and the exact rule
+    /// text; a v5-shaped profile (the built-in minus that row) does not, and a rule about a column the
+    /// file lacks would tell the school to fill in nothing.
+    /// </summary>
+    [Fact]
+    public async Task Organization_instructions_line_appears_only_when_the_profile_maps_it()
+    {
+        const string expected =
+            "ORGANIZATION is optional, up to 150 characters. A blank cell keeps the organization already " +
+            "stored for the student; a filled-in cell replaces it, and a longer value is not applied and is " +
+            "reported. For a student on several rows, the first filled-in cell is used.";
+
+        var withOrg = await ArrangeAsync();
+        using (var factory = new EamsApiFactory(Sql.ConnectionString))
+        using (var client = await SignedInClientAsync(factory, withOrg.SchoolId))
+        using (var template = await DownloadAsync(client))
+        {
+            var lines = InstructionLinesOf(template);
+            Assert.Contains(SisRosterColumns.Organization, HeadersOf(Roster(template)));
+            Assert.Contains(expected, lines);
+        }
+
+        // Same school (one per database): a newer active profile now supersedes the built-in.
+        var v5Shaped = withOrg;
+        var mapping = BuiltInMapping()
+            .Where(m => m.TargetField != SisImportProfileTemplate.StudentOrganizationTarget)
+            .ToList();
+        Assert.True(mapping.Count < BuiltInMapping().Count, "the fixture must actually drop the organization row");
+        // The built-in row must exist (inactive) for a newer active version to be preferred to it.
+        await SeedProfileAsync(v5Shaped.SchoolId, SisImportProfileTemplate.BuiltInVersion, isActive: false, BuiltInMapping());
+        await SeedProfileAsync(v5Shaped.SchoolId, SisImportProfileTemplate.BuiltInVersion + 1, isActive: true, mapping);
+
+        using (var factory = new EamsApiFactory(Sql.ConnectionString))
+        using (var client = await SignedInClientAsync(factory, v5Shaped.SchoolId))
+        using (var template = await DownloadAsync(client))
+        {
+            var lines = InstructionLinesOf(template);
+            // Positive control: the sheet is there and is the seeded profile's (the reader-required headers
+            // keep ORGANIZATION on the Roster sheet whatever the profile maps, so the header is no signal).
+            Assert.Contains("Columns", lines);
+            Assert.Contains($"version {SisImportProfileTemplate.BuiltInVersion + 1}.", lines[1], StringComparison.Ordinal);
+            Assert.DoesNotContain(lines, l => l.Contains(SisImportTemplateWorkbook.OrganizationRuleTail, StringComparison.Ordinal));
+            Assert.DoesNotContain(expected, lines);
+        }
     }
 
     /// <summary>

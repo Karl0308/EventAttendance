@@ -20,12 +20,18 @@ namespace EAMS.Application.Dtos;
 /// </param>
 /// <param name="YearLevel"><inheritdoc cref="Course"/></param>
 /// <param name="Section"><inheritdoc cref="Course"/></param>
+/// <param name="Organization">
+/// <b>Read-only here.</b> Written by the SIS import only (ADR-011 D-81). <c>StudentWriteRequest</c> does not
+/// carry it, so a value echoed back on <c>PUT</c> is ignored. Null when the roster never said. Last in the
+/// record so the addition is purely additive.
+/// </param>
 public record StudentDto(
     Guid Id, string StudentNumber, string FullName,
     string FirstName, string? MiddleName, string LastName,
     string? Email, string? Gender, string? PhotoUrl,
     string? Course, string? YearLevel, string? Section, string Status,
-    IEnumerable<CardDto> Cards);
+    IEnumerable<CardDto> Cards,
+    string? Organization);
 
 public record CardDto(Guid Id, string CardUid, string? Label, bool IsActive);
 

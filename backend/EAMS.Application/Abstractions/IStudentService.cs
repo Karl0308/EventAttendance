@@ -146,6 +146,13 @@ public interface IStudentService
         string? search, string? course, string? status, PageRequest page,
         CancellationToken ct = default);
 
+    /// <summary>
+    /// <c>GET /students/export.csv</c>'s data (ADR-011 D-83) — every student matching the same filters as
+    /// <see cref="ListAsync"/>, unpaged, in the same order, soft-deleted students excluded.
+    /// </summary>
+    Task<IReadOnlyList<StudentExportRow>> ExportAsync(
+        string? search, string? course, string? status, CancellationToken ct = default);
+
     Task<StudentDto?> GetAsync(Guid id, CancellationToken ct = default);
 
     /// <summary>UID→student resolution for the mobile scan screen. Normalizes <paramref name="cardUid"/> first.</summary>

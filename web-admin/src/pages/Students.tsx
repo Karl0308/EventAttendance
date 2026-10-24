@@ -17,6 +17,7 @@ import UploadFileIcon from "@mui/icons-material/UploadFile";
 import EditIcon from "@mui/icons-material/Edit";
 import CreditCardIcon from "@mui/icons-material/CreditCard";
 import PersonSearchIcon from "@mui/icons-material/PersonSearch";
+import DownloadIcon from "@mui/icons-material/Download";
 import DeleteOutlineIcon from "@mui/icons-material/DeleteOutline";
 import { api, describeApiError } from "../api";
 import { useApiResource } from "../useApiResource";
@@ -28,6 +29,7 @@ import EditStudentDialog from "../components/EditStudentDialog";
 import DeleteStudentDialog from "../components/DeleteStudentDialog";
 import StudentCardsDialog from "../components/StudentCardsDialog";
 import CardLookupDialog from "../components/CardLookupDialog";
+import { saveBlob } from "../sisImport";
 import { knownStatus } from "../studentDraft";
 import { STUDENT_STATUS } from "../types";
 import type {
@@ -93,6 +95,14 @@ const DEFAULT_PAGE_SIZE = PAGE_SIZES[0];
 
 /** What a column reads as when the student has no value for it. */
 const NO_VALUE = "—";
+
+/**
+ * The filter this page asks the server about, from the settled search. One function, used by the list
+ * read and by the CSV export, so the file always holds exactly the rows the grid's total counts.
+ */
+const studentFilter = (settledSearch: string): { search?: string } => ({
+  search: settledSearch === "" ? undefined : settledSearch,
+});
 
 /** What the Snackbar is currently saying, and how loudly. As `Events.tsx`, for the same reasons. */
 interface Notice {
@@ -197,7 +207,7 @@ export default function Students() {
   const students = useApiResource(
     () =>
       api.listStudentsPage(
-        { search: query === "" ? undefined : query },
+        studentFilter(query),
         paginationModel.page + FIRST_PAGE,
         paginationModel.pageSize,
       ),
@@ -276,6 +286,9 @@ export default function Students() {
   );
   const detach = useApiMutation((studentId: string, cardId: string) =>
     api.removeStudentCard(studentId, cardId),
+  );
+  const exportCsv = useApiMutation((settledSearch: string) =>
+    api.exportStudentsCsv(studentFilter(settledSearch)),
   );
 
   // Mounting a dialog only while it is open is what keeps its form honest: every open starts from an
@@ -508,6 +521,30 @@ export default function Students() {
     });
   };
 
+  /**
+   * Exports what the grid is showing the total of: the settled search, not the keystroke in flight —
+   * the same value the list read used. The browser's save is outside the mutation, so a failure there
+   * is announced here rather than left as an unhandled rejection.
+   */
+  const runExport = () => {
+    void exportCsv.run(query).then((settled) => {
+      if (settled.outcome === "ignored") return;
+      if (settled.outcome === "failed") {
+        announce({ severity: "error", text: describeApiError(settled.error) });
+        return;
+      }
+      try {
+        saveBlob(settled.data.blob, settled.data.filename);
+      } catch (cause) {
+        console.error(cause);
+        announce({
+          severity: "error",
+          text: "The export was downloaded but the browser would not save it. Try Export CSV again.",
+        });
+      }
+    });
+  };
+
   // --------------------------------------------------------------------------------------- grid
 
   const cols: GridColDef<Student>[] = [
@@ -526,6 +563,13 @@ export default function Students() {
     { field: "course", headerName: "Course", width: 90 },
     { field: "yearLevel", headerName: "Year", width: 110 },
     { field: "section", headerName: "Sec", width: 70 },
+    {
+      field: "organization",
+      headerName: "Organization",
+      width: 160,
+      // Import-written and read-only (ADR-011 D-81); unset for any student whose sheet had none.
+      valueGetter: (_v, row) => row.organization || NO_VALUE,
+    },
     {
       field: "cards",
       headerName: "RFID Card",
@@ -566,6 +610,19 @@ export default function Students() {
           Academic Community
         </Typography>
         <Stack direction="row" spacing={1}>
+          {/* Exports every student the current search selects, not the page in view. Not re-importable:
+              roster import is XLSX only. The label names the scope, so a screen reader hears more than
+              "Export CSV" on a page that also holds an import. */}
+          <Button
+            startIcon={<DownloadIcon />}
+            onClick={runExport}
+            disabled={exportCsv.status === "running"}
+            // Contains the visible text (WCAG 2.5.3) and adds the scope. While running, the visible
+            // "Exporting…" is the name.
+            aria-label={exportCsv.status === "running" ? undefined : "Export CSV of the current search"}
+          >
+            {exportCsv.status === "running" ? "Exporting…" : "Export CSV"}
+          </Button>
           {/* The entry point to §10. A link rather than a button that navigates: it is a destination
               with its own URL, so it must open in a new tab, be copied, and be announced as a link. */}
           <Button

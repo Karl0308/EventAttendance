@@ -80,3 +80,27 @@ public record StudentWriteRequest(
 /// </para>
 /// </summary>
 public record StudentCardRequest(string CardUid, string? Label);
+
+/// <summary>
+/// One row of <c>GET /students/export.csv</c> (ADR-011 D-83) — a projection, not a <see cref="StudentDto"/>,
+/// so the export reads only the columns it writes.
+/// </summary>
+/// <param name="ActiveCardUids">
+/// Every <em>active</em> card serial the student holds, in ordinal order. A student can hold several: the
+/// active-card index is unique per serial, not per student (JJ, 2026-10-23). Empty when none.
+/// </param>
+/// <param name="Course">The ADR-001 D-2 single-valued display cache, exactly as the grid shows it.</param>
+/// <param name="YearLevel"><inheritdoc cref="Course"/></param>
+/// <param name="Section"><inheritdoc cref="Course"/></param>
+public record StudentExportRow(
+    string StudentNumber,
+    IReadOnlyList<string> ActiveCardUids,
+    string LastName,
+    string FirstName,
+    string? MiddleName,
+    string? Email,
+    string? Course,
+    string? YearLevel,
+    string? Section,
+    string? Organization,
+    string Status);

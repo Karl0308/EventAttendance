@@ -1100,6 +1100,9 @@ internal class EamsDbContext : DbContext
         e.Property(x => x.Section).HasMaxLength(50);
         e.Property(x => x.Gender).HasMaxLength(20);
         e.Property(x => x.PhotoUrl).HasMaxLength(1000);
+        // Not in §4.3 — additive (ADR-011 D-79). No index: the audience predicate folds it with
+        // UPPER(LTRIM(RTRIM(..))), which cannot seek.
+        e.Property(x => x.Organization).HasMaxLength(OrganizationText.MaxLength);
         e.Property(x => x.Status).HasMaxLength(20).IsRequired()
             .HasDefaultValue("Active").ValueGeneratedNever();
         e.Property(x => x.SisExternalId).HasMaxLength(100);

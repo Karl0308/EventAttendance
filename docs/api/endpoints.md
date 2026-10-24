@@ -3,7 +3,7 @@
 <!-- GENERATED FILE — DO NOT EDIT.
      Source: docs/api/openapi.json. Regenerate: node scripts/generate-endpoint-index.mjs --write -->
 
-**Generated from [`openapi.json`](openapi.json) — do not edit by hand.** 126 operations across 23 controllers, all mounted under `/api/v1`. Routes below are written relative to that mount.
+**Generated from [`openapi.json`](openapi.json) — do not edit by hand.** 127 operations across 23 controllers, all mounted under `/api/v1`. Routes below are written relative to that mount.
 
 This page is a **map, not a contract.** It exists so you can find an endpoint; payload shapes, field types and outcome tokens live in [`openapi.json`](openapi.json), which is what you generate a client from. Behaviour a schema cannot state — what your queue does with each outcome, the card-UID and clock rules — is in [`attendance-contract-handoff.md`](attendance-contract-handoff.md).
 
@@ -33,7 +33,7 @@ This page is a **map, not a contract.** It exists so you can find an endpoint; p
 - [Users](#users) — 6
 - [Attendance](#attendance) — 5
 - [Events](#events) — 18
-- [Students](#students) — 8
+- [Students](#students) — 9
 
 ## Academic
 
@@ -275,4 +275,5 @@ This page is a **map, not a contract.** It exists so you can find an endpoint; p
 | `POST` | `/students/{id}/cards` | **Bearer** | `400` `404` `409` | §6.2 `POST /students/{id}/cards` — assign an RFID card `{cardUid, label}`. |
 | `DELETE` | `/students/{id}/cards/{cardId}` | **Bearer** | `404` | §6.2 `DELETE /students/{id}/cards/{cardId}` — **deactivate**. |
 | `GET` | `/students/by-card/{cardUid}` | **DeviceKey** | `401` `403` `404` `429` | UID→student resolution for the mobile scan screen. |
+| `GET` | `/students/export.csv` | **Bearer** | *none declared* | Every student matching the same filters as the list, unpaged and in the list's order, as a CSV (ADR-011 D-83). |
 

@@ -71,12 +71,13 @@ internal static class AudienceResolution
         List<string> L(IReadOnlyList<string>? v) => v is null ? [] : [.. v];
         List<Guid> G(IReadOnlyList<Guid>? v) => v is null ? [] : [.. v];
 
-        // Organization criteria are matched trim + case-insensitively (QA #543, Option A): a person stored
-        // as "CICT " (trailing space) or "cict" (different case) resolves into a definition whose criterion
-        // is "CICT". The criterion keys are folded in memory via OrganizationText.MatchKey; the stored side
-        // is folded in SQL below with Organization.Trim().ToUpper() (translates to LTRIM(RTRIM(UPPER(..))),
-        // so the match holds regardless of the database collation — not merely by SQL Server's default
-        // case-/trailing-space-insensitive collation, which also misses leading spaces.
+        // Organization criteria are matched trim + case-insensitively (QA #543, Option A), on both rosters
+        // since ADR-011 D-82: a person stored as "CICT " (trailing space) or "cict" (different case)
+        // resolves into a definition whose criterion is "CICT". The criterion keys are folded in memory via
+        // OrganizationText.MatchKey; the stored side is folded in SQL below with Organization.Trim().ToUpper()
+        // (which EF emits as UPPER(LTRIM(RTRIM(..)))), so the match holds regardless of the database
+        // collation — not merely by SQL Server's default case-/trailing-space-insensitive collation, which
+        // also misses leading spaces.
         List<string> OrgKeys(IReadOnlyList<string>? v) =>
             v is null ? [] : [.. v.Select(OrganizationText.MatchKey).OfType<string>().Distinct()];
 
@@ -120,8 +121,11 @@ internal static class AudienceResolution
 
             case AudienceType.Organization:
             {
+                // Both rosters, one predicate (ADR-011 D-82). Students count toward the denominator and
+                // personnel stay advisory (ADR-007 D-70) — that split is the callers', not this matcher's.
                 var o = OrgKeys(c.Organizations);
-                return (null, personnel.Where(p => p.Organization != null && o.Contains(p.Organization.Trim().ToUpper())));
+                return (students.Where(s => s.Organization != null && o.Contains(s.Organization.Trim().ToUpper())),
+                        personnel.Where(p => p.Organization != null && o.Contains(p.Organization.Trim().ToUpper())));
             }
 
             case AudienceType.SpecificIndividuals:
@@ -141,6 +145,8 @@ internal static class AudienceResolution
                 if (L(c.YearLevels) is { Count: > 0 } cy) { sq = sq.Where(s => s.YearLevel != null && cy.Contains(s.YearLevel)); sApplied = true; }
                 if (L(c.Sections) is { Count: > 0 } cs) { sq = sq.Where(s => s.Section != null && cs.Contains(s.Section)); sApplied = true; }
                 if (G(c.StudentIds) is { Count: > 0 } csi) { sq = sq.Where(s => csi.Contains(s.Id)); sApplied = true; }
+                // ADR-011 D-82: organizations narrow the student side too, ANDed, as departments do.
+                if (OrgKeys(c.Organizations) is { Count: > 0 } so) { sq = sq.Where(s => s.Organization != null && so.Contains(s.Organization.Trim().ToUpper())); sApplied = true; }
 
                 var pApplied = false;
                 var pq = personnel;

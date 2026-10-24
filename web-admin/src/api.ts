@@ -333,6 +333,20 @@ const optStr = (value: unknown): string | undefined =>
   typeof value === "string" ? value : undefined;
 
 /**
+ * A nullable string that still fails loud on drift: an absent key or JSON `null` is `undefined`, a string
+ * is itself, and anything else is off-contract. `optStr` above cannot say that — it turns a number or an
+ * object into `undefined`, so a field that changed type would vanish from the screen without a word.
+ */
+function nullableStr(row: Row, key: string, what: string): string | undefined {
+  const value = row[key];
+  if (value === undefined || value === null) return undefined;
+  if (typeof value !== "string") {
+    throw offContract(what, `\`${key}\` should be a string or null, got ${describeType(value)}`);
+  }
+  return value;
+}
+
+/**
  * The same, for a number — and the non-finite guard is not decoration.
  *
  * `NaN` and `Infinity` are not JSON, but they *are* what a hand-rolled serializer or a proxy that
@@ -1622,6 +1636,10 @@ function toStudent(row: Row, what: string): Student {
     course: optStr(row.course),
     yearLevel: optStr(row.yearLevel),
     section: optStr(row.section),
+    // ADR-011 D-81. Nullable, not required: this SPA is deployed separately from the API, so a server
+    // that predates the field sends no key at all — `undefined`, same as `null`. `nullableStr` rather
+    // than `optStr` so a non-string fails loud instead of quietly vanishing.
+    organization: nullableStr(row, "organization", what),
     status: reqStr(row, "status", what),
     cards: asRows(row.cards, `${what}.cards`).map((card, i) => toCard(card, `${what}.cards[${i}]`)),
   };
@@ -3046,6 +3064,42 @@ async function downloadPersonnelCsv(): Promise<DownloadedFile> {
   return { blob, filename: match?.[1] ?? PERSONNEL_CSV_FALLBACK_FILENAME };
 }
 
+const STUDENTS_CSV_FALLBACK_FILENAME = "EAMS-students.csv";
+
+/**
+ * `GET /students/export.csv` (ADR-011 D-83) — every student the filter selects, unpaged, as a CSV.
+ *
+ * The filter is the one `listStudentsPage` sends, so the file holds what the grid's total counts. The
+ * export is **not re-importable**: roster import is XLSX only. Same `send` path and Blob read as
+ * `downloadPersonnelCsv`; any non-2xx raises `ApiError` through `httpError`.
+ */
+async function exportStudentsCsv(
+  filter: { search?: string; course?: string; status?: string },
+): Promise<DownloadedFile> {
+  const what = "GET /students/export.csv";
+  const res = await send(what, "/students/export.csv", {
+    search: filter.search,
+    course: filter.course,
+    status: filter.status,
+  });
+  if (!res.ok) throw httpError(what, await readProblem(res), "read");
+
+  let blob: Blob;
+  try {
+    blob = await res.blob();
+  } catch (cause) {
+    if (isTimeout(cause)) throw timedOut(what, cause, "read", REQUEST_TIMEOUT_MS);
+    throw new ApiError(
+      "network", 0,
+      `Cannot reach the EAMS API at ${baseUrl} — ${what} was not completed; the connection was lost.`,
+      { shape: "read", cause });
+  }
+
+  const disposition = res.headers.get("Content-Disposition");
+  const match = disposition === null ? null : CONTENT_DISPOSITION_FILENAME.exec(disposition);
+  return { blob, filename: match?.[1] ?? STUDENTS_CSV_FALLBACK_FILENAME };
+}
+
 // ---------------------------------------------------------------------------------------------
 // Unrecognized RFID scans — manual ID entry (UnrecognizedRFIDScans.docx)
 // ---------------------------------------------------------------------------------------------
@@ -4353,6 +4407,7 @@ export const api = {
   deletePersonnel,
   importPersonnel,
   downloadPersonnelCsv,
+  exportStudentsCsv,
   clearanceReport,
   downloadClearanceCsv,
   recordManualId,

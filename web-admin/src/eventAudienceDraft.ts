@@ -40,7 +40,7 @@ export const AUDIENCE_TYPES: ReadonlyArray<{
     label: "Employee classification",
     hint: "Employees of the chosen classifications.",
   },
-  { value: "Organization", label: "Organization", hint: "Employees in the chosen organizations." },
+  { value: "Organization", label: "Organization", hint: "Students and employees in the chosen organizations." },
   {
     value: "SpecificIndividuals",
     label: "Specific individuals",

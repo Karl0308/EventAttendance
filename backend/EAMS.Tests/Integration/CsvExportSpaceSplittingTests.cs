@@ -247,4 +247,47 @@ public class CsvExportSpaceSplittingTests : IntegrationTest
         // Totals lines are label,value pairs; "Without Time Out" must not have split into three cells.
         Assert.Contains(records, r => r.Count == 2 && r[0] == "Without Time Out");
     }
+
+    /// <summary>
+    /// ADR-011 D-83: the student export quotes every cell, so a reader that also splits on spaces keeps
+    /// <c>Last Name</c>, <c>Year Level</c>, <c>RFID UID (active)</c>, a two-word name, a spaced
+    /// organization and a card list joined with <c>"; "</c> each as ONE cell. Header and data row are pinned
+    /// to exact cells; a student with no organization and no card keeps its empty cells as empty cells.
+    /// </summary>
+    [Fact]
+    public async Task The_student_export_quotes_every_cell()
+    {
+        Guid schoolId;
+        await using (var db = NewDbContext())
+        {
+            var school = TestData.NewSchool();
+            db.Schools.Add(school);
+            var maria = TestData.NewStudent(
+                school.Id, "2023-0001", firstName: "Maria Clara", middleName: "Reyes Santos",
+                lastName: "Dela Cruz", course: "BS Information Technology");
+            maria.Organization = "College of Information Technology Society";
+            var bare = TestData.NewStudent(school.Id, "2023-0002", firstName: "Juan", middleName: null, lastName: "Zeta");
+            db.Students.AddRange(maria, bare);
+            db.RfidCards.Add(TestData.NewCard(school.Id, maria.Id, "04A1"));
+            db.RfidCards.Add(TestData.NewCard(school.Id, maria.Id, "04B2"));
+            await db.SaveChangesAsync();
+            schoolId = school.Id;
+        }
+
+        using var factory = new EamsApiFactory(Sql.ConnectionString);
+        using var client = await SignedInClientAsync(factory, schoolId);
+
+        var records = await ReadResponseAsync(await client.GetAsync("/api/v1/students/export.csv"));
+
+        Assert.Equal(3, records.Count);
+        Assert.Equal(StudentCsv.Header, records[0]);
+        Assert.Equal(
+            ["2023-0001", "04A1; 04B2", "Dela Cruz", "Maria Clara", "Reyes Santos", "2023-0001@test.local",
+             "BS Information Technology", "3rd Year", "A", "College of Information Technology Society",
+             "Active"],
+            records[1]);
+        Assert.Equal(11, records[2].Count);
+        Assert.Equal("", records[2][1]);
+        Assert.Equal("", records[2][9]);
+    }
 }

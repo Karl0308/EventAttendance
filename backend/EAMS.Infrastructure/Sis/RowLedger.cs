@@ -68,6 +68,18 @@ internal sealed class RowLedger
     /// else, where an unavailable value may instead be fixed in the vocabulary. Below
     /// <see cref="SisImportWarningCode.StudentIdentityConflict"/>, which contradicts who the person is.
     /// </para>
+    ///
+    /// <para>
+    /// <b><see cref="SisImportWarningCode.OrganizationTooLong"/> (ADR-011, D-80) ranks directly below
+    /// <see cref="SisImportWarningCode.ClassificationConflict"/></b>, at the bottom of the "the file named a
+    /// value and it was not applied" group. With that group because it is the same shape: the cell was
+    /// read and refused, the stored value stands, and the fix is a person correcting the file. At its
+    /// bottom because it is the smallest fix in the group — a cell to shorten, with no vocabulary row to
+    /// add and no disagreement with the record to settle. Above
+    /// <see cref="SisImportWarningCode.CourseCollegeAdopted"/> and
+    /// <see cref="SisImportWarningCode.CourseTitleAlias"/>, which concern a shared course row rather than
+    /// this person and which a section-only batch (every built-in batch since version 5) cannot raise.
+    /// </para>
     /// </summary>
     private static readonly IReadOnlyList<string> WarningPrecedence =
     [
@@ -76,6 +88,7 @@ internal sealed class RowLedger
         SisImportWarningCode.ClassificationWrongAxis,
         SisImportWarningCode.ClassificationUnavailable,
         SisImportWarningCode.ClassificationConflict,
+        SisImportWarningCode.OrganizationTooLong,
         SisImportWarningCode.CourseCollegeAdopted,
         SisImportWarningCode.CourseTitleAlias,
         SisImportWarningCode.ClassificationRegNoSuggestsPersonnel,

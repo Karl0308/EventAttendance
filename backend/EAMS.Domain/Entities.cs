@@ -115,6 +115,20 @@ public class Student : AuditableEntity
 
     public string? Gender { get; set; }
     public string? PhotoUrl { get; set; }
+
+    /// <summary>
+    /// The student's organization, free text from the SIS roster (ADR-011 D-79). Not in §4.3 — additive,
+    /// recorded as drift. Stored in <see cref="OrganizationText.Normalize"/>'s form and matched through
+    /// <see cref="OrganizationText.MatchKey"/>, the same rules as <see cref="Personnel.Organization"/>.
+    ///
+    /// <para>
+    /// <b>Not derived, so never one of <see cref="DerivedAcademicPropertyNames"/>.</b> The importer writes
+    /// it outside the cache-refresh scope, and listing it there would make that write throw. It belongs to
+    /// the import pipeline: <c>PUT /students/{id}</c> does not write it.
+    /// </para>
+    /// </summary>
+    public string? Organization { get; set; }
+
     public string Status { get; set; } = "Active"; // Active/Inactive/Graduated
     public string? SisExternalId { get; set; }
     public DateTime? LastSyncedAt { get; set; }

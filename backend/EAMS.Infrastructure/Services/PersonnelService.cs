@@ -93,27 +93,19 @@ internal sealed class PersonnelService : IPersonnelService
 
     public async Task<IReadOnlyList<string>> OrganizationsAsync(CancellationToken ct = default)
     {
-        // The set of distinct organizations is tiny, so the null/empty filter and SQL-side distinct cut
-        // it to a handful of rows, then the normalization, whitespace-only exclusion and final
+        // The null/empty filter runs in SQL; the normalization, whitespace-only exclusion and
         // case-insensitive dedupe/order run in memory. Doing the whitespace work in memory is deliberate:
         // SQL Server's TRIM only strips spaces (not tabs/newlines) and pads trailing spaces away in
-        // comparisons, so an all-in-SQL version would be correct only by accident.
+        // comparisons, so an all-in-SQL version would be correct only by accident. No SQL DISTINCT either:
+        // under the case-insensitive collation it keeps ONE arbitrary spelling of "CICT" / "cict ", which
+        // would make DistinctForDisplay's ordinally-first pick depend on row order (same as OptionsAsync).
         var raw = await _db.Personnel.AsNoTracking()
             .Where(p => !p.IsDeleted && p.Organization != null && p.Organization != "")
             .Select(p => p.Organization!)
-            .Distinct()
             .ToListAsync(ct);
 
-        return raw
-            .Select(OrganizationText.Normalize)             // trim + collapse, casing preserved
-            .OfType<string>()                               // drops whitespace-only (→ null)
-            .GroupBy(o => o, StringComparer.OrdinalIgnoreCase)
-            // Dedupe case-insensitively so "CICT" and "cict" don't both appear. Representative rule: the
-            // ordinally-first spelling within the case-insensitive group — deterministic regardless of DB
-            // row order (unlike "first seen", which would depend on the unordered Distinct above).
-            .Select(g => g.OrderBy(o => o, StringComparer.Ordinal).First())
-            .OrderBy(o => o, StringComparer.OrdinalIgnoreCase)
-            .ToList();
+        // Personnel only (JJ, ADR-011 D-78): this list feeds the personnel form's suggestions.
+        return OrganizationText.DistinctForDisplay(raw);
     }
 
     // --------------------------------------------------------------------------------- create/edit

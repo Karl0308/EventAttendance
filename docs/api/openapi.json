@@ -10419,6 +10419,59 @@
         ]
       }
     },
+    "/api/v1/students/export.csv": {
+      "get": {
+        "tags": [
+          "Students"
+        ],
+        "summary": "`GET /students/export.csv` — every student matching the same filters as the list, unpaged and in\r\n            the list's order, as a CSV (ADR-011 D-83). Soft-deleted students are excluded, as on the list.",
+        "description": "Not re-importable: the roster import takes XLSX only, and these are display headers. Course, Year\r\nLevel and Section are the ADR-001 D-2 single-valued cache, as on the grid.",
+        "parameters": [
+          {
+            "name": "search",
+            "in": "query",
+            "description": "As on `GET /students`.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "course",
+            "in": "query",
+            "description": "As on `GET /students` — the D-2 cache, so as lossy as the grid's filter.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "description": "As on `GET /students`.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The CSV.",
+            "content": {
+              "text/csv; charset=utf-8": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "Bearer": []
+          }
+        ]
+      }
+    },
     "/api/v1/students/{id}": {
       "get": {
         "tags": [
@@ -15377,6 +15430,11 @@
             "items": {
               "$ref": "#/components/schemas/CardDto"
             }
+          },
+          "organization": {
+            "type": "string",
+            "description": "<b>Read-only here.</b> Written by the SIS import only (ADR-011 D-81). `StudentWriteRequest` does not\r\n            carry it, so a value echoed back on `PUT` is ignored. Null when the roster never said. Last in the\r\n            record so the addition is purely additive.",
+            "nullable": true
           }
         },
         "additionalProperties": false,

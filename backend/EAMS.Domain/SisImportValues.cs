@@ -549,13 +549,28 @@ public static class SisImportWarningCode
     /// </summary>
     public const string ClassificationWrongAxis = "ClassificationWrongAxis";
 
+    /// <summary>
+    /// The row's organization cell is longer than <see cref="OrganizationText.MaxLength"/> characters
+    /// after <see cref="OrganizationText.Normalize"/> (ADR-011, D-80). <b>The cell was not applied: the
+    /// stored organization is kept, and the row still imports.</b>
+    ///
+    /// <para>
+    /// A warning rather than a failure because the column is optional and supplementary: refusing the
+    /// row would cost the student, their card and their section over one cell that the
+    /// <c>Students.Organization nvarchar(150)</c> column could not hold anyway. Truncating instead would
+    /// store a value nobody typed and match it against no audience criterion anyone wrote, so the cell
+    /// is treated as "this row does not say" — the blank-cell rule — and reported.
+    /// </para>
+    /// </summary>
+    public const string OrganizationTooLong = "OrganizationTooLong";
+
     public static readonly IReadOnlyList<string> All =
     [
         CourseTitleAlias, CourseCollegeAdopted, InstructorPlaceholder,
         SectionSpansPrograms, SectionUnspecified, StudentIdentityConflict, RfidCardRevoked,
         RfidCardFromLegacyMapping, ClassificationUnavailable, ClassificationConflict,
         ClassificationMissing, ClassificationRegNoSuggestsPersonnel, ClassificationAxisUnknown,
-        ClassificationWrongAxis,
+        ClassificationWrongAxis, OrganizationTooLong,
     ];
 }
 
@@ -792,6 +807,18 @@ public static class SisRosterColumns
     public const string TeacherLastName = "TEACHER LAST NAME";
     public const string TeacherSuffix = "TEACHER SUFFIX";
     public const string TeacherCollege = "TEACHER COLLEGE";
+
+    /// <summary>
+    /// The student's organization (ADR-011, D-80), normalized by <see cref="OrganizationText.Normalize"/>.
+    ///
+    /// <para>
+    /// <b>Deliberately absent from <see cref="Required"/></b>, as <see cref="RfidCardSerial"/> is: a file
+    /// without it — every Task 2 file — must still select the roster sheet and import. Like the RFID
+    /// column, this constant is only the built-in profile's default header; the column actually read is
+    /// the one the batch's profile maps to <c>Student.Organization</c>.
+    /// </para>
+    /// </summary>
+    public const string Organization = "ORGANIZATION";
 
     // ------------------------------------------------------------------ Task 5: the category columns
     //

@@ -982,15 +982,16 @@ public class SisImportClassificationTests : IntegrationTest
     // ============================================================= ADR-001 D-4: the profile decides
 
     /// <summary>
-    /// <b>The built-in profile is version 5 and maps no category column</b> (ADR-009 D-76 withdrew the
-    /// category columns in version 4; ADR-010 D-77's version 5 keeps them out), and version 3, which
+    /// <b>The built-in profile is version 6 and maps no category column</b> (ADR-009 D-76 withdrew the
+    /// category columns in version 4; ADR-010 D-77's version 5 and ADR-011 D-80's version 6 keep them
+    /// out), and version 3, which
     /// mapped them, is superseded rather than deleted. The AC2 pin at the profile level: the import
     /// template and the importer both read the category mapping from this table, so a
     /// <c>StudentClassification.*</c> row creeping back into the built-in entries is what would put the
     /// classification mapping back.
     /// </summary>
     [Fact]
-    public async Task The_built_in_profile_is_version_5_and_maps_no_category_column()
+    public async Task The_built_in_profile_is_version_6_and_maps_no_category_column()
     {
         var world = await ArrangeBuiltInAsync();
         await ImportAsync(world.TermId);
@@ -1001,7 +1002,7 @@ public class SisImportClassificationTests : IntegrationTest
             .SingleAsync(p => p.SchoolId == world.SchoolId && p.IsActive);
 
         // The literal as well as the constant: asserting BuiltInVersion against itself would pass at any value.
-        Assert.Equal(5, profile.Version);
+        Assert.Equal(6, profile.Version);
         Assert.Equal(SisImportProfileTemplate.BuiltInVersion, profile.Version);
 
         var columns = await read.SisImportProfileColumns.IgnoreQueryFilters()
