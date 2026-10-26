@@ -654,9 +654,10 @@ function PreviewStep({
   // batch over a casing change would be a worse failure than the one it guards against.
   const termMismatch = batch.termId.toLowerCase() !== termId.toLowerCase();
 
-  // Courses and Instructors are not rendered at all when they are 0 (ADR-010): a section-only (v5)
+  // Courses and Instructors are not rendered at all when they are 0 (ADR-010): a section-only (v5/v6)
   // workbook has no such columns, so the API reports 0 and a "0 Courses" tile would read as a defect in
-  // the file. A v4-pinned batch still reports real counts and keeps its tiles.
+  // the file. A v4- or v7-pinned batch reports real course counts; v7 maps no teachers, so Instructors
+  // stays hidden (ADR-014).
   const counts: { label: string; value: number; omitWhenZero?: boolean }[] = [
     { label: "Students", value: preview.distinctStudents },
     { label: "Colleges", value: preview.distinctColleges },

@@ -200,9 +200,10 @@ public class OrganizationMeaningPinTests : IntegrationTest
     }
 
     /// <summary>
-    /// SURVIVOR — the baseline for "a blank keeps". The built-in template (version 6 now, with its
-    /// <c>ORGANIZATION</c> column), filled with one student row that supplies only what the template asks
-    /// for (REGNO, names, college, program, section — no middle name, no e-mail, no alternate e-mail and a
+    /// SURVIVOR — the baseline for "a blank keeps". The built-in template (version 7 now, with its
+    /// <c>COURSE_CODE</c> and <c>ORGANIZATION</c> columns), filled with one student row that supplies only
+    /// what the template asks for (REGNO, names, college, program, section, course code — no middle name,
+    /// no e-mail, no alternate e-mail and a
     /// BLANK organization), is imported over an existing student carrying all of those values AND a stored
     /// organization. Every student field the import touches, the organization included, is unchanged
     /// afterwards (and, the lookup being a <c>Single</c> on the student number, no second student appeared).
@@ -239,6 +240,7 @@ public class OrganizationMeaningPinTests : IntegrationTest
             [SisRosterColumns.CollegeName] = "College of Criminal Justice Education",
             [SisRosterColumns.Program] = "BSCRIM",
             [SisRosterColumns.SectionName] = "CRIM1A",
+            [SisRosterColumns.CourseCode] = "CRIM 101",
         });
 
         using var run = await UploadAndRunAsync(client, world.TermId, template);

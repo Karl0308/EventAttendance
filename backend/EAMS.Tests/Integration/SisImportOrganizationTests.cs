@@ -17,8 +17,8 @@ namespace EAMS.Tests.Integration;
 /// <para>
 /// The first AC, "Organization is an optional last template column", is pinned where the template is:
 /// <c>SisImportTemplateTests.Template_headers_equal_the_active_profile_source_columns_in_order</c> asserts
-/// the literal 12-column header list (ORGANIZATION last) and that the five required columns are the only
-/// ones marked required, so ORGANIZATION is optional by exactly that assertion.
+/// the literal header list (ORGANIZATION last; 13 columns since built-in version 7, ADR-014 D-92) and the
+/// columns marked required, so ORGANIZATION is optional by exactly that assertion.
 /// </para>
 ///
 /// <para>
@@ -54,9 +54,10 @@ public class SisImportOrganizationTests : IntegrationTest
     }
 
     /// <summary>
-    /// A roster with the five required columns, SECTION_NAME, and optionally RFID and ORGANIZATION (last,
-    /// as in the template). <paramref name="courseColumns"/> adds the course and teacher cells a batch with
-    /// no profile (course mode) needs to import at all.
+    /// A roster with the five required columns, SECTION_NAME, COURSE_CODE (built-in version 7 is course
+    /// mode, code only — ADR-014 D-92), and optionally RFID and ORGANIZATION (last, as in the template).
+    /// <paramref name="courseColumns"/> adds the course title and teacher cells too, for a batch with no
+    /// profile (course mode with every course column).
     /// </summary>
     private static MemoryStream Workbook(
         IReadOnlyList<Line> lines, bool organizationColumn = true, bool rfidColumn = false,
@@ -74,6 +75,10 @@ public class SisImportOrganizationTests : IntegrationTest
                 SisRosterColumns.CourseCode, SisRosterColumns.CourseName, SisRosterColumns.TeacherFullName,
                 SisRosterColumns.TeacherFirstName, SisRosterColumns.TeacherLastName,
                 SisRosterColumns.TeacherSuffix, SisRosterColumns.TeacherCollege]);
+        }
+        else
+        {
+            headers.Add(SisRosterColumns.CourseCode);
         }
         if (organizationColumn) headers.Add(SisRosterColumns.Organization);
 
@@ -246,12 +251,12 @@ public class SisImportOrganizationTests : IntegrationTest
 
     // =============================================================== the profile decides (ADR-001 D-4)
 
-    /// <summary>The live (version 6) entries minus the <c>Student.Organization</c> row: built-in version 5.</summary>
+    /// <summary>
+    /// Built-in version 5: the frozen version 6 minus the <c>Student.Organization</c> row. Frozen, not the
+    /// live entries, since version 7 (ADR-014 D-92) put the course code back in them.
+    /// </summary>
     private static IReadOnlyList<(string SourceColumn, string TargetField, string NormalizationRule, bool IsRequired)>
-        VersionFiveEntries() =>
-        [.. SisImportProfileTemplate.Entries
-            .Where(e => e.TargetField != SisImportProfileTemplate.StudentOrganizationTarget)
-            .Select(e => (e.SourceColumn, e.TargetField, e.NormalizationRule, e.IsRequired))];
+        VersionFiveEntries() => SectionOnlyMappingProfile.VersionFiveEntries;
 
     /// <summary>
     /// D-80 point 3: a batch pinned to version 5 reads NO organization cell even from a file that carries
@@ -261,7 +266,7 @@ public class SisImportOrganizationTests : IntegrationTest
     [Fact]
     public async Task A_batch_pinned_to_version_5_reads_no_organization_cell_even_when_the_file_has_one()
     {
-        Assert.Equal(6, SisImportProfileTemplate.BuiltInVersion); // the literal: this test means "one below"
+        Assert.Equal(7, SisImportProfileTemplate.BuiltInVersion); // the literal: version 5 is below it
         var world = await ArrangeAsync();
         await SeedStudentAsync(world.SchoolId, "ORG-0007", "SSG");
 
@@ -319,12 +324,15 @@ public class SisImportOrganizationTests : IntegrationTest
 
     /// <summary>
     /// Version 6 is a section-only profile (ADR-010 D-77): organization is read in that mode, and the batch
-    /// still files no course, instructor or assignment.
+    /// still files no course, instructor or assignment. Pinned to the frozen version 6, since built-in
+    /// version 7 is course mode again (ADR-014 D-92).
     /// </summary>
     [Fact]
     public async Task Organization_imports_under_section_only_mode()
     {
         var world = await ArrangeAsync();
+        await using (var db = NewDbContext())
+            await SectionOnlyMappingProfile.SeedSectionOnlyProfileAsync(db, world.SchoolId);
 
         await using var file = Workbook([new Line("ORG-0011", "CICT")], courseColumns: true);
         var batch = await ImportAsync(world.TermId, file);
@@ -342,17 +350,17 @@ public class SisImportOrganizationTests : IntegrationTest
 
     /// <summary>
     /// D-80 point 6: Organization is a <c>Student</c> column, so it records no touch of its own — a clean
-    /// row still fans out to exactly the seven named entities with a card and six without, with an
-    /// organization on it.
+    /// row still fans out to exactly the eight named entities with a card and seven without, with an
+    /// organization on it. (Eight since built-in version 7 maps the course code: ADR-014 D-92.)
     /// </summary>
     [Fact]
     public async Task Organization_adds_no_entity_touch_to_the_fan_out()
     {
         string[] withCard =
         [
-            SisImportEntityType.College, SisImportEntityType.Program, SisImportEntityType.CourseOffering,
-            SisImportEntityType.Student, SisImportEntityType.RfidCard, SisImportEntityType.StudentTermRecord,
-            SisImportEntityType.Enrollment,
+            SisImportEntityType.College, SisImportEntityType.Program, SisImportEntityType.Course,
+            SisImportEntityType.CourseOffering, SisImportEntityType.Student, SisImportEntityType.RfidCard,
+            SisImportEntityType.StudentTermRecord, SisImportEntityType.Enrollment,
         ];
 
         var world = await ArrangeAsync();

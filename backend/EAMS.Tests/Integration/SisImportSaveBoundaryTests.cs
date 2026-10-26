@@ -71,8 +71,14 @@ public class SisImportSaveBoundaryTests : IntegrationTest
     /// <b>It was eleven between Task 5 and ADR-009 (D-76).</b> Task 5 added the person's
     /// <c>StudentClassification</c> as an eleventh touch; built-in profile version 4 maps no category
     /// column, so a clean row touches no classification again and the count went back to ten. A profile
-    /// that does map one (see <see cref="CategoryMappingProfile"/>) would add one again — this test
-    /// deliberately runs on the built-in profile.
+    /// that does map one (see <see cref="CategoryMappingProfile"/>) would add one again.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>Pinned to the frozen version 6 since built-in version 7 (ADR-014 D-92).</b> Version 7 maps the
+    /// course code again, which adds a <c>Course</c> touch per row. The chunking under test is
+    /// profile-independent, so the suite runs on <see cref="SectionOnlyMappingProfile"/> and keeps this
+    /// arithmetic rather than re-deriving every boundary at eight per row.
     /// </para>
     /// </summary>
     private const int FanOutRowsPerCleanRow = 7;
@@ -136,6 +142,9 @@ public class SisImportSaveBoundaryTests : IntegrationTest
         db.Classifications.AddRange(TestData.ClassificationVocabulary(school.Id));
 
         await db.SaveChangesAsync();
+
+        // See FanOutRowsPerCleanRow: the frozen section-only mapping, not built-in version 7.
+        await SectionOnlyMappingProfile.SeedSectionOnlyProfileAsync(db, school.Id);
         return term.Id;
     }
 

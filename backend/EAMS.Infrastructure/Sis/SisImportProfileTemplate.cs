@@ -81,12 +81,21 @@ internal static class SisImportProfileTemplate
     /// </para>
     ///
     /// <para>
+    /// <b>Bumped to 7 on 2026-10-26 (ADR-014, D-92)</b>, when QA's answer on Task 2 put the course code
+    /// back: version 7 is version 6 plus the two <see cref="SisRosterColumns.CourseCode"/> rows,
+    /// <c>Course.Code</c> and <see cref="CourseCodeKeyTarget"/>, placed after <c>SECTION_NAME</c> as in the
+    /// SIS export and version 4. Code only: no <c>Course.Title</c> and no <c>Instructor.*</c> row, so the
+    /// pipeline is in course mode again but reads no title and no teacher cell (ADR-010 D-77's switch).
+    /// Version 6 is superseded, not deleted, and a batch pinned to it stays section-only — D-4 working.
+    /// </para>
+    ///
+    /// <para>
     /// Bumping is not cosmetic in any case. A database still holding version 1 would read the card
     /// serial out of the REGNO column — the exact defect version 2 removes — while a freshly seeded one
     /// would not. A version is what makes the two agree.
     /// </para>
     /// </summary>
-    public const int BuiltInVersion = 6;
+    public const int BuiltInVersion = 7;
 
     /// <summary>
     /// The dotted target that marks the RFID source column, named once because two places must agree
@@ -164,10 +173,10 @@ internal static class SisImportProfileTemplate
         "version 4 removes them again, because student classification was withdrawn from the product " +
         "(2026-10-23, ADR-009 D-76); version 5 removes the course and teacher columns and imports " +
         "sections only, under one placeholder course per school (2026-10-23, ADR-010 D-77); version 6 " +
-        "adds the optional ORGANIZATION column (2026-10-23, ADR-011 D-80). Earlier " +
-        "versions are kept, superseded, to explain the batches that ran under them — a version 2, 4, 5 or 6 " +
-        "batch maps no category column and therefore classifies nobody, and a version 4 or earlier batch " +
-        "still imports courses and teachers, which is the guarantee rather than a gap. Seeded from " +
+        "adds the optional ORGANIZATION column (2026-10-23, ADR-011 D-80); version 7 maps COURSE_CODE " +
+        "again, code only (2026-10-26, ADR-014 D-92). Earlier versions are kept, superseded, to explain " +
+        "the batches that ran under them: only version 3 classifies anyone, version 4 and earlier import " +
+        "teachers, and versions 5 and 6 import sections only. Seeded from " +
         nameof(SisImportProfileTemplate) + " so every batch points at the rules that actually ran.";
 
     /// <param name="SourceColumn">The header in the file.</param>
@@ -186,11 +195,12 @@ internal static class SisImportProfileTemplate
     private const string Unused = "(not imported)";
 
     /// <summary>
-    /// The twelve template columns, in file order. Columns that feed nothing are listed too — an absent
+    /// The thirteen template columns, in file order. Columns that feed nothing are listed too — an absent
     /// row is indistinguishable from a forgotten one, and "we read this column and deliberately do nothing
     /// with it" is the more useful record. The four category columns version 3 added are not listed
-    /// since version 4, and the seven course and teacher columns not since version 5: a file that still
-    /// carries them imports with those cells unread.
+    /// since version 4, and the seven course and teacher columns not since version 5 — of which version 7
+    /// brings back <c>COURSE_CODE</c> alone: a file that still carries the other six imports with those
+    /// cells unread.
     /// </summary>
     public static readonly IReadOnlyList<Entry> Entries =
     [
@@ -224,12 +234,20 @@ internal static class SisImportProfileTemplate
         new(SisRosterColumns.Program, "Program.Code", Verbatim, IsRequired: true),
         new(SisRosterColumns.Program, "Program.CodeKey", Key, IsRequired: true),
 
-        // The section is the enrollment's only placement under version 5. Optional as a value (a blank
+        // The section is the enrollment's only placement under versions 5 and 6. Optional as a value (a blank
         // one writes no offering and no enrollment, and warns), required as a header.
         new(SisRosterColumns.SectionName, "CourseOffering.SectionName", Verbatim, IsRequired: false),
         new(SisRosterColumns.SectionName, "CourseOffering.SectionKey", Key, IsRequired: false),
 
-        // Version 6 (ADR-011, D-80). Last, so every earlier column keeps its ordinal. Optional as a
+        // Version 7 (ADR-014, D-92). After SECTION_NAME, where the SIS export and version 4 put it.
+        // Required as a value, as in version 4: the course-mode pipeline rejects a row whose code is blank
+        // whatever this flag says, so the template must mark it. Not in SisRosterColumns.Required (the
+        // header list), so a file without the column still selects the worksheet — its rows then fail at
+        // run time, not at upload (ADR-010 D-77). The CourseCodeKeyTarget row is the course-mode switch.
+        new(SisRosterColumns.CourseCode, "Course.Code", Verbatim, IsRequired: true),
+        new(SisRosterColumns.CourseCode, CourseCodeKeyTarget, Key, IsRequired: true),
+
+        // Version 6 (ADR-011, D-80). Last; version 7's COURSE_CODE rows sit before it. Optional as a
         // header and as a value: a blank cell keeps the stored organization, and a file without the
         // column (every Task 2 file) still selects the worksheet and imports.
         new(SisRosterColumns.Organization, StudentOrganizationTarget, Organization, IsRequired: false),

@@ -29,6 +29,13 @@ namespace EAMS.Tests.Integration;
 /// The course-carrying side of every comparison is <see cref="CourseMappingProfile"/>, the frozen version 4
 /// mapping, never the live template.
 /// </para>
+///
+/// <para>
+/// <b>The section-only side is <see cref="SectionOnlyMappingProfile"/>, the frozen version 6 mapping</b>,
+/// seeded as the school's current profile by <see cref="ArrangeAsync"/>. Built-in version 7 maps
+/// <c>COURSE_CODE</c> again (ADR-014 D-92), so the live template no longer exercises this path; the version
+/// numbers in the test names are the mapping each test runs, not the built-in constant.
+/// </para>
 /// </summary>
 [Collection(DatabaseCollection.Name)]
 public class SisImportSectionOnlyTests : IntegrationTest
@@ -70,12 +77,18 @@ public class SisImportSectionOnlyTests : IntegrationTest
         SisRosterColumns.TeacherCollege,
     ];
 
-    /// <summary>The built-in version before this one: the last mapping that carried courses.</summary>
+    /// <summary>
+    /// The version the frozen version 4 (course-carrying) mapping is seeded at: below the built-in, so it
+    /// can only ever be reached by a batch pinned to it.
+    /// </summary>
     private static int PreviousVersion => SisImportProfileTemplate.BuiltInVersion - 1;
 
     private sealed record World(Guid SchoolId, Guid TermId);
 
-    /// <summary>School, term and vocabulary, no profile: the first upload creates the built-in version.</summary>
+    /// <summary>
+    /// School, term and vocabulary, and the frozen version 6 (section-only) mapping as the profile every
+    /// upload is pinned to (<see cref="SectionOnlyMappingProfile"/>).
+    /// </summary>
     private async Task<World> ArrangeAsync(string schoolCode = "USA")
     {
         await using var db = NewDbContext();
@@ -85,6 +98,7 @@ public class SisImportSectionOnlyTests : IntegrationTest
         db.Terms.Add(term);
         db.Classifications.AddRange(TestData.ClassificationVocabulary(school.Id));
         await db.SaveChangesAsync();
+        await SectionOnlyMappingProfile.SeedSectionOnlyProfileAsync(db, school.Id);
         return new World(school.Id, term.Id);
     }
 
@@ -126,9 +140,9 @@ public class SisImportSectionOnlyTests : IntegrationTest
         [.. row.Entities.Select(e => e.EntityType)];
 
     /// <summary>
-    /// Seeds the frozen version 4 (course-carrying) mapping as the school's active profile, unless the
-    /// school already has one. The next upload then creates version 5 and supersedes it, which is exactly
-    /// the state of every school with data on the day this ships.
+    /// Seeds the frozen version 4 (course-carrying) mapping, superseded (inactive), unless the school
+    /// already has it — the state of every school that imported before version 5. Only a batch repointed
+    /// at it runs it; the section-only profile stays the one an upload is pinned to.
     /// </summary>
     private async Task<Guid> EnsureCourseProfileAsync(Guid schoolId)
     {
@@ -140,7 +154,7 @@ public class SisImportSectionOnlyTests : IntegrationTest
         if (existing is { } id) return id;
 
         return await CategoryMappingProfile.SeedProfileAsync(
-            db, schoolId, PreviousVersion, isActive: true, CourseMappingProfile.Entries);
+            db, schoolId, PreviousVersion, isActive: false, CourseMappingProfile.Entries);
     }
 
     /// <summary>
@@ -175,12 +189,14 @@ public class SisImportSectionOnlyTests : IntegrationTest
     // =================================================================================== AC-4 / AC-5
 
     /// <summary>
-    /// <b>AC-4. The first upload after the bump pins built-in version 5 and supersedes version 4 without
-    /// touching it.</b> Version 5 maps no <c>Course.*</c> or <c>Instructor.*</c> target, version 4 keeps
-    /// every one of its rows in order, and the batch that ran under version 4 still points at it.
+    /// <b>AC-4. An upload pins the section-only profile and leaves version 4 untouched.</b> The section-only
+    /// mapping maps no <c>Course.*</c> or <c>Instructor.*</c> target, version 4 keeps every one of its rows
+    /// in order, and the batch that ran under version 4 still points at it. (The supersession half of the
+    /// original AC — an upload deactivating the older active version — is now pinned for the version 6 to 7
+    /// bump by <c>SisImportCourseCodeTests.A_batch_pinned_to_v6_stays_section_only</c>.)
     /// </summary>
     [Fact]
-    public async Task Upload_after_bump_pins_built_in_v5_and_supersedes_v4()
+    public async Task Upload_pins_section_only_profile_and_leaves_v4_untouched()
     {
         var world = await ArrangeAsync();
         var v4Id = await EnsureCourseProfileAsync(world.SchoolId);
@@ -225,13 +241,14 @@ public class SisImportSectionOnlyTests : IntegrationTest
             .Where(p => p.SchoolId == world.SchoolId).OrderBy(p => p.Version).ToListAsync();
 
         Assert.Equal(
-            new[] { PreviousVersion, SisImportProfileTemplate.BuiltInVersion }, profiles.Select(p => p.Version));
+            new[] { PreviousVersion, SisImportProfileTemplate.BuiltInVersion, SectionOnlyMappingProfile.Version },
+            profiles.Select(p => p.Version));
         var v4 = profiles.Single(p => p.Id == v4Id);
-        var v5 = profiles.Single(p => p.Version == SisImportProfileTemplate.BuiltInVersion);
+        var v5 = profiles.Single(p => p.Version == SectionOnlyMappingProfile.Version);
         Assert.False(v4.IsActive);
         Assert.True(v5.IsActive);
 
-        // Version 5 maps no course and no teacher. "Course." with the dot: CourseOffering.* is the section.
+        // The section-only mapping maps no course and no teacher. "Course." with the dot: CourseOffering.* is the section.
         Assert.DoesNotContain(v5.Columns, c =>
             c.TargetField.StartsWith("Course.", StringComparison.Ordinal)
             || c.TargetField.StartsWith("Instructor.", StringComparison.Ordinal));

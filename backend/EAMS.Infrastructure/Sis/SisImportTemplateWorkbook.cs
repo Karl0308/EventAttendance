@@ -131,8 +131,11 @@ internal static class SisImportTemplateWorkbook
     {
         var columns = ColumnsOf(rows);
 
-        // The importer's own switch (ADR-010 D-77): no Course.CodeKey row, no course read.
-        var sectionOnly = !rows.Any(r => r.TargetField == SisImportProfileTemplate.CourseCodeKeyTarget);
+        // The importer's own switch (ADR-010 D-77): no Course.CodeKey row, no course read. Its source
+        // column, first by profile order as the importer reads it, names the course-code line (ADR-014 D-92).
+        var courseCodeHeader = rows
+            .FirstOrDefault(r => r.TargetField == SisImportProfileTemplate.CourseCodeKeyTarget)
+            ?.SourceColumn.Trim();
 
         using var workbook = new XLWorkbook();
         var instructions = workbook.AddWorksheet(InstructionsSheetName);
@@ -146,7 +149,7 @@ internal static class SisImportTemplateWorkbook
 
         WriteRoster(roster, columns);
         WriteInstructions(
-            instructions, profileName, profileVersion, columns, vocabulary, sectionOnly, organizationHeader);
+            instructions, profileName, profileVersion, columns, vocabulary, courseCodeHeader, organizationHeader);
         instructions.SetTabActive();
 
         var buffer = new MemoryStream();
@@ -183,11 +186,11 @@ internal static class SisImportTemplateWorkbook
 
     private static void WriteInstructions(
         IXLWorksheet sheet, string profileName, int profileVersion,
-        IReadOnlyList<TemplateColumn> columns, IReadOnlyList<VocabularyEntry> vocabulary, bool sectionOnly,
+        IReadOnlyList<TemplateColumn> columns, IReadOnlyList<VocabularyEntry> vocabulary, string? courseCodeHeader,
         string? organizationHeader)
     {
         var lines = InstructionLines(
-            profileName, profileVersion, columns, vocabulary, sectionOnly, organizationHeader);
+            profileName, profileVersion, columns, vocabulary, courseCodeHeader, organizationHeader);
 
         sheet.Column(1).Width = InstructionsColumnWidth;
         for (var i = 0; i < lines.Count; i++)
@@ -208,9 +211,11 @@ internal static class SisImportTemplateWorkbook
     /// <c>SisImportService</c> does today — change the importer, change this.
     ///
     /// <para>
-    /// <paramref name="sectionOnly"/> is the importer's mode for this profile (ADR-010 D-77): no
-    /// <c>Course.CodeKey</c> row means no course is read, so the sheet asks for one row per student and
-    /// names only the college and program as values that must be filled in.
+    /// <paramref name="courseCodeHeader"/> is the header the profile maps to <c>Course.CodeKey</c>, or
+    /// <c>null</c> when it maps none — the importer's mode for this profile (ADR-010 D-77): no such row
+    /// means no course is read, so the sheet asks for one row per student per section and names only the
+    /// college and program as values that must be filled in. When it is mapped the sheet carries the
+    /// course-code line (ADR-014 D-92), and nothing about a course title or a teacher.
     /// </para>
     ///
     /// <para>
@@ -220,9 +225,10 @@ internal static class SisImportTemplateWorkbook
     /// </summary>
     internal static List<(string Text, bool Heading)> InstructionLines(
         string profileName, int profileVersion,
-        IReadOnlyList<TemplateColumn> columns, IReadOnlyList<VocabularyEntry> vocabulary, bool sectionOnly,
+        IReadOnlyList<TemplateColumn> columns, IReadOnlyList<VocabularyEntry> vocabulary, string? courseCodeHeader,
         string? organizationHeader)
     {
+        var sectionOnly = courseCodeHeader is null;
         var lines = new List<(string, bool)>();
         void Heading(string text) { lines.Add(("", false)); lines.Add((text, true)); }
         void Line(string text) => lines.Add((text, false));
@@ -273,6 +279,7 @@ internal static class SisImportTemplateWorkbook
             Line($"- {column.Header}: {rule}{note}");
         }
 
+        if (courseCodeHeader is not null) Line(courseCodeHeader + CourseCodeRuleTail);
         if (organizationHeader is not null) Line(organizationHeader + OrganizationRuleTail);
 
         // Only when the profile maps a category column. The built-in mapping has mapped none since
@@ -384,6 +391,18 @@ internal static class SisImportTemplateWorkbook
         "SECTION_NAME may be left blank, but a student with no section is placed in no section: they are " +
         "in no section group and cannot be invited as part of one, and the import reports a warning for " +
         "the row. Fill it in wherever the student has a section.";
+
+    /// <summary>
+    /// The course-code rule (ADR-014 D-92), after the header the profile maps to <c>Course.CodeKey</c>:
+    /// <c>SisImportService.ParseRows</c> rejects a blank code in course mode, keys the course by
+    /// <c>AcademicKey.NormalizeOrUnspecified</c>, and <c>ResolveCourses</c> fails every row of a code
+    /// already recorded under another college. Code only: it says nothing about a title or a teacher.
+    /// </summary>
+    internal const string CourseCodeRuleTail =
+        " must be filled in on every row: it is the course the row enrols the student in. Codes are " +
+        "matched ignoring upper and lower case, spaces and punctuation, so SSCI 7 and SSci7 are the same " +
+        "course. A course code belongs to one college: a code already recorded under a different college " +
+        "is rejected on every row that names it, and nothing on those rows is imported.";
 
     /// <summary>
     /// The organization column's blank-cell rule (ADR-011, D-80), after the mapped header:

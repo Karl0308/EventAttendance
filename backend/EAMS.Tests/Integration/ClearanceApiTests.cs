@@ -169,7 +169,11 @@ public class ClearanceApiTests : IntegrationTest
             termId = term.Id;
         }
 
-        // The eleven-column template file, imported through the real importer under built-in version 5.
+        // Built-in version 7 is course mode again (ADR-014 D-92); the frozen version 6 keeps this section-only.
+        await using (var db = NewDbContext())
+            await SectionOnlyMappingProfile.SeedSectionOnlyProfileAsync(db, schoolId);
+
+        // The eleven-column template file, imported through the real importer under the section-only mapping.
         await using (var file = SyntheticRoster.Build(SyntheticRoster.Rows(), SisRosterColumns.All
             .Where(c => c is SisRosterColumns.RegNo or SisRosterColumns.RfidCardSerial
                 or SisRosterColumns.StudentFirstName or SisRosterColumns.StudentMiddleName

@@ -152,20 +152,21 @@ public class SisImportTemplateTests : IntegrationTest
     // ============================================================================== the contract
 
     /// <summary>
-    /// The built-in version 6 template, as a literal (ADR-010 D-77, ADR-011 D-80): QA's ten columns plus
-    /// <c>RFID</c> and <c>ORGANIZATION</c>, in profile order. Typed out rather than derived from the template entries, so a profile change
-    /// that drops a column — or puts a course, teacher or category column back — fails here.
+    /// The built-in version 7 template, as a literal (ADR-010 D-77, ADR-011 D-80, ADR-014 D-92): QA's ten
+    /// columns plus <c>RFID</c>, <c>COURSE_CODE</c> and <c>ORGANIZATION</c>, in profile order. Typed out rather
+    /// than derived from the template entries, so a profile change that drops a column — or puts a course
+    /// title, teacher or category column back — fails here.
     /// </summary>
     private static readonly IReadOnlyList<string> BuiltInTemplateColumns =
     [
         "REGNO", "RFID", "STUDENT FIRST NAME", "STUDENT MIDDLE NAME", "STUDENT LAST NAME", "FULL_NAME",
-        "EMAIL_ID", "USA_EMAIL", "COLLEGE_NAME", "PROGRAM", "SECTION_NAME", "ORGANIZATION",
+        "EMAIL_ID", "USA_EMAIL", "COLLEGE_NAME", "PROGRAM", "SECTION_NAME", "COURSE_CODE", "ORGANIZATION",
     ];
 
     /// <summary>
     /// The template's header row is the importer's own profile rows — read back from the database the
     /// importer pinned the upload to — distinct and in <c>Ordinal</c> order. Pinned to the literal
-    /// 12-column list as well (<see cref="BuiltInTemplateColumns"/>: built-in version 6, ADR-011 D-80),
+    /// 13-column list as well (<see cref="BuiltInTemplateColumns"/>: built-in version 7, ADR-014 D-92),
     /// so a profile change that silently drops a column — or puts a course, teacher or category column
     /// back — fails here too. And the columns whose value the profile requires are the ones marked.
     ///
@@ -206,21 +207,22 @@ public class SisImportTemplateTests : IntegrationTest
         Assert.Equal(
             [
                 SisRosterColumns.RegNo, SisRosterColumns.StudentFirstName, SisRosterColumns.StudentLastName,
-                SisRosterColumns.CollegeName, SisRosterColumns.Program,
+                SisRosterColumns.CollegeName, SisRosterColumns.Program, SisRosterColumns.CourseCode,
             ],
             marked);
     }
 
     /// <summary>
-    /// <b>AC-2 (ADR-010 D-77). The template names no course or teacher column on either sheet.</b> Not as
-    /// a Roster header, and not in the Instructions sheet as a column to fill in, a vocabulary or a rule:
-    /// the seven columns QA struck and the words for them. The Roster half is pinned exactly by
+    /// <b>AC-2 (ADR-010 D-77, narrowed by ADR-014 D-92). The template names no course title or teacher
+    /// column on either sheet.</b> Not as a Roster header, and not in the Instructions sheet as a column to
+    /// fill in, a vocabulary or a rule: the six columns QA still strikes and the words for them. Version 7
+    /// brings <c>COURSE_CODE</c> back, and only it. The Roster half is pinned exactly by
     /// <see cref="Template_headers_equal_the_active_profile_source_columns_in_order"/> (AC-1 and AC-3); this
     /// is the other half, which a header-list assertion cannot see. Every cell and every header comment of
     /// both sheets is read.
     /// </summary>
     [Fact]
-    public async Task Template_names_no_course_or_teacher_column_on_either_sheet()
+    public async Task Template_names_no_course_title_or_teacher_column_on_either_sheet()
     {
         var world = await ArrangeAsync();
         using var factory = new EamsApiFactory(Sql.ConnectionString);
@@ -234,11 +236,11 @@ public class SisImportTemplateTests : IntegrationTest
 
         string[] struck =
         [
-            SisRosterColumns.CourseCode, SisRosterColumns.CourseName, SisRosterColumns.TeacherFullName,
+            SisRosterColumns.CourseName, SisRosterColumns.TeacherFullName,
             SisRosterColumns.TeacherFirstName, SisRosterColumns.TeacherLastName, SisRosterColumns.TeacherSuffix,
             SisRosterColumns.TeacherCollege,
         ];
-        string[] words = ["course", "teacher", "instructor"];
+        string[] words = ["title", "teacher", "instructor"];
 
         var texts = new List<string>();
         foreach (var sheet in template.Worksheets)
@@ -269,7 +271,10 @@ public class SisImportTemplateTests : IntegrationTest
     [Fact]
     public async Task Section_only_template_says_one_row_per_student_per_section()
     {
+        // Built-in version 7 is course mode again (ADR-014 D-92); the frozen version 6 is section-only.
         var world = await ArrangeAsync();
+        await using (var db = NewDbContext())
+            await SectionOnlyMappingProfile.SeedSectionOnlyProfileAsync(db, world.SchoolId);
         using var factory = new EamsApiFactory(Sql.ConnectionString);
         using var client = await SignedInClientAsync(factory, world.SchoolId);
 
@@ -588,8 +593,9 @@ public class SisImportTemplateTests : IntegrationTest
         using var template = await DownloadAsync(client);
         var lines = InstructionLinesOf(template);
 
-        Assert.Contains(SisImportTemplateWorkbook.NoClassRule, lines);
-        Assert.Contains(SisImportTemplateWorkbook.NoPlaceholderRule, lines);
+        // Built-in version 7 is course mode (ADR-014 D-92), so the course-mode wording is the one shown.
+        Assert.Contains(SisImportTemplateWorkbook.NoClassRuleCourseMode, lines);
+        Assert.Contains(SisImportTemplateWorkbook.NoPlaceholderRuleCourseMode, lines);
         Assert.Contains(
             "The REGNO and RFID columns are " + SisImportTemplateWorkbook.LeadingZerosRuleTail, lines);
         Assert.Contains(SisImportTemplateWorkbook.PasteRule, lines);
