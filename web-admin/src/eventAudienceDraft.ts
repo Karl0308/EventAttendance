@@ -49,11 +49,38 @@ export const AUDIENCE_TYPES: ReadonlyArray<{
   { value: "Custom", label: "Custom", hint: "Combine several criteria (all must match)." },
 ];
 
+/**
+ * The one list of "Who it covers" answers — University-wide and the mixed types read the same labels
+ * (JJ ruling 7, Task 5). The values are the wire values of `AudienceScope`; only the order and labels live here.
+ */
 export const AUDIENCE_SCOPES: ReadonlyArray<{ value: AudienceScope; label: string }> = [
-  { value: "Both", label: "Students and employees" },
-  { value: "Students", label: "Students only" },
-  { value: "Employees", label: "Employees only" },
+  { value: "Students", label: "Students" },
+  { value: "Employees", label: "Employees" },
+  { value: "Both", label: "Both" },
 ];
+
+export const isAudienceScope = (value: unknown): value is AudienceScope =>
+  AUDIENCE_SCOPES.some((s) => s.value === value);
+
+/**
+ * The types that can match students AND employees, so the admin must say which population is meant
+ * (Task 5, JJ ruling 2). UniversityWide has its own default and the rest are single-population.
+ */
+export const MIXED_AUDIENCE_TYPES: readonly AudienceType[] = ["Department", "Organization", "Custom"];
+
+export const isMixedAudienceType = (type: AudienceType): boolean => MIXED_AUDIENCE_TYPES.includes(type);
+
+/** Custom's dimensions, by the population each can narrow. Department and organization narrow both. */
+const STUDENT_DIMENSIONS = ["departments", "programs", "yearLevels", "sections", "organizations"] as const;
+const EMPLOYEE_DIMENSIONS = ["departments", "classifications", "organizations"] as const;
+const ALL_DIMENSIONS = [
+  "departments",
+  "programs",
+  "yearLevels",
+  "sections",
+  "classifications",
+  "organizations",
+] as const;
 
 export const labelForAudienceType = (type: AudienceType): string =>
   AUDIENCE_TYPES.find((t) => t.value === type)?.label ?? type;
@@ -76,6 +103,7 @@ export const VALIDATED_AUDIENCE_FIELDS = [
   "name",
   "eventClassificationId",
   "audienceType",
+  "scope",
   "criteria",
 ] as const;
 
@@ -93,6 +121,19 @@ export function draftFromAudience(definition: AudienceDefinition): AudienceDraft
     audienceType: definition.audienceType,
     criteria: { ...definition.criteria },
   };
+}
+
+/**
+ * The draft after the audience type changes. Criteria are kept across a switch (the admin may switch back),
+ * so UniversityWide's default `Both` would otherwise ride silently into a mixed type, where scope is a
+ * required answer with no default. Entering a mixed type from anything but another mixed type clears it;
+ * a choice already made between two mixed types is the admin's own and stays.
+ */
+export function draftWithAudienceType(draft: AudienceDraft, type: AudienceType): AudienceDraft {
+  const carriesScope = isMixedAudienceType(draft.audienceType) && isMixedAudienceType(type);
+  const criteria =
+    isMixedAudienceType(type) && !carriesScope ? { ...draft.criteria, scope: undefined } : draft.criteria;
+  return { ...draft, audienceType: type, criteria };
 }
 
 // -------------------------------------------------------------- the duplicate name, caught on screen
@@ -123,11 +164,14 @@ const nonEmpty = (values: string[] | undefined): string[] =>
  * switching type would store dead data — so the shape is pruned to the type on the way out.
  */
 export function criteriaForType(type: AudienceType, criteria: AudienceCriteria): AudienceCriteria {
+  // Mixed types send scope when it is a valid answer and omit it otherwise (validation blocks that case);
+  // single-population types never send it.
+  const scope: Pick<AudienceCriteria, "scope"> = isAudienceScope(criteria.scope) ? { scope: criteria.scope } : {};
   switch (type) {
     case "UniversityWide":
       return { scope: criteria.scope ?? "Both" };
     case "Department":
-      return { departments: nonEmpty(criteria.departments) };
+      return { ...scope, departments: nonEmpty(criteria.departments) };
     case "Program":
       return { programs: nonEmpty(criteria.programs) };
     case "YearLevel":
@@ -137,21 +181,27 @@ export function criteriaForType(type: AudienceType, criteria: AudienceCriteria):
     case "EmployeeClassification":
       return { classifications: nonEmpty(criteria.classifications) };
     case "Organization":
-      return { organizations: nonEmpty(criteria.organizations) };
+      return { ...scope, organizations: nonEmpty(criteria.organizations) };
     case "SpecificIndividuals":
       return {
         studentIds: nonEmpty(criteria.studentIds),
         personnelIds: nonEmpty(criteria.personnelIds),
       };
-    case "Custom":
+    case "Custom": {
+      // A pocket that does not apply to the chosen population is dropped, not sent: the server refuses a
+      // scope that leaves no side, and a stale off-scope value would otherwise store as dead data.
+      const students = criteria.scope !== "Employees";
+      const employees = criteria.scope !== "Students";
       return {
+        ...scope,
         departments: nonEmpty(criteria.departments),
-        programs: nonEmpty(criteria.programs),
-        yearLevels: nonEmpty(criteria.yearLevels),
-        sections: nonEmpty(criteria.sections),
-        classifications: nonEmpty(criteria.classifications),
+        programs: students ? nonEmpty(criteria.programs) : [],
+        yearLevels: students ? nonEmpty(criteria.yearLevels) : [],
+        sections: students ? nonEmpty(criteria.sections) : [],
+        classifications: employees ? nonEmpty(criteria.classifications) : [],
         organizations: nonEmpty(criteria.organizations),
       };
+    }
     default:
       return {};
   }
@@ -176,15 +226,13 @@ function criteriaSatisfied(type: AudienceType, c: AudienceCriteria): boolean {
       return (c.organizations ?? []).length > 0;
     case "SpecificIndividuals":
       return (c.studentIds ?? []).length > 0 || (c.personnelIds ?? []).length > 0;
-    case "Custom":
-      return (
-        (c.departments ?? []).length > 0 ||
-        (c.programs ?? []).length > 0 ||
-        (c.yearLevels ?? []).length > 0 ||
-        (c.sections ?? []).length > 0 ||
-        (c.classifications ?? []).length > 0 ||
-        (c.organizations ?? []).length > 0
-      );
+    case "Custom": {
+      // Mirrors the server: the chosen population must keep at least one side to match on. With no scope
+      // chosen yet, any criterion counts — the scope error carries the missing answer.
+      const dimensions =
+        c.scope === "Students" ? STUDENT_DIMENSIONS : c.scope === "Employees" ? EMPLOYEE_DIMENSIONS : ALL_DIMENSIONS;
+      return dimensions.some((d) => (c[d] ?? []).length > 0);
+    }
     default:
       return false;
   }
@@ -200,6 +248,17 @@ const CRITERIA_MESSAGE: Record<AudienceType, string> = {
   Organization: "Select at least one organization.",
   SpecificIndividuals: "Select at least one student or employee.",
   Custom: "A custom audience needs at least one criterion.",
+};
+
+export const SCOPE_MESSAGE = "Choose who it covers";
+
+const CUSTOM_NO_SIDE_MESSAGE: Record<"Students" | "Employees", string> = {
+  Students:
+    "Students need at least one department, program, year level, section or organization. " +
+    "Employee classifications do not apply to students.",
+  Employees:
+    "Employees need at least one department, employee classification or organization. " +
+    "Programs, year levels and sections do not apply to employees.",
 };
 
 export type AudienceValidated =
@@ -231,8 +290,14 @@ export function validateAudience(
   }
 
   const criteria = criteriaForType(draft.audienceType, draft.criteria);
+  if (isMixedAudienceType(draft.audienceType) && !isAudienceScope(criteria.scope)) {
+    errors.scope = SCOPE_MESSAGE;
+  }
   if (!criteriaSatisfied(draft.audienceType, criteria)) {
-    errors.criteria = CRITERIA_MESSAGE[draft.audienceType];
+    errors.criteria =
+      draft.audienceType === "Custom" && (criteria.scope === "Students" || criteria.scope === "Employees")
+        ? CUSTOM_NO_SIDE_MESSAGE[criteria.scope]
+        : CRITERIA_MESSAGE[draft.audienceType];
   }
 
   if (Object.keys(errors).length > 0) return { ok: false, errors };

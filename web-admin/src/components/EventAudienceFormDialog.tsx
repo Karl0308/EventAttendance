@@ -42,7 +42,9 @@ import {
   NO_SCHOOL_TO_FILE_UNDER,
   VALIDATED_AUDIENCE_FIELDS,
   draftFromAudience,
+  draftWithAudienceType,
   isClassificationUnavailable,
+  isMixedAudienceType,
   isNameConflict,
   isNoSchoolResolved,
   validateAudience,
@@ -69,6 +71,7 @@ const FIELD = {
   name: "event-audience-name",
   classification: "event-audience-classification",
   type: "event-audience-type",
+  scope: "event-audience-scope",
   criteria: "event-audience-criteria",
 } as const;
 
@@ -174,6 +177,7 @@ export default function EventAudienceFormDialog({
   const patch = (next: Partial<AudienceDraft>) => setDraft((d) => ({ ...d, ...next }));
   const patchCriteria = (next: Partial<AudienceCriteria>) => {
     markTouched("criteria");
+    if ("scope" in next) markTouched("scope");
     setDraft((d) => ({ ...d, criteria: { ...d.criteria, ...next } }));
   };
 
@@ -264,7 +268,9 @@ export default function EventAudienceFormDialog({
                 labelId={`${FIELD.type}-label`}
                 label="Audience type"
                 value={draft.audienceType}
-                onChange={(e) => patch({ audienceType: e.target.value as AudienceType })}
+                onChange={(e) =>
+                  setDraft((d) => draftWithAudienceType(d, e.target.value as AudienceType))
+                }
               >
                 {AUDIENCE_TYPES.map((t) => (
                   <MenuItem key={t.value} value={t.value}>
@@ -286,6 +292,8 @@ export default function EventAudienceFormDialog({
               peopleLoading={peopleLoading}
               peopleError={peopleError}
               error={errorFor("criteria")}
+              scopeError={errorFor("scope")}
+              onScopeBlur={() => markTouched("scope")}
               onChange={patchCriteria}
             />
           </Stack>
@@ -325,6 +333,8 @@ function CriteriaFields({
   peopleLoading,
   peopleError,
   error,
+  scopeError,
+  onScopeBlur,
   onChange,
 }: {
   type: AudienceType;
@@ -335,27 +345,19 @@ function CriteriaFields({
   peopleLoading: boolean;
   peopleError: unknown;
   error: string | undefined;
+  scopeError: string | undefined;
+  onScopeBlur: () => void;
   onChange: (next: Partial<AudienceCriteria>) => void;
 }) {
   if (type === "UniversityWide") {
     return (
-      <FormControl fullWidth error={error !== undefined}>
-        <InputLabel id={`${FIELD.criteria}-scope-label`}>Who it covers</InputLabel>
-        <Select
-          id={`${FIELD.criteria}-scope`}
-          labelId={`${FIELD.criteria}-scope-label`}
-          label="Who it covers"
-          value={criteria.scope ?? "Both"}
-          onChange={(e) => onChange({ scope: e.target.value as AudienceScope })}
-        >
-          {AUDIENCE_SCOPES.map((s) => (
-            <MenuItem key={s.value} value={s.value}>
-              {s.label}
-            </MenuItem>
-          ))}
-        </Select>
-        {error !== undefined && <FormHelperText>{error}</FormHelperText>}
-      </FormControl>
+      <ScopeSelect
+        id={`${FIELD.criteria}-scope`}
+        value={criteria.scope ?? "Both"}
+        error={error}
+        onBlur={onScopeBlur}
+        onChange={(scope) => onChange({ scope })}
+      />
     );
   }
 
@@ -374,10 +376,20 @@ function CriteriaFields({
   }
 
   // Every remaining type is one or more free-text-plus-suggestions dimension pickers.
-  const dimensions = DIMENSIONS_FOR[type];
+  const dimensions = type === "Custom" ? customDimensions(criteria.scope) : DIMENSIONS_FOR[type];
 
   return (
     <Stack spacing={2}>
+      {isMixedAudienceType(type) && (
+        <ScopeSelect
+          id={FIELD.scope}
+          // No default: a legacy row with no scope shows empty, and save stays blocked until it is chosen.
+          value={criteria.scope ?? ""}
+          error={scopeError}
+          onBlur={onScopeBlur}
+          onChange={(scope) => onChange({ scope })}
+        />
+      )}
       {optionsError !== undefined && (
         <Alert severity="warning" role="status">
           The suggestion lists could not be loaded ({describeApiError(optionsError)}). You can still type
@@ -396,6 +408,46 @@ function CriteriaFields({
         />
       ))}
     </Stack>
+  );
+}
+
+/**
+ * "Who it covers": the one control for UniversityWide and the mixed types, so the labels cannot drift
+ * apart. `""` is the unchosen state a mixed type starts in — it has no preselected answer by design.
+ */
+function ScopeSelect({
+  id,
+  value,
+  error,
+  onBlur,
+  onChange,
+}: {
+  id: string;
+  value: AudienceScope | "";
+  error: string | undefined;
+  onBlur: () => void;
+  onChange: (scope: AudienceScope) => void;
+}) {
+  const labelId = `${id}-label`;
+  return (
+    <FormControl fullWidth required error={error !== undefined}>
+      <InputLabel id={labelId}>Who it covers</InputLabel>
+      <Select
+        id={id}
+        labelId={labelId}
+        label="Who it covers"
+        value={value}
+        onBlur={onBlur}
+        onChange={(e) => onChange(e.target.value as AudienceScope)}
+      >
+        {AUDIENCE_SCOPES.map((s) => (
+          <MenuItem key={s.value} value={s.value}>
+            {s.label}
+          </MenuItem>
+        ))}
+      </Select>
+      {error !== undefined && <FormHelperText>{error}</FormHelperText>}
+    </FormControl>
   );
 }
 
@@ -444,6 +496,19 @@ const DIMENSIONS_FOR: Record<AudienceType, Dimension[]> = {
     DIM.organizations,
   ],
 };
+
+/**
+ * Custom's pickers for the chosen population: students have no classifications, employees have no
+ * programs, year levels or sections. The hidden ones are also dropped from what is saved (criteriaForType).
+ */
+function customDimensions(scope: AudienceScope | undefined): Dimension[] {
+  const all = DIMENSIONS_FOR.Custom;
+  if (scope === "Students") return all.filter((d) => d.key !== "classifications");
+  if (scope === "Employees") {
+    return all.filter((d) => d.key !== "programs" && d.key !== "yearLevels" && d.key !== "sections");
+  }
+  return all;
+}
 
 function DimensionPicker({
   label,

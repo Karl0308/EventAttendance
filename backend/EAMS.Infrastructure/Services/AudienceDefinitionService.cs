@@ -281,7 +281,7 @@ internal sealed class AudienceDefinitionService : IAudienceDefinitionService
         static bool Any(IReadOnlyList<string>? v) => v is { Count: > 0 };
         static bool AnyG(IReadOnlyList<Guid>? v) => v is { Count: > 0 };
 
-        return type switch
+        var refusal = type switch
         {
             AudienceType.UniversityWide when !AudienceScope.TryNormalize(c.Scope, out _) =>
                 Invalid($"A university-wide audience needs a scope: {string.Join(", ", AudienceScope.All)}."),
@@ -297,6 +297,32 @@ internal sealed class AudienceDefinitionService : IAudienceDefinitionService
                 !Any(c.Departments) && !Any(c.Programs) && !Any(c.YearLevels) && !Any(c.Sections)
                 && !Any(c.Classifications) && !Any(c.Organizations) && !AnyG(c.StudentIds) && !AnyG(c.PersonnelIds) =>
                 Invalid("A custom audience needs at least one criterion."),
+            _ => null,
+        };
+        if (refusal is not null || !AudienceResolution.TakesScope(type)) return refusal;
+
+        // BACKOFFICE Task 5: a mixed type must say who it covers, on create and on edit — no default. Rows
+        // stored before this rule resolve as Both until edited (AudienceResolution.BuildQueries).
+        if (!AudienceScope.TryNormalize(c.Scope, out var scope))
+            return Invalid($"Choose who this audience covers: {string.Join(", ", AudienceScope.All)}.");
+
+        if (type != AudienceType.Custom) return null;
+
+        // A Custom side with no criterion resolves nobody, so a scope that keeps only such a side would save
+        // an audience that can never resolve anyone. The side lists mirror AudienceResolution's Custom case.
+        var hasStudentSide = Any(c.Departments) || Any(c.Programs) || Any(c.YearLevels) || Any(c.Sections)
+                             || Any(c.Organizations) || AnyG(c.StudentIds);
+        var hasPersonnelSide = Any(c.Departments) || Any(c.Classifications) || Any(c.Organizations)
+                               || AnyG(c.PersonnelIds);
+
+        return scope switch
+        {
+            AudienceScope.Students when !hasStudentSide => Invalid(
+                "A custom audience covering students needs a student criterion: departments, programs, " +
+                "year levels, sections, organizations or specific students."),
+            AudienceScope.Employees when !hasPersonnelSide => Invalid(
+                "A custom audience covering employees needs an employee criterion: departments, " +
+                "classifications, organizations or specific employees."),
             _ => null,
         };
     }

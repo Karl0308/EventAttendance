@@ -12126,7 +12126,7 @@
         "properties": {
           "scope": {
             "type": "string",
-            "description": "University-wide only: `Students`, `Employees` or `Both`.",
+            "description": "Who the audience covers: `Students`, `Employees` or `Both`. Required for `UniversityWide`, `Department`, `Organization` and `Custom`; ignored by the other types. A stored Department, Organization or Custom definition without one resolves as `Both`.",
             "nullable": true
           },
           "departments": {

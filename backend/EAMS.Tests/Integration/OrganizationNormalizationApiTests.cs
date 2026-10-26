@@ -62,7 +62,7 @@ public class OrganizationNormalizationApiTests : IntegrationTest
             name = $"Members of {organizationCriterion}",
             eventClassificationId = classificationId,
             audienceType = AudienceType.Organization,
-            criteria = new { organizations = new[] { organizationCriterion } },
+            criteria = new { scope = AudienceScope.Both, organizations = new[] { organizationCriterion } },
         });
         Assert.Equal(HttpStatusCode.Created, created.StatusCode);
 

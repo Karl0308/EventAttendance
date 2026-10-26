@@ -121,7 +121,7 @@ public class OrganizationMeaningPinTests : IntegrationTest
         using var client = await SignedInClientAsync(factory, world.SchoolId);
 
         var id = await CreateAudienceAsync(client, world.ClassificationId, "Custom CICT members",
-            AudienceType.Custom, new { departments = new[] { "CICT" }, organizations = new[] { "CICT" } });
+            AudienceType.Custom, new { scope = AudienceScope.Both, departments = new[] { "CICT" }, organizations = new[] { "CICT" } });
 
         var resolved = await ResolveAsync(client, id);
 

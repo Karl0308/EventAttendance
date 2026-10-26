@@ -337,7 +337,7 @@ public class AudienceDefinitionAdminApiTests : IntegrationTest
             name = "BSIT department",
             eventClassificationId = classificationId,
             audienceType = AudienceType.Department,
-            criteria = new { departments = new[] { "BSIT" } },
+            criteria = new { scope = AudienceScope.Both, departments = new[] { "BSIT" } },
         });
         using var body = JsonDocument.Parse(await created.Content.ReadAsStringAsync());
         var id = body.RootElement.GetProperty("id").GetGuid();

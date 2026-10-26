@@ -184,7 +184,7 @@ public class OrganizationAudienceStudentTests : IntegrationTest
         using var client = await SignedInClientAsync(factory, world.SchoolId);
 
         var id = await CreateAudienceAsync(client, world.ClassificationId, "Members of CICT",
-            AudienceType.Organization, new { organizations = new[] { "CICT" } });
+            AudienceType.Organization, new { scope = AudienceScope.Both, organizations = new[] { "CICT" } });
 
         var resolved = await ResolveAsync(client, id);
 
@@ -241,7 +241,7 @@ public class OrganizationAudienceStudentTests : IntegrationTest
         using var client = await SignedInClientAsync(factory, world.SchoolId);
 
         var id = await CreateAudienceAsync(client, world.ClassificationId, "BSIT in CICT",
-            AudienceType.Custom, new { programs = new[] { "BSIT" }, organizations = new[] { "CICT" } });
+            AudienceType.Custom, new { scope = AudienceScope.Both, programs = new[] { "BSIT" }, organizations = new[] { "CICT" } });
 
         var resolved = await ResolveAsync(client, id);
 
@@ -265,7 +265,7 @@ public class OrganizationAudienceStudentTests : IntegrationTest
         using var client = await SignedInClientAsync(factory, world.SchoolId);
 
         var id = await CreateAudienceAsync(client, world.ClassificationId, "ACAD in CICT",
-            AudienceType.Custom, new { classifications = new[] { "ACAD" }, organizations = new[] { "CICT" } });
+            AudienceType.Custom, new { scope = AudienceScope.Both, classifications = new[] { "ACAD" }, organizations = new[] { "CICT" } });
 
         var resolved = await ResolveAsync(client, id);
 

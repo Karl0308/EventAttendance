@@ -5,7 +5,7 @@ namespace EAMS.Application.Dtos;
 /// <c>AudienceType</c>. All lists are optional; each type reads the ones that apply to it (and
 /// <c>Custom</c> combines them). Stored as JSON on the definition — references, never duplicated data.
 /// </summary>
-/// <param name="Scope">University-wide only: <c>Students</c>, <c>Employees</c> or <c>Both</c>.</param>
+/// <param name="Scope">Who the audience covers: <c>Students</c>, <c>Employees</c> or <c>Both</c>. Required for <c>UniversityWide</c>, <c>Department</c>, <c>Organization</c> and <c>Custom</c>; ignored by the other types. A stored Department, Organization or Custom definition without one resolves as <c>Both</c>.</param>
 public record AudienceCriteriaDto(
     string? Scope = null,
     IReadOnlyList<string>? Departments = null,

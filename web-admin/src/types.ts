@@ -113,7 +113,7 @@ export type AudienceType =
   | "SpecificIndividuals"
   | "Custom";
 
-/** The scope of a `UniversityWide` audience. */
+/** Who an audience covers — University-wide, Department, Organization and Custom (ADR-013). */
 export type AudienceScope = "Students" | "Employees" | "Both";
 
 /**

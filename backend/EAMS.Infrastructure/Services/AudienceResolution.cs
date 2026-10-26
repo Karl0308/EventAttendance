@@ -60,6 +60,28 @@ internal static class AudienceResolution
     public static (IQueryable<Student>? Students, IQueryable<Personnel>? Personnel) BuildQueries(
         EamsDbContext db, string type, AudienceCriteriaDto c, bool includeDeleted)
     {
+        var (students, personnel) = BuildUnscopedQueries(db, type, c, includeDeleted);
+        if (!TakesScope(type) || !AudienceScope.TryNormalize(c.Scope, out var scope)) return (students, personnel);
+
+        // BACKOFFICE Task 5: "who it covers" is a MASK over what the type's criteria already selected. It
+        // only ever nulls a side, never widens one — a Custom side with no criterion stays null under Both.
+        // A missing or unreadable scope reads as Both, so definitions stored before the scope was required
+        // resolve exactly as they did.
+        return (scope == AudienceScope.Employees ? null : students,
+                scope == AudienceScope.Students ? null : personnel);
+    }
+
+    /// <summary>
+    /// The mixed types — whose criteria can reach both rosters — that carry a "who it covers" scope.
+    /// University-wide has its own scope (read inside its case); the remaining types are single-population
+    /// or explicit picks and ignore it.
+    /// </summary>
+    public static bool TakesScope(string type) =>
+        type is AudienceType.Department or AudienceType.Organization or AudienceType.Custom;
+
+    private static (IQueryable<Student>? Students, IQueryable<Personnel>? Personnel) BuildUnscopedQueries(
+        EamsDbContext db, string type, AudienceCriteriaDto c, bool includeDeleted)
+    {
         IQueryable<Student> students = db.Students.AsNoTracking();
         IQueryable<Personnel> personnel = db.Personnel.AsNoTracking();
         if (!includeDeleted)

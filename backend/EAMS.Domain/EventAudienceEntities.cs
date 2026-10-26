@@ -110,7 +110,7 @@ public static class AudienceType
         DomainValueSet.TryNormalize(All, value, out canonical);
 }
 
-/// <summary>The scope of a <see cref="AudienceType.UniversityWide"/> audience.</summary>
+/// <summary>Who an audience covers: University-wide, Department, Organization and Custom (ADR-013 D-88).</summary>
 public static class AudienceScope
 {
     public const string Students = "Students";
