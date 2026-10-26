@@ -32,6 +32,10 @@ export default defineConfig({
       "src/**/*.test.ts",
       "src/**/*.test.tsx",
     ],
+    // The Playwright suite lives in `e2e/` and is run by `npm run test:e2e`. It is not under either
+    // `include` root above, and is excluded by name as well so that widening an include glob later
+    // cannot make Vitest try to execute `@playwright/test` specs.
+    exclude: ["**/node_modules/**", "e2e/**", "test-results/**", "playwright-report/**"],
     environment: "node",
 
     // Sets the baseline time zone before any test file is imported. It is a setup file rather than
