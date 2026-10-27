@@ -42,6 +42,11 @@
     tests drift onto a different provider than production runs on, which is the one thing an
     integration suite must not do.
   -->
+  <!-- Frozen contract baselines read by the CaptureContract tests; never the live openapi.json. -->
+  <ItemGroup>
+    <None Include="Integration\Fixtures\*.json" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
   <ItemGroup>
     <ProjectReference Include="..\EAMS.Api\EAMS.Api.csproj" />
     <ProjectReference Include="..\EAMS.Application\EAMS.Application.csproj" />

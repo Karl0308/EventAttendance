@@ -1,0 +1,257 @@
+{
+  "_frozen": "Capture contract as published in docs/api/openapi.json on 2026-10-27, before personnel attendance. Descriptions stripped. Do NOT regenerate from the live document: this file exists so a future change cannot silently move the baseline. Edit only by a deliberate, reviewed contract decision.",
+  "_deviations": [
+    "TapResult.record and TapBatchRowResult.record: openapi 3.0 cannot put nullable beside $ref; the wire sends JSON null on a refusal, so they are marked nullable here.",
+    "CardNotFoundProblem is observed wire shape, not a published schema: the ProblemDetails schema in openapi is open. Captured 2026-10-27 from POST /attendance/tap; note RFC 7807 'type' is NOT emitted today."
+  ],
+  "schemas": {
+    "TapResult": {
+      "type": "object",
+      "properties": {
+        "success": {
+          "type": "boolean"
+        },
+        "message": {
+          "type": "string"
+        },
+        "record": {
+          "$ref": "#/components/schemas/AttendanceDto",
+          "nullable": true
+        },
+        "code": {
+          "type": "string"
+        },
+        "serverTime": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "additionalProperties": false
+    },
+    "AttendanceDto": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "eventId": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "studentId": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "studentName": {
+          "type": "string"
+        },
+        "studentNumber": {
+          "type": "string"
+        },
+        "checkInAt": {
+          "type": "string",
+          "format": "date-time",
+          "nullable": true
+        },
+        "checkOutAt": {
+          "type": "string",
+          "format": "date-time",
+          "nullable": true
+        },
+        "status": {
+          "type": "string"
+        },
+        "captureMethod": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "TapBatchResult": {
+      "type": "object",
+      "properties": {
+        "accepted": {
+          "type": "integer",
+          "format": "int32"
+        },
+        "rejected": {
+          "type": "integer",
+          "format": "int32"
+        },
+        "serverTime": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "results": {
+          "type": "array",
+          "items": {
+            "$ref": "#/components/schemas/TapBatchRowResult"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "TapBatchRowResult": {
+      "type": "object",
+      "properties": {
+        "index": {
+          "type": "integer",
+          "format": "int32"
+        },
+        "deviceTapId": {
+          "type": "string",
+          "nullable": true
+        },
+        "code": {
+          "type": "string"
+        },
+        "status": {
+          "type": "integer",
+          "format": "int32"
+        },
+        "record": {
+          "$ref": "#/components/schemas/AttendanceDto",
+          "nullable": true
+        },
+        "message": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "EventManifestDto": {
+      "type": "object",
+      "properties": {
+        "event": {
+          "$ref": "#/components/schemas/EventManifestEventDto"
+        },
+        "groups": {
+          "type": "array",
+          "items": {
+            "$ref": "#/components/schemas/EventManifestGroupDto"
+          }
+        },
+        "attendees": {
+          "type": "array",
+          "items": {
+            "$ref": "#/components/schemas/EventManifestAttendeeDto"
+          }
+        },
+        "serverTime": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "version": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "EventManifestEventDto": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "name": {
+          "type": "string"
+        },
+        "startAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "endAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "graceMinutes": {
+          "type": "integer",
+          "format": "int32"
+        },
+        "attendanceMode": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "EventManifestGroupDto": {
+      "type": "object",
+      "properties": {
+        "studentGroupId": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "name": {
+          "type": "string"
+        },
+        "type": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "EventManifestAttendeeDto": {
+      "type": "object",
+      "properties": {
+        "studentId": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "studentNumber": {
+          "type": "string"
+        },
+        "fullName": {
+          "type": "string"
+        },
+        "groupIds": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "format": "uuid"
+          }
+        },
+        "cardUids": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "CardNotFoundProblem": {
+      "type": "object",
+      "properties": {
+        "title": {
+          "type": "string"
+        },
+        "status": {
+          "type": "integer",
+          "format": "int32"
+        },
+        "detail": {
+          "type": "string"
+        },
+        "instance": {
+          "type": "string"
+        },
+        "traceId": {
+          "type": "string"
+        },
+        "code": {
+          "type": "string"
+        },
+        "serverTime": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}
