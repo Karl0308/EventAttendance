@@ -19,10 +19,16 @@ internal sealed class PersonnelService : IPersonnelService
     private readonly ISchoolContext _school;
     private readonly ILogger<PersonnelService> _logger;
 
-    public PersonnelService(EamsDbContext db, ISchoolContext school, ILogger<PersonnelService> logger)
+    /// <summary>ADR-015 D-98's test seam — the no-op in production. See <see cref="ICardUidWriteBarrier"/>.</summary>
+    private readonly ICardUidWriteBarrier _cardUidBarrier;
+
+    public PersonnelService(
+        EamsDbContext db, ISchoolContext school, ICardUidWriteBarrier cardUidBarrier,
+        ILogger<PersonnelService> logger)
     {
         _db = db;
         _school = school;
+        _cardUidBarrier = cardUidBarrier;
         _logger = logger;
     }
 
@@ -120,8 +126,6 @@ internal sealed class PersonnelService : IPersonnelService
 
         if (await NumberTakenAsync(schoolId.Value, fields.Number, excluding: null, ct))
             return DuplicateNumber(fields.Number);
-        if (fields.RfidUid is { } uid && await RfidTakenAsync(schoolId.Value, uid, excluding: null, ct))
-            return DuplicateRfid(uid);
 
         var row = new Personnel
         {
@@ -138,6 +142,18 @@ internal sealed class PersonnelService : IPersonnelService
             RfidUid = fields.RfidUid,
             Status = fields.Status,
         };
+
+        // A UID being set is a claim, decided under the D-98 lock against both tables.
+        if (fields.RfidUid is { } uid)
+        {
+            return await ClaimAndSaveAsync(row, schoolId.Value, uid, excluding: null,
+                apply: () =>
+                {
+                    if (_db.Entry(row).State == EntityState.Detached) _db.Personnel.Add(row);
+                },
+                "Personnel record created.", ct);
+        }
+
         _db.Personnel.Add(row);
 
         return await SaveAsync(row, "Personnel record created.", ct);
@@ -153,21 +169,30 @@ internal sealed class PersonnelService : IPersonnelService
 
         if (await NumberTakenAsync(row.SchoolId, fields.Number, excluding: id, ct))
             return DuplicateNumber(fields.Number);
-        if (fields.RfidUid is { } uid && await RfidTakenAsync(row.SchoolId, uid, excluding: id, ct))
-            return DuplicateRfid(uid);
 
-        row.PersonnelNumber = fields.Number;
-        row.FirstName = fields.FirstName;
-        row.MiddleName = fields.MiddleName;
-        row.LastName = fields.LastName;
-        row.Email = fields.Email;
-        row.Classification = fields.Classification;
-        row.Department = fields.Department;
-        row.Organization = fields.Organization;
-        row.Position = fields.Position;
-        row.RfidUid = fields.RfidUid;
-        row.Status = fields.Status;
-        row.UpdatedAt = DateTime.UtcNow;
+        void Apply()
+        {
+            row.PersonnelNumber = fields.Number;
+            row.FirstName = fields.FirstName;
+            row.MiddleName = fields.MiddleName;
+            row.LastName = fields.LastName;
+            row.Email = fields.Email;
+            row.Classification = fields.Classification;
+            row.Department = fields.Department;
+            row.Organization = fields.Organization;
+            row.Position = fields.Position;
+            row.RfidUid = fields.RfidUid;
+            row.Status = fields.Status;
+            row.UpdatedAt = DateTime.UtcNow;
+        }
+
+        // Only a UID that is set AND differs from the stored one is a new claim. Keeping the same UID
+        // claims nothing new, and clearing it releases a claim, which D-98 says needs no lock.
+        if (fields.RfidUid is { } uid && !string.Equals(uid, row.RfidUid, StringComparison.Ordinal))
+            return await ClaimAndSaveAsync(row, row.SchoolId, uid, excluding: id, Apply,
+                "Personnel record updated.", ct);
+
+        Apply();
 
         return await SaveAsync(row, "Personnel record updated.", ct);
     }
@@ -246,22 +271,89 @@ internal sealed class PersonnelService : IPersonnelService
         }
         catch (DbUpdateException ex) when (SqlServerErrors.IsUniqueViolation(ex))
         {
-            _db.Entry(row).State = row.Id == default ? EntityState.Detached : EntityState.Unchanged;
-
-            // Two filtered unique indexes could have been the one that fired. Re-derive which so the
-            // caller gets the specific 409 rather than a generic one.
-            if (await NumberTakenAsync(row.SchoolId, row.PersonnelNumber, excluding: NullIfNew(row), ct))
-            {
-                _logger.LogInformation(
-                    "A personnel write lost the race on the number index for '{Number}'.", row.PersonnelNumber);
-                return DuplicateNumber(row.PersonnelNumber);
-            }
-
-            _logger.LogInformation("A personnel write lost the race on the RFID index for '{Uid}'.", row.RfidUid);
-            return DuplicateRfid(row.RfidUid ?? "");
+            return await LostIndexRaceAsync(row, ct);
         }
 
         return new PersonnelWriteResponse(PersonnelWriteOutcome.Saved, message, ToDto(row));
+    }
+
+    /// <summary>
+    /// ADR-015 D-98 — a write that makes <paramref name="uid"/> claimed. Inside the execution strategy and
+    /// a transaction it takes the one UID lock, re-checks <b>both</b> tables under it (which is what fixes
+    /// the old pre-check that only looked at other personnel), and only then applies the change and
+    /// commits.
+    ///
+    /// <para>
+    /// <paramref name="apply"/> runs after the re-check, never before, so a refused write leaves the
+    /// tracked row exactly as the caller found it — which matters in <see cref="ImportAsync"/>, where the
+    /// next row saves through the same context. It must be idempotent: a transient fault replays the
+    /// whole unit, and <c>AcceptAllChanges</c> is deferred until after the commit.
+    /// </para>
+    /// </summary>
+    private async Task<PersonnelWriteResponse> ClaimAndSaveAsync(
+        Personnel row, Guid schoolId, string uid, Guid? excluding, Action apply, string message,
+        CancellationToken ct)
+    {
+        CardUidHolder? holder = null;
+
+        try
+        {
+            var strategy = _db.Database.CreateExecutionStrategy();
+            await strategy.ExecuteAsync(async () =>
+            {
+                holder = null;
+
+                await using var transaction = await _db.Database.BeginTransactionAsync(ct);
+                await CardUidClaims.LockAsync(_db, schoolId, [uid], ct);
+
+                holder = await CardUidClaims.HolderAsync(_db, schoolId, uid, excluding, ct);
+                if (holder is not null) return;
+
+                await _cardUidBarrier.BetweenCheckAndWriteAsync(ct);
+
+                apply();
+                await _db.SaveChangesAsync(acceptAllChangesOnSuccess: false, ct);
+                await transaction.CommitAsync(ct);
+            });
+        }
+        catch (DbUpdateException ex) when (SqlServerErrors.IsUniqueViolation(ex))
+        {
+            return await LostIndexRaceAsync(row, ct);
+        }
+
+        if (holder is not null)
+        {
+            // Only reachable with the row changed if an earlier attempt applied and then hit a transient
+            // fault; undo it so the refused write does not ride along on the context's next save.
+            var entry = _db.Entry(row);
+            if (entry.State == EntityState.Added) entry.State = EntityState.Detached;
+            else if (entry.State == EntityState.Modified) await entry.ReloadAsync(ct);
+
+            _logger.LogInformation(
+                "A personnel write was refused card UID '{Uid}': it is held by {HolderKind} {HolderId}.",
+                uid, holder.Kind, holder.HolderId);
+            return DuplicateRfid(uid, holder);
+        }
+
+        _db.ChangeTracker.AcceptAllChanges();
+        return new PersonnelWriteResponse(PersonnelWriteOutcome.Saved, message, ToDto(row));
+    }
+
+    private async Task<PersonnelWriteResponse> LostIndexRaceAsync(Personnel row, CancellationToken ct)
+    {
+        _db.Entry(row).State = row.Id == default ? EntityState.Detached : EntityState.Unchanged;
+
+        // Two filtered unique indexes could have been the one that fired. Re-derive which so the
+        // caller gets the specific 409 rather than a generic one.
+        if (await NumberTakenAsync(row.SchoolId, row.PersonnelNumber, excluding: NullIfNew(row), ct))
+        {
+            _logger.LogInformation(
+                "A personnel write lost the race on the number index for '{Number}'.", row.PersonnelNumber);
+            return DuplicateNumber(row.PersonnelNumber);
+        }
+
+        _logger.LogInformation("A personnel write lost the race on the RFID index for '{Uid}'.", row.RfidUid);
+        return DuplicateRfid(row.RfidUid ?? "");
     }
 
     private static Guid? NullIfNew(Personnel row) => row.Id == default ? null : row.Id;
@@ -269,11 +361,6 @@ internal sealed class PersonnelService : IPersonnelService
     private Task<bool> NumberTakenAsync(Guid schoolId, string number, Guid? excluding, CancellationToken ct) =>
         _db.Personnel.AsNoTracking().AnyAsync(
             p => p.SchoolId == schoolId && !p.IsDeleted && p.PersonnelNumber == number
-                 && (excluding == null || p.Id != excluding), ct);
-
-    private Task<bool> RfidTakenAsync(Guid schoolId, string uid, Guid? excluding, CancellationToken ct) =>
-        _db.Personnel.AsNoTracking().AnyAsync(
-            p => p.SchoolId == schoolId && !p.IsDeleted && p.RfidUid == uid
                  && (excluding == null || p.Id != excluding), ct);
 
     private static string? Fragment(string? value) =>
@@ -388,4 +475,18 @@ internal sealed class PersonnelService : IPersonnelService
         new(PersonnelWriteOutcome.DuplicateRfid,
             $"This school already has an active personnel record with RFID UID '{uid}'. Remove it from " +
             "the other record first, or use a different card.", null);
+
+    /// <summary>
+    /// The D-98 refusal, naming the holder — in either table. Only the admin personnel routes reach this,
+    /// so the holder's number is shown to the operator who has to resolve the clash, and to nobody else.
+    /// </summary>
+    private static PersonnelWriteResponse DuplicateRfid(string uid, CardUidHolder holder) =>
+        holder.Kind == CardUidHolderKind.Personnel
+            ? new(PersonnelWriteOutcome.DuplicateRfid,
+                $"This school already has an active personnel record ('{holder.HolderNumber}') with RFID " +
+                $"UID '{uid}'. Remove it from the other record first, or use a different card.", null)
+            : new(PersonnelWriteOutcome.DuplicateRfid,
+                $"RFID UID '{uid}' is already active on a card of student '{holder.HolderNumber}' in this " +
+                "school. One UID identifies one person (ADR-015 D-98), across students and personnel; " +
+                "deactivate that student's card first, or use a different card.", null);
 }

@@ -414,7 +414,7 @@ public class OrganizationAudienceStudentTests : IntegrationTest
         {
             var frozen = await read.AttendanceRecords.AsNoTracking().Where(a => a.EventId == eventId).ToListAsync();
             var names = students.ToDictionary(kv => kv.Value, kv => kv.Key);
-            Assert.Equal(["S-1", "S-2", "S-5"], frozen.Select(a => names[a.StudentId]).Order().ToList());
+            Assert.Equal(["S-1", "S-2", "S-5"], frozen.Select(a => names[Assert.NotNull(a.StudentId)]).Order().ToList());
             Assert.All(frozen, a => Assert.Equal(AttendanceStatus.Absent, a.Status));
         }
 

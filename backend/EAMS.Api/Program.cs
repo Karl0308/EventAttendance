@@ -46,6 +46,10 @@ builder.Services.AddProblemDetails(options => options.CustomizeProblemDetails = 
         Activity.Current?.Id ?? context.HttpContext.TraceIdentifier;
 });
 
+// JJ, 2026-10-28, decision 5: a lock refusal (ADR-015 D-98) is a 503 + Retry-After, not a 500. Consulted by
+// UseExceptionHandler below before its default ProblemDetails; anything else still falls through to that.
+builder.Services.AddExceptionHandler<WriteLockUnavailableExceptionHandler>();
+
 // The admin SPA is served from a different origin in development (Vite on :5173), so every call it
 // makes to this API is cross-origin and the browser refuses it without this. Origins come from
 // configuration and default to the Vite dev server only in Development — see LocalDevelopmentCors for

@@ -57,6 +57,12 @@ public class TapOutcomeContractTests
         ("TappedAtOutOfRange", StatusCodes.Status400BadRequest),
         ("TappedAtOutsideEventWindow", StatusCodes.Status400BadRequest),
         ("BatchTooLarge", StatusCodes.Status400BadRequest),
+
+        // ADR-015 D-99, a deliberate contract addition: 404 so that a capable queue branching on the status
+        // first handles them exactly like CardNotFound. Only a client that sent X-EAMS-Capabilities:
+        // personnel ever receives them; CaptureContractTests freezes the fourteen a v1 client can see.
+        ("PersonnelInactive", StatusCodes.Status404NotFound),
+        ("PersonnelNotInAudience", StatusCodes.Status404NotFound),
     ];
 
     private static string[] PublishedTokens => [.. PublishedOutcomes.Select(o => o.Token)];

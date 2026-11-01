@@ -273,6 +273,28 @@ public static class EamsPermissions
     public const string RolesWrite = "roles.write";
 
     /// <summary>
+    /// The Academic Community's Personnel tab reads — the list, one person, the organization list and
+    /// the CSV export (ADR-015 D-104, JJ 2026-10-27 decision 4).
+    ///
+    /// <para>
+    /// <b>Its own code rather than <see cref="StudentsRead"/>, which it used to reuse.</b> Personnel
+    /// become event attendees under ADR-015, so who may browse the institution's employees stops being
+    /// the same question as who may browse its students. Administrators only, like the other codes
+    /// minted since P3; existing installations receive the grant from
+    /// <c>GrantPersonnelPermissionsToAdminRoles</c>. A non-admin role that holds <c>students.read</c>
+    /// loses personnel access — that is the point of the split.
+    /// </para>
+    /// </summary>
+    public const string PersonnelRead = "personnel.read";
+
+    /// <summary>
+    /// The Personnel tab writes — creating, editing and removing a personnel record, and the import
+    /// (ADR-015 D-104).
+    /// Administrators only, exactly as <see cref="PersonnelRead"/>.
+    /// </summary>
+    public const string PersonnelWrite = "personnel.write";
+
+    /// <summary>
     /// §6.7's reports module — <c>GET /reports/event/{eventId}/summary</c> and
     /// <c>GET /reports/events/summary</c>. <b>Administrators only.</b>
     ///

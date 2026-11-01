@@ -68,9 +68,10 @@ export default function App() {
         <Route path="/" element={<Dashboard />} />
 
         <Route path="/students" element={gated(PERMISSIONS.studentsRead, <Students />)} />
-        {/* The Academic Community's Personnel tab (StudentsEmployees.docx). Same module and permission
-            as the roster; a distinct route rather than an in-page tab in this increment. */}
-        <Route path="/personnel" element={gated(PERMISSIONS.studentsRead, <PersonnelPage />)} />
+        {/* The Academic Community's Personnel tab (StudentsEmployees.docx). Same module as the roster
+            but its own permission pair since ADR-015 D-104 (`personnel.read`, not `students.read`);
+            a distinct route rather than an in-page tab in this increment. */}
+        <Route path="/personnel" element={gated(PERMISSIONS.personnelRead, <PersonnelPage />)} />
         {/* Declared before nothing and after `/students` only for readability — the paths are
             distinct, so order does not decide the match. No nav entry of its own: `Layout`'s
             `isActive` matches on `startsWith`, so Students stays highlighted while the import runs,

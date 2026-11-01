@@ -136,3 +136,23 @@ public static class AudienceText
 
     public static string KeyFor(string name) => AcademicKey.Normalize(name);
 }
+
+/// <summary>
+/// <b>One personnel member frozen into an event's expected audience</b> (ADR-015 D-97) — the personnel
+/// analogue of the <c>EventGroups.StudentId</c> rows a terminal transition flattens students into.
+///
+/// <para>
+/// <b>A junction, so no <c>CreatedAt</c>/<c>UpdatedAt</c></b> — it extends <see cref="Entity"/>, like
+/// <see cref="EventGroup"/>. Both link columns are NOT NULL, so <c>UX_EventPersonnel_Event_Personnel</c>
+/// is a plain, unfiltered unique index. No <c>SchoolId</c> column; tenancy reaches it through
+/// <see cref="Event"/>, as it does for <see cref="EventGroup"/>.
+/// </para>
+/// </summary>
+public class EventPersonnel : Entity
+{
+    public Guid EventId { get; set; }
+    public Event? Event { get; set; }
+
+    public Guid PersonnelId { get; set; }
+    public Personnel? Personnel { get; set; }
+}

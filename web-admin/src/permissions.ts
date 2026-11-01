@@ -26,6 +26,12 @@ export type PermissionCode = (typeof PERMISSIONS)[keyof typeof PERMISSIONS];
 export const PERMISSIONS = {
   studentsRead: "students.read",
   studentsWrite: "students.write",
+  /**
+   * ADR-015 D-104 — the Personnel module's own pair, split off `students.*`. A role holding only
+   * `students.read` no longer reaches `/personnel`; the server enforces the same split.
+   */
+  personnelRead: "personnel.read",
+  personnelWrite: "personnel.write",
   eventsRead: "events.read",
   eventsWrite: "events.write",
   attendanceRead: "attendance.read",

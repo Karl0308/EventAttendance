@@ -53,10 +53,11 @@ internal sealed class AttendanceAnalyticsService : IAttendanceAnalyticsService
         if (!string.IsNullOrWhiteSpace(query.YearLevel)) q = q.Where(a => a.Student!.YearLevel == query.YearLevel);
         if (!string.IsNullOrWhiteSpace(query.Section)) q = q.Where(a => a.Student!.Section == query.Section);
 
-        var rows = await q.Select(a => new Row(
+        // ADR-015 D-101: StudentId is nullable now; the predicate precedes the .Value in the same query.
+        var rows = await q.Where(a => a.StudentId != null).Select(a => new Row(
                 a.Student!.Course, a.Student!.YearLevel, a.Student!.Section,
                 a.EventId, a.Event!.Name, a.Event!.StartAt,
-                a.StudentId, a.Status))
+                a.StudentId!.Value, a.Status))
             .ToListAsync(ct);
 
         var report = new AttendanceAnalyticsReportDto(

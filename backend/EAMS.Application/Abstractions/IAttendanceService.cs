@@ -150,6 +150,32 @@ public enum TapOutcome
     /// </para>
     /// </summary>
     TooSoonIgnored,
+
+    /// <summary>
+    /// A personnel card whose holder is <c>Inactive</c> (ADR-015 D-95, QA Q4). Checked before audience
+    /// membership. <b>404</b>, like <see cref="CardNotFound"/>: a poison row the device must show and drop,
+    /// not a 403 ("stop and re-enrol") and not a 409 ("delivered") — see D-99.
+    ///
+    /// <para>
+    /// Only a client that sent <c>X-EAMS-Capabilities: personnel</c> ever receives this token; without it
+    /// the same tap is <see cref="CardNotFound"/>. The body carries <c>code</c>, <c>serverTime</c> and a
+    /// generic <c>detail</c> — no name, no id. A scan-log row records it.
+    /// </para>
+    /// </summary>
+    PersonnelInactive,
+
+    /// <summary>
+    /// A personnel card whose holder is not in this event's countable personnel set (ADR-015 D-95, QA Q3):
+    /// <c>ExpectedPersonnelIds(event)</c>. <b>404</b>, for the reason <see cref="PersonnelInactive"/>
+    /// records, and the same capable-clients-only, reveal-nothing body.
+    ///
+    /// <para>
+    /// <b>The deliberate asymmetry with students:</b> a student walk-in is recorded and reported
+    /// <c>unexpected</c>; a personnel walk-in is refused, because QA made the chosen audience the authority
+    /// for personnel. The refusal is kept as scan-log evidence instead of attendance.
+    /// </para>
+    /// </summary>
+    PersonnelNotInAudience,
 }
 
 public enum ManualOutcome
@@ -186,12 +212,19 @@ public enum ManualOutcome
 /// happens; <c>TapOutcomeContractTests</c> asserts it holds for every declared member, and
 /// <c>TapFlowTests</c> re-asserts it on every response the real service returns.
 /// </para>
+///
+/// <para>
+/// <b>Person-agnostic (ADR-015 D-99).</b> <see cref="Result"/> is the v2 shape, because only it can hold a
+/// personnel record. The API boundary picks the family the client asked for: v2 as is, or v1 through a
+/// fail-closed mapper that answers <c>CardNotFound</c> for any personnel record. The service has already
+/// applied that rule itself on the no-header path; the mapper is the backstop.
+/// </para>
 /// </summary>
-public record TapResponse(TapOutcome Outcome, TapResult Result)
+public record TapResponse(TapOutcome Outcome, TapResultV2 Result)
 {
     public static TapResponse For(
-        TapOutcome outcome, bool success, string message, AttendanceDto? record, DateTime serverTime) =>
-        new(outcome, new TapResult(success, message, record, outcome.ToString(), serverTime));
+        TapOutcome outcome, bool success, string message, AttendanceDtoV2? record, DateTime serverTime) =>
+        new(outcome, new TapResultV2(success, message, record, outcome.ToString(), serverTime));
 }
 
 /// <summary><inheritdoc cref="TapResponse" path="/summary"/></summary>
@@ -268,8 +301,18 @@ public interface IAttendanceService
     Task<TapResponse> TapAsync(TapRequest request, CancellationToken ct = default);
 
     /// <summary>
+    /// <inheritdoc cref="TapAsync(TapRequest, CancellationToken)" path="/summary"/>
+    /// <para>
+    /// <paramref name="capabilities"/> is what the client declared at the boundary (ADR-015 D-100). The
+    /// overload without it is <see cref="CaptureCapabilities.None"/>: today's v1 client.
+    /// </para>
+    /// </summary>
+    Task<TapResponse> TapAsync(
+        TapRequest request, CaptureCapabilities capabilities, CancellationToken ct = default);
+
+    /// <summary>
     /// §8.2's offline queue flush: many taps, one request, each one decided by
-    /// <see cref="TapAsync"/> itself.
+    /// <see cref="TapAsync(TapRequest, CaptureCapabilities, CancellationToken)"/> itself.
     ///
     /// <para>
     /// <b>The implementation may not contain a second copy of the tap rules, and that is a hard
@@ -282,6 +325,13 @@ public interface IAttendanceService
     /// </para>
     /// </summary>
     Task<TapBatchResponse> TapBatchAsync(TapBatchRequest request, CancellationToken ct = default);
+
+    /// <summary>
+    /// <inheritdoc cref="TapBatchAsync(TapBatchRequest, CancellationToken)" path="/summary"/>
+    /// <para>The declared capabilities apply to every row (ADR-015 D-100).</para>
+    /// </summary>
+    Task<TapBatchResponse> TapBatchAsync(
+        TapBatchRequest request, CaptureCapabilities capabilities, CancellationToken ct = default);
 
     Task<ManualResponse> ManualAsync(
         Guid eventId, Guid studentId, string status, string? notes, CancellationToken ct = default);

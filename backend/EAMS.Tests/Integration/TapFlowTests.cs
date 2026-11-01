@@ -162,7 +162,7 @@ public class TapFlowTests : IntegrationTest
         var records = await AllRecordsAsync();
         Assert.Equal(2, records.Count);
         Assert.Equal(
-            new[] { otherStudentId, world.StudentId }.OrderBy(id => id),
+            new Guid?[] { otherStudentId, world.StudentId }.OrderBy(id => id),
             records.Select(r => r.StudentId).OrderBy(id => id));
     }
 

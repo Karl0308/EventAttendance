@@ -80,23 +80,144 @@ public class SchemaConstraintTests : IntegrationTest
     // ------------------------------- UX_Attendance_Event_Student_Occurrence
 
     /// <summary>
-    /// The regression guard for the shipped-filtered bug. A filter of <c>[OccurrenceId] IS NOT NULL</c>
-    /// here would constrain nothing at all today, because every attendance row in the core slice has
-    /// a NULL <c>OccurrenceId</c> — the index would look present in every schema diff and enforce
-    /// nothing.
+    /// The successor of <c>The_event_student_occurrence_index_is_unique_and_unfiltered</c> (ADR-015
+    /// D-96 — replaced, not deleted). The index is now filtered, but on the attendee id and <em>only</em>
+    /// on it. The regression it still guards is the shipped-filtered bug: a filter of
+    /// <c>[OccurrenceId] IS NOT NULL</c> would constrain nothing at all today, because every attendance
+    /// row in the core slice has a NULL <c>OccurrenceId</c> — the index would look present in every
+    /// schema diff and enforce nothing. So the filter is asserted exactly, not merely as present.
     /// </summary>
     [Fact]
-    public async Task The_event_student_occurrence_index_is_unique_and_unfiltered()
+    public async Task The_event_student_occurrence_index_is_unique_and_filtered_to_student_rows_only()
     {
         var index = await ReadIndexAsync("UX_Attendance_Event_Student_Occurrence");
 
         Assert.True(index.IsUnique);
+        Assert.True(
+            index.FilterDefinition == "([StudentId] IS NOT NULL)",
+            "UX_Attendance_Event_Student_Occurrence is filtered on " + (index.FilterDefinition ?? "nothing") +
+            ", not exactly ([StudentId] IS NOT NULL) (ADR-015 D-96). A filter that mentions OccurrenceId " +
+            "leaves every non-recurring attendance row unconstrained; the explicit HasFilter in " +
+            "EamsDbContext is what replaces the SQL Server provider's automatic one — it is load-bearing.");
+    }
+
+    /// <summary>
+    /// The personnel twin of the index above (ADR-015 D-96): one attendance per personnel member per
+    /// event/occurrence, filtered to personnel rows and never on <c>OccurrenceId</c>.
+    /// </summary>
+    [Fact]
+    public async Task The_event_personnel_occurrence_index_is_unique_and_filtered_to_personnel_rows_only()
+    {
+        var index = await ReadIndexAsync("UX_Attendance_Event_Personnel_Occurrence");
+
+        Assert.True(index.IsUnique);
+        Assert.True(
+            index.FilterDefinition == "([PersonnelId] IS NOT NULL)",
+            "UX_Attendance_Event_Personnel_Occurrence is filtered on " + (index.FilterDefinition ?? "nothing") +
+            ", not exactly ([PersonnelId] IS NOT NULL) (ADR-015 D-96). A filter that mentions " +
+            "OccurrenceId leaves every non-recurring personnel attendance row unconstrained.");
+    }
+
+    private async Task<Guid> ArrangePersonnelAsync(Guid schoolId)
+    {
+        await using var db = NewDbContext();
+        var person = TestData.NewPersonnel(schoolId);
+        db.Personnel.Add(person);
+        await db.SaveChangesAsync();
+        return person.Id;
+    }
+
+    /// <summary>
+    /// The personnel half of the behaviour the index exists for, at the value that would escape an
+    /// index filtered on <c>OccurrenceId</c>: NULL on both rows, so SQL Server's NULL-equality inside
+    /// the unique index makes them collide (ADR-015 D-96).
+    /// </summary>
+    [Fact]
+    public async Task A_duplicate_personnel_attendance_row_with_a_null_occurrence_is_rejected()
+    {
+        var (schoolId, _, eventId) = await ArrangeAsync();
+        var personnelId = await ArrangePersonnelAsync(schoolId);
+
+        await using var db = NewDbContext();
+        db.AttendanceRecords.Add(new AttendanceRecord
+        {
+            SchoolId = schoolId,
+            EventId = eventId, StudentId = null, PersonnelId = personnelId, OccurrenceId = null,
+            CheckInAt = TestData.Now, Status = "Present",
+        });
+        await db.SaveChangesAsync();
+
+        await using var second = NewDbContext();
+        second.AttendanceRecords.Add(new AttendanceRecord
+        {
+            SchoolId = schoolId,
+            EventId = eventId, StudentId = null, PersonnelId = personnelId, OccurrenceId = null,
+            CheckInAt = TestData.Now.AddMinutes(1), Status = "Late",
+        });
+
+        var rejected = await AssertRejectedAsync(() => second.SaveChangesAsync());
+        var sql = AssertSqlError(rejected, UniqueViolation);
+        Assert.Contains("UX_Attendance_Event_Personnel_Occurrence", sql.Message);
+    }
+
+    /// <summary>
+    /// ADR-015 D-96's XOR, the neither half: a row that names no attendee is the case two nullable
+    /// columns would silently accept — attendance by nobody.
+    /// </summary>
+    [Fact]
+    public async Task An_attendance_row_naming_neither_a_student_nor_personnel_is_rejected()
+    {
+        var (schoolId, _, eventId) = await ArrangeAsync();
+
+        await using var db = NewDbContext();
+        db.AttendanceRecords.Add(new AttendanceRecord
+        {
+            SchoolId = schoolId,
+            EventId = eventId, StudentId = null, PersonnelId = null,
+            CheckInAt = TestData.Now, Status = "Present",
+        });
+
+        var rejected = await AssertRejectedAsync(() => db.SaveChangesAsync());
+        var sql = AssertSqlError(rejected, ConstraintViolation);
+        Assert.Contains("CK_AttendanceRecords_StudentOrPersonnel", sql.Message);
+    }
+
+    /// <summary>ADR-015 D-96's XOR, the both half: one row may not be two people's attendance.</summary>
+    [Fact]
+    public async Task An_attendance_row_naming_both_a_student_and_personnel_is_rejected()
+    {
+        var (schoolId, studentId, eventId) = await ArrangeAsync();
+        var personnelId = await ArrangePersonnelAsync(schoolId);
+
+        await using var db = NewDbContext();
+        db.AttendanceRecords.Add(new AttendanceRecord
+        {
+            SchoolId = schoolId,
+            EventId = eventId, StudentId = studentId, PersonnelId = personnelId,
+            CheckInAt = TestData.Now, Status = "Present",
+        });
+
+        var rejected = await AssertRejectedAsync(() => db.SaveChangesAsync());
+        var sql = AssertSqlError(rejected, ConstraintViolation);
+        Assert.Contains("CK_AttendanceRecords_StudentOrPersonnel", sql.Message);
+    }
+
+    // ------------------------------- UX_EventPersonnel_Event_Personnel (ADR-015 D-97)
+
+    /// <summary>
+    /// Both link columns are NOT NULL, so the frozen-personnel index has nothing to filter and must not
+    /// be filtered: the model states <c>HasFilter(null)</c>, and this pins the database to it.
+    /// </summary>
+    [Fact]
+    public async Task The_event_personnel_snapshot_index_is_unique_and_unfiltered()
+    {
+        var index = await ReadIndexAsync("UX_EventPersonnel_Event_Personnel");
+
+        Assert.True(index.IsUnique);
         Assert.False(
             index.HasFilter,
-            "UX_Attendance_Event_Student_Occurrence is filtered on " + index.FilterDefinition +
-            ". Every core-slice attendance row has a NULL OccurrenceId, so a filter over that " +
-            "column leaves the whole table unconstrained. HasFilter(null) in EamsDbContext is what " +
-            "suppresses the SQL Server provider's automatic IS NOT NULL — it is load-bearing.");
+            "UX_EventPersonnel_Event_Personnel is filtered on " + index.FilterDefinition +
+            ". Both columns are NOT NULL; ADR-015 D-97 makes it a plain UNIQUE (EventId, PersonnelId).");
         Assert.Null(index.FilterDefinition);
     }
 

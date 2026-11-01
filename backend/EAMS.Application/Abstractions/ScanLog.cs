@@ -20,7 +20,8 @@ public static class ScanLog
     public const string EventEntityType = "Event";
 
     /// <summary>
-    /// <c>AuditLog.Action</c> for a scan whose card matched no active card in this school.
+    /// <c>AuditLog.Action</c> for a scan that produced no attendance row: a card that matched no active
+    /// card in this school, or a personnel card that was refused (ADR-015 D-100).
     ///
     /// <para>
     /// Namespaced like the auth actions (<c>auth.admin.created</c>) so that an operator filtering the
@@ -49,4 +50,13 @@ public static class ScanLog
     /// scan rows above, and read back by the manual-records review.
     /// </summary>
     public const string ManualIdEntryAction = "attendance.scan.manual-id";
+
+    /// <summary>
+    /// The <c>reason</c> on an <see cref="UnresolvedAction"/> row whose card <em>did</em> resolve to a
+    /// personnel member, refused only because the client did not send <c>X-EAMS-Capabilities: personnel</c>
+    /// (ADR-015 D-100) — including a no-header <c>deviceTapId</c> replay that hit a personnel row (D-99).
+    /// The device was told <c>CardNotFound</c>. On a capable client's refusal the reason is null and
+    /// <c>serverOutcome</c> carries the token it received.
+    /// </summary>
+    public const string PersonnelClientNotCapableReason = "PersonnelClientNotCapable";
 }

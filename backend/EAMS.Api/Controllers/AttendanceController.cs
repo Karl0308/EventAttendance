@@ -207,7 +207,9 @@ public class AttendanceController : ControllerBase
     /// <response code="403">The key was revoked, or the device was retired.</response>
     /// <response code="404">
     /// <c>EventNotFound</c>, <c>CardNotFound</c> or <c>DeviceNotRegistered</c>. The last also covers a
-    /// device belonging to another school — deliberately indistinguishable.
+    /// device belonging to another school — deliberately indistinguishable. A client that sent
+    /// <c>X-EAMS-Capabilities: personnel</c> can also receive <c>PersonnelInactive</c> or
+    /// <c>PersonnelNotInAudience</c>; without the header a personnel card is <c>CardNotFound</c>.
     /// </response>
     /// <response code="429">Capture rate limit. Honour <c>Retry-After</c>.</response>
     // The workflow lives in IAttendanceService; this maps its outcome to an HTTP status.
@@ -229,8 +231,20 @@ public class AttendanceController : ControllerBase
     [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status404NotFound)]
     public async Task<ActionResult<TapResult>> Tap([FromBody] TapRequest req, CancellationToken ct)
     {
-        var response = await _attendance.TapAsync(req, ct);
-        return Respond(StatusCodeFor(response.Outcome), response.Result, TitleFor(response.Outcome));
+        // ADR-015 D-100: read once, here, and handed to the service. It picks the response family and
+        // nothing else: the scheme, policy and rate limit above have already run without looking at it.
+        var capabilities = CaptureCapabilities.Parse(Request.Headers[CaptureCapabilities.HeaderName]);
+        var response = await _attendance.TapAsync(req, capabilities, ct);
+
+        if (capabilities.Personnel)
+        {
+            var v2 = response.Result;
+            return Respond(
+                StatusCodeFor(response.Outcome), v2, v2.Message, v2.Code, v2.ServerTime, TitleFor(response.Outcome));
+        }
+
+        var (outcome, v1) = ToV1(response);
+        return Respond(StatusCodeFor(outcome), v1, TitleFor(outcome));
     }
 
     /// <summary>
@@ -310,7 +324,9 @@ public class AttendanceController : ControllerBase
     public async Task<ActionResult<TapBatchResult>> TapBatch(
         [FromBody] TapBatchRequest req, CancellationToken ct)
     {
-        var response = await _attendance.TapBatchAsync(req, ct);
+        // ADR-015 D-100: one declaration for the whole flush, applied to every row.
+        var capabilities = CaptureCapabilities.Parse(Request.Headers[CaptureCapabilities.HeaderName]);
+        var response = await _attendance.TapBatchAsync(req, capabilities, ct);
 
         if (response.Refusal is { } refusal)
         {
@@ -330,13 +346,31 @@ public class AttendanceController : ControllerBase
         // row's `status` mean exactly what the status line of an individual POST /attendance/tap would
         // have meant — there is one projection of outcome→status in the system, and this is a second
         // caller of it rather than a second copy.
+        if (capabilities.Personnel)
+        {
+            var v2Rows = response.Rows
+                .Select(row => new TapBatchRowResultV2(
+                    row.Index, row.DeviceTapId,
+                    row.Response.Result.Code,
+                    StatusCodeFor(row.Response.Outcome),
+                    row.Response.Result.Record,
+                    row.Response.Result.Message))
+                .ToList();
+
+            return Ok(new TapBatchResultV2(
+                Accepted: v2Rows.Count(r => r.Status < StatusCodes.Status400BadRequest),
+                Rejected: v2Rows.Count(r => r.Status >= StatusCodes.Status400BadRequest),
+                response.ServerTime,
+                v2Rows));
+        }
+
         var results = response.Rows
-            .Select(row => new TapBatchRowResult(
-                row.Index, row.DeviceTapId,
-                row.Response.Result.Code,
-                StatusCodeFor(row.Response.Outcome),
-                row.Response.Result.Record,
-                row.Response.Result.Message))
+            .Select(row =>
+            {
+                var (outcome, v1) = ToV1(row.Response);
+                return new TapBatchRowResult(
+                    row.Index, row.DeviceTapId, v1.Code, StatusCodeFor(outcome), v1.Record, v1.Message);
+            })
             .ToList();
 
         return Ok(new TapBatchResult(
@@ -537,17 +571,67 @@ public class AttendanceController : ControllerBase
     /// projection of outcome→token in the system and it lives in <c>TapResponse.For</c>.
     /// </para>
     /// </summary>
-    private ActionResult<TapResult> Respond(int status, TapResult result, string title)
+    private ActionResult<TapResult> Respond(int status, TapResult result, string title) =>
+        Respond(status, result, result.Message, result.Code, result.ServerTime, title);
+
+    /// <summary>
+    /// The same choice for either response family (ADR-015 D-99): <paramref name="success"/> is a v1
+    /// <see cref="TapResult"/> or a v2 <see cref="TapResultV2"/>, and a refusal is the one RFC 7807 shape
+    /// both families share.
+    /// </summary>
+    private ObjectResult Respond(
+        int status, object success, string message, string code, DateTime serverTime, string title)
     {
-        if (status < StatusCodes.Status400BadRequest) return StatusCode(status, result);
+        if (status < StatusCodes.Status400BadRequest) return StatusCode(status, success);
 
         var problem = ProblemDetailsFactory.CreateProblemDetails(
-            HttpContext, statusCode: status, title: title, detail: result.Message);
+            HttpContext, statusCode: status, title: title, detail: message);
 
-        problem.Extensions[ErrorCodeProperty] = result.Code;
-        problem.Extensions[ServerTimeProperty] = result.ServerTime;
+        problem.Extensions[ErrorCodeProperty] = code;
+        problem.Extensions[ServerTimeProperty] = serverTime;
 
         return StatusCode(status, problem);
+    }
+
+    /// <summary>
+    /// The backstop's <c>detail</c>. Reaching it means the service let a personnel answer through to a
+    /// v1 client, which it is meant never to do; the title already reads the same.
+    /// </summary>
+    private const string V1CardNotFoundDetail = "No active card matches that UID.";
+
+    /// <summary>
+    /// <b>The fail-closed v1 mapper</b> (ADR-015 D-99, resolves W1). A client that did not send
+    /// <c>X-EAMS-Capabilities: personnel</c> gets today's records, byte-identical, and nothing about
+    /// personnel ever: a personnel record, or either personnel refusal, becomes <c>CardNotFound</c> (404,
+    /// today's body) and no record is built.
+    ///
+    /// <para>
+    /// The service applies the same rule first, and writes the flagged scan-log row; this is the backstop
+    /// that holds if it ever does not. <c>CaptureContractTests</c> pins the v1 shapes and token set.
+    /// </para>
+    /// </summary>
+    internal static (TapOutcome Outcome, TapResult Result) ToV1(TapResponse response)
+    {
+        var result = response.Result;
+
+        if (response.Outcome is TapOutcome.PersonnelInactive or TapOutcome.PersonnelNotInAudience)
+            return V1CardNotFound(result.ServerTime);
+
+        if (result.Record is not { } record)
+            return (response.Outcome, new TapResult(result.Success, result.Message, null, result.Code, result.ServerTime));
+
+        if (record is not { PersonType: AttendeePersonType.Student, PersonnelId: null, StudentId: { } studentId })
+            return V1CardNotFound(result.ServerTime);
+
+        var v1Record = new AttendanceDto(
+            record.Id, record.EventId, studentId, record.StudentName ?? "", record.StudentNumber ?? "",
+            record.CheckInAt, record.CheckOutAt, record.Status, record.CaptureMethod);
+
+        return (response.Outcome, new TapResult(result.Success, result.Message, v1Record, result.Code, result.ServerTime));
+
+        static (TapOutcome, TapResult) V1CardNotFound(DateTime serverTime) => (
+            TapOutcome.CardNotFound,
+            new TapResult(false, V1CardNotFoundDetail, null, nameof(TapOutcome.CardNotFound), serverTime));
     }
 
     /// <summary>
@@ -565,6 +649,8 @@ public class AttendanceController : ControllerBase
         TapOutcome.TappedAtOutsideEventWindow => "That tappedAt is outside the event's window.",
         TapOutcome.DeviceTapIdRequired => "That batch row carries no deviceTapId.",
         TapOutcome.BatchTooLarge => "That batch is too large.",
+        TapOutcome.PersonnelInactive => "That card's holder is not active.",
+        TapOutcome.PersonnelNotInAudience => "That card's holder is not in this event's audience.",
         _ => "The tap could not be recorded.",
     };
 
@@ -621,9 +707,16 @@ public class AttendanceController : ControllerBase
             or TapOutcome.TooSoonIgnored => StatusCodes.Status200OK,
 
         // All three name something the request referred to that does not exist.
+        //
+        // The two ADR-015 D-99 personnel refusals are 404 too, though the card does resolve: both are
+        // poison rows the device must show and drop, so a capable queue that branches on the status first
+        // handles them exactly like CardNotFound. 403 means "stop and re-enrol" on device routes and 409
+        // means "delivered, drop" in §8.2; neither is true of them.
         TapOutcome.EventNotFound
             or TapOutcome.CardNotFound
-            or TapOutcome.DeviceNotRegistered => StatusCodes.Status404NotFound,
+            or TapOutcome.DeviceNotRegistered
+            or TapOutcome.PersonnelInactive
+            or TapOutcome.PersonnelNotInAudience => StatusCodes.Status404NotFound,
 
         // All four are the caller's payload, wrong under any circumstances. DeviceMismatch is a bug on
         // the client's side (D-26) and is reported rather than absorbed, so it is discoverable.

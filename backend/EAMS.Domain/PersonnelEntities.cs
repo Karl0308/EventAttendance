@@ -60,6 +60,14 @@ public class Personnel : AuditableEntity
     public string Status { get; set; } = PersonnelStatus.Active;
 
     public bool IsDeleted { get; set; }
+
+    /// <summary>
+    /// "First Middle Last", composed exactly as <see cref="Student.FullName"/> is, so a device shows a
+    /// personnel name the way it shows a student's (ADR-015 D-99 <c>personnelName</c> / <c>fullName</c>).
+    /// Computed and read-only, so the model does not map it.
+    /// </summary>
+    public string FullName => string.Join(' ',
+        new[] { FirstName, MiddleName, LastName }.Where(s => !string.IsNullOrWhiteSpace(s)));
 }
 
 /// <summary>

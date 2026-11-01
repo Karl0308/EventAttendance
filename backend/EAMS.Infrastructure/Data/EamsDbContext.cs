@@ -106,6 +106,12 @@ internal class EamsDbContext : DbContext
     public DbSet<EventAudienceDefinition> EventAudienceDefinitions => Set<EventAudienceDefinition>();
 
     /// <summary>
+    /// The personnel frozen into an event's expected audience (ADR-015 D-97) — the personnel analogue of
+    /// the flattened <c>EventGroups.StudentId</c> rows. Additive. See <see cref="EventPersonnel"/>.
+    /// </summary>
+    public DbSet<EventPersonnel> EventPersonnel => Set<EventPersonnel>();
+
+    /// <summary>
     /// Per-attendee attendance codes for Live Attendance (LiveAttendance.docx §3–§5). Additive. See
     /// <see cref="EventAttendanceCode"/>.
     /// </summary>
@@ -267,6 +273,7 @@ internal class EamsDbContext : DbContext
         ConfigurePersonnel(b);
         ConfigureAudienceDefinitions(b);
         ConfigureEventAudienceDefinitions(b);
+        ConfigureEventPersonnel(b);
         ConfigureEventAttendanceCodes(b);
         ConfigurePreRegistration(b);
         ConfigureSchoolIdQueryFilters(b);
@@ -460,6 +467,11 @@ internal class EamsDbContext : DbContext
         // whenever no tenant is pinned and an audience is the one place a cross-tenant row would be
         // laundered into a denominator.
         b.Entity<EventAudienceDefinition>().HasQueryFilter(
+            x => _school.CurrentSchoolId == null || x.Event!.SchoolId == _school.CurrentSchoolId);
+
+        // The frozen expected personnel (ADR-015 D-97) carry no SchoolId and reach tenancy through their
+        // Event, exactly as EventGroups does — the same dependent-filter pattern.
+        b.Entity<EventPersonnel>().HasQueryFilter(
             x => _school.CurrentSchoolId == null || x.Event!.SchoolId == _school.CurrentSchoolId);
 
         // Attendance codes carry a SchoolId denormalized from their event — filtered directly like
@@ -874,6 +886,7 @@ internal class EamsDbContext : DbContext
         b.Entity<Personnel>(e =>
         {
             e.ToTable("Personnel");
+            e.Ignore(x => x.FullName); // computed in the domain, not persisted — as on Students
             e.Property(x => x.PersonnelNumber).HasMaxLength(PersonnelText.NumberMaxLength).IsRequired();
             e.Property(x => x.FirstName).HasMaxLength(PersonnelText.NameMaxLength).IsRequired();
             e.Property(x => x.MiddleName).HasMaxLength(PersonnelText.NameMaxLength);
@@ -965,6 +978,30 @@ internal class EamsDbContext : DbContext
             e.HasIndex(x => new { x.EventId, x.AudienceDefinitionId }).IsUnique()
                 .HasFilter(null)
                 .HasDatabaseName("UX_EventAudienceDefinitions_Event_Definition");
+        });
+
+    /// <summary>
+    /// The frozen expected personnel of an event (ADR-015 D-97). Not a §4 table — additive.
+    ///
+    /// <para>
+    /// <b>One standard unique index, unfiltered</b>, for the reason <see cref="ConfigureEventAudienceDefinitions"/>
+    /// records: both link columns are NOT NULL, so there is no XOR and no NULL-equals-NULL hazard.
+    /// <c>HasFilter(null)</c> is stated so the index stays unfiltered by decision rather than by default.
+    /// It leads with <c>EventId</c>, so it serves that FK; <c>IX_EventPersonnel_PersonnelId</c> serves
+    /// the other. No <c>SchoolId</c>; tenancy reaches it through <see cref="Event"/>.
+    /// </para>
+    /// </summary>
+    private static void ConfigureEventPersonnel(ModelBuilder b) =>
+        b.Entity<EventPersonnel>(e =>
+        {
+            e.ToTable("EventPersonnel");
+
+            e.HasOne(x => x.Event).WithMany().HasForeignKey(x => x.EventId).IsRequired();
+            e.HasOne(x => x.Personnel).WithMany().HasForeignKey(x => x.PersonnelId).IsRequired();
+
+            e.HasIndex(x => new { x.EventId, x.PersonnelId }).IsUnique()
+                .HasFilter(null)
+                .HasDatabaseName("UX_EventPersonnel_Event_Personnel");
         });
 
     /// <summary>
@@ -1301,7 +1338,10 @@ internal class EamsDbContext : DbContext
     // §4.9 AttendanceRecords
     private static void ConfigureAttendanceRecords(ModelBuilder b) => b.Entity<AttendanceRecord>(e =>
     {
-        e.ToTable("AttendanceRecords");
+        e.ToTable("AttendanceRecords", t => t.HasCheckConstraint(
+            "CK_AttendanceRecords_StudentOrPersonnel",
+            "([StudentId] IS NOT NULL AND [PersonnelId] IS NULL) OR " +
+            "([StudentId] IS NULL AND [PersonnelId] IS NOT NULL)"));
         e.Property(x => x.Status).HasMaxLength(20).IsRequired();
         e.Property(x => x.CaptureMethod).HasMaxLength(20).IsRequired()
             .HasDefaultValue("Rfid").ValueGeneratedNever();
@@ -1348,20 +1388,30 @@ internal class EamsDbContext : DbContext
         // wrong tenant, which is the harder failure to notice.
         e.HasOne(x => x.School).WithMany().HasForeignKey(x => x.SchoolId).IsRequired();
         e.HasOne(x => x.Occurrence).WithMany().HasForeignKey(x => x.OccurrenceId);
-        e.HasOne(x => x.Student).WithMany().HasForeignKey(x => x.StudentId).IsRequired();
+        // ADR-015 D-96: StudentId is optional now, and PersonnelId joins it. Not IsRequired() — the CHECK
+        // below is what makes exactly one of the pair set on every row.
+        e.HasOne(x => x.Student).WithMany().HasForeignKey(x => x.StudentId);
+        e.HasOne(x => x.Personnel).WithMany().HasForeignKey(x => x.PersonnelId);
         e.HasOne(x => x.RfidCard).WithMany().HasForeignKey(x => x.RfidCardId);
         e.HasOne(x => x.Device).WithMany().HasForeignKey(x => x.DeviceId);
         e.HasOne(x => x.RecordedByUser).WithMany().HasForeignKey(x => x.RecordedByUserId);
 
-        // One attendance per student per event/occurrence. SQL Server compares NULL = NULL inside a
-        // unique index, so the non-recurring case (OccurrenceId NULL) collapses to one row per pair.
+        // One attendance per attendee per event/occurrence — one index per half of the XOR, filtered to
+        // that half, so a student row and a personnel row can never collide with each other.
         //
-        // HasFilter(null) is load-bearing: the SQL Server provider silently adds
-        // "WHERE [OccurrenceId] IS NOT NULL" to any unique index over a nullable column, which
-        // would leave every non-recurring attendance row unconstrained — the opposite of §4.9.
+        // The filter mentions the attendee id and NEVER OccurrenceId. SQL Server compares NULL = NULL
+        // inside a unique index, so the non-recurring case (OccurrenceId NULL) still collapses to one row
+        // per pair — that is §4.9's guarantee, and the reason the pre-ADR-015 index had HasFilter(null):
+        // the provider silently adds "WHERE [OccurrenceId] IS NOT NULL" to any unique index over a
+        // nullable column, which would leave every non-recurring attendance row unconstrained. Stating
+        // the filter explicitly replaces the provider's guess with this one.
         e.HasIndex(x => new { x.EventId, x.StudentId, x.OccurrenceId }).IsUnique()
-            .HasFilter(null)
+            .HasFilter("[StudentId] IS NOT NULL")
             .HasDatabaseName("UX_Attendance_Event_Student_Occurrence");
+
+        e.HasIndex(x => new { x.EventId, x.PersonnelId, x.OccurrenceId }).IsUnique()
+            .HasFilter("[PersonnelId] IS NOT NULL")
+            .HasDatabaseName("UX_Attendance_Event_Personnel_Occurrence");
 
         // Idempotent offline sync (§4.9). Filtered so the many rows without a tap id do not collide.
         //

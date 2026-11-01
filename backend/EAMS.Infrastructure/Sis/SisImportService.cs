@@ -47,12 +47,17 @@ internal sealed class SisImportService : ISisImportService
     private readonly IStudentGroupProjection _projection;
     private readonly ICurrentUser _currentUser;
 
+    /// <summary>ADR-015 D-98's test seam — the no-op in production. See <see cref="ICardUidWriteBarrier"/>.</summary>
+    private readonly ICardUidWriteBarrier _cardUidBarrier;
+
     public SisImportService(
-        EamsDbContext db, IStudentGroupProjection projection, ICurrentUser currentUser)
+        EamsDbContext db, IStudentGroupProjection projection, ICurrentUser currentUser,
+        ICardUidWriteBarrier cardUidBarrier)
     {
         _db = db;
         _projection = projection;
         _currentUser = currentUser;
+        _cardUidBarrier = cardUidBarrier;
     }
 
     /// <summary>How many staged rows an upload preview returns. Enough to eyeball, small enough to render.</summary>
@@ -390,8 +395,13 @@ internal sealed class SisImportService : ISisImportService
         // The fact pass can fail rows of its own — one whose RFID serial belongs to another student —
         // and those rows are excluded from the derived cache for the same reason they were excluded
         // from the facts: a failed row must not have contributed anything, including a Section string.
-        var mismatchedRows = await ResolveFactsAsync(term, parsed, dimensions, ledger, ct);
+        var (mismatchedRows, cardIssues) = await ResolveFactsAsync(term, parsed, dimensions, ledger, ct);
         await _db.SaveChangesAsync(ct);
+
+        // ADR-015 D-98: the card pass is its own short unit, after the fact save so every student a new
+        // card points at already exists, and before the fan-out so its row warnings and touches are
+        // folded with everything else.
+        await IssueCardsAsync(term.SchoolId, cardIssues, ledger, ct);
 
         // ---- the fan-out, in saves of its own -----------------------------------------------------
         //
@@ -1566,14 +1576,20 @@ internal sealed class SisImportService : ISisImportService
     /// Writes the facts, and returns the rows it <em>refused</em> to write — the ones whose RFID serial
     /// is owned by another student. They are the fact pass's own equivalent of
     /// <see cref="Dimensions.CollidedRows"/>, and the caller excludes them from the derived cache too.
+    ///
+    /// <para>
+    /// It also returns the cards it <em>plans</em> to issue, unwritten: ADR-015 D-98 moves their insert
+    /// into <see cref="IssueCardsAsync"/>, which decides each one under the card-UID locks after this
+    /// pass's save.
+    /// </para>
     /// </summary>
-    private async Task<IReadOnlySet<int>> ResolveFactsAsync(
+    private async Task<(IReadOnlySet<int> Mismatched, IReadOnlyList<CardIssue> CardIssues)> ResolveFactsAsync(
         Term term, IReadOnlyList<ParsedRow> parsed, Dimensions dimensions,
         RowLedger ledger, CancellationToken ct)
     {
         var schoolId = term.SchoolId;
         var live = parsed.Where(r => !dimensions.CollidedRows.Contains(r.Staged.RowNumber)).ToList();
-        if (live.Count == 0) return new HashSet<int>();
+        if (live.Count == 0) return (new HashSet<int>(), []);
 
         var regNos = live.Select(r => r.RegNo).Distinct(StringComparer.Ordinal).ToList();
 
@@ -1608,7 +1624,7 @@ internal sealed class SisImportService : ISisImportService
         var mismatched = FailRowsWhoseCardBelongsToAnotherStudent(live, students, cards, ledger);
         if (mismatched.Count > 0)
             live = live.Where(r => !mismatched.Contains(r.Staged.RowNumber)).ToList();
-        if (live.Count == 0) return mismatched;
+        if (live.Count == 0) return (mismatched, []);
 
         var termRecords = await _db.StudentTermRecords.IgnoreQueryFilters()
             .Where(r => r.TermId == term.Id && r.Student!.SchoolId == schoolId)
@@ -1636,7 +1652,7 @@ internal sealed class SisImportService : ISisImportService
             .ToDictionary(a => (a.CourseOfferingId, a.InstructorId), a => a.Id);
 
         var resolvedStudents = ResolveStudents(schoolId, live, students, ledger);
-        var resolvedCards = ResolveCards(schoolId, live, resolvedStudents, cards, ledger);
+        var (resolvedCards, cardIssues) = ResolveCards(schoolId, live, resolvedStudents, cards, ledger);
         var resolvedRecords = ResolveTermRecords(term, live, dimensions, resolvedStudents, termRecords);
         var resolvedCategories =
             await ResolveClassificationsAsync(schoolId, live, resolvedStudents, ledger, ct);
@@ -1678,6 +1694,9 @@ internal sealed class SisImportService : ISisImportService
             // statement from touching one and changing nothing, and is exactly the distinction the
             // fan-out exists to keep. It is also the positive record that a student has no card, which
             // is why the no-serial case needs no warning of its own.
+            //
+            // Existing cards only. A card this run plans to issue is touched by IssueCardsAsync, once the
+            // D-98 re-check has decided whether it is issued at all.
             if (row.CardUid is { } uid && resolvedCards.TryGetValue(uid, out var card))
                 ledger.Touch(row.Staged, SisImportEntityType.RfidCard,
                     card.Entity.Id, card.ActionFor(rowNumber));
@@ -1753,7 +1772,7 @@ internal sealed class SisImportService : ISisImportService
             }
         }
 
-        return mismatched;
+        return (mismatched, cardIssues);
     }
 
     /// <summary>
@@ -2470,13 +2489,21 @@ internal sealed class SisImportService : ISisImportService
     /// is invisible here and the next import creates a fresh active card carrying the same serial —
     /// which, since a serial names one physical card, makes the revoked card work again.
     /// </para>
+    ///
+    /// <para>
+    /// <b>A card to issue is planned here and not added to the context</b> (ADR-015 D-98). It is
+    /// returned as a <see cref="CardIssue"/> and inserted by <see cref="IssueCardsAsync"/> under the
+    /// card-UID locks, whose save must carry nothing but those inserts — so it cannot sit in the shared
+    /// change tracker through the fact pass's save.
+    /// </para>
     /// </summary>
-    private Dictionary<string, Touched<RfidCard>> ResolveCards(
+    private (Dictionary<string, Touched<RfidCard>> Resolved, List<CardIssue> Issues) ResolveCards(
         Guid schoolId, IReadOnlyList<ParsedRow> parsed,
         IReadOnlyDictionary<string, Touched<Student>> students,
         Dictionary<string, List<RfidCard>> existing, RowLedger ledger)
     {
         var resolved = new Dictionary<string, Touched<RfidCard>>(StringComparer.Ordinal);
+        var issues = new List<CardIssue>();
 
         foreach (var (uid, group) in GroupByCardUid(parsed))
         {
@@ -2535,13 +2562,152 @@ internal sealed class SisImportService : ISisImportService
                 IsActive = true,
                 IssuedAt = DateTime.UtcNow,
             };
-            _db.RfidCards.Add(issued);
             existing[uid] = [issued];
-            resolved[uid] = new Touched<RfidCard>(
-                issued, SisImportEntityAction.Inserted, first.Staged.RowNumber);
+            issues.Add(new CardIssue(uid, first.RegNo, issued,
+                new Touched<RfidCard>(issued, SisImportEntityAction.Inserted, first.Staged.RowNumber),
+                group.All));
         }
 
-        return resolved;
+        return (resolved, issues);
+    }
+
+    /// <summary>
+    /// One card the fact pass plans to issue: the UID, the REGNO that owns it, the unsaved entity, the
+    /// credit for inserting it, and every row naming it.
+    /// </summary>
+    private sealed record CardIssue(
+        string Uid, string RegNo, RfidCard Card, Touched<RfidCard> Touched, IReadOnlyList<ParsedRow> Rows);
+
+    /// <summary>
+    /// <b>ADR-015 D-98's roster-import card pass: one short <c>ExecuteAsync</c> unit of its own.</b> The
+    /// rest of the import keeps its no-wrapping-transaction design; only this unit is a transaction.
+    ///
+    /// <list type="number">
+    /// <item>Takes a lock on every UID it will insert, in ordinal order, before any write.</item>
+    /// <item>Re-checks both claims under those locks. A UID found claimed turns its planned insert into a
+    /// row warning — a personnel-held UID behaves like <see cref="SisImportWarningCode.RfidCardRevoked"/>:
+    /// no card, no card touch, the student still imports.</item>
+    /// <item>Inserts the remaining cards.</item>
+    /// <item>Saves with <c>acceptAllChangesOnSuccess: false</c> and commits.</item>
+    /// <item>Calls <c>AcceptAllChanges()</c> only after the commit.</item>
+    /// </list>
+    ///
+    /// <para>
+    /// <b>The unit's save must contain only its own card inserts</b>, or it would commit another pass's
+    /// entities while holding the card locks. <see cref="AssertTrackerHoldsOnlyCardInserts"/> checks
+    /// that, in code, before every save.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>Each card is <c>Add</c>ed at most once.</b> Because <c>AcceptAllChanges</c> is deferred, a
+    /// failed attempt leaves its cards <c>Added</c>, and a replay finds them so and does not add them
+    /// again; a card the replay's re-check now refuses is detached instead. A transient fault therefore
+    /// replays the whole unit — lock, re-check, write — against the same entities.
+    /// </para>
+    /// </summary>
+    private async Task IssueCardsAsync(
+        Guid schoolId, IReadOnlyList<CardIssue> issues, RowLedger ledger, CancellationToken ct)
+    {
+        if (issues.Count == 0) return;
+
+        var uids = issues.Select(i => i.Uid).ToList();
+        IReadOnlyDictionary<string, CardUidHolder> holders = new Dictionary<string, CardUidHolder>();
+
+        var strategy = _db.Database.CreateExecutionStrategy();
+        await strategy.ExecuteAsync(async () =>
+        {
+            await using var transaction = await _db.Database.BeginTransactionAsync(ct);
+
+            // 1. Every lock, in ordinal order, before anything is written.
+            await CardUidClaims.LockAsync(_db, schoolId, uids, ct);
+
+            // 2. The re-check, under the locks.
+            holders = await CardUidClaims.HoldersAsync(_db, schoolId, uids, excludingPersonnelId: null, ct);
+
+            await _cardUidBarrier.BetweenCheckAndWriteAsync(ct);
+
+            // 3. The remaining cards — added once, or detached if this attempt's re-check refuses them.
+            foreach (var issue in issues)
+            {
+                var entry = _db.Entry(issue.Card);
+                if (holders.ContainsKey(issue.Uid))
+                {
+                    if (entry.State != EntityState.Detached) entry.State = EntityState.Detached;
+                }
+                else if (entry.State == EntityState.Detached)
+                {
+                    _db.RfidCards.Add(issue.Card);
+                }
+            }
+
+            AssertTrackerHoldsOnlyCardInserts(issues);
+
+            // 4. Save without accepting, then commit.
+            await _db.SaveChangesAsync(acceptAllChangesOnSuccess: false, ct);
+            await transaction.CommitAsync(ct);
+        });
+
+        // 5. Accepted only now, after the commit.
+        _db.ChangeTracker.AcceptAllChanges();
+
+        foreach (var issue in issues)
+        {
+            if (!holders.TryGetValue(issue.Uid, out var holder))
+            {
+                foreach (var row in issue.Rows)
+                    ledger.Touch(row.Staged, SisImportEntityType.RfidCard,
+                        issue.Card.Id, issue.Touched.ActionFor(row.Staged.RowNumber));
+                continue;
+            }
+
+            if (holder is { Kind: CardUidHolderKind.Student, RfidCardId: { } heldCardId }
+                && holder.HolderId == issue.Card.StudentId)
+            {
+                // Issued to this same student by another writer between the fact pass's read and the
+                // lock: the row now names an existing card, exactly as a re-import would.
+                foreach (var row in issue.Rows)
+                    ledger.Touch(row.Staged, SisImportEntityType.RfidCard,
+                        heldCardId, SisImportEntityAction.Unchanged);
+                continue;
+            }
+
+            var heldBy = holder.Kind == CardUidHolderKind.Personnel
+                ? $"is held by personnel record '{holder.HolderNumber}'"
+                : $"is already active on a card of student '{holder.HolderNumber}'";
+
+            foreach (var row in issue.Rows)
+                ledger.Warn(row.Staged, SisImportWarningCode.RfidCardRevoked,
+                    $"RFID card serial '{issue.Uid}' {heldBy} in this school, so no card was created " +
+                    $"for REGNO '{issue.RegNo}'. One UID identifies one person across students and " +
+                    "personnel (ADR-015 D-98), and the roster does not get to take a card from whoever " +
+                    "holds it. Resolve it in the back office if the serial really belongs to this " +
+                    "student; the student imported normally and is enrolled either way.");
+        }
+    }
+
+    /// <summary>
+    /// D-98's requirement, asserted in code: before the card unit saves, the change tracker holds no
+    /// pending entity other than this unit's own card inserts. Anything else would be committed inside
+    /// the unit's transaction while it holds the card locks — another pass's work, written by the wrong
+    /// save. That is a programming error in the import, so it stops the run rather than being tolerated.
+    /// </summary>
+    private void AssertTrackerHoldsOnlyCardInserts(IReadOnlyList<CardIssue> issues)
+    {
+        var own = new HashSet<object>(issues.Select(i => (object)i.Card), ReferenceEqualityComparer.Instance);
+
+        var strays = _db.ChangeTracker.Entries()
+            .Where(e => e.State is EntityState.Added or EntityState.Modified or EntityState.Deleted)
+            .Where(e => !(e.State == EntityState.Added && own.Contains(e.Entity)))
+            .Select(e => $"{e.Metadata.ClrType.Name} ({e.State})")
+            .ToList();
+
+        if (strays.Count == 0) return;
+
+        throw new InvalidOperationException(
+            "The roster import's card unit (ADR-015 D-98) found pending changes in the change tracker " +
+            $"that are not its own card inserts: {string.Join(", ", strays.Distinct())}. Saving now " +
+            "would commit them inside the card-lock transaction. Every earlier pass must have saved " +
+            "before the card unit runs; this is a defect in the import, and the run is stopped.");
     }
 
     private Dictionary<string, Touched<StudentTermRecord>> ResolveTermRecords(

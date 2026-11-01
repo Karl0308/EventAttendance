@@ -140,14 +140,15 @@ public class RbacSeedTests : IntegrationTest
     }
 
     /// <summary>
-    /// The approved totals: 16 / 16 / 6 / 4 (admins were 11 until P3's <c>reports.read</c>, then 14 with
-    /// <c>users.*</c>, then 16 with <c>roles.*</c> — the RBAC admin phase). Literals, because they are the
+    /// The approved totals: 18 / 18 / 6 / 4 (admins were 11 until P3's <c>reports.read</c>, then 14 with
+    /// <c>users.*</c>, then 16 with <c>roles.*</c> — the RBAC admin phase — then 18 with ADR-015 D-104's
+    /// <c>personnel.*</c>). Literals, because they are the
     /// cheapest way to catch a matrix that has drifted by one cell — an assertion derived from the same
     /// code that produced the grants would agree with any drift.
     /// </summary>
     [Theory]
-    [InlineData(EamsRoleNames.SuperAdmin, 16)]
-    [InlineData(EamsRoleNames.SchoolAdmin, 16)]
+    [InlineData(EamsRoleNames.SuperAdmin, 18)]
+    [InlineData(EamsRoleNames.SchoolAdmin, 18)]
     [InlineData(EamsRoleNames.Organizer, 6)]
     [InlineData(EamsRoleNames.Viewer, 4)]
     public async Task Each_seeded_role_holds_the_approved_number_of_grants(string role, int expected)

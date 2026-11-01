@@ -47,10 +47,16 @@ internal sealed class StudentService : IStudentService
     /// </summary>
     private readonly ILogger<StudentService> _logger;
 
-    public StudentService(EamsDbContext db, ISchoolContext school, ILogger<StudentService> logger)
+    /// <summary>ADR-015 D-98's test seam — the no-op in production. See <see cref="ICardUidWriteBarrier"/>.</summary>
+    private readonly ICardUidWriteBarrier _cardUidBarrier;
+
+    public StudentService(
+        EamsDbContext db, ISchoolContext school, ICardUidWriteBarrier cardUidBarrier,
+        ILogger<StudentService> logger)
     {
         _db = db;
         _school = school;
+        _cardUidBarrier = cardUidBarrier;
         _logger = logger;
     }
 
@@ -577,18 +583,6 @@ internal sealed class StudentService : IStudentService
                 $"Label must be {RfidCardText.LabelMaxLength} characters or fewer (got {label.Length}).");
         }
 
-        // The SchoolId predicate is explicit rather than left to the global query filter, which is
-        // inert whenever no tenant is pinned — design time, most of the test suite, any unseeded
-        // start. Without it this read would search every school and could report another tenant's
-        // card as the conflict, which is both wrong and a disclosure.
-        if (await ActiveCardAsync(student.SchoolId, uid, ct) is { } existing)
-        {
-            return existing.StudentId == student.Id
-                ? new StudentCardResponse(StudentWriteOutcome.Saved,
-                    "That card is already active for this student.", ToDto(existing))
-                : CardUidInUse(uid);
-        }
-
         var card = new RfidCard
         {
             // ADR-001 D-3: denormalized from the student so the filtered unique index can be a single
@@ -602,11 +596,42 @@ internal sealed class StudentService : IStudentService
             IssuedAt = DateTime.UtcNow,
         };
 
-        _db.RfidCards.Add(card);
+        // ADR-015 D-98: the UID is claimed across RfidCards AND Personnel, and neither table's index sees
+        // the other, so the decision is made under a transaction-owned app lock on the UID. The re-check
+        // states its SchoolId explicitly (CardUidClaims.HoldersAsync) rather than leaning on the global
+        // query filter, which is inert whenever no tenant is pinned and would otherwise report another
+        // tenant's card as the conflict — both wrong and a disclosure.
+        CardUidHolder? holder = null;
 
         try
         {
-            await _db.SaveChangesAsync(ct);
+            var strategy = _db.Database.CreateExecutionStrategy();
+            await strategy.ExecuteAsync(async () =>
+            {
+                // Reset per attempt: a transient fault replays the whole unit — lock, re-check, write.
+                holder = null;
+
+                await using var transaction = await _db.Database.BeginTransactionAsync(ct);
+                await CardUidClaims.LockAsync(_db, student.SchoolId, [uid], ct);
+
+                holder = await CardUidClaims.HolderAsync(
+                    _db, student.SchoolId, uid, excludingPersonnelId: null, ct);
+                if (holder is not null)
+                {
+                    // A previous attempt's Add must not survive into the caller's unit of work.
+                    if (_db.Entry(card).State == EntityState.Added)
+                        _db.Entry(card).State = EntityState.Detached;
+                    return;
+                }
+
+                await _cardUidBarrier.BetweenCheckAndWriteAsync(ct);
+
+                // Added once: a retried attempt finds it still Added (AcceptAllChanges is deferred).
+                if (_db.Entry(card).State == EntityState.Detached) _db.RfidCards.Add(card);
+
+                await _db.SaveChangesAsync(acceptAllChangesOnSuccess: false, ct);
+                await transaction.CommitAsync(ct);
+            });
         }
         catch (DbUpdateException ex) when (SqlServerErrors.IsUniqueViolation(ex))
         {
@@ -636,6 +661,21 @@ internal sealed class StudentService : IStudentService
             return CardDerivedGuardTripped(ex);
         }
 
+        if (holder is not null)
+        {
+            if (holder is { Kind: CardUidHolderKind.Student, RfidCardId: { } heldCardId }
+                && holder.HolderId == student.Id)
+            {
+                var existing = await _db.RfidCards.IgnoreQueryFilters()
+                    .FirstAsync(c => c.Id == heldCardId, ct);
+                return new StudentCardResponse(StudentWriteOutcome.Saved,
+                    "That card is already active for this student.", ToDto(existing));
+            }
+
+            return CardUidInUse(uid, holder);
+        }
+
+        _db.ChangeTracker.AcceptAllChanges();
         return new StudentCardResponse(StudentWriteOutcome.Saved, "Card assigned.", ToDto(card));
     }
 
@@ -996,4 +1036,22 @@ internal sealed class StudentService : IStudentService
             "scopes uniqueness to UNIQUE(SchoolId, CardUid) WHERE IsActive = 1, so one UID identifies " +
             "one student at a time; deactivate the existing card first and this one can be issued.",
             null);
+
+    /// <summary>
+    /// The D-98 refusal, naming the holder. Only the admin card routes reach this, so the holder's number
+    /// is shown to the operator who has to resolve the clash, and to nobody else.
+    /// </summary>
+    private static StudentCardResponse CardUidInUse(string uid, CardUidHolder holder) =>
+        holder.Kind == CardUidHolderKind.Personnel
+            ? new(StudentWriteOutcome.CardUidInUse,
+                $"Card UID '{uid}' is already held by personnel record '{holder.HolderNumber}' in this " +
+                "school. One UID identifies one person (ADR-015 D-98), across students and personnel; " +
+                "remove it from that personnel record first and this card can be issued.",
+                null)
+            : new(StudentWriteOutcome.CardUidInUse,
+                $"Card UID '{uid}' is already active on student '{holder.HolderNumber}' in this school. " +
+                "ADR-001 D-3 scopes uniqueness to UNIQUE(SchoolId, CardUid) WHERE IsActive = 1, so one " +
+                "UID identifies one student at a time; deactivate the existing card first and this one " +
+                "can be issued.",
+                null);
 }

@@ -67,7 +67,7 @@ const nav: readonly NavEntry[] = [
     to: "/personnel",
     label: "Personnel",
     icon: <BadgeIcon />,
-    permission: PERMISSIONS.studentsRead,
+    permission: PERMISSIONS.personnelRead,
   },
   { to: "/events", label: "Events", icon: <EventIcon />, permission: PERMISSIONS.eventsRead },
   {

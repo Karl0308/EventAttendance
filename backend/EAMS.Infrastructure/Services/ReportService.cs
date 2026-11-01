@@ -252,6 +252,8 @@ internal sealed class ReportService : IReportService
     private static IQueryable<EventReportAttendeeDto> AttendeesInOrder(
         IQueryable<AttendanceRecord> rows, bool timeInOut) =>
         rows
+            // ADR-015 D-101: StudentId is nullable now; the predicate precedes the .Value below.
+            .Where(a => a.StudentId != null)
             .OrderBy(a => a.Student!.LastName)
             .ThenBy(a => a.Student!.FirstName)
             .ThenBy(a => a.Student!.MiddleName)
@@ -259,7 +261,7 @@ internal sealed class ReportService : IReportService
             .ThenBy(a => a.CheckInAt)
             .ThenBy(a => a.Id)
             .Select(a => new EventReportAttendeeDto(
-                a.StudentId,
+                a.StudentId!.Value,
                 a.Student!.StudentNumber,
                 a.Student!.LastName,
                 a.Student!.FirstName,

@@ -257,14 +257,14 @@ public abstract class IntegrationTest : IAsyncLifetime
     /// </para>
     /// </summary>
     internal IStudentService StudentsOn(EamsDbContext db) =>
-        new StudentService(db, School, NullLogger<StudentService>.Instance);
+        new StudentService(db, School, NoCardUidWriteBarrier.Instance, NullLogger<StudentService>.Instance);
 
     /// <summary>
     /// The same service with a logger a test can read back. See <see cref="CapturingLogger{T}"/> for
     /// why the recovered-from failures need one.
     /// </summary>
     internal IStudentService StudentsOn(EamsDbContext db, CapturingLogger<StudentService> logger) =>
-        new StudentService(db, School, logger);
+        new StudentService(db, School, NoCardUidWriteBarrier.Instance, logger);
 
     /// <summary>
     /// The §6.3 events service, wired to the same tenant and identity as <see cref="NewDbContext()"/>.
@@ -390,5 +390,6 @@ public abstract class IntegrationTest : IAsyncLifetime
     /// </para>
     /// </summary>
     internal ISisImportService SisImportOn(EamsDbContext db) =>
-        new SisImportService(db, new StudentGroupProjection(db), CurrentUser);
+        new SisImportService(
+            db, new StudentGroupProjection(db), CurrentUser, NoCardUidWriteBarrier.Instance);
 }

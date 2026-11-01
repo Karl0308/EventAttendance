@@ -59,9 +59,10 @@ internal sealed class AttendanceCodeService : IAttendanceCodeService
         for (var attempt = 1; ; attempt++)
         {
             // The attendees are the students with a record for this event — the Live Attendance list.
+            // ADR-015 D-101: StudentId is nullable now; the predicate precedes the .Value.
             var attendeeIds = await _db.AttendanceRecords.AsNoTracking()
-                .Where(a => a.EventId == eventId)
-                .Select(a => a.StudentId)
+                .Where(a => a.EventId == eventId && a.StudentId != null)
+                .Select(a => a.StudentId!.Value)
                 .Distinct()
                 .ToListAsync(ct);
 
@@ -158,9 +159,10 @@ internal sealed class AttendanceCodeService : IAttendanceCodeService
         }
         else
         {
+            // ADR-015 D-101: StudentId is nullable now; the predicate precedes the .Value.
             targetIds = await _db.AttendanceRecords.AsNoTracking()
-                .Where(a => a.EventId == eventId)
-                .Select(a => a.StudentId)
+                .Where(a => a.EventId == eventId && a.StudentId != null)
+                .Select(a => a.StudentId!.Value)
                 .Distinct()
                 .ToListAsync(ct);
         }

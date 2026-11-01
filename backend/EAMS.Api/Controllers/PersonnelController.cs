@@ -14,11 +14,12 @@ namespace EAMS.Api.Controllers;
 /// </summary>
 /// <remarks>
 /// <para>
-/// <b>Gated by <see cref="EamsPermissions.StudentsRead"/> / <see cref="EamsPermissions.StudentsWrite"/></b>,
-/// deliberately reusing the roster codes rather than minting <c>personnel.*</c>: Students and Personnel
-/// are the two tabs of one module (Academic Community), curated by the same administrator — the same
-/// decision <see cref="ClassificationsController"/> records for reusing <c>students.*</c>. Import and
-/// export are a later increment.
+/// <b>Gated by <see cref="EamsPermissions.PersonnelRead"/> / <see cref="EamsPermissions.PersonnelWrite"/></b>
+/// (ADR-015 D-104). The routes used to reuse the roster codes, <c>students.*</c>; once personnel became
+/// event attendees, who may manage employees stopped being the same question as who may manage
+/// students, so they have their own pair. Each action changes its <c>Policy</c> and its
+/// <see cref="HasPermissionNotEnforcedAttribute"/> code together, or <c>AuthorizationCoverageTests</c>
+/// passes on a stale pair.
 /// </para>
 /// </remarks>
 [ApiController]
@@ -36,8 +37,8 @@ public class PersonnelController : ControllerBase
     /// </summary>
     /// <response code="200">One page of personnel, possibly empty.</response>
     [HttpGet]
-    [Authorize(AuthenticationSchemes = JwtBearerDefaults.AuthenticationScheme, Policy = EamsPermissions.StudentsRead)]
-    [HasPermissionNotEnforced(EamsPermissions.StudentsRead)]
+    [Authorize(AuthenticationSchemes = JwtBearerDefaults.AuthenticationScheme, Policy = EamsPermissions.PersonnelRead)]
+    [HasPermissionNotEnforced(EamsPermissions.PersonnelRead)]
     [ProducesResponseType(typeof(PagedResult<PersonnelDto>), StatusCodes.Status200OK)]
     public async Task<ActionResult<PagedResult<PersonnelDto>>> List(
         [FromQuery] string? personnelNumber, [FromQuery] string? rfidUid, [FromQuery] string? name,
@@ -56,8 +57,8 @@ public class PersonnelController : ControllerBase
     /// </remarks>
     /// <response code="200">The organizations, possibly empty.</response>
     [HttpGet("organizations")]
-    [Authorize(AuthenticationSchemes = JwtBearerDefaults.AuthenticationScheme, Policy = EamsPermissions.StudentsRead)]
-    [HasPermissionNotEnforced(EamsPermissions.StudentsRead)]
+    [Authorize(AuthenticationSchemes = JwtBearerDefaults.AuthenticationScheme, Policy = EamsPermissions.PersonnelRead)]
+    [HasPermissionNotEnforced(EamsPermissions.PersonnelRead)]
     [ProducesResponseType(typeof(string[]), StatusCodes.Status200OK)]
     public async Task<ActionResult<IReadOnlyList<string>>> Organizations(CancellationToken ct)
         => Ok(await _personnel.OrganizationsAsync(ct));
@@ -68,8 +69,8 @@ public class PersonnelController : ControllerBase
     /// <response code="200">The record.</response>
     /// <response code="404">No such personnel record in this school.</response>
     [HttpGet("{id:guid}", Name = nameof(GetPersonnel))]
-    [Authorize(AuthenticationSchemes = JwtBearerDefaults.AuthenticationScheme, Policy = EamsPermissions.StudentsRead)]
-    [HasPermissionNotEnforced(EamsPermissions.StudentsRead)]
+    [Authorize(AuthenticationSchemes = JwtBearerDefaults.AuthenticationScheme, Policy = EamsPermissions.PersonnelRead)]
+    [HasPermissionNotEnforced(EamsPermissions.PersonnelRead)]
     [ProducesResponseType(typeof(PersonnelDto), StatusCodes.Status200OK)]
     [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status404NotFound)]
     public async Task<ActionResult<PersonnelDto>> GetPersonnel(Guid id, CancellationToken ct)
@@ -87,8 +88,8 @@ public class PersonnelController : ControllerBase
     /// <response code="400">A field breaks a column rule or the status is undocumented.</response>
     /// <response code="409">The ID or RFID UID is already in use, or no school could be resolved.</response>
     [HttpPost]
-    [Authorize(AuthenticationSchemes = JwtBearerDefaults.AuthenticationScheme, Policy = EamsPermissions.StudentsWrite)]
-    [HasPermissionNotEnforced(EamsPermissions.StudentsWrite)]
+    [Authorize(AuthenticationSchemes = JwtBearerDefaults.AuthenticationScheme, Policy = EamsPermissions.PersonnelWrite)]
+    [HasPermissionNotEnforced(EamsPermissions.PersonnelWrite)]
     [ProducesResponseType(typeof(PersonnelDto), StatusCodes.Status201Created)]
     [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status400BadRequest)]
     [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status409Conflict)]
@@ -108,8 +109,8 @@ public class PersonnelController : ControllerBase
     /// <response code="404">No such record.</response>
     /// <response code="409">The ID or RFID UID is already in use by another record.</response>
     [HttpPut("{id:guid}")]
-    [Authorize(AuthenticationSchemes = JwtBearerDefaults.AuthenticationScheme, Policy = EamsPermissions.StudentsWrite)]
-    [HasPermissionNotEnforced(EamsPermissions.StudentsWrite)]
+    [Authorize(AuthenticationSchemes = JwtBearerDefaults.AuthenticationScheme, Policy = EamsPermissions.PersonnelWrite)]
+    [HasPermissionNotEnforced(EamsPermissions.PersonnelWrite)]
     [ProducesResponseType(typeof(PersonnelDto), StatusCodes.Status200OK)]
     [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status400BadRequest)]
     [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status404NotFound)]
@@ -127,8 +128,8 @@ public class PersonnelController : ControllerBase
     /// <response code="200">The removed record, as it was.</response>
     /// <response code="404">No such record.</response>
     [HttpDelete("{id:guid}")]
-    [Authorize(AuthenticationSchemes = JwtBearerDefaults.AuthenticationScheme, Policy = EamsPermissions.StudentsWrite)]
-    [HasPermissionNotEnforced(EamsPermissions.StudentsWrite)]
+    [Authorize(AuthenticationSchemes = JwtBearerDefaults.AuthenticationScheme, Policy = EamsPermissions.PersonnelWrite)]
+    [HasPermissionNotEnforced(EamsPermissions.PersonnelWrite)]
     [ProducesResponseType(typeof(PersonnelDto), StatusCodes.Status200OK)]
     [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status404NotFound)]
     public async Task<ActionResult<PersonnelDto>> Delete(Guid id, CancellationToken ct)
@@ -148,8 +149,8 @@ public class PersonnelController : ControllerBase
     /// </summary>
     /// <response code="200">The CSV.</response>
     [HttpGet("export.csv")]
-    [Authorize(AuthenticationSchemes = JwtBearerDefaults.AuthenticationScheme, Policy = EamsPermissions.StudentsRead)]
-    [HasPermissionNotEnforced(EamsPermissions.StudentsRead)]
+    [Authorize(AuthenticationSchemes = JwtBearerDefaults.AuthenticationScheme, Policy = EamsPermissions.PersonnelRead)]
+    [HasPermissionNotEnforced(EamsPermissions.PersonnelRead)]
     [ProducesResponseType(typeof(FileContentResult), StatusCodes.Status200OK, PersonnelCsv.ContentType)]
     public async Task<IActionResult> ExportCsv(
         [FromQuery] string? personnelNumber, [FromQuery] string? rfidUid, [FromQuery] string? name,
@@ -174,8 +175,8 @@ public class PersonnelController : ControllerBase
     /// <response code="200">The import summary — created, updated, failed, and each failure's reason.</response>
     /// <response code="400">No rows, or more than the maximum this endpoint accepts.</response>
     [HttpPost("import")]
-    [Authorize(AuthenticationSchemes = JwtBearerDefaults.AuthenticationScheme, Policy = EamsPermissions.StudentsWrite)]
-    [HasPermissionNotEnforced(EamsPermissions.StudentsWrite)]
+    [Authorize(AuthenticationSchemes = JwtBearerDefaults.AuthenticationScheme, Policy = EamsPermissions.PersonnelWrite)]
+    [HasPermissionNotEnforced(EamsPermissions.PersonnelWrite)]
     [ProducesResponseType(typeof(PersonnelImportResultDto), StatusCodes.Status200OK)]
     [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status400BadRequest)]
     public async Task<ActionResult<PersonnelImportResultDto>> Import(

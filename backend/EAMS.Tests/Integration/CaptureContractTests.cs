@@ -34,6 +34,7 @@ public class CaptureContractTests : IntegrationTest
     public CaptureContractTests(SqlServerFixture sql) : base(sql) { }
 
     private const string StoredUid = "04A7B8C9";
+    private const string PersonnelUid = "05D4E5F6";
     private const string TapRoute = "/api/v1/attendance/tap";
     private const string BatchRoute = "/api/v1/attendance/tap/batch";
 
@@ -168,6 +169,105 @@ public class CaptureContractTests : IntegrationTest
     }
 
     /// <summary>
+    /// ADR-015 D-99: <c>GET /students/by-card/{cardUid}</c> and its <c>StudentDto</c> are unchanged, and
+    /// there is never a school-wide personnel lookup. The personnel card is the point of the second half:
+    /// this route must keep answering as if it does not exist.
+    /// </summary>
+    [Fact]
+    public async Task CaptureContract_students_by_card_matches_the_frozen_StudentDto()
+    {
+        var world = await ArrangeAsync();
+        await AddPersonnelCardAsync(world);
+        using var factory = new EamsApiFactory(Sql.ConnectionString);
+        using var client = factory.CreateClient().WithDeviceKey(world.ApiKey);
+
+        var response = await client.GetAsync($"/api/v1/students/by-card/{StoredUid}");
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var body = await BodyOf(response);
+        Assert.Single(body.GetProperty("cards").EnumerateArray());
+        AssertConforms(body, "StudentDto");
+
+        var personnelCard = await client.GetAsync($"/api/v1/students/by-card/{PersonnelUid}");
+        Assert.Equal(HttpStatusCode.NotFound, personnelCard.StatusCode);
+    }
+
+    /// <summary>
+    /// #705 old-client test 1: a capture response produced without the header validates against the frozen
+    /// snapshot <b>including a personnel tap</b>, which is the case the snapshot was taken to protect.
+    /// </summary>
+    [Fact]
+    public async Task CaptureContract_personnel_tap_without_the_header_matches_the_frozen_CardNotFound_problem()
+    {
+        var world = await ArrangeAsync();
+        await AddPersonnelCardAsync(world);
+        using var factory = new EamsApiFactory(Sql.ConnectionString);
+        using var client = factory.CreateClient().WithDeviceKey(world.ApiKey);
+
+        var response = await client.PostAsJsonAsync(TapRoute, new
+        {
+            eventId = world.EventId, cardUid = PersonnelUid, deviceTapId = "cc-0005",
+        });
+
+        Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
+        var body = await BodyOf(response);
+        Assert.Equal("CardNotFound", body.GetProperty("code").GetString());
+        AssertConforms(body, "CardNotFoundProblem");
+    }
+
+    /// <inheritdoc cref="CaptureContract_personnel_tap_without_the_header_matches_the_frozen_CardNotFound_problem"/>
+    [Fact]
+    public async Task CaptureContract_batch_with_a_personnel_row_without_the_header_matches_the_frozen_TapBatchResult()
+    {
+        var world = await ArrangeAsync();
+        await AddPersonnelCardAsync(world);
+        using var factory = new EamsApiFactory(Sql.ConnectionString);
+        using var client = factory.CreateClient().WithDeviceKey(world.ApiKey);
+
+        var response = await client.PostAsJsonAsync(BatchRoute, new
+        {
+            clientClockAt = DateTime.UtcNow,
+            taps = new[]
+            {
+                new { eventId = world.EventId, cardUid = StoredUid, deviceTapId = "cc-0006" },
+                new { eventId = world.EventId, cardUid = PersonnelUid, deviceTapId = "cc-0007" },
+            },
+        });
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var body = await BodyOf(response);
+        Assert.Equal(
+            ["Recorded", "CardNotFound"],
+            body.GetProperty("results").EnumerateArray().Select(r => r.GetProperty("code").GetString()));
+        AssertConforms(body, "TapBatchResult");
+    }
+
+    /// <summary>
+    /// The fixture's <c>enum</c> is only worth having if the comparer reads it. Neither personnel token may
+    /// ever reach a client that did not opt in, on a success body or a refusal.
+    /// </summary>
+    [Theory]
+    [InlineData("PersonnelInactive")]
+    [InlineData("PersonnelNotInAudience")]
+    public void CaptureContract_a_personnel_token_is_outside_the_frozen_code_enum(string token)
+    {
+        using var document = JsonDocument.Parse(
+            $$"""{"status":404,"title":"t","detail":"d","traceId":"x","code":"{{token}}","serverTime":"2026-10-31T00:00:00Z"}""");
+
+        var violations = new List<string>();
+        FrozenContract.Check(document.RootElement, "CardNotFoundProblem", "$", violations);
+
+        Assert.Contains(violations, v => v.Contains(token, StringComparison.Ordinal));
+    }
+
+    private async Task AddPersonnelCardAsync(World world)
+    {
+        await using var db = NewDbContext();
+        db.Personnel.Add(TestData.NewPersonnel(world.SchoolId, rfidUid: PersonnelUid));
+        await db.SaveChangesAsync();
+    }
+
+    /// <summary>
     /// Recursive comparer over the frozen file. Exact property set (extra and missing both fail),
     /// JSON value kind, <c>format</c> for uuid/date-time, and nullability as declared. Deliberately
     /// small: it understands only the keywords the frozen schemas use, and throws on any other so a
@@ -186,7 +286,7 @@ public class CaptureContractTests : IntegrationTest
         }
 
         private static readonly HashSet<string> KnownKeywords =
-            ["type", "properties", "additionalProperties", "items", "format", "nullable", "$ref"];
+            ["type", "properties", "additionalProperties", "items", "format", "nullable", "$ref", "enum"];
 
         public static void Check(JsonElement value, string schemaName, string path, List<string> errors) =>
             Check(value, Schemas.GetProperty(schemaName), path, errors);
@@ -260,6 +360,12 @@ public class CaptureContractTests : IntegrationTest
                     {
                         errors.Add($"{path}: expected string, got {value.ValueKind}");
                         return;
+                    }
+
+                    if (schema.TryGetProperty("enum", out var allowed)
+                        && allowed.EnumerateArray().All(token => token.GetString() != value.GetString()))
+                    {
+                        errors.Add($"{path}: '{value.GetString()}' is not a token a v1 client was promised");
                     }
 
                     if (schema.TryGetProperty("format", out var format))

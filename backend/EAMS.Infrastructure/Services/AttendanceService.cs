@@ -44,9 +44,35 @@ internal sealed class AttendanceService : IAttendanceService
     }
 
     private static AttendanceDto ToDto(AttendanceRecord a) => new(
-        a.Id, a.EventId, a.StudentId,
+        a.Id, a.EventId, StudentIdOf(a),
         a.Student?.FullName ?? "", a.Student?.StudentNumber ?? "",
         a.CheckInAt, a.CheckOutAt, a.Status, a.CaptureMethod);
+
+    /// <summary>
+    /// The student id of a materialized row this service built or read for a student (ADR-015 D-101).
+    /// Every caller starts from a resolved <see cref="Student"/>, so a null here is a personnel row on a
+    /// student-only path — a bug, reported as one rather than defaulted around.
+    /// </summary>
+    private static Guid StudentIdOf(AttendanceRecord a) =>
+        a.StudentId ?? throw new InvalidOperationException(
+            $"Attendance record {a.Id} has no StudentId: a personnel row reached a student-only path " +
+            "(ADR-015 D-101).");
+
+    /// <summary>
+    /// The person-agnostic record a tap answers with (ADR-015 D-99). The API boundary turns it into the v2
+    /// record as is, or into the v1 <see cref="AttendanceDto"/> through a fail-closed mapper. Ids, numbers
+    /// and names only; the personnel side carries nothing a device may not hold (#705 guardrail 2).
+    /// </summary>
+    private static AttendanceDtoV2 ToDtoV2(AttendanceRecord a) => a.PersonnelId is { } personnelId
+        ? new AttendanceDtoV2(
+            a.Id, a.EventId, StudentId: null, StudentName: null, StudentNumber: null,
+            a.CheckInAt, a.CheckOutAt, a.Status, a.CaptureMethod,
+            AttendeePersonType.Personnel, personnelId,
+            a.Personnel?.PersonnelNumber ?? "", a.Personnel?.FullName ?? "")
+        : new AttendanceDtoV2(
+            a.Id, a.EventId, StudentIdOf(a), a.Student?.FullName ?? "", a.Student?.StudentNumber ?? "",
+            a.CheckInAt, a.CheckOutAt, a.Status, a.CaptureMethod,
+            AttendeePersonType.Student, PersonnelId: null, PersonnelNumber: null, PersonnelName: null);
 
     /// <inheritdoc cref="IAttendanceService.ListAsync"/>
     /// <remarks>
@@ -159,7 +185,54 @@ internal sealed class AttendanceService : IAttendanceService
     // The public entry point takes no window cache: a single tap resolves its §4.13 settings once and
     // has nothing to reuse them across. TapBatchAsync supplies one — see the overload below.
     public Task<TapResponse> TapAsync(TapRequest req, CancellationToken ct = default) =>
-        TapAsync(req, settingsCache: null, ct);
+        TapAsync(req, CaptureCapabilities.None, settingsCache: null, ct);
+
+    /// <inheritdoc cref="IAttendanceService.TapAsync(TapRequest, CaptureCapabilities, CancellationToken)"/>
+    public Task<TapResponse> TapAsync(
+        TapRequest req, CaptureCapabilities capabilities, CancellationToken ct = default) =>
+        TapAsync(req, capabilities, settingsCache: null, ct);
+
+    /// <summary>
+    /// The decision (<see cref="DecideTapAsync"/>), then ADR-015 D-99's no-header replay rule, applied to
+    /// whatever the decision returned.
+    ///
+    /// <para>
+    /// <b>Why here and not at each replay site.</b> A <c>deviceTapId</c> replay matches on the device key
+    /// before identity, so a client that never opted in can be handed a personnel row it stored nothing
+    /// about: a student card sent under a tap id that a capable build on the same device used for a
+    /// personnel tap. Four sites return a stored row (the replay check, the lost insert race, the
+    /// later-tap replay re-check, the lost check-out race), and a rule repeated four times is the D-15
+    /// trap. One check over the result covers every path, including any added later.
+    /// </para>
+    ///
+    /// <para>
+    /// The answer is today's <c>CardNotFound</c> body, plus a flagged scan-log row. The API boundary's v1
+    /// mapper would also refuse it; this is the rule, the mapper is the backstop.
+    /// </para>
+    /// </summary>
+    private async Task<TapResponse> TapAsync(
+        TapRequest req, CaptureCapabilities capabilities,
+        Dictionary<Guid, CaptureSettings>? settingsCache, CancellationToken ct)
+    {
+        var response = await DecideTapAsync(req, capabilities, settingsCache, ct);
+        if (capabilities.Personnel || response.Result.Record is not { PersonnelId: { } leakedPersonnelId })
+            return response;
+
+        // Only a stored row can carry a personnel record to a no-header request, and every path that
+        // returns one resolved the event first, so it is tracked and this is an identity-map hit.
+        var ev = await _db.Events.FindAsync(new object?[] { req.EventId }, ct)
+            ?? throw new InvalidOperationException(
+                $"Tap on event {req.EventId} returned a stored personnel row, but the event it resolved " +
+                "is no longer readable. Every path that returns a stored row resolves the event first.");
+
+        var uid = CardUid.Normalize(req.CardUid);
+        var serverTime = response.Result.ServerTime;
+        await LogUnresolvedScanAsync(
+            ev, req, uid, UtcTime.Normalize(req.TappedAt) ?? serverTime, serverTime,
+            TapOutcome.CardNotFound, leakedPersonnelId, ScanLog.PersonnelClientNotCapableReason, ct);
+
+        return CardNotFound(uid, serverTime);
+    }
 
     /// <inheritdoc cref="TapAsync(TapRequest, CancellationToken)"/>
     /// <param name="settingsCache">
@@ -167,7 +240,7 @@ internal sealed class AttendanceService : IAttendanceService
     /// interval), keyed by school, or null to resolve every time.
     /// Phase 4d's carry-over from 4c: <see cref="ResolveCaptureSettingsAsync"/> is one settings query per tap
     /// and a 200-row batch would run it 200 times, identically. Supplied by
-    /// <see cref="TapBatchAsync"/> and by nothing else.
+    /// <see cref="TapBatchAsync(TapBatchRequest, CaptureCapabilities, CancellationToken)"/> and by nothing else.
     ///
     /// <para>
     /// <b>Keyed by school rather than by event, and it must stay that way.</b> The window is a §4.13
@@ -184,8 +257,9 @@ internal sealed class AttendanceService : IAttendanceService
     /// since changed, and nothing about that would look wrong at the call site.
     /// </para>
     /// </param>
-    private async Task<TapResponse> TapAsync(
-        TapRequest req, Dictionary<Guid, CaptureSettings>? settingsCache, CancellationToken ct)
+    private async Task<TapResponse> DecideTapAsync(
+        TapRequest req, CaptureCapabilities capabilities,
+        Dictionary<Guid, CaptureSettings>? settingsCache, CancellationToken ct)
     {
         // Read once, at entry, and used for three things that must agree: the fallback timestamp when
         // the client sends none, the D-36 future-tolerance comparison, and the `serverTime` every
@@ -320,49 +394,51 @@ internal sealed class AttendanceService : IAttendanceService
         // Rejecting the tap here would instead discard evidence that someone was physically present,
         // to protect a number that no longer depends on it. See
         // KnownDefectTests.A_student_with_no_enrollment_is_not_an_expected_attendee.
+        //
+        // ADR-015 D-99 tenancy: `c.SchoolId == ev.SchoolId` is defence in depth, as every personnel query on
+        // this path is. The §11 filter is inert when no tenant is pinned (an import, a direct call), and the
+        // card index is per school. It changes no shape and no outcome for an authenticated device.
         var card = await _db.RfidCards.Include(c => c.Student)
-            .FirstOrDefaultAsync(c => c.CardUid == uid && c.IsActive && !c.Student!.IsDeleted, ct);
-        if (card?.Student is null)
+            .FirstOrDefaultAsync(
+                c => c.CardUid == uid && c.IsActive && c.SchoolId == ev.SchoolId && !c.Student!.IsDeleted, ct);
+
+        Attendee attendee;
+        Personnel? personnel = null;
+        if (card?.Student is { } student)
         {
-            await LogUnresolvedScanAsync(ev, req, uid, when, serverTime, ct);
-            return Reject(TapOutcome.CardNotFound, $"No active card matches UID {uid}.", serverTime);
+            attendee = Attendee.For(student, card);
         }
-
-        var student = card.Student;
-
-        // DeviceId is a foreign key and was previously written unchecked, so an unknown one became
-        // an FK violation that IsUniqueViolation correctly declines to swallow — an unhandled 500.
-        // §8.2 treats 5xx as retryable, so a re-provisioned handset holding a stale id retried every
-        // queued tap forever and the queue never drained. Validated here, before the write, and
-        // reported as a rejection the client can act on.
-        //
-        // D-27 — DEFECT 3, closed here. The check is on the device's *own* SchoolId against the
-        // event's, not on whatever the query filter happens to be doing. Device authentication already
-        // makes the ordinary case impossible (an authenticated device's school pins the tenant, so a
-        // foreign event is simply EventNotFound), but that is a property of the request pipeline, and
-        // this method is called directly by the import path and by tests with no tenant pinned at all.
-        // Defence in depth: a tenant-owned foreign key arriving on a write is validated explicitly
-        // rather than by whichever filter is in force.
-        //
-        // It reuses DeviceNotRegistered → 404 rather than introducing a 403. A distinct status would
-        // confirm to the caller that the device exists in some other school, which is a cross-tenant
-        // existence disclosure; and the published mobile contract already defines this token as
-        // "unknown device, or device belongs to another school". No new outcome, no wire change.
-        if (deviceId is { } tappingDeviceId)
+        else
         {
-            var deviceSchoolId = await _db.Devices
-                .Where(d => d.Id == tappingDeviceId)
-                .Select(d => (Guid?)d.SchoolId)
-                .FirstOrDefaultAsync(ct);
+            // ADR-015 D-99/D-100: the student card missed, so ask Personnel.RfidUid: live rows only, this
+            // school only. D-98 makes a UID name at most one person across both tables, so the order of
+            // the two reads decides nothing. Inactive rows are found on purpose: they are refused by name.
+            personnel = await _db.Personnel.FirstOrDefaultAsync(
+                p => p.SchoolId == ev.SchoolId && !p.IsDeleted && p.RfidUid == uid, ct);
 
-            if (deviceSchoolId != ev.SchoolId)
+            if (personnel is null)
             {
-                return Reject(
-                    TapOutcome.DeviceNotRegistered,
-                    $"Device {tappingDeviceId} is not registered.",
-                    serverTime);
+                await LogUnresolvedScanAsync(
+                    ev, req, uid, when, serverTime, TapOutcome.CardNotFound, personnelId: null, reason: null, ct);
+                return CardNotFound(uid, serverTime);
             }
+
+            // D-100: a client that did not opt in cannot be answered about personnel at all. It gets
+            // today's CardNotFound body, byte-identical to an unknown card so the answer is no oracle for
+            // "this UID is a staff card", and the scan log keeps the evidence, flagged.
+            if (!capabilities.Personnel)
+            {
+                await LogUnresolvedScanAsync(
+                    ev, req, uid, when, serverTime, TapOutcome.CardNotFound,
+                    personnel.Id, ScanLog.PersonnelClientNotCapableReason, ct);
+                return CardNotFound(uid, serverTime);
+            }
+
+            attendee = Attendee.For(personnel);
         }
+
+        if (await RefuseForeignDeviceAsync(ev, deviceId, serverTime, ct) is { } deviceRefusal)
+            return deviceRefusal;
 
         // Idempotency (§4.9, §8.2): the same tap replayed by the same device returns the record it
         // already produced. The key is the *pair* (DeviceId, DeviceTapId), matching
@@ -374,7 +450,15 @@ internal sealed class AttendanceService : IAttendanceService
             if (dup is not null) return Duplicate(dup, serverTime);
         }
 
-        var existing = await FindByEventStudentAsync(ev.Id, student.Id, ct);
+        // ADR-015 D-95's refusals, AFTER the replay check (D-99: replay precedes refusal). A retry of a tap
+        // that was stored is DuplicateIgnored even if its holder has since gone inactive or left the audience.
+        if (personnel is not null
+            && await RefusePersonnelAsync(ev, req, uid, personnel, when, serverTime, ct) is { } refusal)
+        {
+            return refusal;
+        }
+
+        var existing = await FindByEventAttendeeAsync(ev.Id, attendee.StudentId, attendee.PersonnelId, ct);
 
         if (existing is null)
         {
@@ -387,10 +471,12 @@ internal sealed class AttendanceService : IAttendanceService
                 // D-35. Denormalized from the event that was just read, which is the only source it
                 // ever has — see AttendanceRecord.SchoolId.
                 SchoolId = ev.SchoolId,
-                EventId = ev.Id, StudentId = student.Id, RfidCardId = card.Id,
+                EventId = ev.Id,
+                StudentId = attendee.StudentId, PersonnelId = attendee.PersonnelId,
+                RfidCardId = attendee.RfidCardId,
                 CheckInAt = when, Status = status, CaptureMethod = CaptureMethod.Rfid,
                 DeviceId = deviceId, DeviceTapId = req.DeviceTapId,
-                Student = student,
+                Student = attendee.Student, Personnel = attendee.Personnel,
             };
             _db.AttendanceRecords.Add(rec);
 
@@ -424,6 +510,105 @@ internal sealed class AttendanceService : IAttendanceService
         return await ApplyLaterTapAsync(
             ev, req, uid, deviceId, existing, when, settings.MinTapInterval, serverTime, ct);
     }
+
+    /// <summary>
+    /// Who a resolved card belongs to: a student (through an <see cref="RfidCard"/>) or a personnel member
+    /// (through <c>Personnel.RfidUid</c>, which has no card row). Exactly one side is set, matching
+    /// <c>CK_AttendanceRecords_StudentOrPersonnel</c>. Everything after resolution (device, replay, the
+    /// row, check-in versus check-out) is one code path for both: no second copy of the tap rules.
+    /// </summary>
+    private sealed record Attendee(
+        Guid? StudentId, Guid? PersonnelId, Guid? RfidCardId, Student? Student, Personnel? Personnel)
+    {
+        public static Attendee For(Student student, RfidCard card) => new(student.Id, null, card.Id, student, null);
+
+        public static Attendee For(Personnel personnel) => new(null, personnel.Id, null, null, personnel);
+    }
+
+    /// <summary>
+    /// D-27's device-ownership check, shared by both attendee kinds. Moved here unchanged from the tap
+    /// body, with its reasoning:
+    ///
+    /// <para>
+    /// DeviceId is a foreign key and was previously written unchecked, so an unknown one became
+    /// an FK violation that IsUniqueViolation correctly declines to swallow — an unhandled 500.
+    /// §8.2 treats 5xx as retryable, so a re-provisioned handset holding a stale id retried every
+    /// queued tap forever and the queue never drained. Validated here, before the write, and
+    /// reported as a rejection the client can act on.
+    ///
+    /// D-27 — DEFECT 3, closed here. The check is on the device's *own* SchoolId against the
+    /// event's, not on whatever the query filter happens to be doing. Device authentication already
+    /// makes the ordinary case impossible (an authenticated device's school pins the tenant, so a
+    /// foreign event is simply EventNotFound), but that is a property of the request pipeline, and
+    /// this method is called directly by the import path and by tests with no tenant pinned at all.
+    /// Defence in depth: a tenant-owned foreign key arriving on a write is validated explicitly
+    /// rather than by whichever filter is in force.
+    ///
+    /// It reuses DeviceNotRegistered → 404 rather than introducing a 403. A distinct status would
+    /// confirm to the caller that the device exists in some other school, which is a cross-tenant
+    /// existence disclosure; and the published mobile contract already defines this token as
+    /// "unknown device, or device belongs to another school". No new outcome, no wire change.
+    /// </para>
+    /// </summary>
+    private async Task<TapResponse?> RefuseForeignDeviceAsync(
+        Event ev, Guid? deviceId, DateTime serverTime, CancellationToken ct)
+    {
+        if (deviceId is not { } tappingDeviceId) return null;
+
+        var deviceSchoolId = await _db.Devices
+            .Where(d => d.Id == tappingDeviceId)
+            .Select(d => (Guid?)d.SchoolId)
+            .FirstOrDefaultAsync(ct);
+
+        return deviceSchoolId == ev.SchoolId
+            ? null
+            : Reject(TapOutcome.DeviceNotRegistered, $"Device {tappingDeviceId} is not registered.", serverTime);
+    }
+
+    /// <summary>
+    /// ADR-015 D-95's two personnel refusals, in order: <c>Inactive</c> first, then not in
+    /// <c>ExpectedPersonnelIds(event)</c>. Null when the tap may be recorded.
+    ///
+    /// <para>
+    /// <b>The bodies reveal nothing</b> (#705 guardrail 4): a code, the server time and a generic detail;
+    /// no name, no number, no id. The scan-log row carries the personnel id for the administrator.
+    /// </para>
+    /// </summary>
+    private async Task<TapResponse?> RefusePersonnelAsync(
+        Event ev, TapRequest req, string uid, Personnel personnel, DateTime when, DateTime serverTime,
+        CancellationToken ct)
+    {
+        if (!string.Equals(personnel.Status, PersonnelStatus.Active, StringComparison.OrdinalIgnoreCase))
+        {
+            await LogUnresolvedScanAsync(
+                ev, req, uid, when, serverTime, TapOutcome.PersonnelInactive, personnel.Id, reason: null, ct);
+            return Reject(TapOutcome.PersonnelInactive, PersonnelInactiveMessage, serverTime);
+        }
+
+        var expected = await ExpectedPersonnel.IdsAsync(_db, ev.Id, ev.SchoolId, ev.Status, ct);
+        if (!await expected.ContainsAsync(personnel.Id, ct))
+        {
+            await LogUnresolvedScanAsync(
+                ev, req, uid, when, serverTime, TapOutcome.PersonnelNotInAudience, personnel.Id, reason: null, ct);
+            return Reject(TapOutcome.PersonnelNotInAudience, PersonnelNotInAudienceMessage, serverTime);
+        }
+
+        return null;
+    }
+
+    private const string PersonnelInactiveMessage =
+        "This card's holder is not active, so the tap was not recorded.";
+
+    private const string PersonnelNotInAudienceMessage =
+        "This card's holder is not in this event's audience, so the tap was not recorded.";
+
+    /// <summary>
+    /// Today's <c>CardNotFound</c>, word for word. Also what a no-header client gets for a personnel card
+    /// and for a replay that hit a personnel row (D-99/D-100), so those are indistinguishable from an
+    /// unknown card.
+    /// </summary>
+    private static TapResponse CardNotFound(string uid, DateTime serverTime) =>
+        Reject(TapOutcome.CardNotFound, $"No active card matches UID {uid}.", serverTime);
 
     /// <summary>
     /// The replay check, asked again from the database, on the way to any answer that writes nothing
@@ -500,7 +685,8 @@ internal sealed class AttendanceService : IAttendanceService
             {
                 if (await ReplayOfThisTapAsync(req, deviceId, serverTime, ct) is { } replayed) return replayed;
 
-                await LogSuppressedScanAsync(ev, req, uid, deviceId, row.StudentId, when, anchor, interval, serverTime, ct);
+                await LogSuppressedScanAsync(
+                    ev, req, uid, deviceId, row.StudentId, row.PersonnelId, when, anchor, interval, serverTime, ct);
                 return Accept(
                     TapOutcome.TooSoonIgnored,
                     $"Tap ignored: this card was counted {(when - anchor.At).Duration().TotalSeconds:0.###}s " +
@@ -565,10 +751,10 @@ internal sealed class AttendanceService : IAttendanceService
     // ---------------------------------------------------------------------- §8.2 batch sync (D-31)
 
     /// <summary>
-    /// <inheritdoc cref="IAttendanceService.TapBatchAsync" path="/summary/para[1]"/>
+    /// <inheritdoc cref="IAttendanceService.TapBatchAsync(TapBatchRequest, CancellationToken)" path="/summary/para[1]"/>
     ///
     /// <para>
-    /// <b>Every row goes through <see cref="TapAsync"/>. There is no batch tap logic.</b> The only two
+    /// <b>Every row goes through <see cref="TapAsync(TapRequest, CaptureCapabilities, Dictionary{Guid, CaptureSettings}, CancellationToken)"/>. There is no batch tap logic.</b> The only two
     /// things this method decides are the two the single endpoint has no opinion about — the order rows
     /// are applied in, and that a batch row must carry an idempotency key. Everything else (event
     /// window, device ownership, duplicate detection, check-in versus check-out, Present versus Late) is
@@ -629,8 +815,12 @@ internal sealed class AttendanceService : IAttendanceService
     /// the frozen table). Raised with the document's owner rather than papered over here.
     /// </para>
     /// </summary>
+    public Task<TapBatchResponse> TapBatchAsync(TapBatchRequest req, CancellationToken ct = default) =>
+        TapBatchAsync(req, CaptureCapabilities.None, ct);
+
+    /// <inheritdoc cref="TapBatchAsync(TapBatchRequest, CancellationToken)"/>
     public async Task<TapBatchResponse> TapBatchAsync(
-        TapBatchRequest req, CancellationToken ct = default)
+        TapBatchRequest req, CaptureCapabilities capabilities, CancellationToken ct = default)
     {
         // One clock read for the envelope, matching TapAsync's reasoning: a batch that quoted several
         // serverTimes would give a client computing an offset several answers.
@@ -708,7 +898,8 @@ internal sealed class AttendanceService : IAttendanceService
 
         foreach (var (tap, index) in InProcessingOrder(wellFormed, serverTime))
         {
-            rows[index] = new TapBatchRow(index, tap.DeviceTapId, await TapAsync(tap, settingsCache, ct));
+            rows[index] = new TapBatchRow(
+                index, tap.DeviceTapId, await TapAsync(tap, capabilities, settingsCache, ct));
         }
 
         return new TapBatchResponse(Refusal: null, rows, serverTime);
@@ -752,7 +943,7 @@ internal sealed class AttendanceService : IAttendanceService
     /// </summary>
     /// <param name="taps">
     /// <b>Well-formed rows only.</b> This method dereferences each row, so the caller's shape pass has
-    /// to run first — see the malformed-row floor in <see cref="TapBatchAsync"/>, which is where a null
+    /// to run first — see the malformed-row floor in <see cref="TapBatchAsync(TapBatchRequest, CaptureCapabilities, CancellationToken)"/>, which is where a null
     /// element used to reach this sort and NullReferenceException before any row was processed.
     /// </param>
     private static IEnumerable<(TapRequest Tap, int Index)> InProcessingOrder(
@@ -815,7 +1006,7 @@ internal sealed class AttendanceService : IAttendanceService
 
     private static TapResponse Accept(
         TapOutcome outcome, string message, AttendanceRecord record, DateTime serverTime) =>
-        TapResponse.For(outcome, success: true, message, ToDto(record), serverTime);
+        TapResponse.For(outcome, success: true, message, ToDtoV2(record), serverTime);
 
     private static TapResponse Duplicate(AttendanceRecord record, DateTime serverTime) =>
         Accept(TapOutcome.DuplicateIgnored, "Duplicate tap ignored (idempotent).", record, serverTime);
@@ -870,7 +1061,7 @@ internal sealed class AttendanceService : IAttendanceService
     /// <param name="cache">
     /// A per-batch memo, or null on the single-tap path where there is nothing to reuse it across.
     /// Populated on miss, so a school's settings are read at most once per call to
-    /// <see cref="TapBatchAsync"/>.
+    /// <see cref="TapBatchAsync(TapBatchRequest, CaptureCapabilities, CancellationToken)"/>.
     /// </param>
     private async Task<CaptureSettings> ResolveCaptureSettingsAsync(
         Guid schoolId, Dictionary<Guid, CaptureSettings>? cache, CancellationToken ct)
@@ -1276,7 +1467,7 @@ internal sealed class AttendanceService : IAttendanceService
 
         if (match is null) return null;
 
-        return await _db.AttendanceRecords.Include(a => a.Student)
+        return await _db.AttendanceRecords.Include(a => a.Student).Include(a => a.Personnel)
             .FirstOrDefaultAsync(a => a.Id == match.Id, ct);
     }
 
@@ -1324,6 +1515,28 @@ internal sealed class AttendanceService : IAttendanceService
         _db.AttendanceRecords.Include(a => a.Student)
             .FirstOrDefaultAsync(
                 a => a.EventId == eventId && a.StudentId == studentId && a.OccurrenceId == null, ct);
+
+    /// <summary>
+    /// The row an attendee already has on this event: <see cref="FindByEventStudentAsync"/> for a student,
+    /// its <c>UX_Attendance_Event_Personnel_Occurrence</c> twin for personnel (ADR-015 D-96). Exactly one
+    /// id is set: the caller takes them from an <see cref="Attendee"/> or from a failed insert.
+    /// </summary>
+    private Task<AttendanceRecord?> FindByEventAttendeeAsync(
+        Guid eventId, Guid? studentId, Guid? personnelId, CancellationToken ct)
+    {
+        if (personnelId is { } p)
+        {
+            return _db.AttendanceRecords.Include(a => a.Personnel)
+                .FirstOrDefaultAsync(
+                    a => a.EventId == eventId && a.PersonnelId == p && a.OccurrenceId == null, ct);
+        }
+
+        return FindByEventStudentAsync(
+            eventId,
+            studentId ?? throw new InvalidOperationException(
+                $"An attendance lookup on event {eventId} named neither a student nor a personnel member."),
+            ct);
+    }
 
     /// <summary>What happened to an attendance row this service tried to insert.</summary>
     private enum SaveOutcome
@@ -1405,6 +1618,7 @@ internal sealed class AttendanceService : IAttendanceService
     {
         var eventId = failed.EventId;
         var studentId = failed.StudentId;
+        var personnelId = failed.PersonnelId;
 
         _db.Entry(failed).State = EntityState.Detached;
 
@@ -1414,12 +1628,13 @@ internal sealed class AttendanceService : IAttendanceService
             if (byTap is not null) return new GuardedSave(SaveOutcome.DuplicateTapWon, byTap);
         }
 
-        var winner = await FindByEventStudentAsync(eventId, studentId, ct);
+        var winner = await FindByEventAttendeeAsync(eventId, studentId, personnelId, ct);
         if (winner is not null) return new GuardedSave(SaveOutcome.ExistingRecordWon, winner);
 
+        var attendee = personnelId is { } p ? $"personnel {p}" : $"student {studentId}";
         throw new InvalidOperationException(
-            $"A unique-key violation was raised inserting attendance for event {eventId} / student " +
-            $"{studentId}, but no conflicting record could be read back. The constraint that fired " +
+            $"A unique-key violation was raised inserting attendance for event {eventId} / {attendee}, " +
+            "but no conflicting record could be read back. The constraint that fired " +
             "is not one this method knows how to resolve.", violation);
     }
 
@@ -1502,8 +1717,18 @@ internal sealed class AttendanceService : IAttendanceService
     /// is not silent: the log line names the event and the card.
     /// </para>
     /// </summary>
+    /// <param name="serverOutcome">The token the device received.</param>
+    /// <param name="personnelId">
+    /// ADR-015 D-100: the personnel member a refused personnel card resolved to; null for a card that
+    /// resolved to nobody. An id, never a name (#705 guardrail 8).
+    /// </param>
+    /// <param name="reason">
+    /// <see cref="ScanLog.PersonnelClientNotCapableReason"/> when the device was told <c>CardNotFound</c>
+    /// only because it did not opt in; null otherwise.
+    /// </param>
     private async Task LogUnresolvedScanAsync(
-        Event ev, TapRequest req, string uid, DateTime when, DateTime serverTime, CancellationToken ct)
+        Event ev, TapRequest req, string uid, DateTime when, DateTime serverTime,
+        TapOutcome serverOutcome, Guid? personnelId, string? reason, CancellationToken ct)
     {
         try
         {
@@ -1520,8 +1745,10 @@ internal sealed class AttendanceService : IAttendanceService
                     req.DeviceTapId,
                     _device.DeviceId ?? req.DeviceId,
                     when,
-                    nameof(TapOutcome.CardNotFound),
-                    Truncate(req.LocalOutcome, TapRequestLimits.MaxLocalOutcomeLength)), ScanJson),
+                    serverOutcome.ToString(),
+                    Truncate(req.LocalOutcome, TapRequestLimits.MaxLocalOutcomeLength),
+                    personnelId,
+                    reason), ScanJson),
             });
 
             await _db.SaveChangesAsync(ct);
@@ -1536,8 +1763,8 @@ internal sealed class AttendanceService : IAttendanceService
             _logger.LogWarning(
                 ex,
                 "Could not record the unresolved scan of card {CardUid} on event {EventId}. The tap " +
-                "was rejected as CardNotFound either way; only the scan-log row is missing.",
-                uid, ev.Id);
+                "was rejected as {ServerOutcome} either way; only the scan-log row is missing.",
+                uid, ev.Id, serverOutcome);
         }
     }
 
@@ -1558,8 +1785,8 @@ internal sealed class AttendanceService : IAttendanceService
     /// </para>
     /// </summary>
     private async Task LogSuppressedScanAsync(
-        Event ev, TapRequest req, string uid, Guid? deviceId, Guid studentId, DateTime when,
-        TapAnchor anchor, TimeSpan interval, DateTime serverTime, CancellationToken ct)
+        Event ev, TapRequest req, string uid, Guid? deviceId, Guid? studentId, Guid? personnelId,
+        DateTime when, TapAnchor anchor, TimeSpan interval, DateTime serverTime, CancellationToken ct)
     {
         try
         {
@@ -1577,6 +1804,7 @@ internal sealed class AttendanceService : IAttendanceService
                     deviceId,
                     when,
                     studentId,
+                    personnelId,
                     anchor.At,
                     anchor.Kind.ToString(),
                     interval.TotalSeconds,
@@ -1622,13 +1850,16 @@ internal sealed class AttendanceService : IAttendanceService
     }
 
     /// <summary>The body of an unresolved-scan audit row. Serialized into <c>AuditLog.Changes</c>.</summary>
+    /// <remarks><c>PersonnelId</c> and <c>Reason</c> are ADR-015 D-100's; null on a card that resolved to nobody.</remarks>
     private sealed record UnresolvedScan(
         string CardUid,
         string? DeviceTapId,
         Guid? DeviceId,
         DateTime TappedAt,
         string ServerOutcome,
-        string? LocalOutcome);
+        string? LocalOutcome,
+        Guid? PersonnelId,
+        string? Reason);
 
     /// <summary>
     /// The body of a suppressed-scan audit row (B6). Serialized into <c>AuditLog.Changes</c>, camelCase.
@@ -1639,7 +1870,8 @@ internal sealed class AttendanceService : IAttendanceService
         string? DeviceTapId,
         Guid? DeviceId,
         DateTime TappedAt,
-        Guid StudentId,
+        Guid? StudentId,
+        Guid? PersonnelId,
         DateTime AnchorAt,
         string AnchorKind,
         double IntervalSeconds,

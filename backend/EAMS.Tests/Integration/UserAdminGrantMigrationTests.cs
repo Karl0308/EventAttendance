@@ -195,10 +195,11 @@ public class UserAdminGrantMigrationTests : IntegrationTest
 
             Assert.Equal(0, await PermissionRowsAsync(connectionString));
 
-            // Migrating to EventClassifications unwinds both this migration (users.read, users.write) and
-            // the later GrantRoleAdminToAdminRoles (roles.read, roles.write), so each admin loses four
-            // grants in total. This file's users.* Permissions rows are gone regardless (asserted above).
-            const int adminGrantsRemovedByThisAndLater = 4;
+            // Migrating to EventClassifications unwinds this migration (users.read, users.write), the
+            // later GrantRoleAdminToAdminRoles (roles.read, roles.write) and the later
+            // GrantPersonnelPermissionsToAdminRoles (personnel.read, personnel.write), so each admin loses
+            // six grants in total. This file's users.* Permissions rows are gone regardless (asserted above).
+            const int adminGrantsRemovedByThisAndLater = 6;
             Assert.Equal(before[EamsRoleNames.SuperAdmin] - adminGrantsRemovedByThisAndLater, await AllGrantsAsync(connectionString, EamsRoleNames.SuperAdmin));
             Assert.Equal(before[EamsRoleNames.SchoolAdmin] - adminGrantsRemovedByThisAndLater, await AllGrantsAsync(connectionString, EamsRoleNames.SchoolAdmin));
             Assert.Equal(before[EamsRoleNames.Organizer], await AllGrantsAsync(connectionString, EamsRoleNames.Organizer));

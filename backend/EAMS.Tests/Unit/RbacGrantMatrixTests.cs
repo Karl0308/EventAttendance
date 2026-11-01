@@ -22,17 +22,18 @@ public class RbacGrantMatrixTests
         EamsRoles.ReferenceData.Roles.Single(r => r.Name == roleName).PermissionCodes;
 
     /// <summary>
-    /// <b>The registry has seventeen codes.</b> A literal, so that adding or removing one is a decision
+    /// <b>The registry has nineteen codes.</b> A literal, so that adding or removing one is a decision
     /// someone makes here as well as there — every count below is relative to this number and a silent
-    /// eighteenth code would quietly widen SuperAdmin. Thirteen after P3 added <c>reports.read</c>
+    /// twentieth code would quietly widen SuperAdmin. Thirteen after P3 added <c>reports.read</c>
     /// (QA Q15/Q16); fifteen after the RBAC admin phase added <c>users.read</c>/<c>users.write</c>;
-    /// seventeen once it added <c>roles.read</c>/<c>roles.write</c> (UserWithRBAC.docx).
+    /// seventeen once it added <c>roles.read</c>/<c>roles.write</c> (UserWithRBAC.docx); nineteen once
+    /// ADR-015 D-104 added <c>personnel.read</c>/<c>personnel.write</c>.
     /// </summary>
     [Fact]
-    public void The_registry_declares_seventeen_permission_codes()
+    public void The_registry_declares_nineteen_permission_codes()
     {
-        Assert.Equal(17, EamsPermissions.All.Count);
-        Assert.Equal(17, EamsPermissions.All.Distinct(StringComparer.Ordinal).Count());
+        Assert.Equal(19, EamsPermissions.All.Count);
+        Assert.Equal(19, EamsPermissions.All.Distinct(StringComparer.Ordinal).Count());
     }
 
     [Fact]
@@ -66,9 +67,10 @@ public class RbacGrantMatrixTests
 
     [Theory]
     // Admins 11 → 12 in P3 (reports.read); 12 → 14 (users.read, users.write); 14 → 16 (roles.read,
-    // roles.write). All the RBAC-admin codes go to SuperAdmin and SchoolAdmin only.
-    [InlineData(EamsRoleNames.SuperAdmin, 16)]
-    [InlineData(EamsRoleNames.SchoolAdmin, 16)]
+    // roles.write); 16 → 18 (personnel.read, personnel.write — ADR-015 D-104). All of these go to
+    // SuperAdmin and SchoolAdmin only.
+    [InlineData(EamsRoleNames.SuperAdmin, 18)]
+    [InlineData(EamsRoleNames.SchoolAdmin, 18)]
     [InlineData(EamsRoleNames.Organizer, 6)]
     [InlineData(EamsRoleNames.Viewer, 4)]
     public void Each_role_holds_exactly_the_approved_number_of_permissions(string role, int expected)
@@ -202,6 +204,8 @@ public class RbacGrantMatrixTests
     [InlineData(EamsPermissions.UsersWrite)]
     [InlineData(EamsPermissions.RolesRead)]
     [InlineData(EamsPermissions.RolesWrite)]
+    [InlineData(EamsPermissions.PersonnelRead)]
+    [InlineData(EamsPermissions.PersonnelWrite)]
     public void Neither_Organizer_nor_Viewer_holds_an_administrative_code(string code)
     {
         Assert.DoesNotContain(code, GrantsFor(EamsRoleNames.Organizer));

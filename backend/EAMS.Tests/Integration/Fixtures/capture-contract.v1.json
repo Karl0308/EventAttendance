@@ -4,6 +4,10 @@
     "TapResult.record and TapBatchRowResult.record: openapi 3.0 cannot put nullable beside $ref; the wire sends JSON null on a refusal, so they are marked nullable here.",
     "CardNotFoundProblem is observed wire shape, not a published schema: the ProblemDetails schema in openapi is open. Captured 2026-10-27 from POST /attendance/tap; note RFC 7807 'type' is NOT emitted today."
   ],
+  "_amended": [
+    "2026-10-28, ADR-015 B1c-1 (D-99), deliberate: every capture code field gains an enum of the 14 TapOutcomeCode tokens published before personnel attendance, so a v1 client can never be sent PersonnelInactive or PersonnelNotInAudience.",
+    "2026-10-28, ADR-015 B1c-1 (D-99), deliberate: StudentDto and CardDto added, frozen from the same pre-personnel openapi.json, for GET /students/by-card/{cardUid}."
+  ],
   "schemas": {
     "TapResult": {
       "type": "object",
@@ -19,7 +23,23 @@
           "nullable": true
         },
         "code": {
-          "type": "string"
+          "type": "string",
+          "enum": [
+            "Recorded",
+            "DuplicateIgnored",
+            "CheckedOut",
+            "AlreadyRecorded",
+            "EventNotFound",
+            "EventNotOpen",
+            "CardNotFound",
+            "DeviceNotRegistered",
+            "DeviceMismatch",
+            "TappedAtOutOfRange",
+            "TappedAtOutsideEventWindow",
+            "DeviceTapIdRequired",
+            "BatchTooLarge",
+            "TooSoonIgnored"
+          ]
         },
         "serverTime": {
           "type": "string",
@@ -104,7 +124,23 @@
           "nullable": true
         },
         "code": {
-          "type": "string"
+          "type": "string",
+          "enum": [
+            "Recorded",
+            "DuplicateIgnored",
+            "CheckedOut",
+            "AlreadyRecorded",
+            "EventNotFound",
+            "EventNotOpen",
+            "CardNotFound",
+            "DeviceNotRegistered",
+            "DeviceMismatch",
+            "TappedAtOutOfRange",
+            "TappedAtOutsideEventWindow",
+            "DeviceTapIdRequired",
+            "BatchTooLarge",
+            "TooSoonIgnored"
+          ]
         },
         "status": {
           "type": "integer",
@@ -244,11 +280,114 @@
           "type": "string"
         },
         "code": {
-          "type": "string"
+          "type": "string",
+          "enum": [
+            "Recorded",
+            "DuplicateIgnored",
+            "CheckedOut",
+            "AlreadyRecorded",
+            "EventNotFound",
+            "EventNotOpen",
+            "CardNotFound",
+            "DeviceNotRegistered",
+            "DeviceMismatch",
+            "TappedAtOutOfRange",
+            "TappedAtOutsideEventWindow",
+            "DeviceTapIdRequired",
+            "BatchTooLarge",
+            "TooSoonIgnored"
+          ]
         },
         "serverTime": {
           "type": "string",
           "format": "date-time"
+        }
+      },
+      "additionalProperties": false
+    },
+    "StudentDto": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "studentNumber": {
+          "type": "string"
+        },
+        "fullName": {
+          "type": "string"
+        },
+        "firstName": {
+          "type": "string"
+        },
+        "middleName": {
+          "type": "string",
+          "nullable": true
+        },
+        "lastName": {
+          "type": "string"
+        },
+        "email": {
+          "type": "string",
+          "nullable": true
+        },
+        "gender": {
+          "type": "string",
+          "nullable": true
+        },
+        "photoUrl": {
+          "type": "string",
+          "nullable": true
+        },
+        "course": {
+          "type": "string",
+          "nullable": true
+        },
+        "yearLevel": {
+          "type": "string",
+          "nullable": true
+        },
+        "section": {
+          "type": "string",
+          "nullable": true
+        },
+        "status": {
+          "type": "string"
+        },
+        "cards": {
+          "type": "array",
+          "items": {
+            "$ref": "#/components/schemas/CardDto"
+          }
+        },
+        "organization": {
+          "type": "string",
+          "nullable": true
+        },
+        "department": {
+          "type": "string",
+          "nullable": true
+        }
+      },
+      "additionalProperties": false
+    },
+    "CardDto": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "cardUid": {
+          "type": "string"
+        },
+        "label": {
+          "type": "string",
+          "nullable": true
+        },
+        "isActive": {
+          "type": "boolean"
         }
       },
       "additionalProperties": false

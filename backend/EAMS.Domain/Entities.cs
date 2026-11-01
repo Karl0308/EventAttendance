@@ -309,8 +309,20 @@ public class AttendanceRecord : AuditableEntity
     public Guid? OccurrenceId { get; set; }
     public EventSchedule? Occurrence { get; set; }
 
-    public Guid StudentId { get; set; }
+    /// <summary>
+    /// Set when the attendee is a student; null when they are personnel. Exactly one of this and
+    /// <see cref="PersonnelId"/> is set — <c>CK_AttendanceRecords_StudentOrPersonnel</c> (ADR-015 D-96).
+    /// A reader that needs a student id filters <c>StudentId != null</c> in the same query (D-101).
+    /// </summary>
+    public Guid? StudentId { get; set; }
     public Student? Student { get; set; }
+
+    /// <summary>
+    /// Set when the attendee is personnel; null when they are a student (ADR-015 D-96). A personnel row's
+    /// <see cref="RfidCardId"/> stays null — personnel carry a single <c>RfidUid</c>, not a card table.
+    /// </summary>
+    public Guid? PersonnelId { get; set; }
+    public Personnel? Personnel { get; set; }
 
     public Guid? RfidCardId { get; set; }
     public RfidCard? RfidCard { get; set; }

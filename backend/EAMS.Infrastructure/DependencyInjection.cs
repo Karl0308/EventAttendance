@@ -119,6 +119,10 @@ public static class DependencyInjection
         services.AddSingleton(
             AttendanceLiveOptions.Resolve(configuration[AttendanceLiveOptions.ConfigurationKey]));
 
+        // ADR-015 D-98's test seam between a card-UID writer's re-check and its write. The no-op is the
+        // only production registration; CardUidRaceTests constructs the services with a real barrier.
+        services.AddSingleton<ICardUidWriteBarrier>(NoCardUidWriteBarrier.Instance);
+
         services.AddScoped<IStudentService, StudentService>();
 
         // The Academic Community's Personnel tab (StudentsEmployees.docx). The parallel of the student

@@ -75,3 +75,34 @@ describe("Layout nav — the student roster entry", () => {
     expect(within(mainNav()).queryByRole("link", { name: "Students" })).toBeNull();
   });
 });
+
+// ADR-015 D-104 — Personnel has its own permission pair; `students.read` no longer opens it.
+describe("Layout nav — the personnel entry", () => {
+  it("shows Personnel with personnel.read only", () => {
+    beginSession("access-token-1", userWith(PERMISSIONS.personnelRead));
+
+    showLayout();
+
+    const entry = within(mainNav()).getByRole("link", { name: "Personnel" });
+    expect(entry.getAttribute("href")).toContain("/personnel");
+    expect(within(mainNav()).queryByRole("link", { name: "Students" })).toBeNull();
+  });
+
+  it("hides Personnel with students.read only", () => {
+    beginSession("access-token-1", userWith(PERMISSIONS.studentsRead));
+
+    showLayout();
+
+    expect(within(mainNav()).queryByRole("link", { name: "Personnel" })).toBeNull();
+    expect(within(mainNav()).getByRole("link", { name: "Students" })).toBeTruthy();
+  });
+
+  it("hides Personnel under every code except personnel.read", () => {
+    const everyOther = Object.values(PERMISSIONS).filter((p) => p !== PERMISSIONS.personnelRead);
+    beginSession("access-token-1", userWith(...everyOther));
+
+    showLayout();
+
+    expect(within(mainNav()).queryByRole("link", { name: "Personnel" })).toBeNull();
+  });
+});

@@ -287,11 +287,12 @@ internal sealed class EventService : IEventService, IEventSummaryFigures
     private IQueryable<Guid> AttendedStudentIds(Guid eventId, long? ceiling) =>
         AttendanceOn(eventId, ceiling)
             .Where(a => a.Status == AttendanceStatus.Present || a.Status == AttendanceStatus.Late)
-            .Select(a => a.StudentId);
+            .Where(a => a.StudentId != null)
+            .Select(a => a.StudentId!.Value);
 
     /// <summary>Every student with any attendance row on this event. <c>EXCEPT</c> the expected set gives the walk-ins.</summary>
     private IQueryable<Guid> RecordedStudentIds(Guid eventId, long? ceiling) =>
-        AttendanceOn(eventId, ceiling).Select(a => a.StudentId);
+        AttendanceOn(eventId, ceiling).Where(a => a.StudentId != null).Select(a => a.StudentId!.Value);
 
     /// <summary>
     /// One event's attendance rows, optionally bounded by the live cursor's ceiling (Phase 4e).
@@ -836,7 +837,9 @@ internal sealed class EventService : IEventService, IEventSummaryFigures
                 Text(root, "deviceTapId"),
                 Identifier(root, "deviceId"),
                 Text(root, "serverOutcome") ?? "Unknown",
-                Text(root, "localOutcome"));
+                Text(root, "localOutcome"),
+                Identifier(root, "personnelId"),
+                Text(root, "reason"));
         }
         catch (JsonException)
         {
@@ -998,8 +1001,9 @@ internal sealed class EventService : IEventService, IEventSummaryFigures
         // event they were already allowed to read.
         if (floor > ceiling) floor = null;
 
+        // ADR-015 D-101: StudentId is nullable now; the predicate precedes the .Value in the projection.
         var q = _db.AttendanceRecords.AsNoTracking()
-            .Where(a => a.EventId == id && a.RowVersion <= ceiling);
+            .Where(a => a.EventId == id && a.RowVersion <= ceiling && a.StudentId != null);
         if (floor is { } lowerBound) q = q.Where(a => a.RowVersion > lowerBound);
 
         // Projected rather than materialized as entities: the delta needs six columns and four of the
@@ -1018,7 +1022,7 @@ internal sealed class EventService : IEventService, IEventSummaryFigures
             {
                 a.Id,
                 a.RowVersion,
-                a.StudentId,
+                StudentId = a.StudentId!.Value,
                 a.Status,
                 a.CheckInAt,
                 a.CheckOutAt,
@@ -2151,8 +2155,8 @@ internal sealed class EventService : IEventService, IEventSummaryFigures
         // OccurrenceId == null matches UX_Attendance_Event_Student_Occurrence exactly, which is the
         // index these inserts must not collide with. See AttendanceService.FindByEventStudentAsync.
         var recorded = await _db.AttendanceRecords
-            .Where(a => a.EventId == eventId && a.OccurrenceId == null)
-            .Select(a => a.StudentId)
+            .Where(a => a.EventId == eventId && a.OccurrenceId == null && a.StudentId != null)
+            .Select(a => a.StudentId!.Value)
             .ToListAsync(ct);
 
         var missing = expected.Except(recorded).ToList();

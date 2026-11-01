@@ -1,20 +1,20 @@
 namespace EAMS.Application.Dtos;
 
 /// <summary>
-/// One scan that reached the server and resolved to nobody, as <c>GET /events/{id}/scans</c> reports
-/// it.
+/// One scan that reached the server and produced no attendance row, as <c>GET /events/{id}/scans</c>
+/// reports it: a card that resolved to nobody, or a personnel card that was refused (ADR-015 D-100).
 ///
 /// <para>
-/// <b>Every row here is a scan that is in no other record.</b> A scan whose card resolves becomes an
+/// <b>Every row here is a scan that is in no other record.</b> A scan that is counted becomes an
 /// <c>AttendanceRecord</c> and is reported by <c>GET /events/{id}/roster</c> and the attendance list;
 /// it is deliberately absent from this report rather than duplicated into it. This is the remainder —
 /// the population that until now existed only as an HTTP response nobody kept.
 /// </para>
 /// </summary>
 /// <param name="CardUid">
-/// The normalized serial the device sent. It matched no active card in this school at the moment the
-/// tap was decided — which is not the same as "no such card exists now": a card issued afterwards
-/// does not retroactively resolve rows already written.
+/// The normalized serial the device sent. Unless <paramref name="PersonnelId"/> is set, it matched no
+/// active card in this school at the moment the tap was decided — which is not the same as "no such card
+/// exists now": a card issued afterwards does not retroactively resolve rows already written.
 /// </param>
 /// <param name="ScannedAt">
 /// The device's <c>tappedAt</c> for this scan, not the moment the server saw it. For an offline queue
@@ -28,14 +28,24 @@ namespace EAMS.Application.Dtos;
 /// </param>
 /// <param name="DeviceId">The device that captured it, where known.</param>
 /// <param name="ServerOutcome">
-/// What the server decided. <c>CardNotFound</c> today, and the field exists so that a second
-/// unresolved outcome can be added later without changing the shape of this report.
+/// The code the device received: <c>CardNotFound</c>, <c>PersonnelInactive</c> or
+/// <c>PersonnelNotInAudience</c>.
 /// </param>
 /// <param name="LocalOutcome">
 /// What the <em>device</em> claimed, verbatim and possibly null. <b>Never authoritative.</b> Its
 /// value is in disagreeing with <paramref name="ServerOutcome"/>: a device reporting that it found
 /// this card while the server could not resolve it is evidence of a stale manifest, a sync that did
 /// not run, or a cloned card.
+/// </param>
+/// <param name="PersonnelId">
+/// ADR-015 D-100: the personnel member the card resolved to, when it did and the tap was refused anyway
+/// (<c>PersonnelInactive</c>, <c>PersonnelNotInAudience</c>, or a client that cannot receive personnel).
+/// Null for a card that resolved to nobody. An id only — this report never carries a name.
+/// </param>
+/// <param name="Reason">
+/// Why a resolved card produced no row when <paramref name="ServerOutcome"/> alone does not say:
+/// <c>PersonnelClientNotCapable</c> when the device was told <c>CardNotFound</c> because it did not send
+/// <c>X-EAMS-Capabilities: personnel</c>. Null otherwise.
 /// </param>
 public record EventScanDto(
     string CardUid,
@@ -44,7 +54,9 @@ public record EventScanDto(
     string? DeviceTapId,
     Guid? DeviceId,
     string ServerOutcome,
-    string? LocalOutcome);
+    string? LocalOutcome,
+    Guid? PersonnelId,
+    string? Reason);
 
 /// <summary>
 /// The unresolved scans for one event, with the counts a reader needs before deciding whether the

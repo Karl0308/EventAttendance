@@ -183,4 +183,48 @@ public class PermissionRegistryTests
             "permission map (D-45). If this is a deliberate reversal, register it as a new decision " +
             "in docs/adr/README.md rather than re-minting the code.");
     }
+
+    /// <summary>
+    /// <b>ADR-015 D-104: every <c>PersonnelController</c> action is gated by <c>personnel.*</c>, and its
+    /// <c>[Authorize]</c> policy names the same code as its <c>[HasPermissionNotEnforced]</c>.</b>
+    ///
+    /// <para>
+    /// The two assertions above cannot see this: moving a route from <c>students.read</c> to
+    /// <c>personnel.read</c> leaves both codes declared somewhere, so both stay green whether or not the
+    /// move happened. And a route that changed its policy but not its recorded code — or the reverse —
+    /// passes on a stale pair, which is the one way D-104 says the coverage tests can be fooled.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public void Every_personnel_route_is_gated_by_a_personnel_code_on_both_attributes()
+    {
+        string[] personnelCodes = [EamsPermissions.PersonnelRead, EamsPermissions.PersonnelWrite];
+
+        var actions = typeof(EAMS.Api.Controllers.PersonnelController)
+            .GetMethods(BindingFlags.Public | BindingFlags.Instance | BindingFlags.DeclaredOnly)
+            .Where(m => m.GetCustomAttributes<Microsoft.AspNetCore.Mvc.Routing.HttpMethodAttribute>().Any())
+            .ToList();
+
+        Assert.NotEmpty(actions);
+
+        var wrong = actions
+            .Select(m => (
+                Action: m.Name,
+                Policies: m.GetCustomAttributes<Microsoft.AspNetCore.Authorization.AuthorizeAttribute>()
+                    .Select(a => a.Policy).ToList(),
+                Declared: m.GetCustomAttributes<HasPermissionNotEnforcedAttribute>()
+                    .Select(a => a.Permission).ToList()))
+            .Where(a => a.Policies.Count != 1 || a.Declared.Count != 1
+                || !personnelCodes.Contains(a.Declared[0], StringComparer.Ordinal)
+                || !string.Equals(a.Policies[0], a.Declared[0], StringComparison.Ordinal))
+            .Select(a => $"{a.Action}: policy [{string.Join(", ", a.Policies)}], declared [{string.Join(", ", a.Declared)}]")
+            .ToList();
+
+        Assert.True(
+            wrong.Count == 0,
+            "These personnel routes are not gated by one personnel.* code on both attributes:\n  " +
+            string.Join("\n  ", wrong) +
+            "\nADR-015 D-104 moves every personnel admin route off students.*; change the Policy and the " +
+            "[HasPermissionNotEnforced] code in the same edit.");
+    }
 }

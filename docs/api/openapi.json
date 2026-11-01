@@ -984,7 +984,7 @@
             }
           },
           "404": {
-            "description": "`EventNotFound`, `CardNotFound` or `DeviceNotRegistered`. The last also covers a\r\n             device belonging to another school — deliberately indistinguishable.",
+            "description": "`EventNotFound`, `CardNotFound` or `DeviceNotRegistered`. The last also covers a\r\n             device belonging to another school — deliberately indistinguishable. A client that sent\r\n             `X-EAMS-Capabilities: personnel` can also receive `PersonnelInactive` or\r\n             `PersonnelNotInAudience`; without the header a personnel card is `CardNotFound`.",
             "content": {
               "text/plain": {
                 "schema": {
@@ -14076,7 +14076,7 @@
         "properties": {
           "cardUid": {
             "type": "string",
-            "description": "The normalized serial the device sent. It matched no active card in this school at the moment the\r\ntap was decided — which is not the same as \"no such card exists now\": a card issued afterwards\r\ndoes not retroactively resolve rows already written."
+            "description": "The normalized serial the device sent. Unless PersonnelId is set, it matched no\r\nactive card in this school at the moment the tap was decided — which is not the same as \"no such card\r\nexists now\": a card issued afterwards does not retroactively resolve rows already written."
           },
           "scannedAt": {
             "type": "string",
@@ -14101,16 +14101,27 @@
           },
           "serverOutcome": {
             "type": "string",
-            "description": "What the server decided. `CardNotFound` today, and the field exists so that a second\r\nunresolved outcome can be added later without changing the shape of this report."
+            "description": "The code the device received: `CardNotFound`, `PersonnelInactive` or\r\n`PersonnelNotInAudience`."
           },
           "localOutcome": {
             "type": "string",
             "description": "What the <em>device</em> claimed, verbatim and possibly null. <b>Never authoritative.</b> Its\r\nvalue is in disagreeing with ServerOutcome: a device reporting that it found\r\nthis card while the server could not resolve it is evidence of a stale manifest, a sync that did\r\nnot run, or a cloned card.",
             "nullable": true
+          },
+          "personnelId": {
+            "type": "string",
+            "description": "ADR-015 D-100: the personnel member the card resolved to, when it did and the tap was refused anyway\r\n(`PersonnelInactive`, `PersonnelNotInAudience`, or a client that cannot receive personnel).\r\nNull for a card that resolved to nobody. An id only — this report never carries a name.",
+            "format": "uuid",
+            "nullable": true
+          },
+          "reason": {
+            "type": "string",
+            "description": "Why a resolved card produced no row when ServerOutcome alone does not say:\r\n`PersonnelClientNotCapable` when the device was told `CardNotFound` because it did not send\r\n`X-EAMS-Capabilities: personnel`. Null otherwise.",
+            "nullable": true
           }
         },
         "additionalProperties": false,
-        "description": "One scan that reached the server and resolved to nobody, as `GET /events/{id}/scans` reports\r\nit.\r\n            \r\n\r\n<b>Every row here is a scan that is in no other record.</b> A scan whose card resolves becomes an\r\n`AttendanceRecord` and is reported by `GET /events/{id}/roster` and the attendance list;\r\nit is deliberately absent from this report rather than duplicated into it. This is the remainder —\r\nthe population that until now existed only as an HTTP response nobody kept.\r\n"
+        "description": "One scan that reached the server and produced no attendance row, as `GET /events/{id}/scans`\r\nreports it: a card that resolved to nobody, or a personnel card that was refused (ADR-015 D-100).\r\n            \r\n\r\n<b>Every row here is a scan that is in no other record.</b> A scan that is counted becomes an\r\n`AttendanceRecord` and is reported by `GET /events/{id}/roster` and the attendance list;\r\nit is deliberately absent from this report rather than duplicated into it. This is the remainder —\r\nthe population that until now existed only as an HTTP response nobody kept.\r\n"
       },
       "EventScanLogDto": {
         "type": "object",
@@ -15763,10 +15774,12 @@
           "TappedAtOutsideEventWindow",
           "DeviceTapIdRequired",
           "BatchTooLarge",
-          "TooSoonIgnored"
+          "TooSoonIgnored",
+          "PersonnelInactive",
+          "PersonnelNotInAudience"
         ],
         "type": "string",
-        "description": "The `code` returned by `POST /attendance/tap` and by every row of\n`POST /attendance/tap/batch`, on success bodies and RFC 7807 problem bodies alike.\n\n**This list is frozen published contract.** A rename here is a breaking change for a\nclient we cannot recompile, and the symptom is a queue that quietly stops reconciling\nrather than anything that looks like a failure. A build-gating test pins it.\n\nQueue guidance: a `2xx` row is done — drop it. A `4xx` row will be refused identically\nforever — stop retrying rather than skipping past it, and flush strictly in order.\n`BatchTooLarge` is the one exception: chunk to `maxBatchRows` and resend.\n\n`TooSoonIgnored` is a `2xx`: the same card was counted less than the minimum tap\ninterval ago (3 s), so nothing was written. Drop the row and show the student nothing.\n\n| `code` | HTTP |\n|---|---|\n| `Recorded` | 200 |\n| `DuplicateIgnored` | 200 |\n| `CheckedOut` | 200 |\n| `AlreadyRecorded` | 200 |\n| `EventNotFound` | 404 |\n| `EventNotOpen` | 400 |\n| `CardNotFound` | 404 |\n| `DeviceNotRegistered` | 404 |\n| `DeviceMismatch` | 400 |\n| `TappedAtOutOfRange` | 400 |\n| `TappedAtOutsideEventWindow` | 400 |\n| `DeviceTapIdRequired` | 400 |\n| `BatchTooLarge` | 400 |\n| `TooSoonIgnored` | 200 |"
+        "description": "The `code` returned by `POST /attendance/tap` and by every row of\n`POST /attendance/tap/batch`, on success bodies and RFC 7807 problem bodies alike.\n\n**This list is frozen published contract.** A rename here is a breaking change for a\nclient we cannot recompile, and the symptom is a queue that quietly stops reconciling\nrather than anything that looks like a failure. A build-gating test pins it.\n\nQueue guidance: a `2xx` row is done — drop it. A `4xx` row will be refused identically\nforever — stop retrying rather than skipping past it, and flush strictly in order.\n`BatchTooLarge` is the one exception: chunk to `maxBatchRows` and resend.\n\n`TooSoonIgnored` is a `2xx`: the same card was counted less than the minimum tap\ninterval ago (3 s), so nothing was written. Drop the row and show the student nothing.\n\n| `code` | HTTP |\n|---|---|\n| `Recorded` | 200 |\n| `DuplicateIgnored` | 200 |\n| `CheckedOut` | 200 |\n| `AlreadyRecorded` | 200 |\n| `EventNotFound` | 404 |\n| `EventNotOpen` | 400 |\n| `CardNotFound` | 404 |\n| `DeviceNotRegistered` | 404 |\n| `DeviceMismatch` | 400 |\n| `TappedAtOutOfRange` | 400 |\n| `TappedAtOutsideEventWindow` | 400 |\n| `DeviceTapIdRequired` | 400 |\n| `BatchTooLarge` | 400 |\n| `TooSoonIgnored` | 200 |\n| `PersonnelInactive` | 404 |\n| `PersonnelNotInAudience` | 404 |"
       },
       "TapRequest": {
         "type": "object",

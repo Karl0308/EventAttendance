@@ -108,6 +108,9 @@ namespace EAMS.Infrastructure.Migrations
                     b.Property<Guid?>("OccurrenceId")
                         .HasColumnType("uniqueidentifier");
 
+                    b.Property<Guid?>("PersonnelId")
+                        .HasColumnType("uniqueidentifier");
+
                     b.Property<Guid?>("RecordedByUserId")
                         .HasColumnType("uniqueidentifier");
 
@@ -127,7 +130,7 @@ namespace EAMS.Infrastructure.Migrations
                         .HasMaxLength(20)
                         .HasColumnType("nvarchar(20)");
 
-                    b.Property<Guid>("StudentId")
+                    b.Property<Guid?>("StudentId")
                         .HasColumnType("uniqueidentifier");
 
                     b.Property<DateTime>("UpdatedAt")
@@ -138,6 +141,8 @@ namespace EAMS.Infrastructure.Migrations
                     b.HasIndex("DeviceId");
 
                     b.HasIndex("OccurrenceId");
+
+                    b.HasIndex("PersonnelId");
 
                     b.HasIndex("RecordedByUserId");
 
@@ -151,9 +156,15 @@ namespace EAMS.Infrastructure.Migrations
                     b.HasIndex("EventId", "Status")
                         .HasDatabaseName("IX_Attendance_EventId_Status");
 
+                    b.HasIndex("EventId", "PersonnelId", "OccurrenceId")
+                        .IsUnique()
+                        .HasDatabaseName("UX_Attendance_Event_Personnel_Occurrence")
+                        .HasFilter("[PersonnelId] IS NOT NULL");
+
                     b.HasIndex("EventId", "StudentId", "OccurrenceId")
                         .IsUnique()
-                        .HasDatabaseName("UX_Attendance_Event_Student_Occurrence");
+                        .HasDatabaseName("UX_Attendance_Event_Student_Occurrence")
+                        .HasFilter("[StudentId] IS NOT NULL");
 
                     b.HasIndex("SchoolId", "DeviceId", "CheckOutDeviceTapId")
                         .IsUnique()
@@ -165,7 +176,10 @@ namespace EAMS.Infrastructure.Migrations
                         .HasDatabaseName("UX_Attendance_Device_DeviceTapId")
                         .HasFilter("[DeviceTapId] IS NOT NULL");
 
-                    b.ToTable("AttendanceRecords", (string)null);
+                    b.ToTable("AttendanceRecords", null, t =>
+                        {
+                            t.HasCheckConstraint("CK_AttendanceRecords_StudentOrPersonnel", "([StudentId] IS NOT NULL AND [PersonnelId] IS NULL) OR ([StudentId] IS NULL AND [PersonnelId] IS NOT NULL)");
+                        });
                 });
 
             modelBuilder.Entity("EAMS.Domain.AudienceDefinition", b =>
@@ -826,6 +840,29 @@ namespace EAMS.Infrastructure.Migrations
                         {
                             t.HasCheckConstraint("CK_EventGroups_GroupOrStudent", "([StudentGroupId] IS NULL AND [StudentId] IS NOT NULL) OR ([StudentGroupId] IS NOT NULL AND [StudentId] IS NULL)");
                         });
+                });
+
+            modelBuilder.Entity("EAMS.Domain.EventPersonnel", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<Guid>("EventId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<Guid>("PersonnelId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("PersonnelId");
+
+                    b.HasIndex("EventId", "PersonnelId")
+                        .IsUnique()
+                        .HasDatabaseName("UX_EventPersonnel_Event_Personnel");
+
+                    b.ToTable("EventPersonnel", (string)null);
                 });
 
             modelBuilder.Entity("EAMS.Domain.EventSchedule", b =>
@@ -2138,6 +2175,11 @@ namespace EAMS.Infrastructure.Migrations
                         .HasForeignKey("OccurrenceId")
                         .OnDelete(DeleteBehavior.Restrict);
 
+                    b.HasOne("EAMS.Domain.Personnel", "Personnel")
+                        .WithMany()
+                        .HasForeignKey("PersonnelId")
+                        .OnDelete(DeleteBehavior.Restrict);
+
                     b.HasOne("EAMS.Domain.User", "RecordedByUser")
                         .WithMany()
                         .HasForeignKey("RecordedByUserId")
@@ -2157,14 +2199,15 @@ namespace EAMS.Infrastructure.Migrations
                     b.HasOne("EAMS.Domain.Student", "Student")
                         .WithMany()
                         .HasForeignKey("StudentId")
-                        .OnDelete(DeleteBehavior.Restrict)
-                        .IsRequired();
+                        .OnDelete(DeleteBehavior.Restrict);
 
                     b.Navigation("Device");
 
                     b.Navigation("Event");
 
                     b.Navigation("Occurrence");
+
+                    b.Navigation("Personnel");
 
                     b.Navigation("RecordedByUser");
 
@@ -2431,6 +2474,25 @@ namespace EAMS.Infrastructure.Migrations
                     b.Navigation("Student");
 
                     b.Navigation("StudentGroup");
+                });
+
+            modelBuilder.Entity("EAMS.Domain.EventPersonnel", b =>
+                {
+                    b.HasOne("EAMS.Domain.Event", "Event")
+                        .WithMany()
+                        .HasForeignKey("EventId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("EAMS.Domain.Personnel", "Personnel")
+                        .WithMany()
+                        .HasForeignKey("PersonnelId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.Navigation("Event");
+
+                    b.Navigation("Personnel");
                 });
 
             modelBuilder.Entity("EAMS.Domain.EventSchedule", b =>
