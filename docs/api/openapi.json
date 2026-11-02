@@ -8528,8 +8528,8 @@
         "tags": [
           "Reports"
         ],
-        "summary": "Task 9.6 `GET /reports/event/{eventId}/attendees` — the report's student list, paged: every\r\nstudent who tapped in, with Time In, Time Out and Duration.",
-        "description": "\r\n\r\n  <b>Paged like every admin list</b> (`?page=` 1-based, `?pageSize=` default\r\n             EAMS.Application.Dtos.Paging.DefaultPageSize, clamped to EAMS.Application.Dtos.Paging.MaxPageSize), because an\r\n             assembly can have thousands of attendees. A client that wants every row walks the pages;\r\n             `GET /reports/event/{eventId}/export.csv` is the unpaged form, written from the same query.\r\n             \r\n\r\n\r\n  <b>Which rows:</b> the event's attendance rows with a Time In, in any status. `total` therefore\r\n             equals the detail report's `timeInOut.tappedIn`. <b>Order:</b> last name, first name, middle\r\n             name, student number, Time In, record id — total, so pages never overlap or skip on a stable event.\r\n             On an `Open` event a tap landing between two page reads can shift later rows, as on every\r\n             offset-paged list.\r\n             \r\n\r\n\r\n  <b>For a `Single` event `timeOut` and `durationSeconds` are always `null`</b>\r\n             (QA Q12). Otherwise `durationSeconds` is Time Out − Time In in whole seconds, and `null`\r\n             exactly when `timeOut` is.\r\n             ",
+        "summary": "Task 9.6 `GET /reports/event/{eventId}/attendees` — the report's attendee list, paged: every\r\nstudent and personnel member who tapped in, with `personType`, Time In, Time Out and Duration.",
+        "description": "\r\n\r\n  <b>Paged like every admin list</b> (`?page=` 1-based, `?pageSize=` default\r\n             EAMS.Application.Dtos.Paging.DefaultPageSize, clamped to EAMS.Application.Dtos.Paging.MaxPageSize), because an\r\n             assembly can have thousands of attendees. A client that wants every row walks the pages;\r\n             `GET /reports/event/{eventId}/export.csv` is the unpaged form, written from the same query.\r\n             \r\n\r\n\r\n  <b>Which rows:</b> the event's attendance rows with a Time In, in any status. `total` therefore\r\n             equals the detail report's `timeInOut.tappedIn`. <b>Order:</b> last name, first name, middle\r\n             name, student or personnel number, Time In, record id — total, so pages never overlap or skip on a stable event.\r\n             On an `Open` event a tap landing between two page reads can shift later rows, as on every\r\n             offset-paged list.\r\n             \r\n\r\n\r\n  <b>For a `Single` event `timeOut` and `durationSeconds` are always `null`</b>\r\n             (QA Q12). Otherwise `durationSeconds` is Time Out − Time In in whole seconds, and `null`\r\n             exactly when `timeOut` is.\r\n             ",
         "parameters": [
           {
             "name": "eventId",
@@ -8654,7 +8654,7 @@
         "tags": [
           "Reports"
         ],
-        "summary": "Task 9.6 `GET /reports/event/{eventId}/export.csv` — the whole single-event report as a CSV\r\ndownload: particulars, totals, and every row of the student list.",
+        "summary": "Task 9.6 `GET /reports/event/{eventId}/export.csv` — the whole single-event report as a CSV\r\ndownload: particulars, totals, and every row of the attendee list.",
         "description": "\r\n\r\n  <b>The same numbers and rows as `/detail` and `/attendees`, from the same queries</b>, so\r\n             the file agrees with the screen row for row. Under `reports.read` — no separate export\r\n             permission (JJ decision B: CSV from the server now; printing is the SPA's; no PDF).\r\n             \r\n\r\n\r\n  `text/csv; charset=utf-8`\r\n  <b>with a UTF-8 byte-order mark</b> so Excel reads ñ correctly;\r\n             RFC 4180 quoting; CRLF records; `Content-Disposition: attachment` named\r\n             `EAMS-event-report-{startDate}-{eventId}.csv`; `Cache-Control: no-store`. A cell that\r\n             begins with `=`, `+`, `-`, `@`, tab or CR is prefixed with `'` so a\r\n             spreadsheet cannot run it as a formula. <b>Times are UTC</b>, ISO 8601 with `Z`, to the\r\n             second, and the headings say so. A `Single` event's file has no time-out totals and no Time Out\r\n             or Duration columns (QA Q12).\r\n             ",
         "parameters": [
           {
@@ -14021,7 +14021,7 @@
           }
         },
         "additionalProperties": false,
-        "description": "`GET /reports/event/{eventId}/detail` — Task 9.6's single-event report: the event's\r\n            particulars, its summary figures, and (for a `TimeInOut` event) its time-out totals. The\r\n            student list is paged separately (`GET /reports/event/{eventId}/attendees`) and the whole thing\r\n            exports as one CSV (`GET /reports/event/{eventId}/export.csv`)."
+        "description": "`GET /reports/event/{eventId}/detail` — Task 9.6's single-event report: the event's\r\n            particulars, its summary figures, and (for a `TimeInOut` event) its time-out totals. The\r\n            attendee list is paged separately (`GET /reports/event/{eventId}/attendees`) and the whole thing\r\n            exports as one CSV (`GET /reports/event/{eventId}/export.csv`)."
       },
       "EventDto": {
         "type": "object",
@@ -14346,12 +14346,14 @@
         "properties": {
           "studentId": {
             "type": "string",
-            "description": "The student.",
-            "format": "uuid"
+            "description": "The student; null on a personnel row.",
+            "format": "uuid",
+            "nullable": true
           },
           "studentNumber": {
             "type": "string",
-            "description": "The school's student number, as stored."
+            "description": "The school's student number, as stored; null on a personnel row.",
+            "nullable": true
           },
           "lastName": {
             "type": "string",
@@ -14373,7 +14375,7 @@
           },
           "timeOut": {
             "type": "string",
-            "description": "The Time Out (`CheckOutAt` — the last accepted tap), UTC; null when the student never timed\r\nout, and <b>always null for a `Single` event</b> (QA Q12).",
+            "description": "The Time Out (`CheckOutAt` — the last accepted tap), UTC; null when the attendee never timed\r\nout, and <b>always null for a `Single` event</b> (QA Q12).",
             "format": "date-time",
             "nullable": true
           },
@@ -14382,10 +14384,25 @@
             "description": "TimeOut − TimeIn in whole seconds (SQL Server\r\n            `DATEDIFF(SECOND, …)`); null exactly when TimeOut is.",
             "format": "int64",
             "nullable": true
+          },
+          "personType": {
+            "type": "string",
+            "description": "`Student` or `Personnel`, always present."
+          },
+          "personnelId": {
+            "type": "string",
+            "description": "Null on a student row.",
+            "format": "uuid",
+            "nullable": true
+          },
+          "personnelNumber": {
+            "type": "string",
+            "description": "Null on a student row.",
+            "nullable": true
           }
         },
         "additionalProperties": false,
-        "description": "One line of a Task 9.6 student list: a student who tapped in. Ordered by last name, first name,\r\nmiddle name, student number, Time In, then record id — so the order is total and a printout, the\r\nCSV and every page agree."
+        "description": "One line of a Task 9.6 attendee list: a student or a personnel member who tapped in (ADR-015 D-101).\r\nOrdered by last name, first name, middle name, student or personnel number, Time In, then record id —\r\nso the order is total and a printout, the CSV and every page agree."
       },
       "EventReportAttendeeDtoPagedResult": {
         "type": "object",
@@ -14488,12 +14505,12 @@
           },
           "expected": {
             "type": "integer",
-            "description": "The invited population (ADR-003 D-19). For a `Closed` or `Cancelled` event this is the\r\naudience frozen when it closed, so a later roster import cannot move a past event's number.",
+            "description": "The invited population, students plus personnel (ADR-003 D-19, ADR-015 D-102). For a `Closed` or\r\n`Cancelled` event this is the audience frozen when it closed, so a later roster import cannot move\r\na past event's number.",
             "format": "int32"
           },
           "attended": {
             "type": "integer",
-            "description": "Expected students with a `Present` or `Late` record — the numerator of\r\nAttendanceRate. It is published so a multi-event total can be checked by hand:\r\nthe pooled rate is the sum of these over the sum of Expected.",
+            "description": "Expected attendees with a `Present` or `Late` record — the numerator of\r\nAttendanceRate. It is published so a multi-event total can be checked by hand:\r\nthe pooled rate is the sum of these over the sum of Expected.",
             "format": "int32"
           },
           "present": {
@@ -14518,13 +14535,23 @@
           },
           "unexpected": {
             "type": "integer",
-            "description": "Students with a record who were not in the expected population.",
+            "description": "Attendees with a record who were not in the expected population.",
             "format": "int32"
           },
           "attendanceRate": {
             "type": "number",
             "description": "Attended ÷ Expected × 100, to one decimal place; 0 when\r\n            nothing is expected. It cannot exceed 100.",
             "format": "double"
+          },
+          "expectedStudents": {
+            "type": "integer",
+            "description": "The students in Expected.",
+            "format": "int32"
+          },
+          "expectedPersonnel": {
+            "type": "integer",
+            "description": "The personnel in Expected.",
+            "format": "int32"
           }
         },
         "additionalProperties": false,
@@ -14601,7 +14628,7 @@
           },
           "expected": {
             "type": "integer",
-            "description": "The invited population: the expected students plus the expected personnel, each de-duplicated. This is\r\nthe denominator §4.5 and §12 mean, and it is <em>not</em> the length of EAMS.Application.Dtos.EventRosterDto.Entries — a student\r\nwho tapped without being invited is listed with `IsExpected = false` and is not counted here.\r\n            \r\n\r\n\r\nWhile the event is live the soft-deleted are excluded: a student the roster says does not exist\r\ncannot be expected to attend. Once EAMS.Application.Dtos.EventRosterDto.IsFrozen they are included, because by then this\r\nis a written-down record of who was invited and a student deleted next year must not retroactively\r\nshrink a past event's denominator.\r\n",
+            "description": "The invited population: the expected students plus the expected personnel, each de-duplicated. This is\r\nthe denominator §4.5 and §12 mean, and it is <em>not</em> the length of EAMS.Application.Dtos.EventRosterDto.Entries — someone\r\nwho tapped without being invited is listed with `IsExpected = false` and is not counted here.\r\n            \r\n\r\n\r\nWhile the event is live the soft-deleted are excluded: a student the roster says does not exist\r\ncannot be expected to attend. Once EAMS.Application.Dtos.EventRosterDto.IsFrozen they are included, because by then this\r\nis a written-down record of who was invited and a student deleted next year must not retroactively\r\nshrink a past event's denominator.\r\n",
             "format": "int32"
           },
           "present": {
@@ -14627,7 +14654,7 @@
           },
           "unexpected": {
             "type": "integer",
-            "description": "Entries flagged `IsExpected = false` — recorded but never invited — plus any personnel in the same\r\nposition. The same number `GET /events/{id}/summary` reports under the same name, so the two views\r\nof one event agree about how many walk-ins it had.",
+            "description": "Entries flagged `IsExpected = false` — recorded but never invited. The same number\r\n`GET /events/{id}/summary` reports under the same name, so the two views of one event agree about\r\nhow many walk-ins it had.",
             "format": "int32"
           },
           "entries": {
@@ -14648,32 +14675,38 @@
           }
         },
         "additionalProperties": false,
-        "description": "`GET /events/{id}/roster` — §6.3's \"expected vs present roster\" and the source of §12's\r\n             Absentee Report.\r\n            \r\n             \r\n<b>The header counts both populations and EAMS.Application.Dtos.EventRosterDto.Entries lists students</b> (ADR-015 D-102). The\r\n             student part of the header is counted over exactly the rows listed; the personnel part comes from the\r\n             same attendance rows `GET /events/{id}/summary` counts, so the header matches the summary.\r\n             "
+        "description": "`GET /events/{id}/roster` — §6.3's \"expected vs present roster\" and the source of §12's\r\n             Absentee Report.\r\n            \r\n             \r\n<b>The header counts both populations and EAMS.Application.Dtos.EventRosterDto.Entries lists both</b> (ADR-015 D-101, D-102),\r\n             so every header figure is what the entries add up to, and the header matches the summary.\r\n             "
       },
       "EventRosterEntryDto": {
         "type": "object",
         "properties": {
           "studentId": {
             "type": "string",
-            "format": "uuid"
+            "description": "Null on a personnel row.",
+            "format": "uuid",
+            "nullable": true
           },
           "studentNumber": {
-            "type": "string"
+            "type": "string",
+            "description": "Null on a personnel row.",
+            "nullable": true
           },
           "fullName": {
-            "type": "string"
+            "type": "string",
+            "description": "The person's name, either population."
           },
           "section": {
             "type": "string",
+            "description": "The student's section; always null on a personnel row.",
             "nullable": true
           },
           "isExpected": {
             "type": "boolean",
-            "description": "Whether the event's audience includes this student. False means a walk-in: they have an attendance\r\nrecord but no invitation. Listed rather than hidden, because the alternative is a roster whose rows\r\ndo not add up to the summary an organizer is looking at beside it."
+            "description": "Whether the event's audience includes this person. False means a walk-in: they have an attendance\r\nrecord but no invitation. Listed rather than hidden, because the alternative is a roster whose rows\r\ndo not add up to the summary an organizer is looking at beside it."
           },
           "status": {
             "type": "string",
-            "description": "The §4.9 status, or `null` for an expected student with no record yet. Null is the absentee\r\nsignal before a close; there are none after one.",
+            "description": "The §4.9 status, or `null` for an expected attendee with no record yet. Null is the absentee\r\nsignal before a close; there are none after one.",
             "nullable": true
           },
           "checkInAt": {
@@ -14689,10 +14722,25 @@
           "captureMethod": {
             "type": "string",
             "nullable": true
+          },
+          "personType": {
+            "type": "string",
+            "description": "`Student` or `Personnel`, always present."
+          },
+          "personnelId": {
+            "type": "string",
+            "description": "Null on a student row.",
+            "format": "uuid",
+            "nullable": true
+          },
+          "personnelNumber": {
+            "type": "string",
+            "description": "Null on a student row.",
+            "nullable": true
           }
         },
         "additionalProperties": false,
-        "description": "One line of the roster."
+        "description": "One line of the roster: a student or a personnel member. Students are listed first, then personnel,\r\neach by name."
       },
       "EventScanDto": {
         "type": "object",

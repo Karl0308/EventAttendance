@@ -179,8 +179,8 @@ internal sealed class ReportService : IReportService
     /// Time In. Tenant-scoped by the <c>AttendanceRecord</c> query filter, as every attendance read is.
     ///
     /// <para>
-    /// <b>No student soft-delete filter, deliberately — the same rows the summary's status buckets
-    /// count.</b> A report beside those buckets that silently dropped a since-deleted student's tap
+    /// <b>No soft-delete filter on either population, deliberately — the same rows the summary's status
+    /// buckets count.</b> A report beside those buckets that silently dropped a since-deleted person's tap
     /// would describe a different population from the numbers next to it, and a past event's report
     /// would shrink whenever the roster was tidied.
     /// </para>
@@ -246,33 +246,54 @@ internal sealed class ReportService : IReportService
     }
 
     /// <summary>
-    /// The student list's one ordering and one projection, shared by the paged read and the export.
+    /// The attendee list's one ordering and one projection, shared by the paged read and the export.
     /// The order is total — the record id breaks every remaining tie — so a page boundary, a printout
     /// and the CSV all put the same row in the same place.
+    ///
+    /// <para>
+    /// <b>Students and personnel sort together (ADR-015 D-101), in one statement.</b> Exactly one of the two
+    /// joins matches, by <c>CK_AttendanceRecords_StudentOrPersonnel</c>. The joins are <c>LEFT</c> and only
+    /// the tenant filter sits on them, so a soft-deleted person keeps their row and name, as
+    /// <see cref="TappedIn"/> explains.
+    /// </para>
     /// </summary>
     private static IQueryable<EventReportAttendeeDto> AttendeesInOrder(
         IQueryable<AttendanceRecord> rows, bool timeInOut) =>
         rows
-            // ADR-015 D-101: StudentId is nullable now; the predicate precedes the .Value below.
-            .Where(a => a.StudentId != null)
-            .OrderBy(a => a.Student!.LastName)
-            .ThenBy(a => a.Student!.FirstName)
-            .ThenBy(a => a.Student!.MiddleName)
-            .ThenBy(a => a.Student!.StudentNumber)
+            .Select(a => new
+            {
+                a.Id,
+                a.StudentId,
+                a.PersonnelId,
+                a.CheckInAt,
+                a.CheckOutAt,
+                StudentNumber = (string?)a.Student!.StudentNumber,
+                PersonnelNumber = (string?)a.Personnel!.PersonnelNumber,
+                LastName = a.StudentId != null ? a.Student!.LastName : a.Personnel!.LastName,
+                FirstName = a.StudentId != null ? a.Student!.FirstName : a.Personnel!.FirstName,
+                MiddleName = a.StudentId != null ? a.Student!.MiddleName : a.Personnel!.MiddleName,
+            })
+            .OrderBy(a => a.LastName)
+            .ThenBy(a => a.FirstName)
+            .ThenBy(a => a.MiddleName)
+            .ThenBy(a => a.StudentNumber ?? a.PersonnelNumber)
             .ThenBy(a => a.CheckInAt)
             .ThenBy(a => a.Id)
             .Select(a => new EventReportAttendeeDto(
-                a.StudentId!.Value,
-                a.Student!.StudentNumber,
-                a.Student!.LastName,
-                a.Student!.FirstName,
-                a.Student!.MiddleName,
+                a.StudentId,
+                a.StudentNumber,
+                a.LastName,
+                a.FirstName,
+                a.MiddleName,
                 a.CheckInAt!.Value,
                 // QA Q12: a Single event shows no Time Out whatever the row holds.
                 timeInOut ? a.CheckOutAt : null,
                 timeInOut && a.CheckOutAt != null
                     ? (long?)EF.Functions.DateDiffSecond(a.CheckInAt, a.CheckOutAt)
-                    : null));
+                    : null,
+                a.StudentId != null ? AttendeePersonType.Student : AttendeePersonType.Personnel,
+                a.PersonnelId,
+                a.PersonnelNumber));
 
     private static EventReportRowDto RowFor(Event ev, EventSummaryFigures figures)
     {
@@ -281,7 +302,8 @@ internal sealed class ReportService : IReportService
             s.EventId, s.EventName, ev.Status, ev.StartAt,
             s.Expected, figures.Attended,
             s.Present, s.Late, s.Absent, s.Excused, s.Unexpected,
-            s.AttendanceRate);
+            s.AttendanceRate,
+            s.ExpectedStudents, s.ExpectedPersonnel);
     }
 
     private static MultiEventReportResponse Refused(MultiEventReportOutcome outcome, string message) =>

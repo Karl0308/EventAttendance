@@ -354,14 +354,13 @@ public record EventAudienceStudentDto(
 /// Absentee Report.
 ///
 /// <para>
-/// <b>The header counts both populations and <see cref="Entries"/> lists students</b> (ADR-015 D-102). The
-/// student part of the header is counted over exactly the rows listed; the personnel part comes from the
-/// same attendance rows <c>GET /events/{id}/summary</c> counts, so the header matches the summary.
+/// <b>The header counts both populations and <see cref="Entries"/> lists both</b> (ADR-015 D-101, D-102),
+/// so every header figure is what the entries add up to, and the header matches the summary.
 /// </para>
 /// </summary>
 /// <param name="Expected">
 /// The invited population: the expected students plus the expected personnel, each de-duplicated. This is
-/// the denominator §4.5 and §12 mean, and it is <em>not</em> the length of <see cref="Entries"/> — a student
+/// the denominator §4.5 and §12 mean, and it is <em>not</em> the length of <see cref="Entries"/> — someone
 /// who tapped without being invited is listed with <c>IsExpected = false</c> and is not counted here.
 ///
 /// <para>
@@ -378,9 +377,9 @@ public record EventAudienceStudentDto(
 /// honest answer: the invitation list was frozen, and nobody attended because the event did not happen.
 /// </param>
 /// <param name="Unexpected">
-/// Entries flagged <c>IsExpected = false</c> — recorded but never invited — plus any personnel in the same
-/// position. The same number <c>GET /events/{id}/summary</c> reports under the same name, so the two views
-/// of one event agree about how many walk-ins it had.
+/// Entries flagged <c>IsExpected = false</c> — recorded but never invited. The same number
+/// <c>GET /events/{id}/summary</c> reports under the same name, so the two views of one event agree about
+/// how many walk-ins it had.
 /// </param>
 /// <param name="ExpectedStudents">The students in <see cref="Expected"/>.</param>
 /// <param name="ExpectedPersonnel">The personnel in <see cref="Expected"/>.</param>
@@ -413,24 +412,35 @@ public record EventRosterDto(
     int ExpectedPersonnel);
 
 /// <summary>
-/// One line of the roster.
+/// One line of the roster: a student or a personnel member. Students are listed first, then personnel,
+/// each by name.
 /// </summary>
+/// <param name="StudentId">Null on a personnel row.</param>
+/// <param name="StudentNumber">Null on a personnel row.</param>
+/// <param name="FullName">The person's name, either population.</param>
+/// <param name="Section">The student's section; always null on a personnel row.</param>
 /// <param name="IsExpected">
-/// Whether the event's audience includes this student. False means a walk-in: they have an attendance
+/// Whether the event's audience includes this person. False means a walk-in: they have an attendance
 /// record but no invitation. Listed rather than hidden, because the alternative is a roster whose rows
 /// do not add up to the summary an organizer is looking at beside it.
 /// </param>
 /// <param name="Status">
-/// The §4.9 status, or <c>null</c> for an expected student with no record yet. Null is the absentee
+/// The §4.9 status, or <c>null</c> for an expected attendee with no record yet. Null is the absentee
 /// signal before a close; there are none after one.
 /// </param>
+/// <param name="PersonType"><c>Student</c> or <c>Personnel</c>, always present.</param>
+/// <param name="PersonnelId">Null on a student row.</param>
+/// <param name="PersonnelNumber">Null on a student row.</param>
 public record EventRosterEntryDto(
-    Guid StudentId,
-    string StudentNumber,
+    Guid? StudentId,
+    string? StudentNumber,
     string FullName,
     string? Section,
     bool IsExpected,
     string? Status,
     DateTime? CheckInAt,
     DateTime? CheckOutAt,
-    string? CaptureMethod);
+    string? CaptureMethod,
+    string PersonType,
+    Guid? PersonnelId,
+    string? PersonnelNumber);

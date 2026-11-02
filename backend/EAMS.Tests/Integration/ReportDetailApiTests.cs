@@ -431,7 +431,7 @@ public class ReportDetailApiTests : IntegrationTest
             var a = screen[i];
             string[] expected =
             [
-                a.StudentNumber, a.LastName, a.FirstName, a.MiddleName ?? "",
+                a.StudentNumber!, a.LastName, a.FirstName, a.MiddleName ?? "",
                 EventReportCsv.Time(a.TimeIn),
                 a.TimeOut is { } o ? EventReportCsv.Time(o) : "",
                 a.DurationSeconds is { } d ? EventReportCsv.Duration(d) : "",

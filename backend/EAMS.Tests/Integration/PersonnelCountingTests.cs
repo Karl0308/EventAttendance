@@ -187,7 +187,7 @@ public class PersonnelCountingTests : IntegrationTest
         Assert.Equal((1, 1, 0), (detached.Expected, detached.ExpectedStudents, detached.ExpectedPersonnel));
     }
 
-    /// <summary>The roster header and the summary describe one event, though the entries list students.</summary>
+    /// <summary>The roster header and the summary describe one event, and both populations are listed.</summary>
     [Fact]
     public async Task The_roster_header_matches_the_summary_on_a_mixed_event()
     {
@@ -211,7 +211,9 @@ public class PersonnelCountingTests : IntegrationTest
 
         // The attached student has not tapped, and the personnel member who stayed has.
         Assert.Equal(1, roster.NotRecorded);
-        Assert.Equal(world.StudentId, Assert.Single(roster.Entries).StudentId);
+        Assert.Equal(world.StudentId, Assert.Single(
+            roster.Entries, e => e.PersonType == AttendeePersonType.Student).StudentId);
+        Assert.Equal(2, roster.Entries.Count(e => e.PersonType == AttendeePersonType.Personnel));
     }
 
     /// <summary>D-102's "what each advisory field becomes", with the figures chosen to be different.</summary>

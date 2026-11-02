@@ -908,64 +908,71 @@ internal sealed class EventService : IEventService, IEventSummaryFigures
 
         var entries = rows.Select(r => new EventRosterEntryDto(
             r.Id, r.StudentNumber,
-            string.Join(' ', new[] { r.FirstName, r.MiddleName, r.LastName }
-                .Where(p => !string.IsNullOrWhiteSpace(p))),
+            DisplayName(r.FirstName, r.MiddleName, r.LastName),
             r.Section, r.IsExpected,
-            r.Record?.Status, r.Record?.CheckInAt, r.Record?.CheckOutAt, r.Record?.CaptureMethod))
+            r.Record?.Status, r.Record?.CheckInAt, r.Record?.CheckOutAt, r.Record?.CaptureMethod,
+            AttendeePersonType.Student, PersonnelId: null, PersonnelNumber: null))
             .ToList();
 
-        var personnel = await RosterPersonnelFiguresAsync(id, ev.SchoolId, ev.Status, ct);
-        var expectedStudents = entries.Count(e => e.IsExpected);
+        entries.AddRange(await RosterPersonnelEntriesAsync(id, ev.SchoolId, ev.Status, ct));
 
         return new EventRosterDto(
             ev.Id, ev.Name, ev.Status,
             IsFrozen: EventStatusTransition.HasFrozenAudience(ev.Status),
-            Expected: expectedStudents + personnel.Expected,
-            Present: entries.Count(e => e.Status == AttendanceStatus.Present) + personnel.Counts.Present,
-            Late: entries.Count(e => e.Status == AttendanceStatus.Late) + personnel.Counts.Late,
-            Absent: entries.Count(e => e.Status == AttendanceStatus.Absent) + personnel.Counts.Absent,
-            Excused: entries.Count(e => e.Status == AttendanceStatus.Excused) + personnel.Counts.Excused,
-            NotRecorded: entries.Count(e => e.IsExpected && e.Status is null) + personnel.NotRecorded,
+            Expected: entries.Count(e => e.IsExpected),
+            Present: entries.Count(e => e.Status == AttendanceStatus.Present),
+            Late: entries.Count(e => e.Status == AttendanceStatus.Late),
+            Absent: entries.Count(e => e.Status == AttendanceStatus.Absent),
+            Excused: entries.Count(e => e.Status == AttendanceStatus.Excused),
+            NotRecorded: entries.Count(e => e.IsExpected && e.Status is null),
             // The same people GetSummaryAsync counts as Unexpected, arrived at from the other side: it
             // runs recorded EXCEPT expected in SQL, this counts the rows that survived the same test in
             // the projection above. The two must agree or the roster and the summary describe different
             // events, which is the disagreement CONDITION 1 removed from the rate.
-            Unexpected: entries.Count(e => !e.IsExpected) + personnel.Unexpected,
+            Unexpected: entries.Count(e => !e.IsExpected),
             entries,
-            expectedStudents, personnel.Expected);
+            ExpectedStudents: entries.Count(e => e.IsExpected && e.PersonType == AttendeePersonType.Student),
+            ExpectedPersonnel: entries.Count(e => e.IsExpected && e.PersonType == AttendeePersonType.Personnel));
     }
 
-    /// <summary>The personnel half of the roster's header (ADR-015 D-102).</summary>
-    private readonly record struct RosterPersonnelFigures(
-        int Expected, StatusCounts Counts, int NotRecorded, int Unexpected);
-
     /// <summary>
-    /// The roster header's personnel half, as aggregates: <see cref="EventRosterDto.Entries"/> lists
-    /// students only, so these cannot be counted from the entries as the student half is. It keeps the
-    /// roster's <c>OccurrenceId == null</c> reading of "their row", the same one its entries use.
+    /// The roster's personnel lines (ADR-015 D-101): the student query's twin, one statement after the
+    /// resolver's. No <c>IsDeleted</c> predicate, so a soft-deleted member on a frozen list keeps their line
+    /// and name, as a student does; the live expected set has already left the deleted out.
     /// </summary>
-    private async Task<RosterPersonnelFigures> RosterPersonnelFiguresAsync(
+    private async Task<List<EventRosterEntryDto>> RosterPersonnelEntriesAsync(
         Guid eventId, Guid schoolId, string status, CancellationToken ct)
     {
         var expected = await ExpectedPersonnel.IdsAsync(_db, eventId, schoolId, status, ct);
-        var rows = _db.AttendanceRecords
-            .Where(a => a.EventId == eventId && a.PersonnelId != null && a.OccurrenceId == null);
-        var recorded = rows.Select(a => a.PersonnelId!.Value);
+        var recorded = _db.AttendanceRecords
+            .Where(a => a.EventId == eventId && a.PersonnelId != null)
+            .Select(a => a.PersonnelId!.Value);
 
-        var counts = await rows
-            .GroupBy(_ => 1)
-            .Select(g => new StatusCounts(
-                g.Count(a => a.Status == AttendanceStatus.Present),
-                g.Count(a => a.Status == AttendanceStatus.Late),
-                g.Count(a => a.Status == AttendanceStatus.Absent),
-                g.Count(a => a.Status == AttendanceStatus.Excused)))
-            .FirstOrDefaultAsync(ct);
+        var rows = await _db.Personnel.AsNoTracking()
+            .Where(p => expected.Contains(p.Id) || recorded.Contains(p.Id))
+            .OrderBy(p => p.LastName).ThenBy(p => p.FirstName).ThenBy(p => p.PersonnelNumber)
+            .Select(p => new
+            {
+                p.Id,
+                p.PersonnelNumber,
+                p.FirstName,
+                p.MiddleName,
+                p.LastName,
+                IsExpected = expected.Contains(p.Id),
+                Record = _db.AttendanceRecords
+                    .Where(a => a.EventId == eventId && a.PersonnelId == p.Id && a.OccurrenceId == null)
+                    .Select(a => new { a.Status, a.CheckInAt, a.CheckOutAt, a.CaptureMethod })
+                    .FirstOrDefault(),
+            })
+            .ToListAsync(ct);
 
-        return new RosterPersonnelFigures(
-            await expected.CountAsync(ct),
-            counts,
-            await expected.Except(recorded).CountAsync(ct),
-            await recorded.Except(expected).CountAsync(ct));
+        return rows.Select(r => new EventRosterEntryDto(
+            StudentId: null, StudentNumber: null,
+            DisplayName(r.FirstName, r.MiddleName, r.LastName),
+            Section: null, r.IsExpected,
+            r.Record?.Status, r.Record?.CheckInAt, r.Record?.CheckOutAt, r.Record?.CaptureMethod,
+            AttendeePersonType.Personnel, r.Id, r.PersonnelNumber))
+            .ToList();
     }
 
     // ------------------------------------------------------------------- live attendance (D-29/D-30)

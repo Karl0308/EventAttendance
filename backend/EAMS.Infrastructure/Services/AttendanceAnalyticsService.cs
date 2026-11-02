@@ -39,8 +39,9 @@ internal sealed class AttendanceAnalyticsService : IAttendanceAnalyticsService
                 AttendanceAnalyticsOutcome.ValidationFailed,
                 "The 'from' date is after the 'to' date.", null);
 
+        // ADR-015 D-101: student-only, filtered at the root, so a personnel row is no extra "student".
         var q = _db.AttendanceRecords.AsNoTracking()
-            .Where(a => !a.Event!.IsDeleted && !a.Student!.IsDeleted);
+            .Where(a => a.StudentId != null && !a.Event!.IsDeleted && !a.Student!.IsDeleted);
 
         if (!query.IncludeCancelled)
             q = q.Where(a => a.Event!.Status != EventStatus.Cancelled);
@@ -53,8 +54,7 @@ internal sealed class AttendanceAnalyticsService : IAttendanceAnalyticsService
         if (!string.IsNullOrWhiteSpace(query.YearLevel)) q = q.Where(a => a.Student!.YearLevel == query.YearLevel);
         if (!string.IsNullOrWhiteSpace(query.Section)) q = q.Where(a => a.Student!.Section == query.Section);
 
-        // ADR-015 D-101: StudentId is nullable now; the predicate precedes the .Value in the same query.
-        var rows = await q.Where(a => a.StudentId != null).Select(a => new Row(
+        var rows = await q.Select(a => new Row(
                 a.Student!.Course, a.Student!.YearLevel, a.Student!.Section,
                 a.EventId, a.Event!.Name, a.Event!.StartAt,
                 a.StudentId!.Value, a.Status))

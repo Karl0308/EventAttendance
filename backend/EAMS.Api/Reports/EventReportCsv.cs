@@ -12,8 +12,12 @@ namespace EAMS.Api.Reports;
 ///
 /// <para>
 /// <b>Layout.</b> Three blocks separated by a blank line: the event's particulars, the totals, and the
-/// student list with its own header row. A <c>Single</c> event (QA Q12) has no time-out totals and its
-/// student list has no Time Out or Duration column.
+/// attendee list with its own header row. A <c>Single</c> event (QA Q12) has no time-out totals and its
+/// attendee list has no Time Out or Duration column. "Expected" is the total, with a row for each
+/// population under it, and a personnel row carries its personnel number in the ID column (ADR-015 D-101,
+/// D-102). When the list holds at least one personnel row, that column is headed "ID Number" rather than
+/// "Student Number" and a trailing "Person Type" column says which population each row belongs to; a
+/// student-only list keeps the pre-ADR-015 heading and columns unchanged.
 /// </para>
 ///
 /// <para>
@@ -74,13 +78,30 @@ internal static class EventReportCsv
 
     private static readonly Encoding Utf8WithBom = new UTF8Encoding(encoderShouldEmitUTF8Identifier: true);
 
-    /// <summary>The student list's heading row for a <c>TimeInOut</c> event.</summary>
+    /// <summary>The attendee list's heading row for a <c>TimeInOut</c> event whose list holds students only.</summary>
     internal static readonly string[] TimeInOutListHeader =
         ["Student Number", "Last Name", "First Name", "Middle Name", "Time In (UTC)", "Time Out (UTC)", "Duration (h:mm:ss)"];
 
-    /// <summary>The student list's heading row for a <c>Single</c> event — no time-out columns (QA Q12).</summary>
+    /// <summary>
+    /// The attendee list's heading row for a <c>Single</c> event whose list holds students only — no time-out
+    /// columns (QA Q12).
+    /// </summary>
     internal static readonly string[] SingleListHeader =
         ["Student Number", "Last Name", "First Name", "Middle Name", "Time In (UTC)"];
+
+    /// <summary>
+    /// The attendee list's heading row for a <c>TimeInOut</c> event whose list holds any personnel: the ID
+    /// column is "ID Number" and a trailing "Person Type" column is added (ADR-015).
+    /// </summary>
+    internal static readonly string[] MixedTimeInOutListHeader =
+        ["ID Number", "Last Name", "First Name", "Middle Name", "Time In (UTC)", "Time Out (UTC)", "Duration (h:mm:ss)", "Person Type"];
+
+    /// <summary>
+    /// The attendee list's heading row for a <c>Single</c> event whose list holds any personnel: the ID column
+    /// is "ID Number" and a trailing "Person Type" column is added (ADR-015).
+    /// </summary>
+    internal static readonly string[] MixedSingleListHeader =
+        ["ID Number", "Last Name", "First Name", "Middle Name", "Time In (UTC)", "Person Type"];
 
     internal static string FileNameFor(EventReportDetailsDto ev) =>
         $"{FileNamePrefix}-{ev.StartAt.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture)}-{ev.EventId:N}.csv";
@@ -118,6 +139,8 @@ internal static class EventReportCsv
         csv.Append(RecordSeparator);
 
         Record(csv, "Expected", Number(s.Expected));
+        Record(csv, "Expected students", Number(s.ExpectedStudents));
+        Record(csv, "Expected personnel", Number(s.ExpectedPersonnel));
         Record(csv, "Attended", Number(s.Attended));
         Record(csv, "Present", Number(s.Present));
         Record(csv, "Late", Number(s.Late));
@@ -137,20 +160,35 @@ internal static class EventReportCsv
         }
         csv.Append(RecordSeparator);
 
-        Record(csv, timeInOut ? TimeInOutListHeader : SingleListHeader);
+        var mixed = export.Attendees.Any(a => a.PersonType == AttendeePersonType.Personnel);
+
+        if (mixed)
+            Record(csv, timeInOut ? MixedTimeInOutListHeader : MixedSingleListHeader);
+        else
+            Record(csv, timeInOut ? TimeInOutListHeader : SingleListHeader);
+
         foreach (var a in export.Attendees)
         {
+            var number = a.StudentNumber ?? a.PersonnelNumber ?? "";
+
             if (timeInOut)
             {
-                Record(csv,
-                    a.StudentNumber, a.LastName, a.FirstName, a.MiddleName ?? "",
-                    Time(a.TimeIn),
-                    a.TimeOut is { } timeOut ? Time(timeOut) : "",
-                    a.DurationSeconds is { } seconds ? Duration(seconds) : "");
+                var timeOutCell = a.TimeOut is { } timeOut ? Time(timeOut) : "";
+                var durationCell = a.DurationSeconds is { } seconds ? Duration(seconds) : "";
+
+                if (mixed)
+                    Record(csv, number, a.LastName, a.FirstName, a.MiddleName ?? "",
+                        Time(a.TimeIn), timeOutCell, durationCell, a.PersonType);
+                else
+                    Record(csv, number, a.LastName, a.FirstName, a.MiddleName ?? "",
+                        Time(a.TimeIn), timeOutCell, durationCell);
             }
             else
             {
-                Record(csv, a.StudentNumber, a.LastName, a.FirstName, a.MiddleName ?? "", Time(a.TimeIn));
+                if (mixed)
+                    Record(csv, number, a.LastName, a.FirstName, a.MiddleName ?? "", Time(a.TimeIn), a.PersonType);
+                else
+                    Record(csv, number, a.LastName, a.FirstName, a.MiddleName ?? "", Time(a.TimeIn));
             }
         }
 

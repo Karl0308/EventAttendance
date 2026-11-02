@@ -124,8 +124,8 @@ public class ReportsController : ControllerBase
     }
 
     /// <summary>
-    /// Task 9.6 <c>GET /reports/event/{eventId}/attendees</c> — the report's student list, paged: every
-    /// student who tapped in, with Time In, Time Out and Duration.
+    /// Task 9.6 <c>GET /reports/event/{eventId}/attendees</c> — the report's attendee list, paged: every
+    /// student and personnel member who tapped in, with <c>personType</c>, Time In, Time Out and Duration.
     /// </summary>
     /// <remarks>
     /// <para>
@@ -138,7 +138,7 @@ public class ReportsController : ControllerBase
     /// <para>
     /// <b>Which rows:</b> the event's attendance rows with a Time In, in any status. <c>total</c> therefore
     /// equals the detail report's <c>timeInOut.tappedIn</c>. <b>Order:</b> last name, first name, middle
-    /// name, student number, Time In, record id — total, so pages never overlap or skip on a stable event.
+    /// name, student or personnel number, Time In, record id — total, so pages never overlap or skip on a stable event.
     /// On an <c>Open</c> event a tap landing between two page reads can shift later rows, as on every
     /// offset-paged list.
     /// </para>
@@ -173,7 +173,7 @@ public class ReportsController : ControllerBase
 
     /// <summary>
     /// Task 9.6 <c>GET /reports/event/{eventId}/export.csv</c> — the whole single-event report as a CSV
-    /// download: particulars, totals, and every row of the student list.
+    /// download: particulars, totals, and every row of the attendee list.
     /// </summary>
     /// <remarks>
     /// <para>

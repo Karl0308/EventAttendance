@@ -665,6 +665,10 @@ removed from the definition while the event is Open. The rate stays ≤ 100% and
 | Roster `Entries` | Student-only until B3, which adds personnel so header and entries add up | JJ, 2026-11-02 (D-101, D-102) |
 | `ExpectedSource` and `expectedPersonnelSource` on a terminal event | Describe the sessions as they are now, so the label may move after close and the frozen numbers do not. No migration; the SPA hides the label on frozen events | JJ, 2026-11-02 (D-103) |
 | Soft-deleted personnel matched at close | Frozen with Absent rows, as D-97 orders and as students are, so `Expected` can rise at close | JJ, 2026-11-02 (D-97) |
+| CSV ID column and person type | Only when the attendee list holds a personnel row: heading "ID Number" plus a trailing "Person Type" column. A student-only file keeps "Student Number" and no extra column, byte-identical apart from the two Expected rows | JJ, 2026-11-02 (D-101, D-102) |
+| Roster on `events.read` lists expected staff (id, number, name) to holders without `personnel.read` | Accepted: the same fields Viewers already see for students, and header and entries must add up | JJ, 2026-11-02 (D-101, D-104) |
+| `EventReportRowDto` gains `ExpectedStudents` and `ExpectedPersonnel` | Accepted; additive | JJ, 2026-11-02 (D-102) |
+| Roster `recorded` for personnel | Any attendance row counts, as for students and the summary | JJ, 2026-11-02 (D-101) |
 
 ## Open questions
 

@@ -36,11 +36,12 @@ public static class ReportLimits
 /// <param name="Status"><c>Draft</c>, <c>Open</c>, <c>Closed</c> or <c>Cancelled</c>.</param>
 /// <param name="StartAt">When it starts, UTC.</param>
 /// <param name="Expected">
-/// The invited population (ADR-003 D-19). For a <c>Closed</c> or <c>Cancelled</c> event this is the
-/// audience frozen when it closed, so a later roster import cannot move a past event's number.
+/// The invited population, students plus personnel (ADR-003 D-19, ADR-015 D-102). For a <c>Closed</c> or
+/// <c>Cancelled</c> event this is the audience frozen when it closed, so a later roster import cannot move
+/// a past event's number.
 /// </param>
 /// <param name="Attended">
-/// Expected students with a <c>Present</c> or <c>Late</c> record — the numerator of
+/// Expected attendees with a <c>Present</c> or <c>Late</c> record — the numerator of
 /// <paramref name="AttendanceRate"/>. It is published so a multi-event total can be checked by hand:
 /// the pooled rate is the sum of these over the sum of <paramref name="Expected"/>.
 /// </param>
@@ -48,11 +49,13 @@ public static class ReportLimits
 /// <param name="Late">Attendance rows in the <c>Late</c> bucket, walk-ins included.</param>
 /// <param name="Absent">Attendance rows in the <c>Absent</c> bucket.</param>
 /// <param name="Excused">Attendance rows in the <c>Excused</c> bucket.</param>
-/// <param name="Unexpected">Students with a record who were not in the expected population.</param>
+/// <param name="Unexpected">Attendees with a record who were not in the expected population.</param>
 /// <param name="AttendanceRate">
 /// <paramref name="Attended"/> ÷ <paramref name="Expected"/> × 100, to one decimal place; 0 when
 /// nothing is expected. It cannot exceed 100.
 /// </param>
+/// <param name="ExpectedStudents">The students in <paramref name="Expected"/>.</param>
+/// <param name="ExpectedPersonnel">The personnel in <paramref name="Expected"/>.</param>
 public record EventReportRowDto(
     Guid EventId,
     string EventName,
@@ -65,7 +68,9 @@ public record EventReportRowDto(
     int Absent,
     int Excused,
     int Unexpected,
-    double AttendanceRate);
+    double AttendanceRate,
+    int ExpectedStudents,
+    int ExpectedPersonnel);
 
 /// <summary>
 /// The totals of a multi-event report.
@@ -185,7 +190,7 @@ public record EventTimeOutTotalsDto(
 /// <summary>
 /// <c>GET /reports/event/{eventId}/detail</c> — Task 9.6's single-event report: the event's
 /// particulars, its summary figures, and (for a <c>TimeInOut</c> event) its time-out totals. The
-/// student list is paged separately (<c>GET /reports/event/{eventId}/attendees</c>) and the whole thing
+/// attendee list is paged separately (<c>GET /reports/event/{eventId}/attendees</c>) and the whole thing
 /// exports as one CSV (<c>GET /reports/event/{eventId}/export.csv</c>).
 /// </summary>
 /// <param name="Event">Name, location, date and time, mode, grace.</param>
@@ -201,33 +206,39 @@ public record EventDetailReportDto(
     EventTimeOutTotalsDto? TimeInOut);
 
 /// <summary>
-/// One line of a Task 9.6 student list: a student who tapped in. Ordered by last name, first name,
-/// middle name, student number, Time In, then record id — so the order is total and a printout, the
-/// CSV and every page agree.
+/// One line of a Task 9.6 attendee list: a student or a personnel member who tapped in (ADR-015 D-101).
+/// Ordered by last name, first name, middle name, student or personnel number, Time In, then record id —
+/// so the order is total and a printout, the CSV and every page agree.
 /// </summary>
-/// <param name="StudentId">The student.</param>
-/// <param name="StudentNumber">The school's student number, as stored.</param>
+/// <param name="StudentId">The student; null on a personnel row.</param>
+/// <param name="StudentNumber">The school's student number, as stored; null on a personnel row.</param>
 /// <param name="LastName">Last name, as stored.</param>
 /// <param name="FirstName">First name, as stored.</param>
 /// <param name="MiddleName">Middle name, as stored; null when there is none.</param>
 /// <param name="TimeIn">The Time In (<c>CheckInAt</c>), UTC. Never null: the list is the tapped-in rows.</param>
 /// <param name="TimeOut">
-/// The Time Out (<c>CheckOutAt</c> — the last accepted tap), UTC; null when the student never timed
+/// The Time Out (<c>CheckOutAt</c> — the last accepted tap), UTC; null when the attendee never timed
 /// out, and <b>always null for a <c>Single</c> event</b> (QA Q12).
 /// </param>
 /// <param name="DurationSeconds">
 /// <paramref name="TimeOut"/> − <paramref name="TimeIn"/> in whole seconds (SQL Server
 /// <c>DATEDIFF(SECOND, …)</c>); null exactly when <paramref name="TimeOut"/> is.
 /// </param>
+/// <param name="PersonType"><c>Student</c> or <c>Personnel</c>, always present.</param>
+/// <param name="PersonnelId">Null on a student row.</param>
+/// <param name="PersonnelNumber">Null on a student row.</param>
 public record EventReportAttendeeDto(
-    Guid StudentId,
-    string StudentNumber,
+    Guid? StudentId,
+    string? StudentNumber,
     string LastName,
     string FirstName,
     string? MiddleName,
     DateTime TimeIn,
     DateTime? TimeOut,
-    long? DurationSeconds);
+    long? DurationSeconds,
+    string PersonType,
+    Guid? PersonnelId,
+    string? PersonnelNumber);
 
 /// <summary>
 /// The whole of a Task 9.6 report in one value — what the CSV export is written from. Its
