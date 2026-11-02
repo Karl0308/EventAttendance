@@ -93,6 +93,15 @@ public static class EventManifestVersion
     public const string ContractShapePrefix = "m1.";
 
     /// <summary>
+    /// The shape prefix of <see cref="EventManifestDtoV2"/> (ADR-015 D-99). <see cref="ContractShapePrefix"/>
+    /// is untouched, so a no-header client's version and ETag are computed exactly as they always were. A
+    /// separate prefix makes "a v2 version never equals a v1 version" true by construction rather than by
+    /// the two hashes happening to differ, so an <c>If-None-Match</c> carried across a capability change
+    /// can only ever answer 200.
+    /// </summary>
+    public const string ContractShapePrefixV2 = "m2.";
+
+    /// <summary>
     /// How many base64url characters of the digest are published. 22 characters is 132 bits, which is
     /// far past the point where two distinct manifests collide, and it keeps the header short enough to
     /// read in a log line.
@@ -119,7 +128,12 @@ public static class EventManifestVersion
         NumberHandling = JsonNumberHandling.Strict,
         DefaultIgnoreCondition = JsonIgnoreCondition.Never,
         Encoder = JavaScriptEncoder.Default,
-        Converters = { new RoundTripUtcDateTimeConverter(), new PublishedContentConverter() },
+        Converters =
+        {
+            new RoundTripUtcDateTimeConverter(),
+            new PublishedContentConverter<EventManifestDto>(),
+            new PublishedContentConverter<EventManifestDtoV2>(),
+        },
     };
 
     /// <summary>
@@ -161,16 +175,6 @@ public static class EventManifestVersion
     ];
 
     /// <summary>
-    /// Every other property of <see cref="EventManifestDto"/>, in a fixed order. Resolved once, and
-    /// <b>sorted by name rather than left in reflection order</b>: <see cref="Type.GetProperties()"/>
-    /// makes no ordering promise, so trusting it would make the published version a property of the
-    /// runtime's metadata layout — two hosts on different runtimes could then publish two versions of
-    /// an identical manifest, which is the same failure the <see cref="DateTimeKind"/> normalization
-    /// below exists to prevent, one level up.
-    /// </summary>
-    private static readonly PropertyInfo[] HashedProperties = ResolveHashedProperties();
-
-    /// <summary>
     /// The version string for one manifest's published content — <see cref="EventManifestDto.Version"/>,
     /// and the <c>ETag</c> minus its <c>W/</c> and quotes.
     /// </summary>
@@ -194,9 +198,28 @@ public static class EventManifestVersion
         return ContractShapePrefix + Base64Url(SHA256.HashData(canonical))[..DigestCharacters];
     }
 
-    private static PropertyInfo[] ResolveHashedProperties()
+    /// <summary>
+    /// The version of a v2 manifest (ADR-015 D-99): the same rules over the v2 body, so a new field is
+    /// inside the hash by default here too, under <see cref="ContractShapePrefixV2"/>.
+    /// </summary>
+    public static string ComputeV2(EventManifestDtoV2 content)
     {
-        var declared = typeof(EventManifestDto)
+        var canonical = JsonSerializer.SerializeToUtf8Bytes(content, CanonicalJson);
+
+        return ContractShapePrefixV2 + Base64Url(SHA256.HashData(canonical))[..DigestCharacters];
+    }
+
+    /// <summary>
+    /// Every other property of a manifest type, in a fixed order. Resolved once per type, and <b>sorted
+    /// by name rather than left in reflection order</b>: <see cref="Type.GetProperties()"/> makes no
+    /// ordering promise, so trusting it would make the published version a property of the runtime's
+    /// metadata layout — two hosts on different runtimes could then publish two versions of an identical
+    /// manifest, which is the same failure the <see cref="DateTimeKind"/> normalization below exists to
+    /// prevent, one level up.
+    /// </summary>
+    private static PropertyInfo[] ResolveHashedProperties(Type manifestType)
+    {
+        var declared = manifestType
             .GetProperties(BindingFlags.Public | BindingFlags.Instance)
             .Where(p => p.CanRead && p.GetIndexParameters().Length == 0)
             .ToArray();
@@ -211,7 +234,7 @@ public static class EventManifestVersion
 
             throw new InvalidOperationException(
                 $"'{excluded}' is excluded from the manifest version but is not a property of " +
-                $"{nameof(EventManifestDto)}. It was renamed or removed, and the exclusion silently " +
+                $"{manifestType.Name}. It was renamed or removed, and the exclusion silently " +
                 "stopped applying — which for ServerTime means every pull publishes a new version and " +
                 "no device ever receives a 304. Update ExcludedFromTheHash in the same change.");
         }
@@ -222,8 +245,8 @@ public static class EventManifestVersion
     }
 
     /// <summary>
-    /// Writes an <see cref="EventManifestDto"/> as its published content alone: every property except
-    /// the ones <see cref="ExcludedFromTheHash"/> names, in <see cref="HashedProperties"/>' fixed order.
+    /// Writes a manifest as its published content alone: every property except the ones
+    /// <see cref="ExcludedFromTheHash"/> names, in <see cref="HashedProperties"/>' fixed order.
     ///
     /// <para>
     /// <b>Never used on the wire.</b> The response body is serialized by MVC with its own options and
@@ -231,15 +254,17 @@ public static class EventManifestVersion
     /// also why <see cref="Read"/> throws.
     /// </para>
     /// </summary>
-    private sealed class PublishedContentConverter : JsonConverter<EventManifestDto>
+    private sealed class PublishedContentConverter<TManifest> : JsonConverter<TManifest>
     {
-        public override EventManifestDto Read(
+        private static readonly PropertyInfo[] HashedProperties = ResolveHashedProperties(typeof(TManifest));
+
+        public override TManifest Read(
             ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options) =>
             throw new NotSupportedException(
                 "The canonical manifest form is written, never read: it exists only to be hashed.");
 
         public override void Write(
-            Utf8JsonWriter writer, EventManifestDto value, JsonSerializerOptions options)
+            Utf8JsonWriter writer, TManifest value, JsonSerializerOptions options)
         {
             writer.WriteStartObject();
 

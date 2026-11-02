@@ -218,6 +218,42 @@ public class EventsController : ControllerBase
         return log is null ? NotFound() : Ok(log);
     }
 
+    /// <summary>
+    /// <c>GET /events/personnel-picker</c> — the school's personnel, narrowed to what choosing someone for
+    /// an event or a pre-registration needs.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Why it exists (ADR-015 D-104).</b> <c>GET /personnel</c> moved to <c>personnel.read</c>, which an
+    /// Organizer does not hold, and the staff pickers still have to work for them. So the Organizer gets
+    /// this instead of that grant: each item is exactly <c>id</c>, <c>personnelNumber</c> and
+    /// <c>fullName</c>, and a card UID, an email or a department stays behind <c>personnel.read</c>.
+    /// </para>
+    ///
+    /// <para>
+    /// The same rows, in the same order, as <c>GET /personnel</c> with no filter: not-deleted, this school,
+    /// <c>Inactive</c> included. A literal segment, so the <c>guid</c> constraint keeps it off
+    /// <c>GET /events/{id}</c>.
+    /// </para>
+    /// </remarks>
+    /// <param name="page">1-based page number, default 1. Out-of-range values are clamped.</param>
+    /// <param name="pageSize">Rows per page. Default 50, maximum 200.</param>
+    /// <param name="personnel">The personnel read, which owns the order this shares with <c>GET /personnel</c>.</param>
+    /// <param name="ct">Cancellation token.</param>
+    /// <response code="200">One page, possibly empty.</response>
+    /// <response code="401">No token, or an expired one.</response>
+    /// <response code="403">Signed in, but without <c>events.write</c>.</response>
+    [HttpGet("personnel-picker")]
+    [Authorize(AuthenticationSchemes = JwtBearerDefaults.AuthenticationScheme, Policy = EamsPermissions.EventsWrite)]
+    [HasPermissionNotEnforced(EamsPermissions.EventsWrite)]
+    [ProducesResponseType(typeof(PagedResult<PersonnelPickerItemDto>), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status401Unauthorized)]
+    [ProducesResponseType(StatusCodes.Status403Forbidden)]
+    public async Task<ActionResult<PagedResult<PersonnelPickerItemDto>>> PersonnelPicker(
+        [FromQuery] int? page, [FromQuery] int? pageSize,
+        [FromServices] IPersonnelService personnel, CancellationToken ct)
+        => Ok(await personnel.PickerAsync(PageRequest.From(page, pageSize), ct));
+
     // --------------------------------------------------------------------------------- writes
 
     /// <summary>

@@ -46,6 +46,10 @@ public class ManualOutcomeContractTests
         ("StudentNotFound", StatusCodes.Status404NotFound),
         ("InvalidStatus", StatusCodes.Status400BadRequest),
         ("InvalidNotes", StatusCodes.Status400BadRequest),
+        ("PersonRequired", StatusCodes.Status400BadRequest),
+        ("PersonnelNotFound", StatusCodes.Status404NotFound),
+        ("PersonnelInactive", StatusCodes.Status404NotFound),
+        ("PersonnelNotInAudience", StatusCodes.Status404NotFound),
     ];
 
     private static string[] PublishedTokens => [.. PublishedOutcomes.Select(o => o.Token)];

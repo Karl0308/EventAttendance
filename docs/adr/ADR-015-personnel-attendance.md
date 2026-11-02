@@ -106,6 +106,11 @@ Six facts constrain the shape:
 - **Manual entry applies the same refusals** (JJ, 2026-10-27, decision 1).
   - **On a closed event, the test is membership in the frozen `EventPersonnel` set only, not the current
     `Status`.** A frozen member who has since gone inactive can still be marked by hand (ADR-003 D-17).
+    That holds for a frozen member who has since been soft-deleted too (JJ, 2026-11-02): frozen means
+    frozen.
+  - **On a live event, an existing attendance row can always be corrected** (JJ, 2026-11-02). The two
+    refusals guard the creation of a row. Without this, someone who tapped and then went `Inactive`
+    could never be corrected by hand. A soft-deleted member on a live event stays `PersonnelNotFound`.
 - **The asymmetry with students is deliberate and recorded.**
   - A student card resolves regardless of audience or `Status`. A walk-in is recorded, reported
     `unexpected`, and kept out of the rate (D-19, `KnownDefectTests.A_student_with_no_enrollment_is_not_an_expected_attendee`).
@@ -113,8 +118,9 @@ Six facts constrain the shape:
   - For personnel, QA ruled the opposite (Q3/Q4, against our recommendation): the chosen audience is the
     authority.
   - **The cost:** a refused personnel tap is not attendance. It is kept as scan-log evidence instead (D-100).
-  - **The gain:** personnel `unexpected` stays near zero. It arises only when a live definition edit
-    removes someone who has already tapped.
+  - **The gain:** personnel `unexpected` stays near zero. On a live event it arises only when a live
+    definition edit removes someone who has already tapped. On a terminal event it cannot arise, because
+    the freeze also keeps anyone with an attendance row (D-97).
 
 ### D-96: The attendance row is `StudentId` XOR `PersonnelId`; the migration is data-preserving
 
@@ -227,6 +233,10 @@ DROP TABLE dbo.EventPersonnel;
   student rows.
   - It writes `ExpectedPersonnelIds` as it stands at the transition, using D-103's per-population selector
     and the same `includeDeleted` argument as the student freeze.
+  - **It also writes every personnel member who already has an attendance row on the event** (JJ,
+    2026-11-02), whether or not they are still `Active` or in the audience. Otherwise a tapper who went
+    `Inactive` would fall out of the frozen set, and their row could never be corrected on the closed
+    event.
 - **Absent rows at close** (JJ, 2026-10-27, decision 6; resolves W4).
   - `StageAbsenteesAsync` also inserts `Status = Absent`, `CaptureMethod = Import`, `OccurrenceId = NULL`
     rows for every frozen personnel member with no row, just as it does for students.
@@ -337,7 +347,12 @@ ORDER BY c.SchoolId, c.CardUid;
     type generated as v1 `TapResult` (`additionalProperties: false`), which fails on `personType`. **An
     opted-in client must deserialize v2 itself:** the generated v2 *models* are usable, the generated
     *operation return type* is not. #707 must say so.
-- **Admin (JWT) routes** return v2 directly: live, list and manual. The SPA ships with the server.
+- **Admin (JWT) routes** return v2 directly: list and manual. The SPA ships with the server.
+  - **Live keeps `AttendanceDeltaDto`, with the same additions** (JJ, 2026-11-02): `personType`,
+    `personnelId`, `personnelNumber`, `personnelName`, and nullable student fields. It stays a delta shape
+    rather than becoming `AttendanceDtoV2`.
+- **A v2 tap or batch response sends `Cache-Control: private, no-cache`** (JJ, 2026-11-02), because it
+  carries `personnelName`.
 
 **`AttendanceDtoV2`** is every v1 member plus the following.
 - `personType`: `"Student"` or `"Personnel"`, always present.
@@ -366,6 +381,9 @@ ORDER BY c.SchoolId, c.CardUid;
   "delivered, drop" in §8.2.
 - **Replay precedes refusal** on the capable path. A replay of a stored tap is `DuplicateIgnored` even if
   the person has since gone inactive or left the audience.
+  - **The exception is a card that no longer resolves** (JJ, 2026-11-02). If the holder was soft-deleted or
+    their UID changed, the replay is `CardNotFound`, because card resolution precedes replay. Students
+    behave the same way.
 
 **`EventManifestDtoV2`** is every v1 member plus `personnel` (`EventManifestPersonnelDto[]`, always present,
 possibly `[]`).
@@ -375,6 +393,9 @@ possibly `[]`).
 - `MaxAttendees` counts students plus personnel.
 - `version` is computed over the v2 body. Because `personnel` is always present, it never equals a v1
   version.
+- **Personnel are read in a second statement, after the composed one** (JJ, 2026-11-02). This is a
+  deliberate exception to D-46's one-snapshot note, to avoid a cartesian product. A concurrent write
+  converges on the next pull.
 
 **Event card lookup: `GET /api/v1/events/{id}/by-card/{cardUid}`.**
 - Auth: DeviceKey + `AttendanceCapture`. It sits under the device-capture rate limit and sends
@@ -426,9 +447,10 @@ New `ManualOutcome`s:
   ignored elsewhere.
 
 **`Vary`.**
-- The manifest sends `Vary: Authorization, X-EAMS-Capabilities` on every response, including the 304 and
-  refusals. It is built with `Headers.Append`, because today's code assigns `Authorization` with `=` and
-  an assignment would overwrite.
+- The manifest sends `Vary: Authorization, X-EAMS-Capabilities` on every response an action produces,
+  including the 304 and refusals. Pipeline 401, 403 and 429 responses never reach the action and do not
+  carry it (JJ, 2026-11-02). It is built with `Headers.Append`, because today's code assigns
+  `Authorization` with `=` and an assignment would overwrite.
 - POST tap and batch send no `Vary`: POST responses are not cacheable.
 
 **Access is identical with and without the header:** scheme, policy, tenant, rate-limit partition and
@@ -567,6 +589,11 @@ removed from the definition while the event is Open. The rate stays ≤ 100% and
   passes on a stale pair.
 - **Consequence:** a non-admin role that holds `students.read` today loses personnel access. That is the
   point of the split.
+- **Event authors keep a narrow personnel picker** (JJ, 2026-11-02; found at the B1 gate). The split cost
+  Organizer its staff choices in the audience dialog and Pre-registration, and those screens need them.
+  - `GET /api/v1/events/personnel-picker` is gated by `EventsWrite` and returns only id, number and full
+    name.
+  - Organizer is **not** granted `personnel.read`.
 
 ### Technical Plan drift
 
@@ -608,7 +635,8 @@ removed from the definition while the event is Open. The rate stays ≤ 100% and
     expected. On close, it marks that whole audience Absent (D-97). Before ADR-015 it froze nobody.
 - **R3:** a writer that skips the lock reopens Q2. Mitigation: one shared helper, plus a race test per
   writer.
-- **R4:** collisions that already exist resolve to the student until the audit is cleared.
+- **R4:** collisions that already exist resolve to the student until the audit is cleared. If the student
+  is soft-deleted, the tap skips them and the UID reaches the personnel member (JJ, 2026-11-02).
 
 ## Answered since revision 0 (recorded, not open)
 
@@ -625,6 +653,13 @@ removed from the definition while the event is Open. The rate stays ≤ 100% and
 | D-103 applied to students too, including a linked session with no registrants | Accepted, as option A reads | JJ, 2026-10-27 |
 | Tapped UID on a recorded personnel tap | Not kept; known limit tied to Q7 | JJ, 2026-10-27 (D-96) |
 | Reports page totals | Include personnel (sum of event-level figures); `AttendanceAnalyticsService` stays student-only | JJ, 2026-10-27 (D-101) |
+| Tapper who later went `Inactive` | Frozen with their row; existing rows stay correctable on a live event | JJ, 2026-11-02 (D-95, D-97) |
+| Soft-deleted frozen member on a closed event | Still markable; frozen means frozen | JJ, 2026-11-02 (D-95) |
+| Soft-deleted member outside the frozen set on a closed event | `PersonnelNotInAudience`, not `PersonnelNotFound` | JJ, 2026-11-02 (D-95) |
+| Organizer's staff picker after the split | Narrow route on `EventsWrite`, no `personnel.read` | JJ, 2026-11-02 (D-104) |
+| Live DTO, second manifest statement, `Vary` scope | Accepted as built | JJ, 2026-11-02 (D-99, D-100) |
+| `Cache-Control` on tap and batch v2 | `private, no-cache` | JJ, 2026-11-02 (D-99) |
+| Old-client test 3, "both modes" | With and without the header | JJ, 2026-11-02 |
 
 ## Open questions
 

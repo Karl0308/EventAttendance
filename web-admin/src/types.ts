@@ -475,6 +475,18 @@ export interface Personnel {
   status: string;
 }
 
+/**
+ * One row of `GET /events/personnel-picker` — the three fields an audience or pre-registration picker
+ * needs, and nothing else. It is deliberately not `Personnel`: the route is gated on `events.write`
+ * rather than `personnel.read` (ADR-015 D-104), so it must not carry what `personnel.read` protects.
+ */
+export interface PersonnelPickerEntry {
+  id: string;
+  personnelNumber: string;
+  /** Composed by the server (`Last, First Middle`); read-only. */
+  fullName: string;
+}
+
 /** §11's two personnel statuses. Read to compare; `Personnel.status` stays `string` on the wire. */
 export const PERSONNEL_STATUSES = ["Active", "Inactive"] as const;
 export type PersonnelStatusName = (typeof PERSONNEL_STATUSES)[number];

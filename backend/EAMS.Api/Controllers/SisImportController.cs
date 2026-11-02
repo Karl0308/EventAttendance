@@ -155,12 +155,18 @@ public class SisImportController : ControllerBase
     /// Runs a staged batch. Idempotent with respect to the database: running the same roster twice
     /// leaves it identical and reports every row <c>Skipped</c>.
     /// </summary>
+    /// <response code="503">
+    /// <c>WriteLockUnavailable</c>: another change to a card in this roster held its lock. Earlier passes
+    /// may have committed and the batch is left <c>Failed</c>. Running it again after <c>Retry-After</c>
+    /// seconds is safe and converges.
+    /// </response>
     [HttpPost("{batchId:guid}/run")]
     [Authorize(AuthenticationSchemes = JwtBearerDefaults.AuthenticationScheme, Policy = EamsPermissions.SisImport)]
     [HasPermissionNotEnforced(EamsPermissions.SisImport)]
     [ProducesResponseType(typeof(SisImportBatchDto), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     [ProducesResponseType(StatusCodes.Status409Conflict)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status503ServiceUnavailable)]
     public async Task<ActionResult<SisImportBatchDto>> Run(
         Guid batchId, [FromBody] SisImportRunRequest request)
     {

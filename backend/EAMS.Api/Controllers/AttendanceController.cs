@@ -1,5 +1,6 @@
 ﻿using System.ComponentModel.DataAnnotations;
 using EAMS.Api.Authorization;
+using EAMS.Api.OpenApi;
 using EAMS.Api.RateLimiting;
 using EAMS.Application.Abstractions;
 using EAMS.Application.Dtos;
@@ -48,6 +49,12 @@ public class AttendanceController : ControllerBase
     /// </summary>
     internal const string MaxBatchRowsProperty = "maxBatchRows";
 
+    /// <summary>
+    /// ADR-015 D-99: a capable tap or batch response can carry <c>personnelName</c>, so it says so, as the
+    /// manifest and the card lookup do (#705 guardrail 9). A no-header response stays byte-identical to v1.
+    /// </summary>
+    private const string CapableCaptureCacheControl = "private, no-cache";
+
     private readonly IAttendanceService _attendance;
 
     /// <summary>
@@ -88,8 +95,14 @@ public class AttendanceController : ControllerBase
     /// <c>cardUid</c>.</b> Each is an optional fragment — a "contains" match — and every filter on this
     /// route, these three included, combines with AND. Absent or blank means that filter is not
     /// applied. They only ever narrow attendance rows, so a student who has no row for the event never
-    /// appears through them. The rows returned are the same <c>AttendanceDto</c> as without them; no
+    /// appears through them. The rows returned are the same <c>AttendanceDtoV2</c> as without them; no
     /// field is added to say which filter matched.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>Rows are v2 and may be personnel (ADR-015 D-99).</b> Branch on <c>personType</c>: on a
+    /// <c>Personnel</c> row the three student members are null and the three personnel members are set.
+    /// The search filters read the student's columns, so a personnel row never matches one.
     /// </para>
     /// </remarks>
     /// <param name="eventId">Restrict to one event.</param>
@@ -129,9 +142,9 @@ public class AttendanceController : ControllerBase
     [HttpGet]
     [Authorize(AuthenticationSchemes = JwtBearerDefaults.AuthenticationScheme, Policy = EamsPermissions.AttendanceRead)]
     [HasPermissionNotEnforced(EamsPermissions.AttendanceRead)]
-    [ProducesResponseType(typeof(PagedResult<AttendanceDto>), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(PagedResult<AttendanceDtoV2>), StatusCodes.Status200OK)]
     [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status400BadRequest)]
-    public async Task<ActionResult<PagedResult<AttendanceDto>>> List(
+    public async Task<ActionResult<PagedResult<AttendanceDtoV2>>> List(
         [FromQuery] Guid? eventId, [FromQuery] Guid? studentId, [FromQuery] string? status,
         [FromQuery][StringLength(AttendanceListSearch.StudentNumberMaxLength)] string? studentNumber,
         [FromQuery][StringLength(AttendanceListSearch.StudentNameMaxLength)] string? studentName,
@@ -197,7 +210,8 @@ public class AttendanceController : ControllerBase
     /// <param name="ct">Cancellation token.</param>
     /// <response code="200">
     /// <c>Recorded</c>, <c>DuplicateIgnored</c>, <c>CheckedOut</c> or <c>AlreadyRecorded</c>. All four
-    /// mean the client can drop the tap from its queue.
+    /// mean the client can drop the tap from its queue. With <c>X-EAMS-Capabilities: personnel</c> every
+    /// answer sends <c>Cache-Control: private, no-cache</c>, because it can name a personnel member.
     /// </response>
     /// <response code="400">
     /// <c>EventNotOpen</c>, <c>DeviceMismatch</c>, <c>TappedAtOutOfRange</c> or
@@ -229,6 +243,7 @@ public class AttendanceController : ControllerBase
     [ProducesResponseType(typeof(TapResult), StatusCodes.Status200OK)]
     [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status400BadRequest)]
     [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status404NotFound)]
+    [CaptureCapabilityResponse(typeof(TapResultV2))]
     public async Task<ActionResult<TapResult>> Tap([FromBody] TapRequest req, CancellationToken ct)
     {
         // ADR-015 D-100: read once, here, and handed to the service. It picks the response family and
@@ -238,6 +253,8 @@ public class AttendanceController : ControllerBase
 
         if (capabilities.Personnel)
         {
+            Response.Headers.CacheControl = CapableCaptureCacheControl;
+
             var v2 = response.Result;
             return Respond(
                 StatusCodeFor(response.Outcome), v2, v2.Message, v2.Code, v2.ServerTime, TitleFor(response.Outcome));
@@ -302,6 +319,11 @@ public class AttendanceController : ControllerBase
     /// partway through leaves the earlier rows written and the retry absorbs them as
     /// <c>DuplicateIgnored</c>.
     /// </para>
+    ///
+    /// <para>
+    /// With <c>X-EAMS-Capabilities: personnel</c> the response sends
+    /// <c>Cache-Control: private, no-cache</c>, because a row can name a personnel member.
+    /// </para>
     /// </response>
     /// <response code="400">
     /// Transport or size only: a malformed body, or <c>BatchTooLarge</c>. The refusal echoes the limit
@@ -321,12 +343,16 @@ public class AttendanceController : ControllerBase
     [ProducesResponseType(StatusCodes.Status429TooManyRequests)]
     [ProducesResponseType(typeof(TapBatchResult), StatusCodes.Status200OK)]
     [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status400BadRequest)]
+    [CaptureCapabilityResponse(typeof(TapBatchResultV2))]
     public async Task<ActionResult<TapBatchResult>> TapBatch(
         [FromBody] TapBatchRequest req, CancellationToken ct)
     {
         // ADR-015 D-100: one declaration for the whole flush, applied to every row.
         var capabilities = CaptureCapabilities.Parse(Request.Headers[CaptureCapabilities.HeaderName]);
         var response = await _attendance.TapBatchAsync(req, capabilities, ct);
+
+        // Before the refusal, so a capable flush is told the same thing however it ends.
+        if (capabilities.Personnel) Response.Headers.CacheControl = CapableCaptureCacheControl;
 
         if (response.Refusal is { } refusal)
         {
@@ -508,7 +534,12 @@ public class AttendanceController : ControllerBase
     /// </para>
     /// </remarks>
     /// <param name="eventId">The event to record against.</param>
-    /// <param name="studentId">The student.</param>
+    /// <param name="studentId">The student. Send this or <c>personnelId</c>, never both.</param>
+    /// <param name="personnelId">
+    /// The personnel member. Send this or <c>studentId</c>, never both. They are held to the same
+    /// refusals as a tap on a live event; on a terminal event the test is membership of the set frozen at
+    /// close, not their current status.
+    /// </param>
     /// <param name="status">
     /// One of §4.9's values — <c>Present</c>, <c>Late</c>, <c>Absent</c>, <c>Excused</c>. Anything else
     /// is <c>400 InvalidStatus</c> rather than a stored value no summary can count.
@@ -520,28 +551,38 @@ public class AttendanceController : ControllerBase
     /// <param name="ct">Cancellation token.</param>
     /// <response code="200">Recorded. <c>code</c> is <c>Saved</c>.</response>
     /// <response code="400">
-    /// <c>InvalidStatus</c> or <c>InvalidNotes</c>, as an RFC 7807 body carrying <c>code</c> and
-    /// <c>serverTime</c>. <b>Not</b> a <c>TapResult</c> with <c>success: false</c> — that shape left
-    /// the 4xx responses in Phase 4c.
+    /// <c>InvalidStatus</c>, <c>InvalidNotes</c> or <c>PersonRequired</c>, as an RFC 7807 body carrying
+    /// <c>code</c> and <c>serverTime</c>. <b>Not</b> a <c>TapResult</c> with <c>success: false</c> — that
+    /// shape left the 4xx responses in Phase 4c.
     /// </response>
-    /// <response code="404"><c>EventNotFound</c> or <c>StudentNotFound</c>, same body shape.</response>
+    /// <response code="404">
+    /// <c>EventNotFound</c>, <c>StudentNotFound</c>, <c>PersonnelNotFound</c>, <c>PersonnelInactive</c> or
+    /// <c>PersonnelNotInAudience</c>, same body shape.
+    /// </response>
     [HttpPost("manual")]
     [Authorize(AuthenticationSchemes = JwtBearerDefaults.AuthenticationScheme, Policy = EamsPermissions.AttendanceWrite)]
     [HasPermissionNotEnforced(EamsPermissions.AttendanceWrite)]
     // Without these the document infers TapResult for every status this action produces, which 4c made
     // untrue: a generated client would deserialize a problem body into TapResult and read `success` off
     // a field that is not there. The <response> tags above supply the prose, not the schema.
-    [ProducesResponseType(typeof(TapResult), StatusCodes.Status200OK)]
+    //
+    // ADR-015 D-99: an admin route, so the v2 record directly and no capability header. The SPA ships
+    // with the server.
+    [ProducesResponseType(typeof(TapResultV2), StatusCodes.Status200OK)]
     [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status400BadRequest)]
     [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status404NotFound)]
-    public async Task<ActionResult<TapResult>> Manual(
-        [FromQuery] Guid eventId, [FromQuery] Guid studentId,
+    public async Task<ActionResult<TapResultV2>> Manual(
+        [FromQuery] Guid eventId, [FromQuery] Guid? studentId, [FromQuery] Guid? personnelId,
         [FromQuery] string status = "Present",
         [FromQuery][StringLength(AttendanceNotes.MaxLength)] string? notes = null,
         CancellationToken ct = default)
     {
-        var response = await _attendance.ManualAsync(eventId, studentId, status, notes, ct);
-        return Respond(StatusCodeFor(response.Outcome), response.Result, TitleFor(response.Outcome));
+        var response = await _attendance.ManualAsync(eventId, studentId, personnelId, status, notes, ct);
+        var result = response.Result;
+
+        return Respond(
+            StatusCodeFor(response.Outcome), result, result.Message, result.Code, result.ServerTime,
+            TitleFor(response.Outcome));
     }
 
     /// <summary>
@@ -669,6 +710,10 @@ public class AttendanceController : ControllerBase
         ManualOutcome.StudentNotFound => "Student not found.",
         ManualOutcome.InvalidStatus => "That attendance status is not one of the documented values.",
         ManualOutcome.InvalidNotes => "Those notes are too long.",
+        ManualOutcome.PersonRequired => "Name exactly one student or personnel member.",
+        ManualOutcome.PersonnelNotFound => "Personnel record not found.",
+        ManualOutcome.PersonnelInactive => "That personnel record is not active.",
+        ManualOutcome.PersonnelNotInAudience => "That personnel record is not in this event's audience.",
         _ => "The manual entry could not be saved.",
     };
 
@@ -774,13 +819,19 @@ public class AttendanceController : ControllerBase
     {
         ManualOutcome.Saved => StatusCodes.Status200OK,
 
+        // The two personnel refusals are 404 for the reason StatusCodeFor(TapOutcome) records on the tap's.
         ManualOutcome.EventNotFound
-            or ManualOutcome.StudentNotFound => StatusCodes.Status404NotFound,
+            or ManualOutcome.StudentNotFound
+            or ManualOutcome.PersonnelNotFound
+            or ManualOutcome.PersonnelInactive
+            or ManualOutcome.PersonnelNotInAudience => StatusCodes.Status404NotFound,
 
         // Syntactically valid requests that failed a §4.9 column rule — 400, not 500, and not a
-        // cheerful 200 with the bad value persisted.
+        // cheerful 200 with the bad value persisted. PersonRequired is the same shape of mistake: the
+        // same query string is refused forever.
         ManualOutcome.InvalidStatus
-            or ManualOutcome.InvalidNotes => StatusCodes.Status400BadRequest,
+            or ManualOutcome.InvalidNotes
+            or ManualOutcome.PersonRequired => StatusCodes.Status400BadRequest,
 
         _ => throw new ArgumentOutOfRangeException(
             nameof(outcome), outcome,

@@ -43,25 +43,20 @@ internal sealed class AttendanceService : IAttendanceService
         _logger = logger;
     }
 
-    private static AttendanceDto ToDto(AttendanceRecord a) => new(
-        a.Id, a.EventId, StudentIdOf(a),
-        a.Student?.FullName ?? "", a.Student?.StudentNumber ?? "",
-        a.CheckInAt, a.CheckOutAt, a.Status, a.CaptureMethod);
-
     /// <summary>
-    /// The student id of a materialized row this service built or read for a student (ADR-015 D-101).
-    /// Every caller starts from a resolved <see cref="Student"/>, so a null here is a personnel row on a
-    /// student-only path — a bug, reported as one rather than defaulted around.
+    /// The student id of a row that has no personnel id (ADR-015 D-101). Its one caller is
+    /// <see cref="ToDtoV2"/>'s student branch, so a null here is a row with neither person, which
+    /// <c>CK_AttendanceRecords_StudentOrPersonnel</c> forbids: a bug, reported as one.
     /// </summary>
     private static Guid StudentIdOf(AttendanceRecord a) =>
         a.StudentId ?? throw new InvalidOperationException(
-            $"Attendance record {a.Id} has no StudentId: a personnel row reached a student-only path " +
-            "(ADR-015 D-101).");
+            $"Attendance record {a.Id} has neither a StudentId nor a PersonnelId (ADR-015 D-101).");
 
     /// <summary>
     /// The person-agnostic record a tap answers with (ADR-015 D-99). The API boundary turns it into the v2
-    /// record as is, or into the v1 <see cref="AttendanceDto"/> through a fail-closed mapper. Ids, numbers
-    /// and names only; the personnel side carries nothing a device may not hold (#705 guardrail 2).
+    /// record as is, or into the v1 <see cref="AttendanceDto"/> through a fail-closed mapper. The admin
+    /// routes (list, manual) return it as is. Ids, numbers and names only; the personnel side carries
+    /// nothing a device may not hold (#705 guardrail 2).
     /// </summary>
     private static AttendanceDtoV2 ToDtoV2(AttendanceRecord a) => a.PersonnelId is { } personnelId
         ? new AttendanceDtoV2(
@@ -78,9 +73,8 @@ internal sealed class AttendanceService : IAttendanceService
     /// <remarks>
     /// <para>
     /// Counted and paged through <c>PagedQuery.ToPageAsync</c>, the seam all nine admin lists share,
-    /// so the total cannot be answering a different filter than the rows. <c>Include(Student)</c> goes
-    /// in the ordering callback and so lands on the page query alone — the count has no use for the
-    /// join.
+    /// so the total cannot be answering a different filter than the rows. The two <c>Include</c>s go in
+    /// the ordering callback and so land on the page query alone — the count has no use for the joins.
     /// </para>
     ///
     /// <para>
@@ -101,7 +95,7 @@ internal sealed class AttendanceService : IAttendanceService
     /// than SQL Server 2012 offers: it is <c>LIKE</c>, <c>+</c> and <c>COALESCE</c>.
     /// </para>
     /// </remarks>
-    public Task<PagedResult<AttendanceDto>> ListAsync(
+    public Task<PagedResult<AttendanceDtoV2>> ListAsync(
         Guid? eventId, Guid? studentId, string? status, PageRequest page,
         AttendanceListSearch? search = null, CancellationToken ct = default)
     {
@@ -114,8 +108,9 @@ internal sealed class AttendanceService : IAttendanceService
         return q.ToPageAsync(
             ordered => ordered
                 .Include(a => a.Student)
+                .Include(a => a.Personnel)
                 .OrderByDescending(a => a.CheckInAt).ThenBy(a => a.Id),
-            ToDto, page, ct);
+            ToDtoV2, page, ct);
     }
 
     /// <summary>
@@ -521,6 +516,9 @@ internal sealed class AttendanceService : IAttendanceService
         Guid? StudentId, Guid? PersonnelId, Guid? RfidCardId, Student? Student, Personnel? Personnel)
     {
         public static Attendee For(Student student, RfidCard card) => new(student.Id, null, card.Id, student, null);
+
+        /// <summary>A student named directly, by the override: no card made this row.</summary>
+        public static Attendee For(Student student) => new(student.Id, null, null, student, null);
 
         public static Attendee For(Personnel personnel) => new(null, personnel.Id, null, null, personnel);
     }
@@ -1157,11 +1155,27 @@ internal sealed class AttendanceService : IAttendanceService
     // walking through the reader — and it surfaced as a 500 with the override discarded. Both write
     // paths now go through FindByEventStudentAsync and SaveNewRecordAsync, so they cannot drift
     // apart again without the divergence being visible in one place.
+    public Task<ManualResponse> ManualAsync(
+        Guid eventId, Guid studentId, string status, string? notes, CancellationToken ct = default) =>
+        ManualAsync(eventId, studentId, personnelId: null, status, notes, ct);
+
+    /// <inheritdoc cref="IAttendanceService.ManualAsync(Guid, Guid?, Guid?, string, string?, CancellationToken)"/>
     public async Task<ManualResponse> ManualAsync(
-        Guid eventId, Guid studentId, string status, string? notes, CancellationToken ct = default)
+        Guid eventId, Guid? studentId, Guid? personnelId, string status, string? notes,
+        CancellationToken ct = default)
     {
         // Same reasoning as the tap path: one read of the clock, quoted back on every response.
         var serverTime = DateTime.UtcNow;
+
+        // ADR-015 D-99: exactly one subject, before anything else is judged. Everything below this line
+        // is about a person, so a request that names no single person has nothing to validate.
+        if (studentId.HasValue == personnelId.HasValue)
+        {
+            return RejectManual(
+                ManualOutcome.PersonRequired,
+                "Name exactly one person: studentId or personnelId, not both and not neither.",
+                serverTime);
+        }
 
         // §4.9's value set, validated before anything is read or written. Here rather than in the
         // controller because the service is what writes the column: a guard on the HTTP boundary
@@ -1189,11 +1203,41 @@ internal sealed class AttendanceService : IAttendanceService
         if (ev is null)
             return RejectManual(ManualOutcome.EventNotFound, "Event not found.", serverTime);
 
-        var student = await _db.Students.FirstOrDefaultAsync(s => s.Id == studentId && !s.IsDeleted, ct);
-        if (student is null)
-            return RejectManual(ManualOutcome.StudentNotFound, "Student not found.", serverTime);
+        Attendee attendee;
+        Personnel? personnel = null;
+        if (personnelId is { } requestedPersonnelId)
+        {
+            // ADR-015 D-99 tenancy: the school is named, because the §11 filter is inert with no tenant
+            // pinned.
+            //
+            // D-95: on a terminal event the frozen set is the only test, and it does not ask whether the
+            // person still exists, so a soft-deleted row has to be readable here. It is refused below if it
+            // was not frozen. On a live event a soft-deleted member is nobody.
+            var frozen = EventStatusTransition.HasFrozenAudience(ev.Status);
+            personnel = await _db.Personnel.FirstOrDefaultAsync(
+                p => p.Id == requestedPersonnelId && p.SchoolId == ev.SchoolId && (frozen || !p.IsDeleted), ct);
+            if (personnel is null)
+                return RejectManual(ManualOutcome.PersonnelNotFound, "Personnel record not found.", serverTime);
 
-        var existing = await FindByEventStudentAsync(eventId, studentId, ct);
+            attendee = Attendee.For(personnel);
+        }
+        else
+        {
+            var student = await _db.Students.FirstOrDefaultAsync(s => s.Id == studentId && !s.IsDeleted, ct);
+            if (student is null)
+                return RejectManual(ManualOutcome.StudentNotFound, "Student not found.", serverTime);
+
+            attendee = Attendee.For(student);
+        }
+
+        var existing = await FindByEventAttendeeAsync(eventId, attendee.StudentId, attendee.PersonnelId, ct);
+
+        if (personnel is not null
+            && await RefuseManualPersonnelAsync(ev, personnel, hasRow: existing is not null, serverTime, ct) is { } refusal)
+        {
+            return refusal;
+        }
+
         if (existing is not null)
         {
             ApplyOverride(existing, canonicalStatus, notes);
@@ -1210,14 +1254,14 @@ internal sealed class AttendanceService : IAttendanceService
             RecordedByUserId = _currentUser.UserId,
             // D-35, as on the tap path: the tenant comes from the event this row belongs to.
             SchoolId = ev.SchoolId,
-            EventId = eventId, StudentId = studentId,
+            EventId = eventId, StudentId = attendee.StudentId, PersonnelId = attendee.PersonnelId,
             // §4.9 defines CheckInAt as "First tap (UTC)" and makes it nullable. Absent and Excused
             // are precisely the statuses that assert the student did NOT check in, so stamping a
             // time on them creates a row that contradicts its own status — and the SPA both displays
             // it and orders the attendance list by it. Present and Late are recorded now.
             CheckInAt = RecordsAnArrival(canonicalStatus) ? DateTime.UtcNow : null,
             Status = canonicalStatus, CaptureMethod = CaptureMethod.Manual, Notes = notes,
-            Student = student,
+            Student = attendee.Student, Personnel = attendee.Personnel,
         };
         _db.AttendanceRecords.Add(rec);
 
@@ -1237,8 +1281,49 @@ internal sealed class AttendanceService : IAttendanceService
         return Saved(saved.Record);
 
         ManualResponse Saved(AttendanceRecord record) => ManualResponse.For(
-            ManualOutcome.Saved, success: true, "Manual entry saved.", ToDto(record), serverTime);
+            ManualOutcome.Saved, success: true, "Manual entry saved.", ToDtoV2(record), serverTime);
     }
+
+    /// <summary>
+    /// ADR-015 D-95's refusals on the override path. Null when the entry may be saved.
+    ///
+    /// <para>
+    /// <b>On a live event the two refusals guard the creation of a row.</b> An existing row can always be
+    /// corrected (JJ, 2026-11-02): someone who tapped and then went inactive or left the audience would
+    /// otherwise be uncorrectable. The caller has already refused a soft-deleted member.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>On a terminal event the test is membership of the frozen set and nothing else.</b> Neither the
+    /// current <c>Status</c> nor <c>IsDeleted</c> nor an existing row is read there: someone who was expected
+    /// when the event closed and has since gone inactive or been soft-deleted can still be marked by hand,
+    /// because the override is the only route back from a mistake on a closed event (ADR-003 D-17).
+    /// <c>IdsAsync</c> serves the frozen rows on that branch. Until B2's freeze writes them the set is empty,
+    /// so a closed event refuses all personnel: expected, and not to be worked around here.
+    /// </para>
+    /// </summary>
+    private async Task<ManualResponse?> RefuseManualPersonnelAsync(
+        Event ev, Personnel personnel, bool hasRow, DateTime serverTime, CancellationToken ct)
+    {
+        if (!EventStatusTransition.HasFrozenAudience(ev.Status))
+        {
+            if (hasRow) return null;
+
+            if (!string.Equals(personnel.Status, PersonnelStatus.Active, StringComparison.OrdinalIgnoreCase))
+                return RejectManual(ManualOutcome.PersonnelInactive, ManualPersonnelInactiveMessage, serverTime);
+        }
+
+        var expected = await ExpectedPersonnel.IdsAsync(_db, ev.Id, ev.SchoolId, ev.Status, ct);
+        return await expected.ContainsAsync(personnel.Id, ct)
+            ? null
+            : RejectManual(ManualOutcome.PersonnelNotInAudience, ManualPersonnelNotInAudienceMessage, serverTime);
+    }
+
+    private const string ManualPersonnelInactiveMessage =
+        "This personnel record is not active, so no attendance was saved.";
+
+    private const string ManualPersonnelNotInAudienceMessage =
+        "This personnel record is not in this event's audience, so no attendance was saved.";
 
     /// <summary>
     /// <inheritdoc cref="Reject" path="/summary"/>

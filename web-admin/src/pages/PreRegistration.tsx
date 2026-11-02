@@ -40,14 +40,20 @@ import LockOpenIcon from "@mui/icons-material/LockOpen";
 import { api, describeApiError } from "../api";
 import { useApiResource } from "../useApiResource";
 import { useApiMutation } from "../useApiMutation";
+import { useSignedInUser } from "../authContext";
+import { grants, PERMISSIONS } from "../permissions";
 import { EmptyState, ErrorState, LoadingState } from "../components/ResourceStates";
 import type {
   AudienceDefinition,
-  Personnel,
+  PersonnelPickerEntry,
   PreRegistrant,
   PreRegistrationSession,
   Student,
 } from "../types";
+
+/** Shown beside the manual picker when its people could not be loaded; the reason follows it. */
+const PEOPLE_LOAD_FAILED =
+  "The list of people could not be loaded, so the manual picker is empty. Tapping a card still works.";
 
 const loadSessions = () => api.listPreRegistrationSessions();
 const loadAudiences = () => api.listAudienceDefinitions({ includeInactive: false });
@@ -387,26 +393,33 @@ function ManageSessionDialog({
   const [chosen, setChosen] = useState<PersonOption | null>(null);
   const [notice, setNotice] = useState<Notice | undefined>(undefined);
 
-  // People for the manual picker, loaded once.
+  // People for the manual picker, loaded once. Pre-registration opens on `events.read`, but registering
+  // by hand is a write, so no people load is made for a Viewer (the picker still renders, empty) —
+  // it would otherwise be refused and surface an error the user could do nothing about.
+  const canPickPeople = grants(useSignedInUser().permissions, PERMISSIONS.eventsWrite);
   const [people, setPeople] = useState<PersonOption[] | undefined>(undefined);
+  const [peopleError, setPeopleError] = useState<unknown>(undefined);
   useEffect(() => {
+    if (!canPickPeople) return;
     let live = true;
-    Promise.all([api.listStudents(), api.listPersonnel()]).then(
-      ([students, personnel]: [Student[], Personnel[]]) => {
+    // The picker route, not `listPersonnel`: an Organizer holds `events.write` and not `personnel.read`.
+    Promise.all([api.listStudents(), api.listPersonnelPicker()]).then(
+      ([students, personnel]: [Student[], PersonnelPickerEntry[]]) => {
         if (!live) return;
         setPeople([
           ...students.map((s) => opt(s.id, "Student", s.studentNumber, s.fullName)),
           ...personnel.map((p) => opt(p.id, "Personnel", p.personnelNumber, p.fullName)),
         ]);
       },
-      () => {
-        /* the manual picker simply stays empty; tapping still works */
+      (e: unknown) => {
+        // Tapping does not need the list, so the dialog stays usable; the failure is shown, not swallowed.
+        if (live) setPeopleError(e);
       },
     );
     return () => {
       live = false;
     };
-  }, []);
+  }, [canPickPeople]);
 
   const full = counter.count >= counter.capacity;
   const busy = register.status === "running";
@@ -487,24 +500,31 @@ function ManageSessionDialog({
             </ToggleButtonGroup>
 
             {mode === "Manual" ? (
-              <Stack direction="row" spacing={1}>
-                <Autocomplete
-                  sx={{ flexGrow: 1 }}
-                  options={people ?? []}
-                  loading={people === undefined}
-                  value={chosen}
-                  onChange={(_e, next) => setChosen(next)}
-                  getOptionLabel={(o) => o.label}
-                  isOptionEqualToValue={(a, b) => a.id === b.id}
-                  groupBy={(o) => (o.kind === "Student" ? "Students" : "Personnel")}
-                  renderInput={(params) => (
-                    <TextField {...params} label="Search a student or employee" />
-                  )}
-                />
-                <Button variant="contained" onClick={registerManual} disabled={busy || chosen === null}>
-                  Add
-                </Button>
-              </Stack>
+              <>
+                {peopleError !== undefined && (
+                  <Alert severity="warning" sx={{ mb: 2 }}>
+                    {PEOPLE_LOAD_FAILED} {describeApiError(peopleError)}
+                  </Alert>
+                )}
+                <Stack direction="row" spacing={1}>
+                  <Autocomplete
+                    sx={{ flexGrow: 1 }}
+                    options={people ?? []}
+                    loading={canPickPeople && people === undefined && peopleError === undefined}
+                    value={chosen}
+                    onChange={(_e, next) => setChosen(next)}
+                    getOptionLabel={(o) => o.label}
+                    isOptionEqualToValue={(a, b) => a.id === b.id}
+                    groupBy={(o) => (o.kind === "Student" ? "Students" : "Personnel")}
+                    renderInput={(params) => (
+                      <TextField {...params} label="Search a student or employee" />
+                    )}
+                  />
+                  <Button variant="contained" onClick={registerManual} disabled={busy || chosen === null}>
+                    Add
+                  </Button>
+                </Stack>
+              </>
             ) : (
               <Stack direction="row" spacing={1}>
                 <TextField

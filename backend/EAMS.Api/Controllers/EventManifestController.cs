@@ -8,13 +8,15 @@ using EAMS.Domain;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.RateLimiting;
+using Microsoft.Net.Http.Headers;
 using DeviceKey = EAMS.Domain.DeviceKey;
 
 namespace EAMS.Api.Controllers;
 
 /// <summary>
 /// The device-facing half of the events resource: <c>GET /events/{id}/manifest</c>, the offline capture
-/// cache a kiosk or handset pulls before it starts scanning (D-46).
+/// cache a kiosk or handset pulls before it starts scanning (D-46), and
+/// <c>GET /events/{id}/by-card/{cardUid}</c>, the scan screen's event-scoped card lookup (ADR-015 D-99).
 ///
 /// <para>
 /// <b>Its own controller rather than one more action on <c>EventsController</c>, and that is a
@@ -88,6 +90,17 @@ public class EventManifestController : ControllerBase
     /// </summary>
     private const string VaryOnAuthorization = "Authorization";
 
+    /// <summary>
+    /// The manifest's shape depends on this header (ADR-015 D-100), so a cache must never hand one client's
+    /// shape to the other, on any response.
+    /// </summary>
+    private const string VaryOnCapabilities = CaptureCapabilities.HeaderName;
+
+    /// <summary>
+    /// <c>private, no-cache</c>, as on the manifest: a personnel-bearing device response (#705 guardrail 9).
+    /// </summary>
+    private const string CardLookupCacheControl = "private, no-cache";
+
     private readonly IEventService _events;
     private readonly ILogger<EventManifestController> _logger;
 
@@ -153,6 +166,15 @@ public class EventManifestController : ControllerBase
     /// <c>startAt</c>/<c>endAt</c> are the template's. Recurrence is unbuilt; an <c>occurrenceId</c>
     /// parameter is additive when it lands.
     /// </para>
+    ///
+    /// <para>
+    /// <b>Send <c>X-EAMS-Capabilities: personnel</c> to receive the v2 body</b>, which adds a
+    /// <c>personnel</c> array and has its own <c>version</c>; the documented 200 stays v1 for a client that
+    /// does not opt in, whose body and <c>ETag</c> are unchanged. Every response sends
+    /// <c>Vary: Authorization, X-EAMS-Capabilities</c>, so keep a client's cached manifest with the
+    /// capability it was pulled under. The header changes the shape and never access; the one exception
+    /// is the <c>413</c>, which counts what is sent.
+    /// </para>
     /// </remarks>
     /// <param name="id">The event. Must be <c>Open</c> — see the 409s.</param>
     /// <param name="clientClockAt">
@@ -207,7 +229,9 @@ public class EventManifestController : ControllerBase
     /// <response code="413">
     /// <c>ManifestTooLarge</c> — the event expects more attendees than a manifest carries. Stop, tell
     /// the operator, and report it to us. Deliberately loud rather than truncated, and unlike
-    /// <c>BatchTooLarge</c> there is nothing for you to halve.
+    /// <c>BatchTooLarge</c> there is nothing for you to halve. It counts what would be sent, so with
+    /// <c>X-EAMS-Capabilities: personnel</c> it counts personnel too, and an event can fit without them
+    /// and exceed the limit with them.
     /// </response>
     /// <response code="429">
     /// <c>RateLimited</c>. Not an error — retry, honouring <c>Retry-After</c>. Keep capturing meanwhile.
@@ -236,6 +260,7 @@ public class EventManifestController : ControllerBase
     [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status404NotFound)]
     [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status409Conflict)]
     [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status413PayloadTooLarge)]
+    [CaptureCapabilityResponse(typeof(EventManifestDtoV2))]
     public async Task<ActionResult<EventManifestDto>> Manifest(
         Guid id, [FromQuery] string? clientClockAt, CancellationToken ct)
     {
@@ -245,27 +270,113 @@ public class EventManifestController : ControllerBase
         // one describes the body.
         LogClockSkew(clientClockAt, DateTime.UtcNow);
 
-        var response = await _events.GetManifestAsync(id, ct);
+        // ADR-015 D-100: read once, here. It picks the response family; the scheme, policy and rate limit
+        // above have already run without looking at it.
+        var capabilities = CaptureCapabilities.Parse(Request.Headers[CaptureCapabilities.HeaderName]);
+        var response = await _events.GetManifestAsync(id, capabilities, ct);
 
         // Set before the outcome is known so they cover the refusals as well as the 200 and the 304.
         // A cacheable 409 is the nastier case: an intermediary replaying it would pin a device at "that
         // event is not open" long after the organizer had opened it.
+        //
+        // Appended, never assigned (D-100): each assignment would overwrite whatever Vary already holds.
         Response.Headers.CacheControl = ManifestCacheControl;
-        Response.Headers.Vary = VaryOnAuthorization;
+        Response.Headers.Append(HeaderNames.Vary, VaryOnAuthorization);
+        Response.Headers.Append(HeaderNames.Vary, VaryOnCapabilities);
 
         if (response.Outcome != ManifestOutcome.Ok) return Refusal(response);
 
-        var manifest = response.Manifest!;
+        // Exactly one family is set on Ok. The v2 body is an object here on purpose: the declared return
+        // type stays v1, which is what the document publishes (D-99).
+        object body = (object?)response.ManifestV2 ?? response.Manifest!;
+        var version = response.ManifestV2?.Version ?? response.Manifest!.Version;
 
         // On the 200 and on the 304 alike. A 304 without an ETag leaves a client that has lost its
         // stored version with nothing to revalidate against next time, which turns every subsequent
         // pull into a full download of a body it already holds.
-        Response.Headers.ETag = EventManifestVersion.ETagFor(manifest.Version);
+        Response.Headers.ETag = EventManifestVersion.ETagFor(version);
 
-        if (EventManifestVersion.Matches(Request.Headers.IfNoneMatch, manifest.Version))
+        if (EventManifestVersion.Matches(Request.Headers.IfNoneMatch, version))
             return StatusCode(StatusCodes.Status304NotModified);
 
-        return Ok(manifest);
+        return Ok(body);
+    }
+
+    /// <summary>
+    /// <c>GET /events/{id}/by-card/{cardUid}</c> — who holds this card, for one <c>Open</c> event.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Event-scoped on purpose.</b> There is no school-wide personnel lookup, and
+    /// <c>GET /students/by-card/{cardUid}</c> stays student-only. A student is returned whether or not
+    /// they are in the audience, because a tap would record them as a walk-in. A personnel member is
+    /// returned only if a tap would count them.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>This is a read, and a read is not a state oracle.</b> A personnel card that a tap would refuse
+    /// answers <c>404 CardNotFound</c>, exactly as a card nobody holds does. Only a tap says why. Nothing
+    /// here writes a scan-log row, and a <c>404</c> here is no reason to refuse to queue a tap: capture
+    /// and queue regardless, and let the server rule.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>The server normalizes what you send</b>, so any reader format is accepted. It is not honoured
+    /// through <c>X-EAMS-Capabilities</c>: this route has one shape.
+    /// </para>
+    /// </remarks>
+    /// <param name="id">The event. Must be <c>Open</c>.</param>
+    /// <param name="cardUid">The raw or normalized UID.</param>
+    /// <param name="ct">Cancellation token.</param>
+    /// <response code="200">
+    /// The holder. Every member is present, and <c>null</c> where it does not apply to this
+    /// <c>personType</c>.
+    /// </response>
+    /// <response code="400">
+    /// <c>EventNotOpen</c>; or <c>{id}</c> is not a GUID, the ordinary model-validation body with no
+    /// <c>code</c>. Stop: the same request is refused until the event changes.
+    /// </response>
+    /// <response code="401">
+    /// <c>DeviceKeyMissing</c> / <c>DeviceKeyMalformed</c> / <c>DeviceKeyInvalid</c>.
+    /// </response>
+    /// <response code="403"><c>DeviceKeyRevoked</c> / <c>DeviceInactive</c>.</response>
+    /// <response code="404">
+    /// <c>EventNotFound</c> (no such event, or one in another school, deliberately indistinguishable) or
+    /// <c>CardNotFound</c>.
+    /// </response>
+    /// <response code="429"><c>RateLimited</c>. Not an error: retry, honouring <c>Retry-After</c>.</response>
+    // Unconstrained `{id}` for the reason the manifest route records: a malformed id is the client's bug
+    // and answers 400, never a bare 404 that reads as EventNotFound.
+    //
+    // PolicyName, the device-capture budget: this is called per scan, like a tap, and unlike the manifest
+    // it has no conditional GET to make a pull cheap (#705 guardrail 6).
+    [HttpGet("{id}/by-card/{cardUid}")]
+    [Authorize(AuthenticationSchemes = DeviceKey.AuthenticationScheme, Policy = EamsPermissions.AttendanceCapture)]
+    [EnableRateLimiting(CaptureRateLimiting.PolicyName)]
+    [HasPermissionNotEnforced(EamsPermissions.AttendanceCapture)]
+    [ProducesResponseType(typeof(EventCardHolderDto), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status401Unauthorized)]
+    [ProducesResponseType(StatusCodes.Status403Forbidden)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status404NotFound)]
+    [ProducesResponseType(StatusCodes.Status429TooManyRequests)]
+    public async Task<ActionResult<EventCardHolderDto>> ByCard(
+        Guid id, string cardUid, CancellationToken ct)
+    {
+        var response = await _events.GetCardHolderAsync(id, cardUid, ct);
+
+        // Before the outcome is known, as on the manifest: a cached refusal is worse than a cached answer.
+        Response.Headers.CacheControl = CardLookupCacheControl;
+
+        if (response.Outcome == EventCardLookupOutcome.Ok) return Ok(response.Holder);
+
+        var status = StatusCodeFor(response.Outcome);
+        var problem = ProblemDetailsFactory.CreateProblemDetails(
+            HttpContext, statusCode: status, title: TitleFor(response.Outcome), detail: response.Message);
+
+        problem.Extensions[ErrorCodeProperty] = response.Outcome.ToString();
+
+        return StatusCode(status, problem);
     }
 
     /// <summary>
@@ -305,6 +416,34 @@ public class EventManifestController : ControllerBase
         ManifestOutcome.EventFrozen => "That event is over.",
         ManifestOutcome.ManifestTooLarge => "That event's manifest is too large to publish.",
         _ => "The manifest could not be produced.",
+    };
+
+    /// <inheritdoc cref="TitleFor(ManifestOutcome)"/>
+    private static string TitleFor(EventCardLookupOutcome outcome) => outcome switch
+    {
+        EventCardLookupOutcome.EventNotFound => "Event not found.",
+        EventCardLookupOutcome.EventNotOpen => "That event is not open for capture.",
+        EventCardLookupOutcome.CardNotFound => "No active card matches that UID.",
+        _ => "The card could not be looked up.",
+    };
+
+    /// <summary>
+    /// The contract for <c>GET /events/{id}/by-card/{cardUid}</c>: the same token, the same status, as a
+    /// tap (ADR-015 D-99). See <see cref="StatusCodeFor(ManifestOutcome)"/> for why the final arm throws.
+    /// </summary>
+    internal static int StatusCodeFor(EventCardLookupOutcome outcome) => outcome switch
+    {
+        EventCardLookupOutcome.Ok => StatusCodes.Status200OK,
+
+        EventCardLookupOutcome.EventNotFound
+            or EventCardLookupOutcome.CardNotFound => StatusCodes.Status404NotFound,
+
+        EventCardLookupOutcome.EventNotOpen => StatusCodes.Status400BadRequest,
+
+        _ => throw new ArgumentOutOfRangeException(
+            nameof(outcome), outcome,
+            $"No HTTP status is mapped for this {nameof(EventCardLookupOutcome)}. Every outcome must be " +
+            "mapped explicitly."),
     };
 
     /// <summary>

@@ -2585,8 +2585,9 @@ internal sealed class SisImportService : ISisImportService
     /// <list type="number">
     /// <item>Takes a lock on every UID it will insert, in ordinal order, before any write.</item>
     /// <item>Re-checks both claims under those locks. A UID found claimed turns its planned insert into a
-    /// row warning — a personnel-held UID behaves like <see cref="SisImportWarningCode.RfidCardRevoked"/>:
-    /// no card, no card touch, the student still imports.</item>
+    /// row warning — <see cref="SisImportWarningCode.RfidCardHeldByPersonnel"/> for a personnel-held UID,
+    /// which behaves like <see cref="SisImportWarningCode.RfidCardRevoked"/>: no card, no card touch, the
+    /// student still imports.</item>
     /// <item>Inserts the remaining cards.</item>
     /// <item>Saves with <c>acceptAllChangesOnSuccess: false</c> and commits.</item>
     /// <item>Calls <c>AcceptAllChanges()</c> only after the commit.</item>
@@ -2675,8 +2676,12 @@ internal sealed class SisImportService : ISisImportService
                 ? $"is held by personnel record '{holder.HolderNumber}'"
                 : $"is already active on a card of student '{holder.HolderNumber}'";
 
+            var warning = holder.Kind == CardUidHolderKind.Personnel
+                ? SisImportWarningCode.RfidCardHeldByPersonnel
+                : SisImportWarningCode.RfidCardRevoked;
+
             foreach (var row in issue.Rows)
-                ledger.Warn(row.Staged, SisImportWarningCode.RfidCardRevoked,
+                ledger.Warn(row.Staged, warning,
                     $"RFID card serial '{issue.Uid}' {heldBy} in this school, so no card was created " +
                     $"for REGNO '{issue.RegNo}'. One UID identifies one person across students and " +
                     "personnel (ADR-015 D-98), and the roster does not get to take a card from whoever " +

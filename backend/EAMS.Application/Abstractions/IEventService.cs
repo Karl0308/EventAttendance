@@ -176,16 +176,52 @@ public enum ManifestOutcome
 }
 
 /// <summary>
-/// <paramref name="Manifest"/> is null unless <paramref name="Outcome"/> is
-/// <see cref="ManifestOutcome.Ok"/>.
+/// On <see cref="ManifestOutcome.Ok"/> exactly one of <paramref name="Manifest"/> and
+/// <paramref name="ManifestV2"/> is set, chosen by the capabilities the caller declared (ADR-015 D-100).
+/// Both are null otherwise.
 /// </summary>
 /// <param name="Attendees">
-/// How many attendees the manifest carries, or would have carried. Populated on
+/// How many attendees the manifest carries, or would have carried, personnel included on v2. Populated on
 /// <see cref="ManifestOutcome.ManifestTooLarge"/> as well as on success, so the refusal can say how far
 /// over the ceiling the event is — "too large" with no number gives an operator nothing to report.
 /// </param>
 public record EventManifestResponse(
-    ManifestOutcome Outcome, string Message, EventManifestDto? Manifest, int Attendees);
+    ManifestOutcome Outcome, string Message, EventManifestDto? Manifest, int Attendees,
+    EventManifestDtoV2? ManifestV2 = null);
+
+/// <summary>
+/// What <c>GET /events/{id}/by-card/{cardUid}</c> decided (ADR-015 D-99). The tokens are the ones a tap
+/// uses, with the same meanings and statuses, so a capture client has one meaning per token.
+/// </summary>
+public enum EventCardLookupOutcome
+{
+    /// <summary>The card resolved to someone this event may name. 200.</summary>
+    Ok,
+
+    /// <summary>
+    /// No such event, it is soft-deleted, or it belongs to another school. 404, indistinguishable by
+    /// design (D-27).
+    /// </summary>
+    EventNotFound,
+
+    /// <summary>The event is not <c>Open</c>. 400, as on a tap: a device sees only an Open event (#705 guardrail 3).</summary>
+    EventNotOpen,
+
+    /// <summary>
+    /// No active student card, and no countable personnel member, holds this UID. 404.
+    ///
+    /// <para>
+    /// <b>Also what a personnel card a tap would refuse answers, and the two are indistinguishable.</b>
+    /// This is a read, so it must not be a state oracle (JJ, 2026-10-27, decision 7): only a tap carries
+    /// the distinct refusals, and only a tap writes a scan-log row for them.
+    /// </para>
+    /// </summary>
+    CardNotFound,
+}
+
+/// <summary><paramref name="Holder"/> is null unless <paramref name="Outcome"/> is <see cref="EventCardLookupOutcome.Ok"/>.</summary>
+public record EventCardLookupResponse(
+    EventCardLookupOutcome Outcome, string Message, EventCardHolderDto? Holder);
 
 /// <summary>
 /// What <c>POST /events/audience/resolve</c> decided (D-50/D-51). Its own enum rather than a member of
@@ -525,6 +561,24 @@ public interface IEventService
     /// <param name="id">The event.</param>
     /// <param name="ct">Cancellation token.</param>
     Task<EventManifestResponse> GetManifestAsync(Guid id, CancellationToken ct = default);
+
+    /// <summary>
+    /// <inheritdoc cref="GetManifestAsync(Guid, CancellationToken)" path="/summary"/>
+    /// <para>
+    /// <paramref name="capabilities"/> is what the client declared at the boundary (ADR-015 D-100). The
+    /// overload without it is <see cref="CaptureCapabilities.None"/>: today's v1 body, version and ETag.
+    /// </para>
+    /// </summary>
+    Task<EventManifestResponse> GetManifestAsync(
+        Guid id, CaptureCapabilities capabilities, CancellationToken ct = default);
+
+    /// <summary>
+    /// <c>GET /events/{id}/by-card/{cardUid}</c> (ADR-015 D-99): who holds this card, for one <c>Open</c>
+    /// event. A student is returned whatever the audience, as a walk-in would be; a personnel member only
+    /// if countable. Writes nothing, a scan-log row included.
+    /// </summary>
+    Task<EventCardLookupResponse> GetCardHolderAsync(
+        Guid id, string cardUid, CancellationToken ct = default);
 
     /// <summary>
     /// <c>POST /events/audience/resolve</c> — the D-50/D-51 audience filter builder's one query: filter

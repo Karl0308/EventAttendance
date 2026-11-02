@@ -11,7 +11,7 @@ namespace EAMS.Application.Abstractions;
 /// </para>
 ///
 /// <para>
-/// Honoured on <c>POST /attendance/tap</c>, <c>/tap/batch</c> and (B1c-2) <c>GET /events/{id}/manifest</c>.
+/// Honoured on <c>POST /attendance/tap</c>, <c>/tap/batch</c> and <c>GET /events/{id}/manifest</c>.
 /// Ignored everywhere else.
 /// </para>
 /// </summary>

@@ -729,7 +729,7 @@
           "Attendance"
         ],
         "summary": "`GET /attendance` — recorded attendance rows, every filter optional.",
-        "description": "\r\n\r\n             A back-office read rather than something to poll: offset-paged, newest check-in first. The live\r\n             dashboard's read is `GET /attendance/live/{eventId}`, which is cursored.\r\n             \r\n\r\n\r\n  <b>The two are not variations on one endpoint and must not be made into one.</b> This answers\r\n             \"give me rows 40 to 60 of what matched\"; the live one answers \"what changed after this cursor\",\r\n             and its `since`/`cursor`/`hasMore` shape is frozen published contract\r\n             (D-29/D-30/D-42) that a mobile client polls today. Offset paging over a live feed also loses\r\n             rows outright — an insert below the offset shifts everything up by one and the next page skips\r\n             it — which is exactly why that endpoint was built on a `rowversion` cursor instead.\r\n             \r\n\r\n\r\n  <b>Live Attendance's search (client QA Q7): `studentNumber`, `studentName` and\r\n             `cardUid`.</b> Each is an optional fragment — a \"contains\" match — and every filter on this\r\n             route, these three included, combines with AND. Absent or blank means that filter is not\r\n             applied. They only ever narrow attendance rows, so a student who has no row for the event never\r\n             appears through them. The rows returned are the same `AttendanceDto` as without them; no\r\n             field is added to say which filter matched.\r\n             ",
+        "description": "\r\n\r\n             A back-office read rather than something to poll: offset-paged, newest check-in first. The live\r\n             dashboard's read is `GET /attendance/live/{eventId}`, which is cursored.\r\n             \r\n\r\n\r\n  <b>The two are not variations on one endpoint and must not be made into one.</b> This answers\r\n             \"give me rows 40 to 60 of what matched\"; the live one answers \"what changed after this cursor\",\r\n             and its `since`/`cursor`/`hasMore` shape is frozen published contract\r\n             (D-29/D-30/D-42) that a mobile client polls today. Offset paging over a live feed also loses\r\n             rows outright — an insert below the offset shifts everything up by one and the next page skips\r\n             it — which is exactly why that endpoint was built on a `rowversion` cursor instead.\r\n             \r\n\r\n\r\n  <b>Live Attendance's search (client QA Q7): `studentNumber`, `studentName` and\r\n             `cardUid`.</b> Each is an optional fragment — a \"contains\" match — and every filter on this\r\n             route, these three included, combines with AND. Absent or blank means that filter is not\r\n             applied. They only ever narrow attendance rows, so a student who has no row for the event never\r\n             appears through them. The rows returned are the same `AttendanceDtoV2` as without them; no\r\n             field is added to say which filter matched.\r\n             \r\n\r\n\r\n  <b>Rows are v2 and may be personnel (ADR-015 D-99).</b> Branch on `personType`: on a\r\n             `Personnel` row the three student members are null and the three personnel members are set.\r\n             The search filters read the student's columns, so a personnel row never matches one.\r\n             ",
         "parameters": [
           {
             "name": "eventId",
@@ -812,17 +812,17 @@
             "content": {
               "text/plain": {
                 "schema": {
-                  "$ref": "#/components/schemas/AttendanceDtoPagedResult"
+                  "$ref": "#/components/schemas/AttendanceDtoV2PagedResult"
                 }
               },
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/AttendanceDtoPagedResult"
+                  "$ref": "#/components/schemas/AttendanceDtoV2PagedResult"
                 }
               },
               "text/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/AttendanceDtoPagedResult"
+                  "$ref": "#/components/schemas/AttendanceDtoV2PagedResult"
                 }
               }
             }
@@ -944,7 +944,7 @@
             }
           },
           "200": {
-            "description": "`Recorded`, `DuplicateIgnored`, `CheckedOut` or `AlreadyRecorded`. All four\r\n             mean the client can drop the tap from its queue.",
+            "description": "`Recorded`, `DuplicateIgnored`, `CheckedOut` or `AlreadyRecorded`. All four\r\n             mean the client can drop the tap from its queue. With `X-EAMS-Capabilities: personnel` every\r\n             answer sends `Cache-Control: private, no-cache`, because it can name a personnel member.",
             "content": {
               "text/plain": {
                 "schema": {
@@ -1008,7 +1008,16 @@
           {
             "DeviceKey": []
           }
-        ]
+        ],
+        "x-eams-capability-response": {
+          "header": "X-EAMS-Capabilities",
+          "token": "personnel",
+          "status": 200,
+          "schema": {
+            "$ref": "#/components/schemas/TapResultV2"
+          },
+          "description": "Send this header with this token and a `200` from this operation is this schema instead\nof the documented one. Without it nothing changes, and access is identical either way.\n\nCode generators ignore `x-` members, so a generated client still types this operation's\nreturn as the documented schema: **deserialize this one yourself.**"
+        }
       }
     },
     "/api/v1/attendance/tap/batch": {
@@ -1100,7 +1109,7 @@
             }
           },
           "200": {
-            "description": "<b>Every well-formed batch, including an empty one.</b>\r\n`results` is dense — one entry per\r\n             submitted tap, in the order you sent them, so `results[i].index == i` and\r\n             `accepted + rejected == results.length`. Each row's own `status` is the status that tap\r\n             would have received as a single `POST /attendance/tap`.\r\n            \r\n             \r\n\r\n             On a `5xx`, retry the whole batch — that is always safe. Safe <b>because every row is\r\n             idempotent</b>, not because the batch is atomic: rows commit individually, so a server error\r\n             partway through leaves the earlier rows written and the retry absorbs them as\r\n             `DuplicateIgnored`.\r\n             ",
+            "description": "<b>Every well-formed batch, including an empty one.</b>\r\n`results` is dense — one entry per\r\n             submitted tap, in the order you sent them, so `results[i].index == i` and\r\n             `accepted + rejected == results.length`. Each row's own `status` is the status that tap\r\n             would have received as a single `POST /attendance/tap`.\r\n            \r\n             \r\n\r\n             On a `5xx`, retry the whole batch — that is always safe. Safe <b>because every row is\r\n             idempotent</b>, not because the batch is atomic: rows commit individually, so a server error\r\n             partway through leaves the earlier rows written and the retry absorbs them as\r\n             `DuplicateIgnored`.\r\n             \r\n\r\n             With `X-EAMS-Capabilities: personnel` the response sends\r\n             `Cache-Control: private, no-cache`, because a row can name a personnel member.\r\n             ",
             "content": {
               "text/plain": {
                 "schema": {
@@ -1144,7 +1153,16 @@
           {
             "DeviceKey": []
           }
-        ]
+        ],
+        "x-eams-capability-response": {
+          "header": "X-EAMS-Capabilities",
+          "token": "personnel",
+          "status": 200,
+          "schema": {
+            "$ref": "#/components/schemas/TapBatchResultV2"
+          },
+          "description": "Send this header with this token and a `200` from this operation is this schema instead\nof the documented one. Without it nothing changes, and access is identical either way.\n\nCode generators ignore `x-` members, so a generated client still types this operation's\nreturn as the documented schema: **deserialize this one yourself.**"
+        }
       }
     },
     "/api/v1/attendance/live/{eventId}": {
@@ -1283,7 +1301,16 @@
           {
             "name": "studentId",
             "in": "query",
-            "description": "The student.",
+            "description": "The student. Send this or `personnelId`, never both.",
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "personnelId",
+            "in": "query",
+            "description": "The personnel member. Send this or `studentId`, never both. They are held to the same\r\nrefusals as a tap on a live event; on a terminal event the test is membership of the set frozen at\r\nclose, not their current status.",
             "schema": {
               "type": "string",
               "format": "uuid"
@@ -1315,23 +1342,23 @@
             "content": {
               "text/plain": {
                 "schema": {
-                  "$ref": "#/components/schemas/TapResult"
+                  "$ref": "#/components/schemas/TapResultV2"
                 }
               },
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/TapResult"
+                  "$ref": "#/components/schemas/TapResultV2"
                 }
               },
               "text/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/TapResult"
+                  "$ref": "#/components/schemas/TapResultV2"
                 }
               }
             }
           },
           "400": {
-            "description": "`InvalidStatus` or `InvalidNotes`, as an RFC 7807 body carrying `code` and\r\n             `serverTime`. <b>Not</b> a `TapResult` with `success: false` — that shape left\r\n             the 4xx responses in Phase 4c.",
+            "description": "`InvalidStatus`, `InvalidNotes` or `PersonRequired`, as an RFC 7807 body carrying\r\n             `code` and `serverTime`. <b>Not</b> a `TapResult` with `success: false` — that\r\n             shape left the 4xx responses in Phase 4c.",
             "content": {
               "text/plain": {
                 "schema": {
@@ -1351,7 +1378,7 @@
             }
           },
           "404": {
-            "description": "`EventNotFound` or `StudentNotFound`, same body shape.",
+            "description": "`EventNotFound`, `StudentNotFound`, `PersonnelNotFound`, `PersonnelInactive` or\r\n             `PersonnelNotInAudience`, same body shape.",
             "content": {
               "text/plain": {
                 "schema": {
@@ -4786,7 +4813,7 @@
           "EventManifest"
         ],
         "summary": "`GET /events/{id}/manifest` — the offline capture cache: who is expected at this event and\r\n             which card resolves to whom.",
-        "description": "\r\n\r\n  <b>This is the invitation, not the roster.</b> It carries nothing about who has already tapped —\r\n             that is `GET /attendance/live/{eventId}` — because a manifest carrying attendance state\r\n             would read as authoritative on the device, and the one thing this object must never be is\r\n             authoritative.\r\n             \r\n\r\n\r\n  <b>Offline validation against it is display-only and never gating.</b> A tap whose card UID is\r\n             absent from the manifest <b>must still be queued and flushed</b>. The server rules on it and it\r\n             lands as a walk-in (`isExpected: false`). A client that refuses to capture an unknown card\r\n             turns \"my cache is stale\" into \"that attendance never happened\", and afterwards the two are\r\n             indistinguishable.\r\n             \r\n\r\n\r\n  <b>Send the previous `version` back as `If-None-Match` on every pull.</b> Unchanged is\r\n             a `304` with no body — keep what you have. The comparison is weak (`W/`) and lenient\r\n             about quoting, so sending the header back verbatim always works. <b>Never parse the version and\r\n             never order it</b>; compare it for equality only.\r\n             \r\n\r\n\r\n  <b>Check `serverTime` against the device clock before enabling scan mode</b>: more than five\r\n             minutes apart, do not scan. Every tap captured past that threshold arrives as\r\n             `TappedAtOutOfRange` — poison, dropped by your own queue, attendance gone. A `304`\r\n             carries no `serverTime`; take the offset from the HTTP `Date` header instead, because\r\n             the manifest not changing says nothing about the clock.\r\n             \r\n\r\n\r\n  <b>Two obligations that hold across every response, including the failures.</b>\r\n  <b>Never clear\r\n             the cached manifest on a failure</b> — a client that wipes on error degrades from slightly-stale\r\n             names to no names, and does it exactly when the network is worst; the only sanctioned discard is\r\n             after the queue drains on a terminal event. And <b>no refusal here ever stops tap capture</b>:\r\n             capture and queueing continue whatever this endpoint returns. Only the <em>flush</em> pauses, and\r\n             only on `401` or `403`.\r\n             \r\n\r\n\r\n  <b>Read the HTTP status first and `code` second; never branch on `title` or\r\n             `detail`.</b> Only `EventFrozen` and `ManifestTooLarge` are new tokens — the rest\r\n             are the ones the capture path already uses, with the same meanings.\r\n             \r\n\r\n\r\n  <b>Event-scoped, not occurrence-scoped.</b> §4.8 `EventGroups` carries no\r\n             `OccurrenceId`, so one manifest serves every occurrence of a recurring event and\r\n             `startAt`/`endAt` are the template's. Recurrence is unbuilt; an `occurrenceId`\r\n             parameter is additive when it lands.\r\n             ",
+        "description": "\r\n\r\n  <b>This is the invitation, not the roster.</b> It carries nothing about who has already tapped —\r\n             that is `GET /attendance/live/{eventId}` — because a manifest carrying attendance state\r\n             would read as authoritative on the device, and the one thing this object must never be is\r\n             authoritative.\r\n             \r\n\r\n\r\n  <b>Offline validation against it is display-only and never gating.</b> A tap whose card UID is\r\n             absent from the manifest <b>must still be queued and flushed</b>. The server rules on it and it\r\n             lands as a walk-in (`isExpected: false`). A client that refuses to capture an unknown card\r\n             turns \"my cache is stale\" into \"that attendance never happened\", and afterwards the two are\r\n             indistinguishable.\r\n             \r\n\r\n\r\n  <b>Send the previous `version` back as `If-None-Match` on every pull.</b> Unchanged is\r\n             a `304` with no body — keep what you have. The comparison is weak (`W/`) and lenient\r\n             about quoting, so sending the header back verbatim always works. <b>Never parse the version and\r\n             never order it</b>; compare it for equality only.\r\n             \r\n\r\n\r\n  <b>Check `serverTime` against the device clock before enabling scan mode</b>: more than five\r\n             minutes apart, do not scan. Every tap captured past that threshold arrives as\r\n             `TappedAtOutOfRange` — poison, dropped by your own queue, attendance gone. A `304`\r\n             carries no `serverTime`; take the offset from the HTTP `Date` header instead, because\r\n             the manifest not changing says nothing about the clock.\r\n             \r\n\r\n\r\n  <b>Two obligations that hold across every response, including the failures.</b>\r\n  <b>Never clear\r\n             the cached manifest on a failure</b> — a client that wipes on error degrades from slightly-stale\r\n             names to no names, and does it exactly when the network is worst; the only sanctioned discard is\r\n             after the queue drains on a terminal event. And <b>no refusal here ever stops tap capture</b>:\r\n             capture and queueing continue whatever this endpoint returns. Only the <em>flush</em> pauses, and\r\n             only on `401` or `403`.\r\n             \r\n\r\n\r\n  <b>Read the HTTP status first and `code` second; never branch on `title` or\r\n             `detail`.</b> Only `EventFrozen` and `ManifestTooLarge` are new tokens — the rest\r\n             are the ones the capture path already uses, with the same meanings.\r\n             \r\n\r\n\r\n  <b>Event-scoped, not occurrence-scoped.</b> §4.8 `EventGroups` carries no\r\n             `OccurrenceId`, so one manifest serves every occurrence of a recurring event and\r\n             `startAt`/`endAt` are the template's. Recurrence is unbuilt; an `occurrenceId`\r\n             parameter is additive when it lands.\r\n             \r\n\r\n\r\n  <b>Send `X-EAMS-Capabilities: personnel` to receive the v2 body</b>, which adds a\r\n             `personnel` array and has its own `version`; the documented 200 stays v1 for a client that\r\n             does not opt in, whose body and `ETag` are unchanged. Every response sends\r\n             `Vary: Authorization, X-EAMS-Capabilities`, so keep a client's cached manifest with the\r\n             capability it was pulled under. The header changes the shape and never access; the one exception\r\n             is the `413`, which counts what is sent.\r\n             ",
         "parameters": [
           {
             "name": "id",
@@ -5002,7 +5029,173 @@
             }
           },
           "413": {
-            "description": "`ManifestTooLarge` — the event expects more attendees than a manifest carries. Stop, tell\r\n             the operator, and report it to us. Deliberately loud rather than truncated, and unlike\r\n             `BatchTooLarge` there is nothing for you to halve.",
+            "description": "`ManifestTooLarge` — the event expects more attendees than a manifest carries. Stop, tell\r\n             the operator, and report it to us. Deliberately loud rather than truncated, and unlike\r\n             `BatchTooLarge` there is nothing for you to halve. It counts what would be sent, so with\r\n             `X-EAMS-Capabilities: personnel` it counts personnel too, and an event can fit without them\r\n             and exceed the limit with them.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "DeviceKey": []
+          }
+        ],
+        "x-eams-capability-response": {
+          "header": "X-EAMS-Capabilities",
+          "token": "personnel",
+          "status": 200,
+          "schema": {
+            "$ref": "#/components/schemas/EventManifestDtoV2"
+          },
+          "description": "Send this header with this token and a `200` from this operation is this schema instead\nof the documented one. Without it nothing changes, and access is identical either way.\n\nCode generators ignore `x-` members, so a generated client still types this operation's\nreturn as the documented schema: **deserialize this one yourself.**"
+        }
+      }
+    },
+    "/api/v1/events/{id}/by-card/{cardUid}": {
+      "get": {
+        "tags": [
+          "EventManifest"
+        ],
+        "summary": "`GET /events/{id}/by-card/{cardUid}` — who holds this card, for one `Open` event.",
+        "description": "\r\n\r\n  <b>Event-scoped on purpose.</b> There is no school-wide personnel lookup, and\r\n             `GET /students/by-card/{cardUid}` stays student-only. A student is returned whether or not\r\n             they are in the audience, because a tap would record them as a walk-in. A personnel member is\r\n             returned only if a tap would count them.\r\n             \r\n\r\n\r\n  <b>This is a read, and a read is not a state oracle.</b> A personnel card that a tap would refuse\r\n             answers `404 CardNotFound`, exactly as a card nobody holds does. Only a tap says why. Nothing\r\n             here writes a scan-log row, and a `404` here is no reason to refuse to queue a tap: capture\r\n             and queue regardless, and let the server rule.\r\n             \r\n\r\n\r\n  <b>The server normalizes what you send</b>, so any reader format is accepted. It is not honoured\r\n             through `X-EAMS-Capabilities`: this route has one shape.\r\n             ",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The event. Must be `Open`.",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "cardUid",
+            "in": "path",
+            "description": "The raw or normalized UID.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The holder. Every member is present, and `null` where it does not apply to this\r\n`personType`.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/EventCardHolderDto"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EventCardHolderDto"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EventCardHolderDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`EventNotOpen`; or `{id}` is not a GUID, the ordinary model-validation body with no\r\n             `code`. Stop: the same request is refused until the event changes.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "`DeviceKeyMissing` / `DeviceKeyMalformed` / `DeviceKeyInvalid`.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`DeviceKeyRevoked` / `DeviceInactive`.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`EventNotFound` (no such event, or one in another school, deliberately indistinguishable) or\r\n             `CardNotFound`.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`RateLimited`. Not an error: retry, honouring `Retry-After`.",
             "content": {
               "text/plain": {
                 "schema": {
@@ -5684,6 +5877,102 @@
           },
           "404": {
             "description": "No such event in this tenant.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "Bearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/events/personnel-picker": {
+      "get": {
+        "tags": [
+          "Events"
+        ],
+        "summary": "`GET /events/personnel-picker` — the school's personnel, narrowed to what choosing someone for\r\n             an event or a pre-registration needs.",
+        "description": "\r\n\r\n  <b>Why it exists (ADR-015 D-104).</b>\r\n  `GET /personnel` moved to `personnel.read`, which an\r\n             Organizer does not hold, and the staff pickers still have to work for them. So the Organizer gets\r\n             this instead of that grant: each item is exactly `id`, `personnelNumber` and\r\n             `fullName`, and a card UID, an email or a department stays behind `personnel.read`.\r\n             \r\n\r\n\r\n             The same rows, in the same order, as `GET /personnel` with no filter: not-deleted, this school,\r\n             `Inactive` included. A literal segment, so the `guid` constraint keeps it off\r\n             `GET /events/{id}`.\r\n             ",
+        "parameters": [
+          {
+            "name": "page",
+            "in": "query",
+            "description": "1-based page number, default 1. Out-of-range values are clamped.",
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          },
+          {
+            "name": "pageSize",
+            "in": "query",
+            "description": "Rows per page. Default 50, maximum 200.",
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "One page, possibly empty.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/PersonnelPickerItemDtoPagedResult"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PersonnelPickerItemDtoPagedResult"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PersonnelPickerItemDtoPagedResult"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No token, or an expired one.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Signed in, but without `events.write`.",
             "content": {
               "text/plain": {
                 "schema": {
@@ -6896,6 +7185,26 @@
                 }
               }
             }
+          },
+          "503": {
+            "description": "`WriteLockUnavailable`: another change to the same card held its lock. Nothing was written.\r\n            Send the same request again after `Retry-After` seconds.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -7131,6 +7440,26 @@
                 }
               }
             }
+          },
+          "503": {
+            "description": "`WriteLockUnavailable`: another change to the same card held its lock. Nothing was written.\r\n            Send the same request again after `Retry-After` seconds.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -7329,6 +7658,26 @@
           },
           "400": {
             "description": "No rows, or more than the maximum this endpoint accepts.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "`WriteLockUnavailable`: another change to a card in this import held its lock. Rows before it\r\n            may already be saved. Sending the same request again after `Retry-After` seconds is safe, because\r\n            the import upserts by number.",
             "content": {
               "text/plain": {
                 "schema": {
@@ -9758,6 +10107,26 @@
                 }
               }
             }
+          },
+          "503": {
+            "description": "`WriteLockUnavailable`: another change to a card in this roster held its lock. Earlier passes\r\n            may have committed and the batch is left `Failed`. Running it again after `Retry-After`\r\n            seconds is safe and converges.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -10953,6 +11322,26 @@
                 }
               }
             }
+          },
+          "503": {
+            "description": "`WriteLockUnavailable`: another change to the same card held its lock. Nothing was written.\r\n             Send the same request again after `Retry-After` seconds.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -11890,7 +12279,9 @@
           },
           "studentId": {
             "type": "string",
-            "format": "uuid"
+            "description": "Null on a personnel row.",
+            "format": "uuid",
+            "nullable": true
           },
           "status": {
             "type": "string"
@@ -11916,10 +12307,14 @@
             "format": "uuid"
           },
           "studentNumber": {
-            "type": "string"
+            "type": "string",
+            "description": "Null on a personnel row.",
+            "nullable": true
           },
           "studentName": {
-            "type": "string"
+            "type": "string",
+            "description": "Null on a personnel row.",
+            "nullable": true
           },
           "checkOutAt": {
             "type": "string",
@@ -11928,6 +12323,26 @@
           },
           "captureMethod": {
             "type": "string"
+          },
+          "personType": {
+            "type": "string",
+            "description": "`Student` or `Personnel`, always present. This and the three personnel members are\r\n            EAMS.Application.Dtos.AttendanceDtoV2's own, carried on the delta rather than replacing it (ADR-015 D-99): the\r\n            event-level counts and EAMS.Application.Dtos.AttendanceDeltaDto.AttendanceId above are what make it a delta."
+          },
+          "personnelId": {
+            "type": "string",
+            "description": "Always present; null on a student row.",
+            "format": "uuid",
+            "nullable": true
+          },
+          "personnelNumber": {
+            "type": "string",
+            "description": "Always present; null on a student row.",
+            "nullable": true
+          },
+          "personnelName": {
+            "type": "string",
+            "description": "Always present; null on a student row.",
+            "nullable": true
           }
         },
         "additionalProperties": false,
@@ -11973,13 +12388,80 @@
         },
         "additionalProperties": false
       },
-      "AttendanceDtoPagedResult": {
+      "AttendanceDtoV2": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "eventId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "studentId": {
+            "type": "string",
+            "description": "Null on a personnel record.",
+            "format": "uuid",
+            "nullable": true
+          },
+          "studentName": {
+            "type": "string",
+            "description": "Null on a personnel record.",
+            "nullable": true
+          },
+          "studentNumber": {
+            "type": "string",
+            "description": "Null on a personnel record.",
+            "nullable": true
+          },
+          "checkInAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "checkOutAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "status": {
+            "type": "string"
+          },
+          "captureMethod": {
+            "type": "string"
+          },
+          "personType": {
+            "type": "string",
+            "description": "`Student` or `Personnel`, always present."
+          },
+          "personnelId": {
+            "type": "string",
+            "description": "Always present; null on a student record.",
+            "format": "uuid",
+            "nullable": true
+          },
+          "personnelNumber": {
+            "type": "string",
+            "description": "Always present; null on a student record.",
+            "nullable": true
+          },
+          "personnelName": {
+            "type": "string",
+            "description": "Always present; null on a student record.",
+            "nullable": true
+          }
+        },
+        "additionalProperties": false,
+        "description": "The v2 attendance record (ADR-015 D-99): every EAMS.Application.Dtos.AttendanceDto member, in the same order,\r\nplus who the attendee is.\r\n            \r\n\r\n<b>The v1 records are never extended.</b>EAMS.Application.Dtos.AttendanceDto, EAMS.Application.Dtos.TapResult,\r\nEAMS.Application.Dtos.TapBatchRowResult and EAMS.Application.Dtos.TapBatchResult stay byte-identical; a client that did\r\nnot send `X-EAMS-Capabilities: personnel` keeps receiving them, and a personnel record can never\r\nbe expressed in them — the v1 mapper answers `CardNotFound` instead.\r\n"
+      },
+      "AttendanceDtoV2PagedResult": {
         "type": "object",
         "properties": {
           "items": {
             "type": "array",
             "items": {
-              "$ref": "#/components/schemas/AttendanceDto"
+              "$ref": "#/components/schemas/AttendanceDtoV2"
             },
             "description": "This page's rows, in the endpoint's documented order. Empty is an ordinary answer — for an empty\r\nfilter and for a page past the end alike."
           },
@@ -12077,7 +12559,11 @@
               "studentNumber": "USA39912",
               "studentName": "Maria Clara Reyes",
               "checkOutAt": null,
-              "captureMethod": "Rfid"
+              "captureMethod": "Rfid",
+              "personType": "Student",
+              "personnelId": null,
+              "personnelNumber": null,
+              "personnelName": null
             }
           ],
           "serverTime": "2026-07-29T09:14:05.402Z",
@@ -13345,6 +13831,45 @@
         "additionalProperties": false,
         "description": "One individually-attached student. See EAMS.Application.Dtos.EventAudienceDto.Students."
       },
+      "EventCardHolderDto": {
+        "type": "object",
+        "properties": {
+          "personType": {
+            "type": "string",
+            "description": "`Student` or `Personnel`."
+          },
+          "studentId": {
+            "type": "string",
+            "format": "uuid",
+            "nullable": true
+          },
+          "studentNumber": {
+            "type": "string",
+            "nullable": true
+          },
+          "personnelId": {
+            "type": "string",
+            "format": "uuid",
+            "nullable": true
+          },
+          "personnelNumber": {
+            "type": "string",
+            "nullable": true
+          },
+          "fullName": {
+            "type": "string"
+          },
+          "cardUids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The holder's active, normalized serials: every active card for a student, the one UID for personnel."
+          }
+        },
+        "additionalProperties": false,
+        "description": "`GET /events/{id}/by-card/{cardUid}` (ADR-015 D-99): who holds this card, for one `Open` event.\r\n             Every member is always present, `null` where it does not apply.\r\n            \r\n             \r\n<b>Deliberately not a school-wide lookup.</b> A personnel member is returned only if countable for this\r\n             event, so a device cannot enumerate staff cards. There is no status, email or department here for the\r\n             same reason there is none on the manifest.\r\n             "
+      },
       "EventClassificationActiveRequest": {
         "type": "object",
         "properties": {
@@ -13646,6 +14171,43 @@
         "additionalProperties": false,
         "description": "The body of `GET /api/v1/events/{id}/manifest` (D-46) — the offline capture cache a device\r\npulls before it starts scanning, published as the `EventManifest*` schemas in the generated\r\nOpenAPI document and frozen with the external mobile developer.\r\n            \r\n\r\n<b>This is the invitation, not the roster.</b> It says who is expected and which card resolves to\r\nwhom; it says nothing about who has already tapped. That is\r\n`GET /attendance/live/{eventId}`. A manifest carrying attendance state would read as\r\nauthoritative on the device, and the one thing this object must never be is authoritative — the\r\nserver rules on every tap, always.\r\n\r\n<b>Offline validation against it is display-only and never gating.</b> A tap whose UID is absent\r\nfrom this manifest MUST still be queued and flushed. The server decides; it lands as a walk-in\r\n(`isExpected: false`, already modelled by EAMS.Application.Dtos.EventRosterDto, D-20). A client that\r\nrefuses to capture an unknown card converts \"the cache is stale\" into \"the attendance never\r\nexisted\", and the two are indistinguishable afterwards.\r\n\r\n<b>Never truncated and never paged.</b> Over\r\n`EventManifestLimits.MaxAttendees` this endpoint is a loud `413`, never a partial body.\r\n"
       },
+      "EventManifestDtoV2": {
+        "type": "object",
+        "properties": {
+          "event": {
+            "$ref": "#/components/schemas/EventManifestEventDto"
+          },
+          "groups": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/EventManifestGroupDto"
+            }
+          },
+          "attendees": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/EventManifestAttendeeDto"
+            }
+          },
+          "serverTime": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "version": {
+            "type": "string",
+            "description": "A `version` over this body, prefixed EAMS.Application.Dtos.EventManifestVersion.ContractShapePrefixV2, so it\r\nnever equals a v1 version and a client that changes capability never revalidates against the other\r\nfamily's cached body."
+          },
+          "personnel": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/EventManifestPersonnelDto"
+            },
+            "description": "Always present, possibly empty. `Active`, not-deleted personnel in this event's audience only (the\r\nD-95 countable set), ordered by `personnelId`. Offline validation against it is display-only, as it\r\nis for EAMS.Application.Dtos.EventManifestDto.Attendees: the server rules on every tap."
+          }
+        },
+        "additionalProperties": false,
+        "description": "The v2 manifest (ADR-015 D-99): every EAMS.Application.Dtos.EventManifestDto member, in the same order, plus\r\nEAMS.Application.Dtos.EventManifestDtoV2.Personnel. Only a client that sent `X-EAMS-Capabilities: personnel` receives it; the\r\nv1 record and its `version` stay exactly as they were."
+      },
       "EventManifestEventDto": {
         "type": "object",
         "properties": {
@@ -13704,6 +14266,33 @@
         },
         "additionalProperties": false,
         "description": "One §4.7 group attached to the event's audience."
+      },
+      "EventManifestPersonnelDto": {
+        "type": "object",
+        "properties": {
+          "personnelId": {
+            "type": "string",
+            "description": "The identity to key the offline index by. Stable.",
+            "format": "uuid"
+          },
+          "personnelNumber": {
+            "type": "string",
+            "description": "The institutional number. Never a tap identity (D-43)."
+          },
+          "fullName": {
+            "type": "string",
+            "description": "Prose. Display only."
+          },
+          "cardUids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Normalized like EAMS.Application.Dtos.EventManifestAttendeeDto.CardUids. Personnel hold at most one UID today, so\r\nthis has zero or one member; it is a list so a device indexes both populations the same way."
+          }
+        },
+        "additionalProperties": false,
+        "description": "One expected personnel member on a device, and <b>exactly these four members</b> (ADR-015 D-99, #705\r\nguardrail 2). A device holds no email, position, classification, department, organization or status:\r\na stolen handset must carry the minimum a scan screen needs."
       },
       "EventPreRegistrationDto": {
         "type": "object",
@@ -14475,10 +15064,14 @@
           "EventNotFound",
           "StudentNotFound",
           "InvalidStatus",
-          "InvalidNotes"
+          "InvalidNotes",
+          "PersonRequired",
+          "PersonnelNotFound",
+          "PersonnelInactive",
+          "PersonnelNotInAudience"
         ],
         "type": "string",
-        "description": "The `code` returned by `POST /attendance/manual` — the organizer override, which is\nnot a device path.\n\n**Frozen published contract on the same terms as `TapOutcomeCode`**, and pinned by the\nsame kind of test. It travels through the identical `code` field, so one accessor\nreads both.\n\n`POST /attendance/manual` deliberately keeps working on a `Closed` event: it is the\nonly recovery route out of a terminal status.\n\n| `code` | HTTP |\n|---|---|\n| `Saved` | 200 |\n| `EventNotFound` | 404 |\n| `StudentNotFound` | 404 |\n| `InvalidStatus` | 400 |\n| `InvalidNotes` | 400 |"
+        "description": "The `code` returned by `POST /attendance/manual` — the organizer override, which is\nnot a device path.\n\n**Frozen published contract on the same terms as `TapOutcomeCode`**, and pinned by the\nsame kind of test. It travels through the identical `code` field, so one accessor\nreads both.\n\n`POST /attendance/manual` deliberately keeps working on a `Closed` event: it is the\nonly recovery route out of a terminal status.\n\n| `code` | HTTP |\n|---|---|\n| `Saved` | 200 |\n| `EventNotFound` | 404 |\n| `StudentNotFound` | 404 |\n| `InvalidStatus` | 400 |\n| `InvalidNotes` | 400 |\n| `PersonRequired` | 400 |\n| `PersonnelNotFound` | 404 |\n| `PersonnelInactive` | 404 |\n| `PersonnelNotInAudience` | 404 |"
       },
       "MultiEventReportDto": {
         "type": "object",
@@ -14645,6 +15238,58 @@
         },
         "additionalProperties": false,
         "description": "The outcome of a bulk import — how many rows created, updated, and failed, with per-row reasons."
+      },
+      "PersonnelPickerItemDto": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "personnelNumber": {
+            "type": "string"
+          },
+          "fullName": {
+            "type": "string",
+            "description": "Composed by the server, exactly as EAMS.Application.Dtos.PersonnelDto.FullName."
+          }
+        },
+        "additionalProperties": false,
+        "description": "One row of `GET /events/personnel-picker` (ADR-015 D-104): what an organizer needs to choose a staff\r\nmember, and deliberately nothing else. Who may read the rest of the record is `personnel.read`'s\r\nquestion, so email, position, classification, department, organization, status and the card UID stay\r\nout. Adding a member here widens what `events.write` can see."
+      },
+      "PersonnelPickerItemDtoPagedResult": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PersonnelPickerItemDto"
+            },
+            "description": "This page's rows, in the endpoint's documented order. Empty is an ordinary answer — for an empty\r\nfilter and for a page past the end alike."
+          },
+          "page": {
+            "type": "integer",
+            "description": "The 1-based page actually served, which is <em>not</em> necessarily the one requested: an\r\nout-of-range `?page=` is clamped and this is where a client sees that it was.",
+            "format": "int32"
+          },
+          "pageSize": {
+            "type": "integer",
+            "description": "The page size actually applied, after the EAMS.Application.Dtos.Paging.MaxPageSize clamp. The field that\r\nmakes clamping discoverable rather than silent.",
+            "format": "int32"
+          },
+          "total": {
+            "type": "integer",
+            "description": "Rows matching the filter across every page, counted in the database against the same filter that\r\nproduced Items. This is what a grid needs to render a page count; without it a\r\ncaller can only discover the end by walking into it.",
+            "format": "int32"
+          },
+          "hasMore": {
+            "type": "boolean",
+            "description": "Whether another page exists after this one.\r\n            \r\n\r\n<b>Derived here rather than left to the client, because the client gets it wrong.</b>`page * pageSize < total` is right and `items.Count == pageSize` is the version\r\npeople write — which reports a further page whenever the last page happens to be exactly full,\r\nso a paging loop makes one extra request every time the total is a multiple of the page size.\r\nComputing it once, on the side that already holds the total, is a byte on the wire against a\r\nclass of off-by-one nobody finds in review.\r\n",
+            "readOnly": true
+          }
+        },
+        "additionalProperties": false,
+        "description": "One page of an admin list read, plus what the caller needs to ask for the next one.\r\n            \r\n\r\n<b>Every §6.2/§6.3 admin list returns this; `GET /attendance/live/{eventId}` deliberately does\r\nnot.</b> That endpoint pages by cursor (`since`/`cursor`/`hasMore`) because it is a\r\npolling delta rather than a list — a client asks \"what changed after this point\", not \"give me rows\r\n40 to 60\" — and its shape is frozen published contract under D-29/D-30/D-42. Offset paging over a\r\nlive feed also drops rows: an insert below the cursor shifts every subsequent row up by one and the\r\nnext page skips it. The two mechanisms coexisting is correct, not an inconsistency to tidy.\r\n"
       },
       "PersonnelWriteRequest": {
         "type": "object",
@@ -15726,6 +16371,31 @@
           ]
         }
       },
+      "TapBatchResultV2": {
+        "type": "object",
+        "properties": {
+          "accepted": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "rejected": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "serverTime": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "results": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TapBatchRowResultV2"
+            }
+          }
+        },
+        "additionalProperties": false,
+        "description": "The v2 EAMS.Application.Dtos.TapBatchResult: identical but for the rows' type."
+      },
       "TapBatchRowResult": {
         "type": "object",
         "properties": {
@@ -15758,6 +16428,34 @@
         },
         "additionalProperties": false,
         "description": "One row of a batch response."
+      },
+      "TapBatchRowResultV2": {
+        "type": "object",
+        "properties": {
+          "index": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "deviceTapId": {
+            "type": "string",
+            "nullable": true
+          },
+          "code": {
+            "type": "string"
+          },
+          "status": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "record": {
+            "$ref": "#/components/schemas/AttendanceDtoV2"
+          },
+          "message": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false,
+        "description": "The v2 EAMS.Application.Dtos.TapBatchRowResult: identical but for the record's type."
       },
       "TapOutcomeCode": {
         "enum": [
@@ -15864,6 +16562,31 @@
           "code": "Recorded",
           "serverTime": "2026-07-29T05:31:22.117Z"
         }
+      },
+      "TapResultV2": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean",
+            "description": "**Deprecated — read `code` instead.** Retained for clients already reading it; the\nbehaviour is unchanged and it will not be removed without notice.\n\nIt carries no information `code` does not. It is `false` on exactly the outcomes that\narrive as a `4xx`, and a `4xx` is an RFC 7807 problem body that has no `success` member —\nso in every body where you can actually see this field it is `true`.",
+            "deprecated": true
+          },
+          "message": {
+            "type": "string"
+          },
+          "record": {
+            "$ref": "#/components/schemas/AttendanceDtoV2"
+          },
+          "code": {
+            "type": "string"
+          },
+          "serverTime": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "additionalProperties": false,
+        "description": "The v2 EAMS.Application.Dtos.TapResult: identical but for the record's type."
       },
       "TermCurrentRequest": {
         "type": "object",
@@ -16185,7 +16908,7 @@
     },
     {
       "name": "EventManifest",
-      "description": "The device-facing half of the events resource: `GET /events/{id}/manifest`, the offline capture\r\ncache a kiosk or handset pulls before it starts scanning (D-46).\r\n            \r\n\r\n<b>Its own controller rather than one more action on `EventsController`, and that is a\r\ndeliberate split.</b> Every action there is `events.read` or `events.write` for a person's\r\nBearer token — the event list alone also admits a device, for its picker; this one authenticates\r\nonly a <em>device</em> and carries\r\n`attendance.capture`. One action with a different principal type in the middle of an\r\nadministrative controller is a review hazard in both directions — a reader skimming\r\n`EventsController` would assume every action takes the same credential, and an action added\r\nlater to a capture-only controller should inherit capture auth rather than an operator's. The route is\r\nidentical either way; only the file is different.\r\n\r\n<b>`events.read` is rejected outright as the permission for this.</b> A device holding it could\r\nread every event and every roster in the school, which is exactly the blast radius a stolen kiosk\r\nkey must not have. §11 scopes device keys to `attendance.capture` and nothing else, so this\r\nendpoint is already pre-authorized by the credential a capture device holds — and minting an\r\n`events.manifest` code would repeat D-45, forcing Phase 6 to grant two codes for one capability.\r\n"
+      "description": "The device-facing half of the events resource: `GET /events/{id}/manifest`, the offline capture\r\ncache a kiosk or handset pulls before it starts scanning (D-46), and\r\n`GET /events/{id}/by-card/{cardUid}`, the scan screen's event-scoped card lookup (ADR-015 D-99).\r\n            \r\n\r\n<b>Its own controller rather than one more action on `EventsController`, and that is a\r\ndeliberate split.</b> Every action there is `events.read` or `events.write` for a person's\r\nBearer token — the event list alone also admits a device, for its picker; this one authenticates\r\nonly a <em>device</em> and carries\r\n`attendance.capture`. One action with a different principal type in the middle of an\r\nadministrative controller is a review hazard in both directions — a reader skimming\r\n`EventsController` would assume every action takes the same credential, and an action added\r\nlater to a capture-only controller should inherit capture auth rather than an operator's. The route is\r\nidentical either way; only the file is different.\r\n\r\n<b>`events.read` is rejected outright as the permission for this.</b> A device holding it could\r\nread every event and every roster in the school, which is exactly the blast radius a stolen kiosk\r\nkey must not have. §11 scopes device keys to `attendance.capture` and nothing else, so this\r\nendpoint is already pre-authorized by the credential a capture device holds — and minting an\r\n`events.manifest` code would repeat D-45, forcing Phase 6 to grant two codes for one capability.\r\n"
     },
     {
       "name": "Permissions",

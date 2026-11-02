@@ -59,10 +59,11 @@ public class OpenApiDocumentTests : IntegrationTest
     private const string Heartbeat = "/api/v1/devices/{id}/heartbeat";
     private const string Summary = "/api/v1/events/{id}/summary";
     private const string Manifest = "/api/v1/events/{id}/manifest";
+    private const string EventByCard = "/api/v1/events/{id}/by-card/{cardUid}";
 
     /// <summary>
-    /// The endpoints gated behind a device key — D-28's four plus D-46's manifest pull — and the whole
-    /// of that list. Transcribed
+    /// The endpoints gated behind a device key — D-28's four, D-46's manifest pull and ADR-015 D-99's
+    /// event card lookup — and the whole of that list. Transcribed
     /// rather than derived from the attributes, for the reason the outcome-token tests record: deriving
     /// it would assert that the pipeline equals itself.
     /// </summary>
@@ -73,6 +74,7 @@ public class OpenApiDocumentTests : IntegrationTest
         (ByCard, "get"),
         (Heartbeat, "post"),
         (Manifest, "get"),
+        (EventByCard, "get"),
     ];
 
     /// <summary>
@@ -274,7 +276,7 @@ public class OpenApiDocumentTests : IntegrationTest
     [Theory]
     [InlineData(Tap, "post", "200:TapResult,400:ProblemDetails,404:ProblemDetails,401:,403:,429:")]
     [InlineData(TapBatch, "post", "200:TapBatchResult,400:ProblemDetails,401:,403:,429:")]
-    [InlineData(Manual, "post", "200:TapResult,400:ProblemDetails,404:ProblemDetails")]
+    [InlineData(Manual, "post", "200:TapResultV2,400:ProblemDetails,404:ProblemDetails")]
     [InlineData(Live, "get", "200:AttendanceLiveDto,400:ProblemDetails,404:ProblemDetails,429:")]
     public async Task Each_capture_operation_publishes_exactly_its_documented_responses(
         string path, string method, string expected)
@@ -440,7 +442,7 @@ public class OpenApiDocumentTests : IntegrationTest
 
         var responses = Operation(document, Manual, "post").GetProperty("responses");
 
-        Assert.Equal("TapResult", SchemaRefOf(responses, "200"));
+        Assert.Equal("TapResultV2", SchemaRefOf(responses, "200"));
         Assert.Equal("ProblemDetails", SchemaRefOf(responses, "400"));
         Assert.Equal("ProblemDetails", SchemaRefOf(responses, "404"));
     }

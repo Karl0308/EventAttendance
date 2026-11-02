@@ -77,6 +77,7 @@ import type {
   Role,
   RoleWriteRequest,
   Personnel,
+  PersonnelPickerEntry,
   PersonnelWriteRequest,
   PersonnelImportResult,
   ClearanceReport,
@@ -1364,6 +1365,15 @@ function toPersonnel(row: Row, what: string): Personnel {
     position: optStr(row.position),
     rfidUid: optStr(row.rfidUid),
     status: reqStr(row, "status", what),
+  };
+}
+
+/** `PersonnelPickerDto` — `{ id, personnelNumber, fullName }` and nothing else; extra members are ignored. */
+function toPersonnelPickerEntry(row: Row, what: string): PersonnelPickerEntry {
+  return {
+    id: reqStr(row, "id", what),
+    personnelNumber: reqStr(row, "personnelNumber", what),
+    fullName: reqStr(row, "fullName", what),
   };
 }
 
@@ -2974,6 +2984,16 @@ async function listPersonnel(): Promise<Personnel[]> {
 }
 
 /**
+ * `GET /events/personnel-picker` — the personnel an event audience or pre-registration picker offers, as
+ * `{ id, personnelNumber, fullName }`. Gated on `events.write`, not `personnel.read` (ADR-015 D-104): an
+ * Organizer holds the first and not the second, so reading `listPersonnel` there is a 403 that would also
+ * take the students list down with it. Same pages and order as `GET /personnel`, so `listAll` walks it.
+ */
+async function listPersonnelPicker(): Promise<PersonnelPickerEntry[]> {
+  return listAll("GET /events/personnel-picker", "/events/personnel-picker", {}, toPersonnelPickerEntry);
+}
+
+/**
  * `GET /personnel/organizations` — the distinct organizations already on the school's personnel, which the
  * form offers as suggestions (the field still accepts a new one).
  *
@@ -4404,6 +4424,7 @@ export const api = {
   getAttendanceAnalytics,
   downloadAttendanceAnalyticsCsv,
   listPersonnel,
+  listPersonnelPicker,
   listPersonnelOrganizations,
   createPersonnel,
   updatePersonnel,

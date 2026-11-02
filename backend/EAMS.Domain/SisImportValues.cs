@@ -360,6 +360,19 @@ public static class SisImportWarningCode
     public const string RfidCardRevoked = "RfidCardRevoked";
 
     /// <summary>
+    /// The row's RFID serial is held by a personnel record in this school, so no card was created
+    /// (ADR-015 D-98, JJ's #4). The student imported normally and is enrolled either way.
+    ///
+    /// <para>
+    /// <b>Its own code because nothing was revoked.</b> The same refusal under
+    /// <see cref="RfidCardRevoked"/> would send an operator looking for a card somebody deactivated,
+    /// when the fix is on the Personnel tab. It behaves like that code all the same: no card, no card
+    /// touch, and the roster does not get to take a card from whoever holds it.
+    /// </para>
+    /// </summary>
+    public const string RfidCardHeldByPersonnel = "RfidCardHeldByPersonnel";
+
+    /// <summary>
     /// This batch's profile maps <c>RfidCard.CardUid</c> from a column that is <em>not</em> the RFID
     /// serial — so the card issued for this row carries whatever that column held, which for every
     /// profile authored before 2026-07-30 is the student number.
@@ -568,7 +581,7 @@ public static class SisImportWarningCode
     [
         CourseTitleAlias, CourseCollegeAdopted, InstructorPlaceholder,
         SectionSpansPrograms, SectionUnspecified, StudentIdentityConflict, RfidCardRevoked,
-        RfidCardFromLegacyMapping, ClassificationUnavailable, ClassificationConflict,
+        RfidCardHeldByPersonnel, RfidCardFromLegacyMapping, ClassificationUnavailable, ClassificationConflict,
         ClassificationMissing, ClassificationRegNoSuggestsPersonnel, ClassificationAxisUnknown,
         ClassificationWrongAxis, OrganizationTooLong,
     ];

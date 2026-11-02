@@ -37,18 +37,33 @@ namespace EAMS.Application.Dtos;
 /// a reducer keyed on <c>studentId</c> alone cannot tell an update from a second row, and §4.6
 /// occurrences will eventually make two rows per student per event legal.
 /// </param>
+/// <param name="StudentId">Null on a personnel row.</param>
+/// <param name="StudentNumber">Null on a personnel row.</param>
+/// <param name="StudentName">Null on a personnel row.</param>
+/// <param name="PersonType">
+/// <c>Student</c> or <c>Personnel</c>, always present. This and the three personnel members are
+/// <see cref="AttendanceDtoV2"/>'s own, carried on the delta rather than replacing it (ADR-015 D-99): the
+/// event-level counts and <see cref="AttendanceId"/> above are what make it a delta.
+/// </param>
+/// <param name="PersonnelId">Always present; null on a student row.</param>
+/// <param name="PersonnelNumber">Always present; null on a student row.</param>
+/// <param name="PersonnelName">Always present; null on a student row.</param>
 public record AttendanceDeltaDto(
     Guid EventId,
-    Guid StudentId,
+    Guid? StudentId,
     string Status,
     DateTime? CheckInAt,
     int PresentCount,
     int ExpectedCount,
     Guid AttendanceId,
-    string StudentNumber,
-    string StudentName,
+    string? StudentNumber,
+    string? StudentName,
     DateTime? CheckOutAt,
-    string CaptureMethod);
+    string CaptureMethod,
+    string PersonType,
+    Guid? PersonnelId,
+    string? PersonnelNumber,
+    string? PersonnelName);
 
 /// <summary>
 /// The body of <c>GET /attendance/live/{eventId}</c> — cursor-delta polling in place of the §5/§6.4

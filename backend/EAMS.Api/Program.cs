@@ -68,7 +68,10 @@ builder.Services.AddCors(options => options.AddPolicy(
         // have to guess or re-query. Exposed by name rather than by wildcard: "*" is ignored outright
         // by any request that carries credentials, so a header list that works today and silently
         // stops working when Phase 6 adds auth is worse than one that names what it means.
-        .WithExposedHeaders("Location")));
+        //
+        // Retry-After for the same reason (JJ, 2026-10-28, decision 5): the 503 a card-UID lock refusal
+        // answers tells the SPA how long to wait, and CORS hides that from it unless it is named here.
+        .WithExposedHeaders("Location", "Retry-After")));
 // No AllowCredentials, deliberately — see LocalDevelopmentCors.
 
 // The one seam into Infrastructure: SQL Server, EamsDbContext, and the service implementations.

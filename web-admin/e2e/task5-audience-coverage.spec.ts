@@ -22,7 +22,9 @@ async function openDialog(page: Page, api: MockApi): Promise<void> {
   api.on("GET /event-audiences/options", { json: options });
   // "Specific individuals" loads the whole roster for its picker; the dialog asks as soon as it is chosen.
   api.on("GET /students", { json: onePage([]) });
-  api.on("GET /personnel", { json: onePage([]) });
+  api.on("GET /events/personnel-picker", {
+    json: onePage([{ id: "p-1", personnelNumber: "P-001", fullName: "Santos, Maria" }]),
+  });
   await page.goto("/event-audiences");
   await page.getByRole("button", { name: "Create audience" }).click();
   await expect(page.getByRole("dialog", { name: "Create an event audience" })).toBeVisible();

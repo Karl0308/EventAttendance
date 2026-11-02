@@ -1,3 +1,4 @@
+using System.Data.Common;
 using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
@@ -10,6 +11,7 @@ using EAMS.Infrastructure.Sis;
 using EAMS.Tests.Integration.Infrastructure;
 using Microsoft.Data.SqlClient;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Diagnostics;
 using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
 
@@ -123,13 +125,16 @@ public class CardUidRaceTests : IntegrationTest
         Assert.Equal(PersonnelWriteOutcome.Saved, race.A.Outcome);
         Assert.NotEqual(SisImportStatus.Failed, race.B.Status);
 
-        // Maria's rows say why she has no card, and record no card touch — RfidCardRevoked's shape.
+        // Maria's rows say why she has no card, under their own code (JJ's #4), and record no card touch
+        // — RfidCardRevoked's shape.
         await using var read = NewDbContext();
         var rows = await SisImportOn(read).GetRowsAsync(batchId, result: null);
         foreach (var rowNumber in new[] { 2, 3, 4, 5 })
         {
             var row = rows.Single(r => r.RowNumber == rowNumber);
-            Assert.Contains($"[{SisImportWarningCode.RfidCardRevoked}]", row.WarningMessage!, StringComparison.Ordinal);
+            Assert.Contains(
+                $"[{SisImportWarningCode.RfidCardHeldByPersonnel}]", row.WarningMessage!, StringComparison.Ordinal);
+            Assert.DoesNotContain(SisImportWarningCode.RfidCardRevoked, row.WarningMessage!, StringComparison.Ordinal);
             Assert.Contains($"personnel record '{PersonnelNumber}'", row.WarningMessage!, StringComparison.Ordinal);
             Assert.DoesNotContain(row.Entities, e => e.EntityType == SisImportEntityType.RfidCard);
         }
@@ -228,6 +233,102 @@ public class CardUidRaceTests : IntegrationTest
         var stored = await read.Personnel.IgnoreQueryFilters().AsNoTracking().SingleAsync(p => p.Id == personnelId);
         Assert.Equal("11223344", stored.RfidUid);
         await AssertExactlyOneClaimAsync(schoolId, Uid);
+    }
+
+    /// <summary>
+    /// JJ's #8. <c>LostIndexRaceAsync</c> asked <c>row.Id == default</c>, which is never true because
+    /// <c>Entity</c> assigns <c>NewGuid</c>, so a create that lost the number index was marked
+    /// <c>Unchanged</c>: a tracked row with no database row behind it, on a context
+    /// <c>ImportAsync</c> goes on saving through. Deterministic through the barrier: the create is parked
+    /// after its pre-check while the same number commits, and only then released into the index.
+    /// </summary>
+    [Fact]
+    public async Task A_create_that_loses_the_number_index_race_leaves_nothing_tracked()
+    {
+        var schoolId = await ArrangeSchoolAsync();
+        var barrier = new HoldingBarrier();
+
+        await using var db = NewDbContext();
+        var create = Task.Run(() => PersonnelOn(db, schoolId, barrier)
+            .CreateAsync(PersonnelRequest(PersonnelNumber, Uid)));
+
+        await Task.WhenAny(barrier.Reached.Task, create).WaitAsync(Patience);
+        Assert.True(barrier.Reached.Task.IsCompleted, "The create finished without ever reaching its barrier.");
+
+        await using (var winner = NewDbContext())
+        {
+            winner.Personnel.Add(TestData.NewPersonnel(schoolId, PersonnelNumber));
+            await winner.SaveChangesAsync();
+        }
+
+        barrier.Release();
+        var response = await create.WaitAsync(Patience);
+
+        Assert.Equal(PersonnelWriteOutcome.DuplicateNumber, response.Outcome);
+        Assert.Empty(db.ChangeTracker.Entries<Personnel>());
+    }
+
+    // ================================================================ the 409's title (JJ's #7)
+
+    /// <summary>
+    /// JJ's #7. The title used to say "another student" whoever held the card, which was false the moment
+    /// D-98 let a personnel record hold one. The detail is what names the holder, as built (#6).
+    /// </summary>
+    [Fact]
+    public async Task A_student_held_card_conflict_has_a_title_that_names_no_kind_of_holder()
+    {
+        var schoolId = await ArrangeSchoolAsync();
+        var holderId = await ArrangeStudentAsync(schoolId);
+        Guid otherStudentId;
+        await using (var arrange = NewDbContext())
+        {
+            arrange.RfidCards.Add(TestData.NewCard(schoolId, holderId, Uid));
+            var other = TestData.NewStudent(schoolId, "2023-0002");
+            arrange.Students.Add(other);
+            await arrange.SaveChangesAsync();
+            otherStudentId = other.Id;
+        }
+
+        var body = await RefusedCardIssueAsync(schoolId, otherStudentId);
+
+        Assert.Equal(CardUidInUseTitle, body.GetProperty("title").GetString());
+        Assert.Contains($"student '{StudentNumber}'", body.GetProperty("detail").GetString()!, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task A_personnel_held_card_conflict_does_not_say_another_student()
+    {
+        var schoolId = await ArrangeSchoolAsync();
+        var studentId = await ArrangeStudentAsync(schoolId);
+        await using (var arrange = NewDbContext())
+        {
+            arrange.Personnel.Add(TestData.NewPersonnel(schoolId, PersonnelNumber, rfidUid: Uid));
+            await arrange.SaveChangesAsync();
+        }
+
+        var body = await RefusedCardIssueAsync(schoolId, studentId);
+
+        Assert.Equal(CardUidInUseTitle, body.GetProperty("title").GetString());
+        Assert.DoesNotContain("student", body.GetProperty("title").GetString()!, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains(
+            $"personnel record '{PersonnelNumber}'", body.GetProperty("detail").GetString()!, StringComparison.Ordinal);
+    }
+
+    private const string CardUidInUseTitle = "That card UID is already in use.";
+
+    private async Task<JsonElement> RefusedCardIssueAsync(Guid schoolId, Guid studentId)
+    {
+        using var factory = new EamsApiFactory(Sql.ConnectionString);
+        using var client = await SignedInClientAsync(factory, schoolId);
+
+        var response = await client.PostAsJsonAsync(
+            $"/api/v1/students/{studentId}/cards", new { cardUid = Uid, label = "Replacement" });
+
+        Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
+
+        using var document = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        Assert.Equal(nameof(StudentWriteOutcome.CardUidInUse), document.RootElement.GetProperty("code").GetString());
+        return document.RootElement.Clone();
     }
 
     // ======================================================================== sp_getapplock return codes
@@ -411,6 +512,334 @@ public class CardUidRaceTests : IntegrationTest
         Assert.False(await read.RfidCards.IgnoreQueryFilters().AnyAsync(c => c.SchoolId == world.SchoolId));
         Assert.Equal(SisImportStatus.Failed,
             (await read.SisImportBatches.IgnoreQueryFilters().SingleAsync(b => b.Id == batchId)).Status);
+    }
+
+    // ================================================================================ a refused roster run
+
+    /// <summary>
+    /// The roster's half of JJ's decision 5, end to end. Another session holds one UID the card pass needs
+    /// for the whole D-98 wait, so the run is refused as a 503, not a 500, and stops at <c>Failed</c> with no
+    /// card written. That is what makes "running it again is safe and converges" true: the same run, once
+    /// the lock is free, issues every card.
+    /// </summary>
+    [Fact]
+    public async Task A_roster_run_refused_the_card_lock_is_a_503_and_the_same_run_then_succeeds()
+    {
+        var world = await ArrangeImportWorldAsync();
+        var batchId = await UploadAsync(world.TermId);
+
+        using var factory = new EamsApiFactory(Sql.ConnectionString);
+        using var client = await SignedInClientAsync(factory, world.SchoolId);
+        var route = $"/api/v1/sis/import/{batchId}/run";
+        var request = new { termId = world.TermId };
+
+        await using var holder = new SqlConnection(Sql.ConnectionString);
+        await holder.OpenAsync();
+        await using var held = (SqlTransaction)await holder.BeginTransactionAsync();
+        Assert.True(await GetAppLockAsync(
+            holder, held, CardUidClaims.LockResource(world.SchoolId, SyntheticRoster.MariaRfid)) >= 0);
+
+        var refused = await client.PostAsJsonAsync(route, request);
+
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, refused.StatusCode);
+        Assert.Equal(
+            TimeSpan.FromSeconds(WriteLockUnavailableException.RetryAfterSeconds),
+            refused.Headers.RetryAfter?.Delta);
+
+        var text = await refused.Content.ReadAsStringAsync();
+        using (var body = JsonDocument.Parse(text))
+            Assert.Equal(WriteLockUnavailableException.Code, body.RootElement.GetProperty("code").GetString());
+        Assert.DoesNotContain(SyntheticRoster.MariaRfid, text, StringComparison.Ordinal);
+
+        await using (var read = NewDbContext())
+        {
+            Assert.Equal(SisImportStatus.Failed,
+                (await read.SisImportBatches.IgnoreQueryFilters().SingleAsync(b => b.Id == batchId)).Status);
+            Assert.False(await read.RfidCards.IgnoreQueryFilters().AnyAsync(c => c.SchoolId == world.SchoolId));
+        }
+
+        await held.RollbackAsync();
+
+        var retried = await client.PostAsJsonAsync(route, request);
+
+        Assert.Equal(HttpStatusCode.OK, retried.StatusCode);
+        await using var after = NewDbContext();
+        Assert.NotEqual(SisImportStatus.Failed,
+            (await after.SisImportBatches.IgnoreQueryFilters().SingleAsync(b => b.Id == batchId)).Status);
+        Assert.Equal(ExpectedImportedStudents,
+            await after.RfidCards.IgnoreQueryFilters().CountAsync(c => c.SchoolId == world.SchoolId && c.IsActive));
+    }
+
+    // ==================================================================== D-98's replay, on a retrying context
+
+    // A transient fault replays the whole unit: lock, re-check, write. Every test below runs on the context
+    // production registers (retry strategy, compatibility level 110) and takes one fault at the unit's commit.
+
+    private const string OtherUid = "0A0B0C0D";
+
+    /// <summary>A replay writes once, and it writes at all: <c>AcceptAllChanges</c> waits for the commit.</summary>
+    [Fact]
+    public async Task A_personnel_create_replayed_after_a_transient_fault_writes_once_on_the_2012_dialect()
+    {
+        var schoolId = await ArrangeSchoolAsync();
+        var (db, probe, fault) = FaultingContext();
+
+        await using (db)
+        {
+            var response = await PersonnelOn(db, schoolId, NoCardUidWriteBarrier.Instance)
+                .CreateAsync(PersonnelRequest(PersonnelNumber, Uid));
+
+            Assert.Equal(PersonnelWriteOutcome.Saved, response.Outcome);
+        }
+
+        AssertReplayed(probe, fault);
+        await AssertExactlyOneClaimAsync(schoolId, Uid);
+    }
+
+    /// <summary>
+    /// The replay's re-check is a real decision: the UID was claimed between the attempts. The refused row
+    /// must not survive into the context, or the next save writes it. <see cref="PersonnelService.ImportAsync"/>
+    /// is exactly that next save.
+    /// </summary>
+    [Fact]
+    public async Task A_personnel_create_whose_uid_is_claimed_before_the_replay_is_refused_and_rides_along_on_nothing()
+    {
+        var schoolId = await ArrangeSchoolAsync();
+        var studentId = await ArrangeStudentAsync(schoolId);
+        var (db, probe, fault) = FaultingContext(() => ClaimOnStudentCardAsync(schoolId, studentId, Uid));
+
+        await using (db)
+        {
+            var personnel = PersonnelOn(db, schoolId, NoCardUidWriteBarrier.Instance);
+
+            var refused = await personnel.CreateAsync(PersonnelRequest(PersonnelNumber, Uid));
+            Assert.Equal(PersonnelWriteOutcome.DuplicateRfid, refused.Outcome);
+            AssertReplayed(probe, fault);
+
+            var next = await personnel.CreateAsync(PersonnelRequest("P-0002", OtherUid));
+            Assert.Equal(PersonnelWriteOutcome.Saved, next.Outcome);
+        }
+
+        await AssertExactlyOneClaimAsync(schoolId, Uid);
+
+        await using var read = NewDbContext();
+        Assert.False(await read.Personnel.AnyAsync(p => p.PersonnelNumber == PersonnelNumber));
+    }
+
+    /// <summary>The update's half: attempt one changed a tracked row, so the refusal has to put it back.</summary>
+    [Fact]
+    public async Task A_personnel_update_whose_uid_is_claimed_before_the_replay_is_refused_and_keeps_the_stored_record()
+    {
+        var schoolId = await ArrangeSchoolAsync();
+        var studentId = await ArrangeStudentAsync(schoolId);
+        Guid personnelId;
+        await using (var arrange = NewDbContext())
+        {
+            var person = TestData.NewPersonnel(schoolId, PersonnelNumber, rfidUid: OtherUid);
+            arrange.Personnel.Add(person);
+            await arrange.SaveChangesAsync();
+            personnelId = person.Id;
+        }
+
+        var (db, probe, fault) = FaultingContext(() => ClaimOnStudentCardAsync(schoolId, studentId, Uid));
+
+        await using (db)
+        {
+            var response = await PersonnelOn(db, schoolId, NoCardUidWriteBarrier.Instance)
+                .UpdateAsync(personnelId, PersonnelRequest(PersonnelNumber, Uid));
+            Assert.Equal(PersonnelWriteOutcome.DuplicateRfid, response.Outcome);
+
+            await db.SaveChangesAsync();
+        }
+
+        AssertReplayed(probe, fault);
+        await AssertExactlyOneClaimAsync(schoolId, Uid);
+
+        await using var read = NewDbContext();
+        Assert.Equal(OtherUid, (await read.Personnel.SingleAsync(p => p.Id == personnelId)).RfidUid);
+    }
+
+    [Fact]
+    public async Task A_student_card_issue_replayed_after_a_transient_fault_writes_once_on_the_2012_dialect()
+    {
+        var schoolId = await ArrangeSchoolAsync();
+        var studentId = await ArrangeStudentAsync(schoolId);
+        var (db, probe, fault) = FaultingContext();
+
+        await using (db)
+        {
+            var response = await StudentsOn(db, NoCardUidWriteBarrier.Instance)
+                .AddCardAsync(studentId, new StudentCardRequest(Uid, null));
+
+            Assert.Equal(StudentWriteOutcome.Saved, response.Outcome);
+        }
+
+        AssertReplayed(probe, fault);
+        await AssertExactlyOneClaimAsync(schoolId, Uid);
+    }
+
+    /// <summary>The student writer's refusal: an earlier attempt's <c>Add</c> must not survive it.</summary>
+    [Fact]
+    public async Task A_student_card_issue_whose_uid_is_claimed_before_the_replay_is_refused_and_rides_along_on_nothing()
+    {
+        var schoolId = await ArrangeSchoolAsync();
+        var studentId = await ArrangeStudentAsync(schoolId);
+        var (db, probe, fault) = FaultingContext(() => ClaimOnPersonnelAsync(schoolId, Uid));
+
+        await using (db)
+        {
+            var response = await StudentsOn(db, NoCardUidWriteBarrier.Instance)
+                .AddCardAsync(studentId, new StudentCardRequest(Uid, null));
+            Assert.Equal(StudentWriteOutcome.CardUidInUse, response.Outcome);
+
+            await db.SaveChangesAsync();
+        }
+
+        AssertReplayed(probe, fault);
+        await AssertExactlyOneClaimAsync(schoolId, Uid);
+    }
+
+    /// <summary>
+    /// D-98's "a transient fault replays the whole unit", for the import, whose save holds many cards. Many
+    /// UIDs is also what shows the 2012 translation: a list of one becomes a plain equality, so the literal
+    /// <c>IN</c> can only be asserted here.
+    /// </summary>
+    [Fact]
+    public async Task The_import_card_unit_replayed_after_a_transient_fault_issues_each_card_once_through_a_literal_IN()
+    {
+        var world = await ArrangeImportWorldAsync();
+        var batchId = await UploadAsync(world.TermId);
+        var (db, probe, fault) = FaultingContext();
+
+        await using (db)
+        {
+            var batch = await ImportOn(db, NoCardUidWriteBarrier.Instance).RunAsync(batchId, world.TermId);
+            Assert.NotEqual(SisImportStatus.Failed, batch.Status);
+        }
+
+        AssertReplayed(probe, fault);
+        Assert.Contains(probe.Commands, sql =>
+            sql.Contains("[CardUid] IN (", StringComparison.Ordinal)
+            && sql.Contains(SyntheticRoster.MariaRfid, StringComparison.Ordinal));
+
+        await using var read = NewDbContext();
+        Assert.Equal(ExpectedImportedStudents,
+            await read.RfidCards.IgnoreQueryFilters().CountAsync(c => c.SchoolId == world.SchoolId && c.IsActive));
+    }
+
+    /// <summary>
+    /// The replay's re-check narrows the unit: the card it had already added in attempt one is detached, and
+    /// every other card is still issued, against the same entities.
+    /// </summary>
+    [Fact]
+    public async Task The_import_card_unit_replay_detaches_a_card_claimed_between_attempts_and_issues_the_rest()
+    {
+        var world = await ArrangeImportWorldAsync();
+        var batchId = await UploadAsync(world.TermId);
+        var (db, probe, fault) = FaultingContext(() => ClaimOnPersonnelAsync(world.SchoolId, SyntheticRoster.MariaRfid));
+
+        await using (db)
+        {
+            var batch = await ImportOn(db, NoCardUidWriteBarrier.Instance).RunAsync(batchId, world.TermId);
+            Assert.NotEqual(SisImportStatus.Failed, batch.Status);
+        }
+
+        AssertReplayed(probe, fault);
+        await AssertExactlyOneClaimAsync(world.SchoolId, SyntheticRoster.MariaRfid);
+
+        await using var read = NewDbContext();
+        Assert.Equal(ExpectedImportedStudents - 1,
+            await read.RfidCards.IgnoreQueryFilters().CountAsync(c => c.SchoolId == world.SchoolId && c.IsActive));
+
+        var rows = await SisImportOn(read).GetRowsAsync(batchId, result: null);
+        Assert.Contains(
+            $"[{SisImportWarningCode.RfidCardHeldByPersonnel}]",
+            rows.Single(r => r.RowNumber == 2).WarningMessage!, StringComparison.Ordinal);
+    }
+
+    private (EamsDbContext Db, UnitProbe Probe, FaultAtUnitCommit Fault) FaultingContext(Func<Task>? betweenAttempts = null)
+    {
+        var probe = new UnitProbe();
+        var fault = new FaultAtUnitCommit(probe, betweenAttempts ?? (() => Task.CompletedTask));
+        return (Sql.NewProductionShapedDbContext(School, probe, fault), probe, fault);
+    }
+
+    /// <summary>
+    /// The fault landed, the unit took its locks again, and neither attempt spoke a dialect the deployed
+    /// server does not have.
+    /// </summary>
+    private static void AssertReplayed(UnitProbe probe, FaultAtUnitCommit fault)
+    {
+        Assert.True(fault.Fired, "No fault was raised, so nothing here was a replay.");
+        Assert.Equal(2, probe.LockCommands);
+        Assert.DoesNotContain(probe.Commands, sql => sql.Contains("OPENJSON", StringComparison.OrdinalIgnoreCase));
+    }
+
+    /// <summary>A rival that owes the lock nothing: the point is what the replay's re-check then finds.</summary>
+    private async Task ClaimOnStudentCardAsync(Guid schoolId, Guid studentId, string uid)
+    {
+        await using var db = NewDbContext();
+        db.RfidCards.Add(TestData.NewCard(schoolId, studentId, uid));
+        await db.SaveChangesAsync();
+    }
+
+    /// <inheritdoc cref="ClaimOnStudentCardAsync"/>
+    private async Task ClaimOnPersonnelAsync(Guid schoolId, string uid)
+    {
+        await using var db = NewDbContext();
+        db.Personnel.Add(TestData.NewPersonnel(schoolId, "P-RIVAL", rfidUid: uid));
+        await db.SaveChangesAsync();
+    }
+
+    /// <summary>Records one context's commands, and how many of them took card-UID locks.</summary>
+    private sealed class UnitProbe : DbCommandInterceptor
+    {
+        public List<string> Commands { get; } = [];
+
+        public int LockCommands { get; private set; }
+
+        private void Record(DbCommand command)
+        {
+            Commands.Add(command.CommandText);
+            if (command.CommandText.Contains("sp_getapplock", StringComparison.Ordinal)) LockCommands++;
+        }
+
+        public override ValueTask<InterceptionResult<int>> NonQueryExecutingAsync(
+            DbCommand command, CommandEventData eventData, InterceptionResult<int> result,
+            CancellationToken cancellationToken = default)
+        {
+            Record(command);
+            return base.NonQueryExecutingAsync(command, eventData, result, cancellationToken);
+        }
+
+        public override ValueTask<InterceptionResult<DbDataReader>> ReaderExecutingAsync(
+            DbCommand command, CommandEventData eventData, InterceptionResult<DbDataReader> result,
+            CancellationToken cancellationToken = default)
+        {
+            Record(command);
+            return base.ReaderExecutingAsync(command, eventData, result, cancellationToken);
+        }
+    }
+
+    /// <summary>
+    /// Raises one transient fault at the first commit after a card-UID lock: the attempt has saved, nothing
+    /// is durable, and <see cref="TimeoutException"/> is what the SQL Server strategy retries. Anything
+    /// <paramref name="betweenAttempts"/> writes is committed by the time the replay re-checks.
+    /// </summary>
+    private sealed class FaultAtUnitCommit(UnitProbe probe, Func<Task> betweenAttempts) : DbTransactionInterceptor
+    {
+        public bool Fired { get; private set; }
+
+        public override async ValueTask<InterceptionResult> TransactionCommittingAsync(
+            DbTransaction transaction, TransactionEventData eventData, InterceptionResult result,
+            CancellationToken cancellationToken = default)
+        {
+            if (Fired || probe.LockCommands == 0) return result;
+
+            Fired = true;
+            await betweenAttempts();
+            throw new TimeoutException("Injected: a transient fault at the card unit's commit.");
+        }
     }
 
     // =================================================================================== plumbing

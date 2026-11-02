@@ -234,6 +234,37 @@ public class PersonnelCaptureTests : IntegrationTest
         Assert.Empty(await ScansAsync(world.EventId));
     }
 
+    /// <summary>
+    /// #705 old-client test 3, the other half: the same card and tap id replayed with and without the
+    /// header, in both modes. The header is what lets the replay be answered at all; without it the card is
+    /// a personnel card, so it is <c>CardNotFound</c> before replay is ever asked, and it says so in a
+    /// flagged scan row.
+    /// </summary>
+    [Theory]
+    [InlineData(AttendanceMode.Single)]
+    [InlineData(AttendanceMode.TimeInOut)]
+    public async Task OldClient_replay_of_a_capable_personnel_tap_is_CardNotFound_and_the_capable_replay_is_not(string mode)
+    {
+        var world = await ArrangeAsync(mode);
+        using var factory = new EamsApiFactory(Sql.ConnectionString);
+        using var client = factory.CreateClient().WithDeviceKey(world.ApiKey);
+
+        await SendAsync(client, TapRoute, Tap(world.EventId, PersonnelUid, "t-1"), Capable);
+
+        var capable = await SendAsync(client, TapRoute, Tap(world.EventId, PersonnelUid, "t-1"), Capable);
+        var plain = await client.PostAsJsonAsync(TapRoute, Tap(world.EventId, PersonnelUid, "t-1"));
+
+        Assert.Equal(nameof(TapOutcome.DuplicateIgnored), CodeOf(await BodyOf(capable)));
+
+        Assert.Equal(HttpStatusCode.NotFound, plain.StatusCode);
+        var body = await BodyOf(plain);
+        Assert.Equal(nameof(TapOutcome.CardNotFound), CodeOf(body));
+        AssertNoTraceOfPersonnel(body.GetRawText());
+
+        Assert.Single(await RowsAsync(world.EventId));
+        AssertFlagged(Assert.Single(await ScansAsync(world.EventId)), world.PersonnelId, PersonnelUid);
+    }
+
     /// <summary>#705 old-client test 4.</summary>
     [Fact]
     public async Task OldClient_mixed_batch_records_students_and_refuses_personnel_per_row()
@@ -481,6 +512,372 @@ public class PersonnelCaptureTests : IntegrationTest
 
         Assert.Equal(nameof(TapOutcome.DuplicateIgnored), CodeOf(await BodyOf(replay)));
         Assert.Equal(nameof(TapOutcome.PersonnelNotInAudience), CodeOf(await BodyOf(fresh)));
+    }
+
+    /// <summary>
+    /// D-99, the exception to replay-precedes-refusal (JJ, 2026-11-02): card resolution precedes replay, so
+    /// once the holder is soft-deleted the card is nobody's and the stored tap is not reached. It reads as an
+    /// unknown card: unflagged, with no personnel id, because the UID no longer resolves to anyone.
+    /// </summary>
+    [Fact]
+    public async Task Replay_is_CardNotFound_when_the_holder_has_since_been_soft_deleted()
+    {
+        var world = await ArrangeAsync();
+        using var factory = new EamsApiFactory(Sql.ConnectionString);
+        using var client = factory.CreateClient().WithDeviceKey(world.ApiKey);
+
+        await SendAsync(client, TapRoute, Tap(world.EventId, PersonnelUid, "t-1"), Capable);
+
+        await using (var db = NewDbContext())
+        {
+            await db.Personnel.ExecuteUpdateAsync(s => s.SetProperty(p => p.IsDeleted, true));
+        }
+
+        var replay = await SendAsync(client, TapRoute, Tap(world.EventId, PersonnelUid, "t-1"), Capable);
+
+        Assert.Equal(HttpStatusCode.NotFound, replay.StatusCode);
+        Assert.Equal(nameof(TapOutcome.CardNotFound), CodeOf(await BodyOf(replay)));
+
+        Assert.Single(await RowsAsync(world.EventId));
+        var scan = Assert.Single(await ScansAsync(world.EventId));
+        Assert.Null(scan.PersonnelId);
+        Assert.Null(scan.Reason);
+    }
+
+    /// <inheritdoc cref="Replay_is_CardNotFound_when_the_holder_has_since_been_soft_deleted"/>
+    [Fact]
+    public async Task Replay_is_CardNotFound_when_the_holders_uid_has_since_changed()
+    {
+        var world = await ArrangeAsync();
+        using var factory = new EamsApiFactory(Sql.ConnectionString);
+        using var client = factory.CreateClient().WithDeviceKey(world.ApiKey);
+
+        await SendAsync(client, TapRoute, Tap(world.EventId, PersonnelUid, "t-1"), Capable);
+
+        await using (var db = NewDbContext())
+        {
+            await db.Personnel.ExecuteUpdateAsync(s => s.SetProperty(p => p.RfidUid, "0A0B0C0D"));
+        }
+
+        var replay = await SendAsync(client, TapRoute, Tap(world.EventId, PersonnelUid, "t-1"), Capable);
+
+        Assert.Equal(HttpStatusCode.NotFound, replay.StatusCode);
+        Assert.Equal(nameof(TapOutcome.CardNotFound), CodeOf(await BodyOf(replay)));
+        Assert.Single(await RowsAsync(world.EventId));
+    }
+
+    // ------------------------------------------------------------------- D-98 / D-99 card resolution
+
+    /// <summary>A soft-deleted holder's card is nobody's: an unknown card, with and without the header.</summary>
+    [Fact]
+    public async Task A_soft_deleted_holders_card_is_CardNotFound_with_and_without_the_header()
+    {
+        var world = await ArrangeAsync();
+
+        await using (var db = NewDbContext())
+        {
+            await db.Personnel.ExecuteUpdateAsync(s => s.SetProperty(p => p.IsDeleted, true));
+        }
+
+        using var factory = new EamsApiFactory(Sql.ConnectionString);
+        using var client = factory.CreateClient().WithDeviceKey(world.ApiKey);
+
+        var capable = await SendAsync(client, TapRoute, Tap(world.EventId, PersonnelUid, "t-1"), Capable);
+        var plain = await client.PostAsJsonAsync(TapRoute, Tap(world.EventId, PersonnelUid, "t-2"));
+
+        Assert.Equal(nameof(TapOutcome.CardNotFound), CodeOf(await BodyOf(capable)));
+        Assert.Equal(nameof(TapOutcome.CardNotFound), CodeOf(await BodyOf(plain)));
+        Assert.Empty(await RowsAsync(world.EventId));
+
+        var scans = await ScansAsync(world.EventId);
+        Assert.Equal(2, scans.Count);
+        Assert.All(scans, scan =>
+        {
+            Assert.Null(scan.PersonnelId);
+            Assert.Null(scan.Reason);
+        });
+    }
+
+    /// <summary>
+    /// D-98's pre-go-live rule: until the audit is clean, a UID on both tables resolves to the student,
+    /// because the tap reads student cards first. Seeded directly: the D-98 lock is what stops a new one.
+    /// </summary>
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task A_uid_on_both_tables_resolves_to_the_student(bool capable)
+    {
+        var world = await ArrangeAsync();
+
+        await using (var db = NewDbContext())
+        {
+            await db.Personnel.ExecuteUpdateAsync(s => s.SetProperty(p => p.RfidUid, StudentUid));
+        }
+
+        using var factory = new EamsApiFactory(Sql.ConnectionString);
+        using var client = factory.CreateClient().WithDeviceKey(world.ApiKey);
+
+        var response = capable
+            ? await SendAsync(client, TapRoute, Tap(world.EventId, StudentUid, "t-1"), Capable)
+            : await client.PostAsJsonAsync(TapRoute, Tap(world.EventId, StudentUid, "t-1"));
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var body = await BodyOf(response);
+        Assert.Equal(nameof(TapOutcome.Recorded), CodeOf(body));
+        Assert.Equal(world.StudentId, body.GetProperty("record").GetProperty("studentId").GetGuid());
+
+        var row = Assert.Single(await RowsAsync(world.EventId));
+        Assert.Equal(world.StudentId, row.StudentId);
+        Assert.Null(row.PersonnelId);
+        Assert.Empty(await ScansAsync(world.EventId));
+    }
+
+    // -------------------------------------------------------------------------------- the scan log
+
+    /// <summary>D-100: scan-log evidence for every personnel refusal on tap <em>and batch</em>.</summary>
+    [Theory]
+    [InlineData(PersonnelStatus.Active, false, nameof(TapOutcome.PersonnelNotInAudience))]
+    [InlineData(PersonnelStatus.Inactive, true, nameof(TapOutcome.PersonnelInactive))]
+    public async Task Capable_batch_refusal_writes_its_scan_row(string status, bool inAudience, string code)
+    {
+        var world = await ArrangeAsync(personnelStatus: status, inAudience: inAudience);
+        using var factory = new EamsApiFactory(Sql.ConnectionString);
+        using var client = factory.CreateClient().WithDeviceKey(world.ApiKey);
+
+        await SendAsync(client, BatchRoute, Batch(Tap(world.EventId, PersonnelUid, "b-1")), Capable);
+
+        Assert.Empty(await RowsAsync(world.EventId));
+
+        var scan = Assert.Single(await ScansAsync(world.EventId));
+        Assert.Equal(PersonnelUid, scan.CardUid);
+        Assert.Equal(world.PersonnelId, scan.PersonnelId);
+        Assert.Equal(code, scan.ServerOutcome);
+        Assert.Null(scan.Reason);
+    }
+
+    /// <summary>
+    /// JJ's ruling (2026-11-02): a personnel tap the interval rule ignored keeps <c>personnelId</c> in its
+    /// audit JSON, and <c>studentId</c> is null, so "why did my second tap not count?" names the right person.
+    /// </summary>
+    [Fact]
+    public async Task A_suppressed_personnel_tap_keeps_its_personnelId_in_the_audit_json()
+    {
+        var world = await ArrangeAsync(AttendanceMode.TimeInOut, startedMinutesAgo: 90);
+        using var factory = new EamsApiFactory(Sql.ConnectionString);
+        using var client = factory.CreateClient().WithDeviceKey(world.ApiKey);
+        var checkIn = DateTime.UtcNow.AddMinutes(-60);
+
+        await SendAsync(client, TapRoute, Tap(world.EventId, PersonnelUid, "in", checkIn), Capable);
+        var soon = await SendAsync(
+            client, TapRoute, Tap(world.EventId, PersonnelUid, "soon", checkIn.AddSeconds(1)), Capable);
+
+        Assert.Equal(nameof(TapOutcome.TooSoonIgnored), CodeOf(await BodyOf(soon)));
+
+        await using var db = NewDbContext();
+        var changes = await db.AuditLogs.AsNoTracking()
+            .Where(a => a.EntityId == world.EventId && a.Action == ScanLog.SuppressedAction)
+            .Select(a => a.Changes!)
+            .SingleAsync();
+
+        using var json = JsonDocument.Parse(changes);
+        Assert.Equal(world.PersonnelId, json.RootElement.GetProperty("personnelId").GetGuid());
+        Assert.Equal(JsonValueKind.Null, json.RootElement.GetProperty("studentId").ValueKind);
+    }
+
+    // ---------------------------------------------------------------------- D-99, Cache-Control
+
+    /// <summary>
+    /// D-99 (JJ, 2026-11-02): a v2 tap or batch can carry <c>personnelName</c>. Every capable answer says
+    /// <c>private, no-cache</c>, the refusal and the batch-level refusal included. D-100: POST sends no
+    /// <c>Vary</c>.
+    /// </summary>
+    [Fact]
+    public async Task Capable_tap_and_batch_send_private_no_cache_and_no_vary()
+    {
+        var world = await ArrangeAsync(inAudience: false);
+        using var factory = new EamsApiFactory(Sql.ConnectionString);
+        using var client = factory.CreateClient().WithDeviceKey(world.ApiKey);
+
+        var recorded = await SendAsync(client, TapRoute, Tap(world.EventId, StudentUid, "t-1"), Capable);
+        var refused = await SendAsync(client, TapRoute, Tap(world.EventId, PersonnelUid, "t-2"), Capable);
+        var batch = await SendAsync(client, BatchRoute, Batch(Tap(world.EventId, StudentUid, "b-1")), Capable);
+        var tooLarge = await SendAsync(
+            client, BatchRoute,
+            Batch([.. Enumerable.Range(0, TapBatchLimits.MaxRows + 1).Select(i => Tap(world.EventId, StudentUid, $"x-{i}"))]),
+            Capable);
+
+        Assert.Equal(HttpStatusCode.OK, recorded.StatusCode);
+        Assert.Equal(HttpStatusCode.NotFound, refused.StatusCode);
+        Assert.Equal(HttpStatusCode.OK, batch.StatusCode);
+        Assert.Equal(HttpStatusCode.BadRequest, tooLarge.StatusCode);
+
+        foreach (var response in new[] { recorded, refused, batch, tooLarge })
+        {
+            Assert.True(response.Headers.CacheControl is { Private: true, NoCache: true });
+            Assert.Empty(response.Headers.Vary);
+        }
+    }
+
+    /// <summary>
+    /// D-99: no-header responses stay v1 to the byte, so the caching directive is not added to them. The
+    /// bodies are held by <c>CaptureContractTests</c>; this holds the headers.
+    /// </summary>
+    [Fact]
+    public async Task No_header_tap_and_batch_send_no_cache_control()
+    {
+        var world = await ArrangeAsync();
+        using var factory = new EamsApiFactory(Sql.ConnectionString);
+        using var client = factory.CreateClient().WithDeviceKey(world.ApiKey);
+
+        var tap = await client.PostAsJsonAsync(TapRoute, Tap(world.EventId, StudentUid, "t-1"));
+        var refused = await client.PostAsJsonAsync(TapRoute, Tap(world.EventId, PersonnelUid, "t-2"));
+        var batch = await client.PostAsJsonAsync(BatchRoute, Batch(Tap(world.EventId, StudentUid, "b-1")));
+
+        foreach (var response in new[] { tap, refused, batch })
+        {
+            Assert.Null(response.Headers.CacheControl);
+            Assert.Empty(response.Headers.Vary);
+        }
+    }
+
+    // ------------------------------------------------------------------ the lost insert race
+
+    /// <summary>
+    /// <c>ResolveLostInsertRaceAsync</c>, first arm: another request stored this same device key between the
+    /// read and the write, so <c>UX_Attendance_Device_DeviceTapId</c> fires. The personnel twin of the
+    /// student race, opened the way <c>ManualOverrideTests</c> opens it: on <c>SavingChanges</c>, after the
+    /// service has decided and before it writes.
+    /// </summary>
+    [Fact]
+    public async Task Lost_insert_race_on_the_tap_id_is_DuplicateIgnored_with_the_winning_personnel_row()
+    {
+        var world = await ArrangeAsync();
+
+        await using var db = NewDbContext();
+        var winner = await RaceFirstSaveAsync(db, world, deviceTapId: "t-1");
+
+        var response = await AttendanceOn(db).TapAsync(
+            new TapRequest(world.EventId, PersonnelUid, null, "t-1", null), PersonnelClient);
+
+        Assert.True(winner.Fired, "The race never fired, so this proved nothing about it.");
+        Assert.Equal(TapOutcome.DuplicateIgnored, response.Outcome);
+        Assert.Equal(winner.RecordId, response.Result.Record!.Id);
+        Assert.Equal(world.PersonnelId, Assert.Single(await RowsAsync(world.EventId)).PersonnelId);
+    }
+
+    /// <summary>
+    /// <c>ResolveLostInsertRaceAsync</c>, second arm: another tap id won, so
+    /// <c>UX_Attendance_Event_Personnel_Occurrence</c> is the index that fired and the winner can only be
+    /// found by person. On a Single event that is <c>AlreadyRecorded</c>.
+    /// </summary>
+    [Fact]
+    public async Task Lost_insert_race_on_the_person_is_AlreadyRecorded_on_a_Single_event()
+    {
+        var world = await ArrangeAsync();
+
+        await using var db = NewDbContext();
+        var winner = await RaceFirstSaveAsync(db, world, deviceTapId: "other");
+
+        var response = await AttendanceOn(db).TapAsync(
+            new TapRequest(world.EventId, PersonnelUid, null, "t-1", null), PersonnelClient);
+
+        Assert.True(winner.Fired, "The race never fired, so this proved nothing about it.");
+        Assert.Equal(TapOutcome.AlreadyRecorded, response.Outcome);
+        Assert.Equal(winner.RecordId, response.Result.Record!.Id);
+        Assert.Single(await RowsAsync(world.EventId));
+    }
+
+    /// <summary>
+    /// The same arm on a TimeInOut event: the winner was the check-in, so this tap is judged as a later tap
+    /// against that row (P7's re-dispatch). Well past the interval, it is the check-out.
+    /// </summary>
+    [Fact]
+    public async Task Lost_insert_race_on_the_person_is_judged_as_a_later_tap_on_a_TimeInOut_event()
+    {
+        var world = await ArrangeAsync(AttendanceMode.TimeInOut, startedMinutesAgo: 90);
+        var checkIn = DateTime.UtcNow.AddMinutes(-60);
+
+        await using var db = NewDbContext();
+        var winner = await RaceFirstSaveAsync(db, world, deviceTapId: "other", checkInAt: checkIn);
+
+        var response = await AttendanceOn(db).TapAsync(
+            new TapRequest(world.EventId, PersonnelUid, null, "t-1", checkIn.AddMinutes(20)), PersonnelClient);
+
+        Assert.True(winner.Fired, "The race never fired, so this proved nothing about it.");
+        Assert.Equal(TapOutcome.CheckedOut, response.Outcome);
+
+        var row = Assert.Single(await RowsAsync(world.EventId));
+        Assert.Equal(winner.RecordId, row.Id);
+        Assert.Equal("t-1", row.CheckOutDeviceTapId);
+    }
+
+    /// <summary>The override's half: losing the race must not lose the instruction, as for a student.</summary>
+    [Fact]
+    public async Task An_override_that_loses_the_insert_race_applies_to_the_winning_personnel_row()
+    {
+        var world = await ArrangeAsync();
+
+        await using var db = NewDbContext();
+        var winner = await RaceFirstSaveAsync(db, world, deviceTapId: "other");
+
+        var response = await AttendanceOn(db).ManualAsync(
+            world.EventId, studentId: null, world.PersonnelId, AttendanceStatus.Excused, "Medical");
+
+        Assert.True(winner.Fired, "The race never fired, so this proved nothing about it.");
+        Assert.Equal(ManualOutcome.Saved, response.Outcome);
+
+        var row = Assert.Single(await RowsAsync(world.EventId));
+        Assert.Equal(winner.RecordId, row.Id);
+        Assert.Equal(AttendanceStatus.Excused, row.Status);
+    }
+
+    private sealed class RaceWinner
+    {
+        public bool Fired { get; set; }
+
+        public Guid RecordId { get; set; }
+    }
+
+    /// <summary>
+    /// Commits a rival personnel row, on its own connection, just before the first save of
+    /// <paramref name="db"/> that holds a new attendance row. Later saves pass through: they are the
+    /// recovery's. Scan-log saves do not count, which is why it looks for the row and not the first save.
+    /// </summary>
+    private async Task<RaceWinner> RaceFirstSaveAsync(
+        EamsDbContext db, World world, string deviceTapId, DateTime? checkInAt = null)
+    {
+        // Both sides on one device: UX_Attendance_Device_DeviceTapId is scoped by it.
+        await using (var read = NewDbContext())
+            Device.DeviceId = await read.Devices.Select(d => d.Id).SingleAsync();
+
+        var deviceId = Device.DeviceId;
+        var winner = new RaceWinner();
+
+        db.SavingChanges += (_, _) =>
+        {
+            if (winner.Fired) return;
+            if (!db.ChangeTracker.Entries<AttendanceRecord>().Any(e => e.State == EntityState.Added)) return;
+
+            winner.Fired = true;
+
+            using var rival = NewDbContext();
+            var row = new AttendanceRecord
+            {
+                SchoolId = world.SchoolId,
+                EventId = world.EventId,
+                PersonnelId = world.PersonnelId,
+                CheckInAt = checkInAt ?? DateTime.UtcNow,
+                Status = AttendanceStatus.Present,
+                CaptureMethod = CaptureMethod.Rfid,
+                DeviceId = deviceId,
+                DeviceTapId = deviceTapId,
+            };
+            rival.AttendanceRecords.Add(row);
+            rival.SaveChanges();
+            winner.RecordId = row.Id;
+        };
+
+        return winner;
     }
 
     // ------------------------------------------------------------------ guardrails 4 and 8

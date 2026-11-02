@@ -34,6 +34,7 @@ internal sealed class ContractSchemaFilter : ISchemaFilter
     {
         if (context.Type == typeof(TapRequest)) schema.Example = TapRequestExample;
         else if (context.Type == typeof(TapResult)) DescribeTapResult(schema);
+        else if (context.Type == typeof(TapResultV2)) DeprecateSuccess(schema);
         else if (context.Type == typeof(TapBatchRequest)) schema.Example = TapBatchRequestExample;
         else if (context.Type == typeof(TapBatchResult)) schema.Example = TapBatchResultExample;
         else if (context.Type == typeof(AttendanceLiveDto)) schema.Example = LiveSnapshotExample;
@@ -55,7 +56,11 @@ internal sealed class ContractSchemaFilter : ISchemaFilter
     private static void DescribeTapResult(OpenApiSchema schema)
     {
         schema.Example = TapResultExample;
+        DeprecateSuccess(schema);
+    }
 
+    private static void DeprecateSuccess(OpenApiSchema schema)
+    {
         if (!schema.Properties.TryGetValue("success", out var success)) return;
 
         success.Deprecated = true;
@@ -199,6 +204,10 @@ internal sealed class ContractSchemaFilter : ISchemaFilter
                 ["studentName"] = new OpenApiString("Maria Clara Reyes"),
                 ["checkOutAt"] = new OpenApiNull(),
                 ["captureMethod"] = new OpenApiString(CaptureMethod.Rfid),
+                ["personType"] = new OpenApiString(AttendeePersonType.Student),
+                ["personnelId"] = new OpenApiNull(),
+                ["personnelNumber"] = new OpenApiNull(),
+                ["personnelName"] = new OpenApiNull(),
             },
         },
         ["serverTime"] = new OpenApiString("2026-07-29T09:14:05.402Z"),

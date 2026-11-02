@@ -20,6 +20,15 @@ public record PersonnelDto(
     string Status);
 
 /// <summary>
+/// One row of <c>GET /events/personnel-picker</c> (ADR-015 D-104): what an organizer needs to choose a staff
+/// member, and deliberately nothing else. Who may read the rest of the record is <c>personnel.read</c>'s
+/// question, so email, position, classification, department, organization, status and the card UID stay
+/// out. Adding a member here widens what <c>events.write</c> can see.
+/// </summary>
+/// <param name="FullName">Composed by the server, exactly as <see cref="PersonnelDto.FullName"/>.</param>
+public record PersonnelPickerItemDto(Guid Id, string PersonnelNumber, string FullName);
+
+/// <summary>
 /// The body of <c>POST /personnel</c> and <c>PUT /personnel/{id}</c> — one type, checked by one method.
 /// A full replacement on update, so an edit form fills it from the record it is editing.
 /// </summary>

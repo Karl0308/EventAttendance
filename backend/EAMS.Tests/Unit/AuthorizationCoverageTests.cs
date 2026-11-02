@@ -17,7 +17,7 @@ namespace EAMS.Tests.Unit;
 ///
 /// <para>
 /// <b>What each test holds.</b> Coverage: nothing outside <c>/auth/login</c> and
-/// <c>/auth/refresh</c> is reachable without a credential. Scheme: the five capture routes take a
+/// <c>/auth/refresh</c> is reachable without a credential. Scheme: the six capture routes take a
 /// device key and nothing else does. Policy: every gate names a policy that exists, and it is the
 /// permission the action declares through <see cref="HasPermissionNotEnforcedAttribute"/>. The live
 /// proof that a request is actually refused is <c>AuthEnforcementTests</c>, where a real host exists.
@@ -46,6 +46,7 @@ public class AuthorizationCoverageTests
         "AttendanceController.Tap",
         "AttendanceController.TapBatch",
         "DevicesController.Heartbeat",
+        "EventManifestController.ByCard",
         "EventManifestController.Manifest",
         "StudentsController.ByCard",
     ];

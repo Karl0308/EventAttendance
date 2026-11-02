@@ -32,6 +32,8 @@ import {
 } from "@mui/material";
 import { api, describeApiError } from "../api";
 import { isResendUnsafe } from "../apiGuidance";
+import { useSignedInUser } from "../authContext";
+import { grants, PERMISSIONS } from "../permissions";
 import {
   AUDIENCE_SCOPES,
   AUDIENCE_TYPES,
@@ -61,7 +63,7 @@ import type {
   AudienceOptions,
   AudienceScope,
   AudienceType,
-  Personnel,
+  PersonnelPickerEntry,
   Student,
 } from "../types";
 import { WriteFailureAlert } from "./WriteFailureAlert";
@@ -140,11 +142,17 @@ export default function EventAudienceFormDialog({
   }, []);
 
   const needsPeople = draft.audienceType === "SpecificIndividuals";
+  // The audience page opens on `events.read`, but building a Specific-individuals audience is a write, so a
+  // Viewer makes no people call: it would be refused and show an error they cannot act on.
+  const canLoadPeople = grants(useSignedInUser().permissions, PERMISSIONS.eventsWrite);
   useEffect(() => {
-    if (!needsPeople || people !== undefined || peopleLoading) return;
+    if (!canLoadPeople || !needsPeople || people !== undefined || peopleLoading || peopleError !== undefined) {
+      return;
+    }
     setPeopleLoading(true);
-    Promise.all([api.listStudents(), api.listPersonnel()]).then(
-      ([students, personnel]: [Student[], Personnel[]]) => {
+    // The picker route, not `listPersonnel`: an Organizer holds `events.write` and not `personnel.read`.
+    Promise.all([api.listStudents(), api.listPersonnelPicker()]).then(
+      ([students, personnel]: [Student[], PersonnelPickerEntry[]]) => {
         setPeople([
           ...students.map((s) => person(s.id, "student", s.studentNumber, s.fullName)),
           ...personnel.map((p) => person(p.id, "personnel", p.personnelNumber, p.fullName)),
@@ -156,7 +164,7 @@ export default function EventAudienceFormDialog({
         setPeopleLoading(false);
       },
     );
-  }, [needsPeople, people, peopleLoading]);
+  }, [canLoadPeople, needsPeople, people, peopleLoading, peopleError]);
 
   const checked = validateAudience(draft, others);
   const errors: AudienceFieldErrors = checked.ok ? NO_AUDIENCE_ERRORS : checked.errors;

@@ -1001,9 +1001,10 @@ internal sealed class EventService : IEventService, IEventSummaryFigures
         // event they were already allowed to read.
         if (floor > ceiling) floor = null;
 
-        // ADR-015 D-101: StudentId is nullable now; the predicate precedes the .Value in the projection.
+        // ADR-015 D-99/D-101: every row on the event, personnel included. The projection below reads both
+        // people's columns through their optional navigations, so neither needs a non-null predicate.
         var q = _db.AttendanceRecords.AsNoTracking()
-            .Where(a => a.EventId == id && a.RowVersion <= ceiling && a.StudentId != null);
+            .Where(a => a.EventId == id && a.RowVersion <= ceiling);
         if (floor is { } lowerBound) q = q.Where(a => a.RowVersion > lowerBound);
 
         // Projected rather than materialized as entities: the delta needs six columns and four of the
@@ -1022,15 +1023,20 @@ internal sealed class EventService : IEventService, IEventSummaryFigures
             {
                 a.Id,
                 a.RowVersion,
-                StudentId = a.StudentId!.Value,
+                a.StudentId,
+                a.PersonnelId,
                 a.Status,
                 a.CheckInAt,
                 a.CheckOutAt,
                 a.CaptureMethod,
-                a.Student!.StudentNumber,
-                a.Student.FirstName,
-                a.Student.MiddleName,
-                a.Student.LastName,
+                StudentNumber = a.Student!.StudentNumber,
+                StudentFirstName = a.Student.FirstName,
+                StudentMiddleName = a.Student.MiddleName,
+                StudentLastName = a.Student.LastName,
+                PersonnelNumber = a.Personnel!.PersonnelNumber,
+                PersonnelFirstName = a.Personnel.FirstName,
+                PersonnelMiddleName = a.Personnel.MiddleName,
+                PersonnelLastName = a.Personnel.LastName,
             })
             .ToListAsync(ct);
 
@@ -1073,13 +1079,21 @@ internal sealed class EventService : IEventService, IEventSummaryFigures
         // matters: the counters can no longer describe a wider set than the rows do.
         var counters = await SummaryForAsync(ev, cursor, ct);
 
-        var deltas = rows.Select(r => new AttendanceDeltaDto(
-            ev.Id, r.StudentId, r.Status, r.CheckInAt,
-            counters.Present, counters.Expected,
-            r.Id, r.StudentNumber,
-            string.Join(' ', new[] { r.FirstName, r.MiddleName, r.LastName }
-                .Where(p => !string.IsNullOrWhiteSpace(p))),
-            r.CheckOutAt, r.CaptureMethod))
+        var deltas = rows.Select(r => r.PersonnelId is { } personnelId
+                ? new AttendanceDeltaDto(
+                    ev.Id, StudentId: null, r.Status, r.CheckInAt,
+                    counters.Present, counters.Expected,
+                    r.Id, StudentNumber: null, StudentName: null,
+                    r.CheckOutAt, r.CaptureMethod,
+                    AttendeePersonType.Personnel, personnelId, r.PersonnelNumber ?? "",
+                    DisplayName(r.PersonnelFirstName, r.PersonnelMiddleName, r.PersonnelLastName))
+                : new AttendanceDeltaDto(
+                    ev.Id, r.StudentId, r.Status, r.CheckInAt,
+                    counters.Present, counters.Expected,
+                    r.Id, r.StudentNumber,
+                    DisplayName(r.StudentFirstName, r.StudentMiddleName, r.StudentLastName),
+                    r.CheckOutAt, r.CaptureMethod,
+                    AttendeePersonType.Student, PersonnelId: null, PersonnelNumber: null, PersonnelName: null))
             .ToList();
 
         var live = new AttendanceLiveDto(
@@ -1097,6 +1111,10 @@ internal sealed class EventService : IEventService, IEventSummaryFigures
 
         return new LiveAttendanceResponse(LiveOutcome.Ok, "Live attendance.", live);
     }
+
+    /// <summary>"First Middle Last" from projected columns, as <c>FullName</c> composes it on the entities.</summary>
+    private static string DisplayName(string? first, string? middle, string? last) =>
+        string.Join(' ', new[] { first, middle, last }.Where(p => !string.IsNullOrWhiteSpace(p)));
 
     /// <summary>
     /// The highest <c>rowversion</c> that is guaranteed to have no uncommitted writer at or below it.
@@ -1121,7 +1139,7 @@ internal sealed class EventService : IEventService, IEventSummaryFigures
     // --------------------------------------------------------------------- the device manifest (D-46)
 
     /// <summary>
-    /// <inheritdoc cref="IEventService.GetManifestAsync" path="/summary/para[1]"/>
+    /// <inheritdoc cref="IEventService.GetManifestAsync(Guid, CancellationToken)" path="/summary/para[1]"/>
     ///
     /// <para>
     /// <b>Two round trips, and the second one produces every published byte.</b> The first reads the
@@ -1189,8 +1207,28 @@ internal sealed class EventService : IEventService, IEventSummaryFigures
     /// here makes it a property of the contract, which is what lets two hosts agree.
     /// </para>
     /// </summary>
+    public Task<EventManifestResponse> GetManifestAsync(Guid id, CancellationToken ct = default) =>
+        GetManifestAsync(id, CaptureCapabilities.None, ct);
+
+    /// <inheritdoc cref="IEventService.GetManifestAsync(Guid, CaptureCapabilities, CancellationToken)"/>
+    /// <remarks>
+    /// <para>
+    /// <b>The no-header path reads no personnel at all</b>, which is what makes its body, version and
+    /// ETag exactly today's by construction rather than by care.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>On v2, personnel are one more statement after the composed one, and that is deliberate.</b>
+    /// Sibling collections in a single statement are a cartesian product (see the cost on the overload
+    /// above), and a personnel collection would multiply the whole of it: an event of 20,000 students and
+    /// 500 staff is ten million rows to produce a 20,500-row answer. The one-snapshot rule protects lists
+    /// that depend on each other (a student detached between two reads appears in one list and not the
+    /// other). Personnel depend on nothing the composed statement reads, so a write landing between the two
+    /// gives a body that is one pull early for that person, and the next pull converges.
+    /// </para>
+    /// </remarks>
     public async Task<EventManifestResponse> GetManifestAsync(
-        Guid id, CancellationToken ct = default)
+        Guid id, CaptureCapabilities capabilities, CancellationToken ct = default)
     {
         // Status alone: the whole of what decides whether there is anything to compose. Null is "no
         // such event" — including an event in another school, which the device's own school_id claim
@@ -1301,20 +1339,28 @@ internal sealed class EventService : IEventService, IEventSummaryFigures
             .OrderBy(a => a.StudentId)
             .ToList();
 
-        if (attendees.Count > EventManifestLimits.MaxAttendees)
+        var personnel = capabilities.Personnel
+            ? await ManifestPersonnelAsync(id, head.SchoolId, ct)
+            : null;
+
+        // D-100's one access exception: this counts what is sent, so an event can fit without personnel
+        // and exceed the limit with them. A no-header client's count is students alone.
+        var attendeeCount = attendees.Count + (personnel?.Count ?? 0);
+
+        if (attendeeCount > EventManifestLimits.MaxAttendees)
         {
             // Checked over the list that was actually composed rather than over a cheaper COUNT run
             // first. A separate count is a second definition of this population — the exact drift
             // ADR-003 D-19 records — and it could disagree with the body by the width of one write.
             return new EventManifestResponse(
                 ManifestOutcome.ManifestTooLarge,
-                $"This event expects {attendees.Count} attendees; a manifest carries at most " +
+                $"This event expects {attendeeCount} attendees; a manifest carries at most " +
                 $"{EventManifestLimits.MaxAttendees}. Nothing was truncated and nothing partial was " +
                 "sent — a short manifest is indistinguishable from a small event, and its consequence " +
                 "is invited students showing on the device as unknown cards. Keep the manifest you " +
                 "have, tell the operator, and report this event to us.",
                 null,
-                attendees.Count);
+                attendeeCount);
         }
 
         var @event = new EventManifestEventDto(
@@ -1335,10 +1381,130 @@ internal sealed class EventService : IEventService, IEventSummaryFigures
             ServerTime: DateTime.UtcNow,
             Version: EventManifestVersion.PendingVersion);
 
+        if (personnel is not null)
+        {
+            var contentV2 = new EventManifestDtoV2(
+                content.Event, content.Groups, content.Attendees, content.ServerTime, content.Version, personnel);
+
+            return new EventManifestResponse(
+                ManifestOutcome.Ok, "Manifest.", Manifest: null, attendeeCount,
+                contentV2 with { Version = EventManifestVersion.ComputeV2(contentV2) });
+        }
+
         var manifest = content with { Version = EventManifestVersion.Compute(content) };
 
         return new EventManifestResponse(
             ManifestOutcome.Ok, "Manifest.", manifest, attendees.Count);
+    }
+
+    /// <summary>
+    /// The manifest's <c>personnel</c>: exactly the countable set (ADR-015 D-95), in contract order.
+    /// Ordered in memory and normalized on the way out for the reasons the attendees are. The projection
+    /// is the whole of what a device may hold (#705 guardrail 2).
+    /// </summary>
+    private async Task<IReadOnlyList<EventManifestPersonnelDto>> ManifestPersonnelAsync(
+        Guid id, Guid schoolId, CancellationToken ct)
+    {
+        var expected = await ExpectedPersonnel.IdsAsync(_db, id, schoolId, EventStatus.Open, ct);
+
+        var rows = await _db.Personnel.AsNoTracking()
+            .Where(p => p.SchoolId == schoolId && expected.Contains(p.Id))
+            .Select(p => new { p.Id, p.PersonnelNumber, p.FirstName, p.MiddleName, p.LastName, p.RfidUid })
+            .ToListAsync(ct);
+
+        return
+        [
+            .. rows
+                .Select(p => new EventManifestPersonnelDto(
+                    p.Id, p.PersonnelNumber, DisplayName(p.FirstName, p.MiddleName, p.LastName),
+                    PersonnelCardUids(p.RfidUid)))
+                .OrderBy(p => p.PersonnelId),
+        ];
+    }
+
+    private static IReadOnlyList<string> PersonnelCardUids(string? rfidUid) =>
+        rfidUid is null ? [] : [CardUid.Normalize(rfidUid)];
+
+    /// <inheritdoc cref="IEventService.GetCardHolderAsync"/>
+    /// <remarks>
+    /// <para>
+    /// <b>Every personnel read is the countable set, so "a card a tap would refuse" needs no branch of its
+    /// own.</b> Inactive, soft-deleted and out-of-audience holders are simply not found, and fall into the
+    /// same answer as a card nobody holds: nothing here can tell them apart, which is what stops the lookup
+    /// being a state oracle (JJ, 2026-10-27, decision 7). The event is <c>Open</c> by then, so the live
+    /// branch of the resolver is the only one reachable.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>The two reads mirror the tap's</b>: the student card first, with the tap's own predicate, then
+    /// <c>Personnel.RfidUid</c>. D-98 makes a UID name at most one person, so the order decides nothing.
+    /// Both name <c>SchoolId</c> explicitly (D-99 tenancy).
+    /// </para>
+    /// </remarks>
+    public async Task<EventCardLookupResponse> GetCardHolderAsync(
+        Guid id, string cardUid, CancellationToken ct = default)
+    {
+        var head = await _db.Events.AsNoTracking()
+            .Where(e => e.Id == id && !e.IsDeleted)
+            .Select(e => new { e.Status, e.SchoolId })
+            .FirstOrDefaultAsync(ct);
+
+        if (head is null)
+            return new EventCardLookupResponse(EventCardLookupOutcome.EventNotFound, "Event not found.", null);
+
+        if (head.Status != EventStatus.Open)
+        {
+            return new EventCardLookupResponse(
+                EventCardLookupOutcome.EventNotOpen, $"Event is {head.Status}, not {EventStatus.Open}.", null);
+        }
+
+        var uid = CardUid.Normalize(cardUid);
+
+        var student = await _db.RfidCards.AsNoTracking()
+            .Where(c => c.CardUid == uid && c.IsActive && c.SchoolId == head.SchoolId && !c.Student!.IsDeleted)
+            .Select(c => new
+            {
+                c.Student!.Id,
+                c.Student.StudentNumber,
+                c.Student.FirstName,
+                c.Student.MiddleName,
+                c.Student.LastName,
+                CardUids = c.Student.Cards.Where(held => held.IsActive).Select(held => held.CardUid).ToList(),
+            })
+            .FirstOrDefaultAsync(ct);
+
+        if (student is not null)
+        {
+            return new EventCardLookupResponse(
+                EventCardLookupOutcome.Ok, "Card holder.",
+                new EventCardHolderDto(
+                    AttendeePersonType.Student, student.Id, student.StudentNumber,
+                    PersonnelId: null, PersonnelNumber: null,
+                    DisplayName(student.FirstName, student.MiddleName, student.LastName),
+                    [.. student.CardUids.Select(CardUid.Normalize).Distinct(StringComparer.Ordinal)
+                        .Order(StringComparer.Ordinal)]));
+        }
+
+        var expected = await ExpectedPersonnel.IdsAsync(_db, id, head.SchoolId, EventStatus.Open, ct);
+
+        var personnel = await _db.Personnel.AsNoTracking()
+            .Where(p => p.SchoolId == head.SchoolId && p.RfidUid == uid && expected.Contains(p.Id))
+            .Select(p => new { p.Id, p.PersonnelNumber, p.FirstName, p.MiddleName, p.LastName, p.RfidUid })
+            .FirstOrDefaultAsync(ct);
+
+        if (personnel is null)
+        {
+            return new EventCardLookupResponse(
+                EventCardLookupOutcome.CardNotFound, "No active card matches that UID.", null);
+        }
+
+        return new EventCardLookupResponse(
+            EventCardLookupOutcome.Ok, "Card holder.",
+            new EventCardHolderDto(
+                AttendeePersonType.Personnel, StudentId: null, StudentNumber: null,
+                personnel.Id, personnel.PersonnelNumber,
+                DisplayName(personnel.FirstName, personnel.MiddleName, personnel.LastName),
+                PersonnelCardUids(personnel.RfidUid)));
     }
 
     /// <summary>

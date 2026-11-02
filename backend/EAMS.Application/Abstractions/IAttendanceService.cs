@@ -199,6 +199,33 @@ public enum ManualOutcome
     /// error 2628 (truncation) — a 500 on input the caller got wrong, which is a 400.
     /// </summary>
     InvalidNotes,
+
+    /// <summary>
+    /// The request named neither a student nor a personnel member, or named both (ADR-015 D-99). 400:
+    /// exactly one person is the subject of a manual entry, matching
+    /// <c>CK_AttendanceRecords_StudentOrPersonnel</c>.
+    /// </summary>
+    PersonRequired,
+
+    /// <summary>
+    /// No personnel record with that id in the event's school, or, on a live event, only a soft-deleted
+    /// one. A terminal event tests frozen membership instead (ADR-015 D-95). 404.
+    /// </summary>
+    PersonnelNotFound,
+
+    /// <summary>
+    /// The named member is <c>Inactive</c>, on an event that is still live (ADR-015 D-95). 404. Checked
+    /// before audience membership, as on a tap. <b>Never on a terminal event</b>: there the test is
+    /// membership of the frozen set alone, so a frozen member who has since gone inactive can still be
+    /// marked by hand (ADR-003 D-17).
+    /// </summary>
+    PersonnelInactive,
+
+    /// <summary>
+    /// The named member is not in <c>ExpectedPersonnelIds(event)</c> (ADR-015 D-95). 404. On a terminal
+    /// event that set is the frozen <c>EventPersonnel</c> rows, empty until B2's freeze writes them.
+    /// </summary>
+    PersonnelNotInAudience,
 }
 
 /// <summary>
@@ -227,12 +254,15 @@ public record TapResponse(TapOutcome Outcome, TapResultV2 Result)
         new(outcome, new TapResultV2(success, message, record, outcome.ToString(), serverTime));
 }
 
-/// <summary><inheritdoc cref="TapResponse" path="/summary"/></summary>
-public record ManualResponse(ManualOutcome Outcome, TapResult Result)
+/// <summary>
+/// The override's decision, plus the body the SPA sees. An admin route, so it answers v2 directly and
+/// there is no v1 mapper behind it (ADR-015 D-99): the SPA ships with the server.
+/// </summary>
+public record ManualResponse(ManualOutcome Outcome, TapResultV2 Result)
 {
     public static ManualResponse For(
-        ManualOutcome outcome, bool success, string message, AttendanceDto? record, DateTime serverTime) =>
-        new(outcome, new TapResult(success, message, record, outcome.ToString(), serverTime));
+        ManualOutcome outcome, bool success, string message, AttendanceDtoV2? record, DateTime serverTime) =>
+        new(outcome, new TapResultV2(success, message, record, outcome.ToString(), serverTime));
 }
 
 /// <summary>
@@ -288,8 +318,13 @@ public interface IAttendanceService
     /// match-everything — the HTTP boundary rejects it first with a 400, so reaching the throw means a
     /// non-HTTP caller skipped that check.
     /// </para>
+    ///
+    /// <para>
+    /// <b>Personnel rows are listed too, as v2 records (ADR-015 D-99, D-101).</b> The text filters read
+    /// the student's own columns, so a personnel row drops out of any search that sets one.
+    /// </para>
     /// </summary>
-    Task<PagedResult<AttendanceDto>> ListAsync(
+    Task<PagedResult<AttendanceDtoV2>> ListAsync(
         Guid? eventId, Guid? studentId, string? status, PageRequest page,
         AttendanceListSearch? search = null, CancellationToken ct = default);
 
@@ -335,4 +370,14 @@ public interface IAttendanceService
 
     Task<ManualResponse> ManualAsync(
         Guid eventId, Guid studentId, string status, string? notes, CancellationToken ct = default);
+
+    /// <summary>
+    /// The organizer override for either population (ADR-015 D-99). Exactly one of
+    /// <paramref name="studentId"/> and <paramref name="personnelId"/> names the subject; anything else
+    /// is <see cref="ManualOutcome.PersonRequired"/>. Personnel are held to D-95's refusals, subject to its
+    /// closed-event rule.
+    /// </summary>
+    Task<ManualResponse> ManualAsync(
+        Guid eventId, Guid? studentId, Guid? personnelId, string status, string? notes,
+        CancellationToken ct = default);
 }

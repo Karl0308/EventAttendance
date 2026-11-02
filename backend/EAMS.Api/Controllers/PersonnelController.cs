@@ -87,12 +87,17 @@ public class PersonnelController : ControllerBase
     /// <response code="201">The created record. <c>Location</c> names it.</response>
     /// <response code="400">A field breaks a column rule or the status is undocumented.</response>
     /// <response code="409">The ID or RFID UID is already in use, or no school could be resolved.</response>
+    /// <response code="503">
+    /// <c>WriteLockUnavailable</c>: another change to the same card held its lock. Nothing was written.
+    /// Send the same request again after <c>Retry-After</c> seconds.
+    /// </response>
     [HttpPost]
     [Authorize(AuthenticationSchemes = JwtBearerDefaults.AuthenticationScheme, Policy = EamsPermissions.PersonnelWrite)]
     [HasPermissionNotEnforced(EamsPermissions.PersonnelWrite)]
     [ProducesResponseType(typeof(PersonnelDto), StatusCodes.Status201Created)]
     [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status400BadRequest)]
     [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status409Conflict)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status503ServiceUnavailable)]
     public async Task<ActionResult<PersonnelDto>> Create(
         [FromBody] PersonnelWriteRequest request, CancellationToken ct)
     {
@@ -108,6 +113,10 @@ public class PersonnelController : ControllerBase
     /// <response code="400">A field breaks a column rule or the status is undocumented.</response>
     /// <response code="404">No such record.</response>
     /// <response code="409">The ID or RFID UID is already in use by another record.</response>
+    /// <response code="503">
+    /// <c>WriteLockUnavailable</c>: another change to the same card held its lock. Nothing was written.
+    /// Send the same request again after <c>Retry-After</c> seconds.
+    /// </response>
     [HttpPut("{id:guid}")]
     [Authorize(AuthenticationSchemes = JwtBearerDefaults.AuthenticationScheme, Policy = EamsPermissions.PersonnelWrite)]
     [HasPermissionNotEnforced(EamsPermissions.PersonnelWrite)]
@@ -115,6 +124,7 @@ public class PersonnelController : ControllerBase
     [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status400BadRequest)]
     [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status404NotFound)]
     [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status409Conflict)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status503ServiceUnavailable)]
     public async Task<ActionResult<PersonnelDto>> Update(
         Guid id, [FromBody] PersonnelWriteRequest request, CancellationToken ct)
     {
@@ -174,11 +184,17 @@ public class PersonnelController : ControllerBase
     /// </summary>
     /// <response code="200">The import summary — created, updated, failed, and each failure's reason.</response>
     /// <response code="400">No rows, or more than the maximum this endpoint accepts.</response>
+    /// <response code="503">
+    /// <c>WriteLockUnavailable</c>: another change to a card in this import held its lock. Rows before it
+    /// may already be saved. Sending the same request again after <c>Retry-After</c> seconds is safe, because
+    /// the import upserts by number.
+    /// </response>
     [HttpPost("import")]
     [Authorize(AuthenticationSchemes = JwtBearerDefaults.AuthenticationScheme, Policy = EamsPermissions.PersonnelWrite)]
     [HasPermissionNotEnforced(EamsPermissions.PersonnelWrite)]
     [ProducesResponseType(typeof(PersonnelImportResultDto), StatusCodes.Status200OK)]
     [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status503ServiceUnavailable)]
     public async Task<ActionResult<PersonnelImportResultDto>> Import(
         [FromBody] PersonnelImportRequest request, CancellationToken ct)
     {

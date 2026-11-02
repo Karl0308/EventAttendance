@@ -60,6 +60,12 @@ public interface IPersonnelService
     Task<PersonnelImportResultDto> ImportAsync(
         IReadOnlyList<PersonnelWriteRequest> rows, CancellationToken ct = default);
 
+    /// <summary>
+    /// <c>GET /events/personnel-picker</c> (ADR-015 D-104): the rows and order of an unfiltered
+    /// <see cref="ListAsync"/>, narrowed to what choosing a person needs. Inactive rows stay in.
+    /// </summary>
+    Task<PagedResult<PersonnelPickerItemDto>> PickerAsync(PageRequest page, CancellationToken ct = default);
+
     /// <summary><c>GET /personnel/{id}</c> — one record, or null when this tenant has none / it is deleted.</summary>
     Task<PersonnelDto?> GetAsync(Guid id, CancellationToken ct = default);
 

@@ -43,3 +43,67 @@ public record TapBatchRowResultV2(
 /// <summary>The v2 <see cref="TapBatchResult"/>: identical but for the rows' type.</summary>
 public record TapBatchResultV2(
     int Accepted, int Rejected, DateTime ServerTime, IReadOnlyList<TapBatchRowResultV2> Results);
+
+/// <summary>
+/// The v2 manifest (ADR-015 D-99): every <see cref="EventManifestDto"/> member, in the same order, plus
+/// <see cref="Personnel"/>. Only a client that sent <c>X-EAMS-Capabilities: personnel</c> receives it; the
+/// v1 record and its <c>version</c> stay exactly as they were.
+/// </summary>
+/// <param name="Version">
+/// A <c>version</c> over this body, prefixed <see cref="EventManifestVersion.ContractShapePrefixV2"/>, so it
+/// never equals a v1 version and a client that changes capability never revalidates against the other
+/// family's cached body.
+/// </param>
+/// <param name="Personnel">
+/// Always present, possibly empty. <c>Active</c>, not-deleted personnel in this event's audience only (the
+/// D-95 countable set), ordered by <c>personnelId</c>. Offline validation against it is display-only, as it
+/// is for <see cref="EventManifestDto.Attendees"/>: the server rules on every tap.
+/// </param>
+public record EventManifestDtoV2(
+    EventManifestEventDto Event,
+    IReadOnlyList<EventManifestGroupDto> Groups,
+    IReadOnlyList<EventManifestAttendeeDto> Attendees,
+    DateTime ServerTime,
+    string Version,
+    IReadOnlyList<EventManifestPersonnelDto> Personnel);
+
+/// <summary>
+/// One expected personnel member on a device, and <b>exactly these four members</b> (ADR-015 D-99, #705
+/// guardrail 2). A device holds no email, position, classification, department, organization or status:
+/// a stolen handset must carry the minimum a scan screen needs.
+/// </summary>
+/// <param name="PersonnelId">The identity to key the offline index by. Stable.</param>
+/// <param name="PersonnelNumber">The institutional number. Never a tap identity (D-43).</param>
+/// <param name="FullName">Prose. Display only.</param>
+/// <param name="CardUids">
+/// Normalized like <see cref="EventManifestAttendeeDto.CardUids"/>. Personnel hold at most one UID today, so
+/// this has zero or one member; it is a list so a device indexes both populations the same way.
+/// </param>
+public record EventManifestPersonnelDto(
+    Guid PersonnelId,
+    string PersonnelNumber,
+    string FullName,
+    IReadOnlyList<string> CardUids);
+
+/// <summary>
+/// <c>GET /events/{id}/by-card/{cardUid}</c> (ADR-015 D-99): who holds this card, for one <c>Open</c> event.
+/// Every member is always present, <c>null</c> where it does not apply.
+///
+/// <para>
+/// <b>Deliberately not a school-wide lookup.</b> A personnel member is returned only if countable for this
+/// event, so a device cannot enumerate staff cards. There is no status, email or department here for the
+/// same reason there is none on the manifest.
+/// </para>
+/// </summary>
+/// <param name="PersonType"><c>Student</c> or <c>Personnel</c>.</param>
+/// <param name="CardUids">
+/// The holder's active, normalized serials: every active card for a student, the one UID for personnel.
+/// </param>
+public record EventCardHolderDto(
+    string PersonType,
+    Guid? StudentId,
+    string? StudentNumber,
+    Guid? PersonnelId,
+    string? PersonnelNumber,
+    string FullName,
+    IReadOnlyList<string> CardUids);

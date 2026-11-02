@@ -3,7 +3,7 @@
 <!-- GENERATED FILE — DO NOT EDIT.
      Source: docs/api/openapi.json. Regenerate: node scripts/generate-endpoint-index.mjs --write -->
 
-**Generated from [`openapi.json`](openapi.json) — do not edit by hand.** 127 operations across 23 controllers, all mounted under `/api/v1`. Routes below are written relative to that mount.
+**Generated from [`openapi.json`](openapi.json) — do not edit by hand.** 129 operations across 23 controllers, all mounted under `/api/v1`. Routes below are written relative to that mount.
 
 This page is a **map, not a contract.** It exists so you can find an endpoint; payload shapes, field types and outcome tokens live in [`openapi.json`](openapi.json), which is what you generate a client from. Behaviour a schema cannot state — what your queue does with each outcome, the card-UID and clock rules — is in [`attendance-contract-handoff.md`](attendance-contract-handoff.md).
 
@@ -20,7 +20,7 @@ This page is a **map, not a contract.** It exists so you can find an endpoint; p
 - [Clearance](#clearance) — 2
 - [Devices](#devices) — 7
 - [EventClassifications](#eventclassifications) — 6
-- [EventManifest](#eventmanifest) — 1
+- [EventManifest](#eventmanifest) — 2
 - [Permissions](#permissions) — 1
 - [Personnel](#personnel) — 8
 - [PreRegistration](#preregistration) — 7
@@ -32,7 +32,7 @@ This page is a **map, not a contract.** It exists so you can find an endpoint; p
 - [StudentGroups](#studentgroups) — 1
 - [Users](#users) — 6
 - [Attendance](#attendance) — 5
-- [Events](#events) — 18
+- [Events](#events) — 19
 - [Students](#students) — 9
 
 ## Academic
@@ -132,6 +132,7 @@ This page is a **map, not a contract.** It exists so you can find an endpoint; p
 
 | Method | Route | Auth | Errors | What it does |
 |---|---|---|---|---|
+| `GET` | `/events/{id}/by-card/{cardUid}` | **DeviceKey** | `400` `401` `403` `404` `429` | Who holds this card, for one `Open` event. |
 | `GET` | `/events/{id}/manifest` | **DeviceKey** | `400` `401` `403` `404` `409` `413` `429` | The offline capture cache: who is expected at this event and which card resolves to whom. |
 
 ## Permissions
@@ -145,12 +146,12 @@ This page is a **map, not a contract.** It exists so you can find an endpoint; p
 | Method | Route | Auth | Errors | What it does |
 |---|---|---|---|---|
 | `GET` | `/personnel` | **Bearer** | *none declared* | One page of the school's personnel, active first then by name, filtered. |
-| `POST` | `/personnel` | **Bearer** | `400` `409` | Create a personnel record. |
+| `POST` | `/personnel` | **Bearer** | `400` `409` `503` | Create a personnel record. |
 | `DELETE` | `/personnel/{id}` | **Bearer** | `404` | Soft-delete the record. |
 | `GET` | `/personnel/{id}` | **Bearer** | `404` | One record. |
-| `PUT` | `/personnel/{id}` | **Bearer** | `400` `404` `409` | A full replacement of the record's fields. |
+| `PUT` | `/personnel/{id}` | **Bearer** | `400` `404` `409` `503` | A full replacement of the record's fields. |
 | `GET` | `/personnel/export.csv` | **Bearer** | *none declared* | Every record matching the same filters as the list, as a CSV whose columns are exactly the ones `POST /personnel/import` reads, so an export round-trips through import. |
-| `POST` | `/personnel/import` | **Bearer** | `400` | A bulk upsert keyed on `PersonnelNumber`. |
+| `POST` | `/personnel/import` | **Bearer** | `400` `503` | A bulk upsert keyed on `PersonnelNumber`. |
 | `GET` | `/personnel/organizations` | **Bearer** | *none declared* | The distinct, non-empty organizations in this school, ascending. |
 
 ## PreRegistration
@@ -201,7 +202,7 @@ This page is a **map, not a contract.** It exists so you can find an endpoint; p
 |---|---|---|---|---|
 | `GET` | `/sis/import/{batchId}` | **Bearer** | `404` | One import batch and its counts. |
 | `GET` | `/sis/import/{batchId}/rows` | **Bearer** | *none declared* | A batch's staged rows, optionally narrowed to one outcome — `?result=Failed` is the query an operator runs after every import. |
-| `POST` | `/sis/import/{batchId}/run` | **Bearer** | `404` `409` | Runs a staged batch. |
+| `POST` | `/sis/import/{batchId}/run` | **Bearer** | `404` `409` `503` | Runs a staged batch. |
 | `GET` | `/sis/import/template` | **Bearer** | `409` | The roster template the school fills in and uploads back. |
 | `POST` | `/sis/import/upload` | **Bearer** | `400` `422` | Stages a workbook and returns what is in it. |
 
@@ -262,6 +263,7 @@ This page is a **map, not a contract.** It exists so you can find an endpoint; p
 | `PATCH` | `/events/{id}/status` | **Bearer** | `400` `404` | §6.3 `PATCH /events/{id}/status` — Open / Close / Cancel. |
 | `GET` | `/events/{id}/summary` | **Bearer** | `404` | The §6.7/§12 Event Attendance Summary. |
 | `POST` | `/events/audience/resolve` | **Bearer** | `400` | How many students a filter matches, who they are, and a preview (D-50/D-51). |
+| `GET` | `/events/personnel-picker` | **Bearer** | `401` `403` | The school's personnel, narrowed to what choosing someone for an event or a pre-registration needs. |
 
 ## Students
 
@@ -272,7 +274,7 @@ This page is a **map, not a contract.** It exists so you can find an endpoint; p
 | `DELETE` | `/students/{id}` | **Bearer** | `404` | §6.2 `DELETE /students/{id}` — soft (§4.3 `IsDeleted`). |
 | `GET` | `/students/{id}` | **Bearer** | `404` | One student by primary key. |
 | `PUT` | `/students/{id}` | **Bearer** | `400` `404` `409` | §6.2 `PUT /students/{id}`. |
-| `POST` | `/students/{id}/cards` | **Bearer** | `400` `404` `409` | §6.2 `POST /students/{id}/cards` — assign an RFID card `{cardUid, label}`. |
+| `POST` | `/students/{id}/cards` | **Bearer** | `400` `404` `409` `503` | §6.2 `POST /students/{id}/cards` — assign an RFID card `{cardUid, label}`. |
 | `DELETE` | `/students/{id}/cards/{cardId}` | **Bearer** | `404` | §6.2 `DELETE /students/{id}/cards/{cardId}` — **deactivate**. |
 | `GET` | `/students/by-card/{cardUid}` | **DeviceKey** | `401` `403` `404` `429` | UID→student resolution for the mobile scan screen. |
 | `GET` | `/students/export.csv` | **Bearer** | *none declared* | Every student matching the same filters as the list, unpaged and in the list's order, as a CSV (ADR-011 D-83). |

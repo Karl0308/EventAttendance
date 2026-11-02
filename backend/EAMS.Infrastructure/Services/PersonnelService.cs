@@ -40,6 +40,16 @@ internal sealed class PersonnelService : IPersonnelService
         return await FilteredQuery(filter).ToPageAsync(Ordered, page, ct);
     }
 
+    public async Task<PagedResult<PersonnelPickerItemDto>> PickerAsync(
+        PageRequest page, CancellationToken ct = default)
+    {
+        // The arguments are the columns read, so the rest of the record never leaves the database.
+        return await FilteredQuery(NoFilter).ToPageAsync(
+            q => InListOrder(q).Select(p => new PersonnelPickerItemDto(
+                p.Id, p.PersonnelNumber, ComposeFullName(p.LastName, p.FirstName, p.MiddleName))),
+            page, ct);
+    }
+
     public async Task<IReadOnlyList<PersonnelDto>> ExportAsync(
         PersonnelListFilter filter, CancellationToken ct = default)
     {
@@ -82,12 +92,17 @@ internal sealed class PersonnelService : IPersonnelService
         return query;
     }
 
+    private static readonly PersonnelListFilter NoFilter = new(null, null, null, null, null, null, null);
+
     private static IQueryable<PersonnelDto> Ordered(IQueryable<Personnel> q) =>
+        InListOrder(q).Select(p => ToDtoExpression(p));
+
+    /// <summary>The one order, shared so the picker and the Personnel tab cannot drift apart.</summary>
+    private static IOrderedQueryable<Personnel> InListOrder(IQueryable<Personnel> q) =>
         q.OrderByDescending(p => p.Status == PersonnelStatus.Active)
             .ThenBy(p => p.LastName)
             .ThenBy(p => p.FirstName)
-            .ThenBy(p => p.Id)
-            .Select(p => ToDtoExpression(p));
+            .ThenBy(p => p.Id);
 
     public async Task<PersonnelDto?> GetAsync(Guid id, CancellationToken ct = default)
     {
@@ -341,11 +356,17 @@ internal sealed class PersonnelService : IPersonnelService
 
     private async Task<PersonnelWriteResponse> LostIndexRaceAsync(Personnel row, CancellationToken ct)
     {
-        _db.Entry(row).State = row.Id == default ? EntityState.Detached : EntityState.Unchanged;
+        // The entry's state, never `row.Id == default`: Entity assigns NewGuid at construction, so the id
+        // cannot say whether this row was ever saved. A failed create stays Added, and a retained Added
+        // or Unchanged entry would ride along on the next save through this context, which ImportAsync
+        // performs for its next row.
+        var entry = _db.Entry(row);
+        var isNew = entry.State == EntityState.Added;
+        entry.State = isNew ? EntityState.Detached : EntityState.Unchanged;
 
         // Two filtered unique indexes could have been the one that fired. Re-derive which so the
         // caller gets the specific 409 rather than a generic one.
-        if (await NumberTakenAsync(row.SchoolId, row.PersonnelNumber, excluding: NullIfNew(row), ct))
+        if (await NumberTakenAsync(row.SchoolId, row.PersonnelNumber, excluding: isNew ? null : row.Id, ct))
         {
             _logger.LogInformation(
                 "A personnel write lost the race on the number index for '{Number}'.", row.PersonnelNumber);
@@ -355,8 +376,6 @@ internal sealed class PersonnelService : IPersonnelService
         _logger.LogInformation("A personnel write lost the race on the RFID index for '{Uid}'.", row.RfidUid);
         return DuplicateRfid(row.RfidUid ?? "");
     }
-
-    private static Guid? NullIfNew(Personnel row) => row.Id == default ? null : row.Id;
 
     private Task<bool> NumberTakenAsync(Guid schoolId, string number, Guid? excluding, CancellationToken ct) =>
         _db.Personnel.AsNoTracking().AnyAsync(
@@ -453,9 +472,12 @@ internal sealed class PersonnelService : IPersonnelService
     // the in-memory ToDto below via compilation-free duplication kept deliberately tiny.
     private static PersonnelDto ToDtoExpression(Personnel p) => new(
         p.Id, p.PersonnelNumber,
-        p.LastName + ", " + p.FirstName + (p.MiddleName == null ? "" : " " + p.MiddleName),
+        ComposeFullName(p.LastName, p.FirstName, p.MiddleName),
         p.FirstName, p.MiddleName, p.LastName, p.Email, p.Classification, p.Department, p.Organization,
         p.Position, p.RfidUid, p.Status);
+
+    private static string ComposeFullName(string lastName, string firstName, string? middleName) =>
+        lastName + ", " + firstName + (middleName == null ? "" : " " + middleName);
 
     private static PersonnelDto ToDto(Personnel p) => ToDtoExpression(p);
 

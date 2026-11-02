@@ -242,6 +242,10 @@ public class StudentsController : ControllerBase
     /// the new card is actually visible on — <c>GET /students/{id}</c> returns it in <c>cards[]</c>.
     /// </para>
     /// </summary>
+    /// <response code="503">
+    /// <c>WriteLockUnavailable</c>: another change to the same card held its lock. Nothing was written.
+    /// Send the same request again after <c>Retry-After</c> seconds.
+    /// </response>
     [HttpPost("{id:guid}/cards")]
     [Authorize(AuthenticationSchemes = JwtBearerDefaults.AuthenticationScheme, Policy = EamsPermissions.StudentsWrite)]
     [HasPermissionNotEnforced(EamsPermissions.StudentsWrite)]
@@ -249,6 +253,7 @@ public class StudentsController : ControllerBase
     [ProducesResponseType(StatusCodes.Status400BadRequest)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     [ProducesResponseType(StatusCodes.Status409Conflict)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status503ServiceUnavailable)]
     public async Task<ActionResult<CardDto>> AddCard(
         Guid id, [FromBody] StudentCardRequest request, CancellationToken ct)
     {
@@ -355,7 +360,9 @@ public class StudentsController : ControllerBase
         StudentWriteOutcome.CardNotFound => "Card not found on this student.",
         StudentWriteOutcome.FieldIsDerived => "That field is a derived read-only cache.",
         StudentWriteOutcome.DuplicateStudentNumber => "That student number is already in use.",
-        StudentWriteOutcome.CardUidInUse => "That card UID is already active on another student.",
+        // Neutral on purpose: since ADR-015 D-98 the holder may be a personnel record, and only the detail
+        // names which.
+        StudentWriteOutcome.CardUidInUse => "That card UID is already in use.",
         StudentWriteOutcome.NoSchoolResolved => "No school could be resolved.",
         _ => "The request could not be processed.",
     };

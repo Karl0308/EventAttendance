@@ -151,6 +151,30 @@ public sealed class SqlServerFixture : IAsyncLifetime
         new(new DbContextOptionsBuilder<EamsDbContext>().UseSqlServer(ConnectionString).Options, school);
 
     /// <summary>
+    /// A context shaped like the one <c>AddEamsInfrastructure</c> registers: a retrying execution strategy
+    /// and the 2012 compatibility level. <see cref="NewDbContext"/> has neither, so through it an
+    /// <c>ExecuteAsync</c> unit never replays and a collection <c>Contains</c> runs as <c>OPENJSON</c>, which
+    /// the deployed server does not have.
+    ///
+    /// <para>
+    /// For the tests that are about a replay (ADR-015 D-98), driven by an interceptor that raises a transient
+    /// fault. Only the retry delay differs from production, so a replay does not cost each test a second.
+    /// </para>
+    /// </summary>
+    internal EamsDbContext NewProductionShapedDbContext(
+        EAMS.Application.Abstractions.ISchoolContext school,
+        params Microsoft.EntityFrameworkCore.Diagnostics.IInterceptor[] interceptors) =>
+        new(new DbContextOptionsBuilder<EamsDbContext>()
+            .UseSqlServer(ConnectionString, sql =>
+            {
+                sql.EnableRetryOnFailure(
+                    maxRetryCount: 3, maxRetryDelay: TimeSpan.FromMilliseconds(50), errorNumbersToAdd: null);
+                sql.UseCompatibilityLevel(EAMS.Infrastructure.DependencyInjection.SqlServerCompatibilityLevel);
+            })
+            .AddInterceptors(interceptors)
+            .Options, school);
+
+    /// <summary>
     /// An extra, empty database on the same server, for the one test that must control which
     /// migrations have been applied.
     ///

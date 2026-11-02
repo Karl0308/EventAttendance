@@ -84,6 +84,11 @@ public static class EamsOpenApi
             // entire value is the 304 was published with no machine-readable trace of it.
             options.OperationFilter<ConditionalGetOperationFilter>();
 
+            // ADR-015 D-99: the v2 response families as components, referenced by an extension, so each
+            // device operation's documented 200 stays v1 and a client that did not opt in regenerates
+            // unchanged.
+            options.OperationFilter<CaptureCapabilityOperationFilter>();
+
             // §6's declared error shape, with the `code`/`serverTime` extensions that are folklore
             // until something writes them into the schema.
             options.SchemaFilter<ProblemDetailsSchemaFilter>();
