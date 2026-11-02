@@ -9,8 +9,21 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 
 import { ApiError } from "../src/api";
+import AuthProvider from "../src/components/AuthProvider";
 import EventAudienceFormDialog from "../src/components/EventAudienceFormDialog";
-import type { AudienceDefinition, AudienceDefinitionWriteRequest } from "../src/types";
+import { beginSession, resetSessionForTests } from "../src/authSession";
+import type { AudienceDefinition, AudienceDefinitionWriteRequest, AuthUser } from "../src/types";
+
+// The dialog reads the signed-in user (it only loads the people picker for `events.write`), so it has to
+// be rendered under the provider like everything else below `RequireAuth`. This file had no session, so
+// every test in it threw "useAuth was called outside <AuthProvider>" before F1 touched it.
+const OPERATOR: AuthUser = {
+  id: "11111111-1111-1111-1111-111111111111",
+  schoolId: "22222222-2222-2222-2222-222222222222",
+  email: "registrar@usa.edu.ph",
+  fullName: "Reg Istrar",
+  permissions: ["events.read", "events.write"],
+};
 
 const CLASSIFICATION = { id: "c-1", name: "Institutional" };
 const SCOPE_NAME = /who it covers/i;
@@ -21,6 +34,8 @@ const json = (status: number, body: unknown) =>
   new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
 
 beforeEach(() => {
+  resetSessionForTests();
+  beginSession("access-token-1", OPERATOR);
   vi.stubGlobal("fetch", () =>
     Promise.resolve(
       json(200, {
@@ -38,20 +53,23 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   vi.unstubAllGlobals();
+  resetSessionForTests();
 });
 
 function renderDialog(over: { definition?: AudienceDefinition; failure?: { error: unknown } } = {}) {
   const onSubmit = vi.fn<(request: AudienceDefinitionWriteRequest) => void>();
   render(
-    <EventAudienceFormDialog
-      definition={over.definition}
-      classifications={[CLASSIFICATION]}
-      others={[]}
-      onClose={() => {}}
-      onSubmit={onSubmit}
-      running={false}
-      failure={over.failure}
-    />,
+    <AuthProvider>
+      <EventAudienceFormDialog
+        definition={over.definition}
+        classifications={[CLASSIFICATION]}
+        others={[]}
+        onClose={() => {}}
+        onSubmit={onSubmit}
+        running={false}
+        failure={over.failure}
+      />
+    </AuthProvider>,
   );
   return onSubmit;
 }
@@ -213,6 +231,38 @@ describe("Custom: pickers follow the chosen population", () => {
 
     expect(onSubmit).not.toHaveBeenCalled();
     expect(await screen.findByText(/Students need at least one/)).toBeTruthy();
+  });
+});
+
+describe("the Who it covers hint says personnel are counted (ADR-015 D-102, W6)", () => {
+  const hintOf = (): string | null =>
+    document.getElementById(screen.getByRole("combobox", { name: SCOPE_NAME }).getAttribute("aria-describedby") ?? "")
+      ?.textContent ?? null;
+
+  it("hints that Employees are counted in the expected audience", () => {
+    renderDialog();
+    choose(/audience type/i, "Department");
+    choose(SCOPE_NAME, "Employees");
+
+    expect(hintOf()).toBe("Employees are counted in the event’s expected audience.");
+  });
+
+  it("hints that Both counts students and employees", () => {
+    renderDialog();
+    choose(/audience type/i, "Department");
+    choose(SCOPE_NAME, "Both");
+
+    expect(hintOf()).toBe("Students and employees are both counted in the event’s expected audience.");
+  });
+
+  it("shows no personnel-counting hint under Students", () => {
+    renderDialog();
+    choose(/audience type/i, "Department");
+    choose(SCOPE_NAME, "Students");
+
+    expect(screen.getByRole("combobox", { name: SCOPE_NAME }).getAttribute("aria-describedby")).toBeNull();
+    expect(screen.queryByText(/are counted in the event/i)).toBeNull();
+    expect(screen.queryByText(/both counted/i)).toBeNull();
   });
 });
 

@@ -6,7 +6,13 @@
 // this is a system boundary, so a payload that drifts from the contract fails loud here instead of
 // arriving three components deep as `undefined`.
 
-import { EXPECTED_SOURCE, GROUP_SOURCE_TYPE, GROUP_TYPE_SECTION, SIS_IMPORT_STATUS } from "./types";
+import {
+  EXPECTED_SOURCE,
+  GROUP_SOURCE_TYPE,
+  GROUP_TYPE_SECTION,
+  PERSON_TYPE,
+  SIS_IMPORT_STATUS,
+} from "./types";
 import type {
   AuthUser,
   Student,
@@ -31,6 +37,7 @@ import type {
   EventPreRegistration,
   EventPreRegistrationSession,
   ExpectedSource,
+  PersonType,
   EventItem,
   EventStatusName,
   EventWriteRequest,
@@ -171,6 +178,13 @@ export interface ApiProblem {
    * refused instead of just reporting a not-found.
    */
   missingEventIds?: readonly string[];
+  /**
+   * The `Retry-After` response header in whole seconds (ADR-015: the personnel and roster write
+   * routes answer `503 WriteLockUnavailable` with it). It lives in a header, not the body, so
+   * `readProblem` reads it off the response. Absent when the header is missing or is not a plain
+   * number of seconds (the HTTP-date form is not interpreted: this server sends seconds).
+   */
+  retryAfterSeconds?: number;
 }
 
 /**
@@ -185,6 +199,12 @@ export interface ApiErrorInit {
   shape: ApiRequestShape;
   problem?: ApiProblem;
   cause?: unknown;
+  /**
+   * Set only by the two import routes (personnel import, SIS roster run), which commit row by row or
+   * in passes: a refusal part-way leaves the earlier work saved. Every other write is one transaction.
+   * `advise()` reads it to decide whether a `WriteLockUnavailable` 503 left the outcome unknown.
+   */
+  mayCommitPartially?: boolean;
 }
 
 export class ApiError extends Error {
@@ -196,6 +216,10 @@ export class ApiError extends Error {
   readonly code: string | undefined;
   readonly traceId: string | undefined;
   readonly problem: ApiProblem | undefined;
+  /** Seconds the server asked the client to wait (`Retry-After`), when it sent a usable number. */
+  readonly retryAfterSeconds: number | undefined;
+  /** See `ApiErrorInit.mayCommitPartially`. */
+  readonly mayCommitPartially: boolean;
 
   constructor(kind: ApiErrorKind, status: number, message: string, init: ApiErrorInit) {
     super(message, { cause: init.cause });
@@ -206,6 +230,8 @@ export class ApiError extends Error {
     this.code = init.problem?.code;
     this.traceId = init.problem?.traceId;
     this.problem = init.problem;
+    this.retryAfterSeconds = init.problem?.retryAfterSeconds;
+    this.mayCommitPartially = init.mayCommitPartially === true;
   }
 }
 
@@ -395,6 +421,15 @@ function buildUrl(path: string, query?: Record<string, string | undefined>): str
   return `${baseUrl}${path}${qs ? `?${qs}` : ""}`;
 }
 
+const RETRY_AFTER_SECONDS_PATTERN = /^\d+$/;
+
+/** `Retry-After` as whole seconds, or `undefined` when absent or not a plain non-negative integer. */
+function parseRetryAfterSeconds(header: string | null): number | undefined {
+  if (header === null) return undefined;
+  const trimmed = header.trim();
+  return RETRY_AFTER_SECONDS_PATTERN.test(trimmed) ? Number(trimmed) : undefined;
+}
+
 async function readProblem(res: Response): Promise<ApiProblem> {
   let body: unknown;
   try {
@@ -416,6 +451,7 @@ async function readProblem(res: Response): Promise<ApiProblem> {
     code: optStr(row.code),
     serverTime: optStr(row.serverTime),
     missingEventIds: optStrs(row.missingEventIds),
+    retryAfterSeconds: parseRetryAfterSeconds(res.headers.get("Retry-After")),
   };
 }
 
@@ -441,12 +477,36 @@ async function readProblem(res: Response): Promise<ApiProblem> {
  * This string is display-only. Nothing in `src/` branches on it — `advise()` reads `kind`/`status`,
  * and the token stays on `ApiError.code` — so re-ordering it changes what is read, not what is done.
  */
-function httpError(what: string, problem: ApiProblem, shape: ApiRequestShape): ApiError {
+function httpError(
+  what: string,
+  problem: ApiProblem,
+  shape: ApiRequestShape,
+  mayCommitPartially = false,
+): ApiError {
   const reason = problem.detail ?? problem.title ?? problem.code ?? "no detail supplied";
-  return new ApiError("http", problem.status, `${what} failed (${problem.status}: ${reason}).`, {
+  // The wait is put into the message HERE, not only in `advise()`: several screens render
+  // `describeApiError` alone (the personnel import dialog, the personnel toast, the first SIS run), and
+  // a busy refusal that never says how long to wait is the one message that sends people straight back.
+  const wait =
+    problem.status === HTTP_SERVICE_UNAVAILABLE && problem.code === WRITE_LOCK_UNAVAILABLE
+      ? ` ${tryAgainText(problem.retryAfterSeconds)}`
+      : "";
+  return new ApiError("http", problem.status, `${what} failed (${problem.status}: ${reason}).${wait}`, {
     shape,
     problem,
+    mayCommitPartially,
   });
+}
+
+const HTTP_SERVICE_UNAVAILABLE = 503;
+
+/** `ProblemDetails.code` of the card-UID write lock's 503 (ADR-015 D-98). The server declares the resend safe. */
+export const WRITE_LOCK_UNAVAILABLE = "WriteLockUnavailable";
+
+/** "Try again in N seconds." from `Retry-After`; a header that is missing or not a number says "shortly". */
+export function tryAgainText(retryAfterSeconds: number | undefined): string {
+  if (retryAfterSeconds === undefined) return "Try again shortly.";
+  return `Try again in ${retryAfterSeconds} ${retryAfterSeconds === 1 ? "second" : "seconds"}.`;
 }
 
 /**
@@ -801,6 +861,8 @@ async function getJsonOrMissing(
  * @param timeoutMs the budget for this one request. Defaulted, and overridden by the two writes whose
  *   duration is not "how long a server may think": the upload, dominated by the bytes going out, and
  *   the import run, dominated by how many rows the operator staged.
+ * @param mayCommitPartially true only for the two import routes, whose refusal part-way leaves earlier
+ *   rows saved; see `ApiErrorInit.mayCommitPartially`.
  */
 async function writeJson<T>(
   what: string,
@@ -809,9 +871,10 @@ async function writeJson<T>(
   applied: string,
   map: (row: Row, what: string) => T,
   timeoutMs: number = REQUEST_TIMEOUT_MS,
+  mayCommitPartially = false,
 ): Promise<T> {
   const res = await send(what, path, undefined, write, timeoutMs);
-  if (!res.ok) throw httpError(what, await readProblem(res), "write");
+  if (!res.ok) throw httpError(what, await readProblem(res), "write", mayCommitPartially);
   const body = await parseBody(res, what, "write", timeoutMs);
   try {
     return map(asRow(body, what), what);
@@ -1686,13 +1749,33 @@ function toEvent(row: Row, what: string): EventItem {
   };
 }
 
+/**
+ * `personType` is required and closed over the two values the contract names. Defaulting a missing
+ * one to `"Student"` would be the quiet wrong answer: a personnel row would then render as a student
+ * with no name, and a value this build cannot name is a version mismatch that should say so.
+ */
+function reqPersonType(row: Row, what: string): PersonType {
+  const value = reqStr(row, "personType", what);
+  if (value === PERSON_TYPE.Student || value === PERSON_TYPE.Personnel) return value;
+  throw offContract(
+    what,
+    `\`personType\` should be "${PERSON_TYPE.Student}" or "${PERSON_TYPE.Personnel}", got "${value}"`,
+  );
+}
+
 function toAttendance(row: Row, what: string): AttendanceRecord {
   return {
     id: reqStr(row, "id", what),
     eventId: reqStr(row, "eventId", what),
-    studentId: reqStr(row, "studentId", what),
-    studentName: reqStr(row, "studentName", what),
-    studentNumber: reqStr(row, "studentNumber", what),
+    // Nullable by contract (ADR-015 D-99): a personnel record has no student at all. `nullableStr`
+    // rather than `optStr` so a field that changed type is still off-contract instead of vanishing.
+    studentId: nullableStr(row, "studentId", what),
+    studentName: nullableStr(row, "studentName", what),
+    studentNumber: nullableStr(row, "studentNumber", what),
+    personType: reqPersonType(row, what),
+    personnelId: nullableStr(row, "personnelId", what),
+    personnelNumber: nullableStr(row, "personnelNumber", what),
+    personnelName: nullableStr(row, "personnelName", what),
     checkInAt: optStr(row.checkInAt),
     checkOutAt: optStr(row.checkOutAt),
     status: reqStr(row, "status", what),
@@ -1705,6 +1788,8 @@ function toSummary(row: Row, what: string): EventSummary {
     eventId: reqStr(row, "eventId", what),
     eventName: reqStr(row, "eventName", what),
     expected: reqNum(row, "expected", what),
+    expectedStudents: reqNum(row, "expectedStudents", what),
+    expectedPersonnel: reqNum(row, "expectedPersonnel", what),
     present: reqNum(row, "present", what),
     late: reqNum(row, "late", what),
     absent: reqNum(row, "absent", what),
@@ -1722,6 +1807,8 @@ function toEventReportRow(row: Row, what: string): EventReportRow {
     status: reqStr(row, "status", what),
     startAt: reqStr(row, "startAt", what),
     expected: reqNum(row, "expected", what),
+    expectedStudents: reqNum(row, "expectedStudents", what),
+    expectedPersonnel: reqNum(row, "expectedPersonnel", what),
     attended: reqNum(row, "attended", what),
     present: reqNum(row, "present", what),
     late: reqNum(row, "late", what),
@@ -1936,12 +2023,12 @@ function toEventPreRegistration(row: Row, what: string): EventPreRegistration {
  * students would then be labelled as coming from the audience union, which is exactly the confusion
  * this field exists to remove.
  */
-function reqExpectedSource(row: Row, what: string): ExpectedSource {
-  const value = reqStr(row, "expectedSource", what);
+function reqExpectedSource(row: Row, key: string, what: string): ExpectedSource {
+  const value = reqStr(row, key, what);
   if (value === EXPECTED_SOURCE.PreRegistration || value === EXPECTED_SOURCE.Audience) return value;
   throw offContract(
     what,
-    `\`expectedSource\` should be "${EXPECTED_SOURCE.PreRegistration}" or "${EXPECTED_SOURCE.Audience}", got "${value}"`,
+    `\`${key}\` should be "${EXPECTED_SOURCE.PreRegistration}" or "${EXPECTED_SOURCE.Audience}", got "${value}"`,
   );
 }
 
@@ -1966,8 +2053,12 @@ function toAudience(row: Row, what: string): EventAudience {
     definitions: asRows(row.definitions, `${what}.definitions`).map((definition, i) =>
       toAudienceDefinitionRef(definition, `${what}.definitions[${i}]`),
     ),
-    advisoryPersonnelCount: reqNum(row, "advisoryPersonnelCount", what),
-    expectedSource: reqExpectedSource(row, what),
+    // `advisoryPersonnelCount` is deprecated (ADR-015 D-102: it equals `expectedPersonnel`) and is no
+    // longer read; `expectedPersonnel` is the one figure.
+    expectedStudents: reqNum(row, "expectedStudents", what),
+    expectedPersonnel: reqNum(row, "expectedPersonnel", what),
+    expectedSource: reqExpectedSource(row, "expectedSource", what),
+    expectedPersonnelSource: reqExpectedSource(row, "expectedPersonnelSource", what),
     // `null` is the contract's "nothing linked" and must be told apart from a missing key or a wrong
     // type, which are drift: only an explicit `null` collapses to "none".
     preRegistration:
@@ -1990,6 +2081,8 @@ function toAudienceResult(row: Row, what: string): EventAudienceResult {
     definitionsAttached: reqNum(row, "definitionsAttached", what),
     definitionsAlreadyAttached: reqNum(row, "definitionsAlreadyAttached", what),
     expected: reqNum(row, "expected", what),
+    expectedStudents: reqNum(row, "expectedStudents", what),
+    expectedPersonnel: reqNum(row, "expectedPersonnel", what),
     warnings: reqStrs(row, "warnings", what),
   };
 }
@@ -2693,6 +2786,9 @@ function toScan(row: Row, what: string): EventScan {
     deviceTapId: optStr(row.deviceTapId),
     deviceId: optStr(row.deviceId),
     serverOutcome: reqStr(row, "serverOutcome", what),
+    // Both null unless a personnel card resolved and the tap was refused anyway (ADR-015 D-100).
+    personnelId: nullableStr(row, "personnelId", what),
+    reason: nullableStr(row, "reason", what),
     // Optional on purpose: most rows will not carry one. A device that never sends it is not
     // misbehaving, and an absent claim must not be read as a claim of absence.
     localOutcome: optStr(row.localOutcome),
@@ -3060,6 +3156,9 @@ async function importPersonnel(rows: PersonnelWriteRequest[]): Promise<Personnel
     { method: "POST", payload: { rows } },
     "The personnel import was processed",
     toPersonnelImportResult,
+    REQUEST_TIMEOUT_MS,
+    // Row-by-row commits: a lock refusal part-way leaves the earlier rows saved.
+    true,
   );
 }
 
@@ -3862,6 +3961,9 @@ async function runImport(batchId: string, request: SisImportRunRequest): Promise
     // being timed now is a server accepting a job — a bounded question, answered in milliseconds. A
     // constant left lying about would be reached for again by the next long-looking write, and it
     // would be just as wrong there.
+    REQUEST_TIMEOUT_MS,
+    // Commits in passes: a lock refusal part-way leaves earlier passes saved and the batch Failed.
+    true,
   );
 }
 

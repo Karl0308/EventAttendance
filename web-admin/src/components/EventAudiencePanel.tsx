@@ -41,6 +41,7 @@ import {
   FROZEN_STUDENTS_ELSEWHERE,
   audienceEditability,
   audienceListsState,
+  expectedBreakdownText,
   isAudienceLocked,
   removeSectionLabel,
   removeStudentLabel,
@@ -122,18 +123,21 @@ export default function EventAudiencePanel({
           gap={1}
           sx={{ mb: 1 }}
         >
-          <Stack direction="row" spacing={1} alignItems="center">
+          <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap" useFlexGap>
             <GroupsIcon color="primary" aria-hidden />
             <Typography variant="h6" component="h2">
               Audience
             </Typography>
             {audience !== undefined && (
-              // The invited population (ADR-003 D-19) — not a count of rows in the lists below, which
-              // is why it is stated rather than derived here: a section of 40 is one row and forty
-              // expected students.
+              // The invited population (ADR-003 D-19, ADR-015 D-102) — not a count of rows in the lists
+              // below, which is why it is stated rather than derived here: a section of 40 is one row
+              // and forty expected students. Students plus personnel, with the total last.
+              // Wraps instead of ellipsising: the label is three figures long and MUI's fixed 24px chip
+              // would clip it at a narrow width. `maxWidth: 100%` keeps it inside its row.
               <Chip
                 size="small"
-                label={`${audience.expected} expected`}
+                sx={{ height: "auto", maxWidth: "100%", "& .MuiChip-label": { whiteSpace: "normal", py: 0.25 } }}
+                label={`Expected: ${expectedBreakdownText(audience)}`}
                 color={audience.expected === 0 ? "default" : "primary"}
               />
             )}

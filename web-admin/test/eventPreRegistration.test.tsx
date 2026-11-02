@@ -11,10 +11,12 @@
 // writes) with `fetch` stubbed, so each write is asserted on what actually went over the wire:
 //
 //   1. The linked sessions and the total pre-registered count badge are shown.
-//   2. `expectedSource === "PreRegistration"` is said in words — expected is not the audience union now.
-//   3. Advisory personnel are their own line and never join the expected figure.
+//   2. `expectedSource === "PreRegistration"` is said in words — expected is not the audience union now —
+//      and replacement is PER GROUP (ADR-015 D-103): students and personnel each name their own source.
+//   3. Pre-registered personnel are a display count, never described as "not counted".
 //   4. A picked session is linked (POST) and an existing link is unlinked (DELETE).
 //   5. On a terminal event link/unlink are disabled with a hint, and a 409 that arrives anyway is an alert.
+//   6. On a terminal event the expected-source label is not shown at all (ADR-015 Answered row, JJ).
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
@@ -105,11 +107,13 @@ const linkedAudience = (over: Partial<EventAudience> = {}): AudienceRead => ({
     status: "Draft",
     isFrozen: false,
     expected: 35,
+    expectedStudents: 35,
+    expectedPersonnel: 0,
     groups: [],
     students: [],
     definitions: [],
-    advisoryPersonnelCount: 0,
     expectedSource: "PreRegistration",
+    expectedPersonnelSource: "Audience",
     preRegistration: {
       linkedSessions,
       totalPreRegisteredStudentCount: 35,
@@ -178,9 +182,71 @@ describe("Pre-registration section: what is linked", () => {
     expect(await screen.findByText("Expected from pre-registration")).toBeTruthy();
     expect(screen.queryByText("Expected from audience")).toBeNull();
     // And says what that did to the number, so a drop from the audience union is not read as lost data.
-    expect(screen.getByText(/this event expects 35 students/i).textContent).toMatch(
-      /replaces the audience sections and definitions/i,
+    expect(screen.getByText("This event expects 35 students · 0 personnel · 35 total.")).toBeTruthy();
+  });
+
+  // Deliberately updated (F1-3, ADR-015 D-103): this used to assert that linking "replaces the audience
+  // sections and definitions" wholesale. Behaviour changed: replacement is per group, so the text says a
+  // group is replaced only when a linked session holds a countable registrant of that kind.
+  it("says pre-registration replaces expected per group, not wholesale", async () => {
+    render(section(linkedAudience()));
+
+    const rule = await screen.findByText(/pre-registration replaces the audience per group/i);
+    expect(rule.textContent).toMatch(/only when a linked session holds a countable registrant/i);
+    expect(screen.queryByText(/replaces the audience sections and definitions/i)).toBeNull();
+    // Students come from the sessions here: that group is named as replaced.
+    expect(screen.getByText(/^Students: the ones pre-registered in the linked sessions/)).toBeTruthy();
+  });
+
+  it("keeps personnel from the audience when no linked session holds a countable personnel registrant", async () => {
+    // Registrants exist (the display count is 5) but none is countable, so `expectedPersonnelSource`
+    // stays `Audience` while the student side comes from the sessions: the per-group split in one read.
+    render(
+      section(
+        linkedAudience({
+          expected: 50,
+          expectedStudents: 35,
+          expectedPersonnel: 15,
+          expectedPersonnelSource: "Audience",
+        }),
+      ),
     );
+
+    expect(await screen.findByText("This event expects 35 students · 15 personnel · 50 total.")).toBeTruthy();
+    const personnel = screen.getByText(/^Personnel: /);
+    expect(personnel.textContent).toMatch(/from the audience definitions/i);
+    expect(personnel.textContent).toMatch(/no linked session holds a countable personnel registrant/i);
+    expect(personnel.textContent).not.toMatch(/pre-registered in the linked/i);
+  });
+
+  // FX-5: a linked session that governs neither group is exactly where a reader needs the rule explained,
+  // so the sentence follows "a session is linked", not "a group already comes from pre-registration".
+  it("explains the per-group rule whenever a session is linked, even when both groups still come from the audience", async () => {
+    render(
+      section(
+        linkedAudience({
+          expected: 135,
+          expectedStudents: 120,
+          expectedPersonnel: 15,
+          expectedSource: "Audience",
+          expectedPersonnelSource: "Audience",
+        }),
+      ),
+    );
+
+    expect(await screen.findByText(/pre-registration replaces the audience per group/i)).toBeTruthy();
+    expect(screen.getByText("This event expects 120 students · 15 personnel · 135 total.")).toBeTruthy();
+    expect(screen.getByText(/^Students: from the audience sections and definitions/)).toBeTruthy();
+    expect(screen.getByText(/^Personnel: from the audience definitions/)).toBeTruthy();
+    // And the label still says the number is from the audience: nothing is claimed to be replaced.
+    expect(screen.getByText("Expected from audience")).toBeTruthy();
+  });
+
+  it("names pre-registration as the personnel source once a linked session holds a countable registrant", async () => {
+    render(section(linkedAudience({ expectedPersonnel: 5, expected: 40, expectedPersonnelSource: "PreRegistration" })));
+
+    const personnel = await screen.findByText(/^Personnel: /);
+    expect(personnel.textContent).toMatch(/pre-registered in the linked sessions/i);
   });
 
   it("says the expected number comes from the audience when nothing is linked", async () => {
@@ -191,19 +257,23 @@ describe("Pre-registration section: what is linked", () => {
     expect(screen.queryByText(/pre-registered$/)).toBeNull();
   });
 
-  it("shows advisory personnel separate from expected", async () => {
+  // Deliberately updated (F1-3, ADR-015 D-102): this used to pin "5 personnel pre-registered — not
+  // counted in expected". Behaviour changed: personnel are counted, and the number of pre-registered
+  // personnel is only a display count, so the line states the count without any "not counted" claim.
+  it("shows pre-registered personnel as a display count without saying they are not counted", async () => {
     render(section(linkedAudience()));
 
-    const advisory = await screen.findByText("5 personnel pre-registered — not counted in expected");
+    const line = await screen.findByText("5 personnel pre-registered");
     const source = screen.getByText("Expected from pre-registration");
     const badge = screen.getByText("35 pre-registered");
 
-    // Its own line, in none of the elements that carry the student figure — and the students-only total
-    // is what the badge reads, not 40.
-    expect(advisory).not.toBe(source);
-    expect(advisory.contains(badge)).toBe(false);
-    expect(badge.contains(advisory)).toBe(false);
+    // Its own line, in none of the elements that carry the student figure — and the badge is the
+    // pre-registered STUDENT total, not 40.
+    expect(line).not.toBe(source);
+    expect(line.contains(badge)).toBe(false);
+    expect(badge.contains(line)).toBe(false);
     expect(screen.queryByText("40 pre-registered")).toBeNull();
+    expect(screen.queryByText(/not counted/i)).toBeNull();
   });
 });
 
@@ -388,6 +458,41 @@ describe("Pre-registration section: a terminal event", () => {
     expect(screen.getByText(/this event is closed, so pre-registration sessions can no longer be linked/i)).toBeTruthy();
     // Nothing to pick from, so nothing is fetched.
     expect(requests.some((r) => r.pathname.endsWith("/pre-registration/sessions"))).toBe(false);
+  });
+
+  // F1-5 (ADR-015 Answered row, JJ): the source describes the linked sessions as they are NOW, and a
+  // session can change after the close while the frozen number cannot. Terminal = Closed and Cancelled.
+  it.each(["Closed", "Cancelled"])("hides the expected-source label on a %s event", async (status) => {
+    render(section(linkedAudience({ isFrozen: true, status }), status));
+
+    // The section is mounted (its other content is there)...
+    await screen.findByRole("combobox", { name: PICKER_NAME });
+    expect(screen.getByText("35 pre-registered")).toBeTruthy();
+    // ...but neither the chip nor the sentence that names the source is.
+    expect(screen.queryByText("Expected from pre-registration")).toBeNull();
+    expect(screen.queryByText("Expected from audience")).toBeNull();
+    expect(screen.queryByText(/pre-registration replaces the audience per group/i)).toBeNull();
+    expect(screen.queryByText(/^Students: /)).toBeNull();
+  });
+
+  it("hides the audience label on a closed event whose sessions are not linked, too", async () => {
+    render(
+      section(
+        linkedAudience({ isFrozen: true, status: "Closed", expectedSource: "Audience", preRegistration: null }),
+        "Closed",
+      ),
+    );
+
+    await screen.findByRole("combobox", { name: PICKER_NAME });
+    expect(screen.queryByText("Expected from audience")).toBeNull();
+    expect(screen.queryByText(/no pre-registration session is linked/i)).toBeNull();
+  });
+
+  it("still shows the expected-source label on an Open event", async () => {
+    render(section(linkedAudience({ status: "Open" }), "Open"));
+
+    expect(await screen.findByText("Expected from pre-registration")).toBeTruthy();
+    expect(screen.getByText(/pre-registration replaces the audience per group/i)).toBeTruthy();
   });
 
   it("shows a 409 that arrives anyway as an alert, and does not call it a generic failure", async () => {

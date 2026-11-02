@@ -59,6 +59,17 @@ export const AUDIENCE_SCOPES: ReadonlyArray<{ value: AudienceScope; label: strin
   { value: "Both", label: "Both" },
 ];
 
+/**
+ * What choosing a scope does to the event's expected audience, for the "Who it covers" hint (W6).
+ * Employees are personnel, and personnel ARE counted in the expected audience (ADR-015 D-102), so the
+ * two scopes that include them say so. `Students` has no entry: it counts no personnel, and a hint
+ * there would only be noise.
+ */
+export const SCOPE_COUNTING_HINT: Readonly<Partial<Record<AudienceScope, string>>> = {
+  Employees: "Employees are counted in the event’s expected audience.",
+  Both: "Students and employees are both counted in the event’s expected audience.",
+};
+
 export const isAudienceScope = (value: unknown): value is AudienceScope =>
   AUDIENCE_SCOPES.some((s) => s.value === value);
 

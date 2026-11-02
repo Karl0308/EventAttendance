@@ -50,7 +50,7 @@ import AudiencePickerDialog from "../components/AudiencePickerDialog";
 import DevDeviceKeyPanel from "../components/DevDeviceKeyPanel";
 import { knownMode, localFrom, requestForCertificatesToggle } from "../eventDraft";
 import type { EditScope } from "../eventDraft";
-import { attachSettledText } from "../eventAudience";
+import { attachSettledText, expectedBreakdownText } from "../eventAudience";
 import { statusActionsFor, statusSettledText } from "../eventStatus";
 import type { StatusChange } from "../eventStatus";
 import { EVENT_STATUS } from "../types";
@@ -1020,6 +1020,18 @@ export default function EventDetail() {
                   )}
                 </CardContent>
               </Card>
+            )}
+
+            {data.summary !== undefined && (
+              // Students and personnel are both in the denominator (ADR-015 D-102), and the rate below
+              // is over the total. "0 personnel" is printed rather than dropped, so a reader never has to
+              // wonder whether personnel were left out of the figure.
+              <Typography sx={{ mb: 1.5 }}>
+                <Box component="span" color="text.secondary">
+                  Expected:{" "}
+                </Box>
+                <Box component="strong">{expectedBreakdownText(data.summary)}</Box>
+              </Typography>
             )}
 
             <Grid container spacing={2} sx={{ mb: 3 }}>

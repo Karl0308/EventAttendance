@@ -110,6 +110,8 @@ const reportRow = (eventId: string, eventName: string) => ({
   status: "Open",
   startAt: "2026-09-01T01:00:00Z",
   expected: 6,
+  expectedStudents: 5,
+  expectedPersonnel: 1,
   attended: 5,
   present: 4,
   late: 1,
@@ -268,6 +270,83 @@ describe("running a report", () => {
     // One event selected: no combined-totals row, per the page's own module note.
     expect(screen.queryByText(/Combined across/i)).toBeNull();
     expect(reportRequests).toEqual([`?eventId=${EVENT_A}`]);
+  });
+
+  // F1-3 (ADR-015 D-102): `expected` is students plus personnel, and the report says so.
+  it("labels Expected as students plus personnel and shows each row's split", async () => {
+    beginSession("access-token-1", OPERATOR);
+    events = [FRESHMAN, FOUNDERS];
+    multiEventStatus = 200;
+    multiEventBody = {
+      events: [
+        reportRow(EVENT_A, "Freshman Orientation"),
+        { ...reportRow(EVENT_B, "Founders Day"), expected: 20, expectedStudents: 12, expectedPersonnel: 8 },
+      ],
+      totals: MISMATCHED_TOTALS,
+    };
+    serve();
+
+    await showReportsPage();
+
+    clickCheckbox(/Freshman Orientation/i);
+    clickCheckbox(/Founders Day/i);
+    clickRun();
+    await act(async () => {});
+
+    expect(screen.getByRole("columnheader", { name: "Expected (students + personnel)" })).toBeTruthy();
+    // Each row's own split, beside the total it adds up to.
+    expect(screen.getByText("5 students · 1 personnel")).toBeTruthy();
+    expect(screen.getByText("12 students · 8 personnel")).toBeTruthy();
+    // The split is a breakdown, not a second number: the cell still leads with the server's total.
+    expect(screen.getByText("12 students · 8 personnel").parentElement?.firstChild?.textContent).toBe("20");
+  });
+
+  // FX-6: the combined row shows the split too. Its TOTAL stays the server's pooled number (20, which is
+  // neither row's own and not the rows' sum - see the next test); only the split beneath it is summed.
+  it("shows the combined row's split as the sum of the rows' splits, under the server's own total", async () => {
+    beginSession("access-token-1", OPERATOR);
+    events = [FRESHMAN, FOUNDERS];
+    multiEventStatus = 200;
+    multiEventBody = {
+      events: [
+        reportRow(EVENT_A, "Freshman Orientation"),
+        { ...reportRow(EVENT_B, "Founders Day"), expected: 20, expectedStudents: 12, expectedPersonnel: 8 },
+      ],
+      totals: MISMATCHED_TOTALS,
+    };
+    serve();
+
+    await showReportsPage();
+
+    clickCheckbox(/Freshman Orientation/i);
+    clickCheckbox(/Founders Day/i);
+    clickRun();
+    await act(async () => {});
+
+    // 5 + 12 students and 1 + 8 personnel.
+    const split = screen.getByText("17 students · 9 personnel");
+    expect(split.parentElement?.firstChild?.textContent).toBe(String(MISMATCHED_TOTALS.expected));
+  });
+
+  // FX-4: a count of one reads "1 student", as everywhere else the split is printed.
+  it("uses the singular in a row's split", async () => {
+    beginSession("access-token-1", OPERATOR);
+    events = [FRESHMAN];
+    multiEventStatus = 200;
+    multiEventBody = {
+      events: [{ ...reportRow(EVENT_A, "Freshman Orientation"), expectedStudents: 1, expectedPersonnel: 1 }],
+      totals: MISMATCHED_TOTALS,
+    };
+    serve();
+
+    await showReportsPage();
+
+    clickCheckbox(/Freshman Orientation/i);
+    clickRun();
+    await act(async () => {});
+
+    expect(screen.getByText("1 student · 1 personnel")).toBeTruthy();
+    expect(screen.queryByText(/1 students/)).toBeNull();
   });
 
   it("shows several events as one row each, plus the server's pooled totals — not a client sum", async () => {

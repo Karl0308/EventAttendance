@@ -9,14 +9,15 @@
 //
 //   POST   /events/{id}/attendees                       body gains `audienceDefinitionIds`; reply gains
 //                                                       `definitionsAttached` / `definitionsAlreadyAttached`
-//   GET    /events/{id}/attendees                       gains `definitions[]` and `advisoryPersonnelCount`
+//   GET    /events/{id}/attendees                       gains `definitions[]` (and `advisoryPersonnelCount`, now
+//                                                       deprecated: `expectedPersonnel` replaced it, ADR-015 D-102)
 //   DELETE /events/{id}/attendees/definitions/{defId}   detach one
 //   GET    /event-audiences?eventClassificationId=      the picker's options
 //   GET    /events/{id}                                 `eventClassificationId` / `eventClassificationName`
 //
 // Every new field is *required* at the seam, so a server that drops one fails loud (`malformed`) rather
-// than arriving at a panel as `undefined` — and in particular an advisory that silently read as 0 would
-// hide eligible personnel.
+// than arriving at a panel as `undefined` — and in particular a personnel count that silently read as 0
+// would hide people the denominator includes.
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -79,6 +80,9 @@ const audienceJson = (over: Record<string, unknown> = {}) => ({
   advisoryPersonnelCount: 7,
   expectedSource: "Audience",
   preRegistration: null,
+  expectedStudents: 120,
+  expectedPersonnel: 7,
+  expectedPersonnelSource: "Audience",
   ...over,
 });
 
@@ -92,6 +96,8 @@ const resultJson = (over: Record<string, unknown> = {}) => ({
   definitionsAlreadyAttached: 2,
   expected: 120,
   warnings: [],
+  expectedStudents: 113,
+  expectedPersonnel: 7,
   ...over,
 });
 
@@ -126,13 +132,16 @@ describe("api.attachEventAudience with audience definitions", () => {
   });
 });
 
-describe("api.getEventAudience reads definitions and the advisory", () => {
-  it("parses definitions[] and advisoryPersonnelCount", async () => {
+describe("api.getEventAudience reads definitions and the expected personnel", () => {
+  // Deliberately updated (F1-1, ADR-015 D-102): this used to parse `advisoryPersonnelCount`, which the
+  // server now sends only as a deprecated alias of `expectedPersonnel`. Behaviour changed: the figure
+  // the SPA reads is `expectedPersonnel`.
+  it("parses definitions[] and expectedPersonnel", async () => {
     serve(() => json(200, audienceJson()));
 
     const audience = await api.getEventAudience(EVENT_ID);
 
-    expect(audience?.advisoryPersonnelCount).toBe(7);
+    expect(audience?.expectedPersonnel).toBe(7);
     expect(audience?.definitions).toEqual([
       {
         audienceDefinitionId: DEFINITION_ID,
@@ -164,14 +173,16 @@ describe("api.getEventAudience reads definitions and the advisory", () => {
     expect(error.message).toContain("definitions");
   });
 
-  it("fails loud when advisoryPersonnelCount is missing, rather than reading it as zero", async () => {
+  // Deliberately updated (F1-1): this used to FAIL LOUD when `advisoryPersonnelCount` was missing. The
+  // field is deprecated and no longer read, so a reply without it is accepted; the loud failure moved to
+  // `expectedPersonnel` (see personnelContractApi.test.ts).
+  it("no longer requires the deprecated advisoryPersonnelCount", async () => {
     const { advisoryPersonnelCount: _dropped, ...withoutAdvisory } = audienceJson();
     serve(() => json(200, withoutAdvisory));
 
-    const error = await apiErrorFrom(() => api.getEventAudience(EVENT_ID));
+    const audience = await api.getEventAudience(EVENT_ID);
 
-    expect(error.kind).toBe("malformed");
-    expect(error.message).toContain("advisoryPersonnelCount");
+    expect(audience?.expectedPersonnel).toBe(7);
   });
 });
 

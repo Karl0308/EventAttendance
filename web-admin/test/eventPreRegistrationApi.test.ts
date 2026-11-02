@@ -79,6 +79,9 @@ const audienceJson = (over: Record<string, unknown> = {}) => ({
   advisoryPersonnelCount: 0,
   expectedSource: "PreRegistration",
   preRegistration: preRegistrationJson(),
+  expectedStudents: 30,
+  expectedPersonnel: 0,
+  expectedPersonnelSource: "Audience",
   ...over,
 });
 

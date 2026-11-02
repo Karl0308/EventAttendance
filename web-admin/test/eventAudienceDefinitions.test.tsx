@@ -91,6 +91,8 @@ function serve(): void {
           definitionsAttached: 2,
           definitionsAlreadyAttached: 0,
           expected: 160,
+          expectedStudents: 150,
+          expectedPersonnel: 10,
           warnings: [],
         }),
       );
@@ -119,11 +121,13 @@ const readyAudience = (over: Partial<EventAudience> = {}): AudienceRead => ({
     status: "Draft",
     isFrozen: false,
     expected: 40,
+    expectedStudents: 40,
+    expectedPersonnel: 0,
     groups: [],
     students: [],
     definitions: [],
-    advisoryPersonnelCount: 0,
     expectedSource: "Audience",
+    expectedPersonnelSource: "Audience",
     preRegistration: null,
     ...over,
   },
@@ -305,10 +309,19 @@ describe("Add audience: an event with no classification, or a locked one", () =>
 });
 
 describe("Add audience: the attached definitions", () => {
-  it("shows advisory personnel count separate from expected", async () => {
+  // Deliberately updated (F1-3, ADR-015 D-102): this used to be "shows advisory personnel count separate
+  // from expected" and pinned "7 personnel eligible — not counted in expected" beside a students-only
+  // "40 expected" chip. Behaviour changed: personnel are IN the expected figure, so the chip shows
+  // 40 students · 7 personnel · 47 total and the definitions card states the 7 as part of it.
+  it("states the definitions' personnel as part of the expected audience", async () => {
     // The sections panel (which owns the expected chip) and this one, fed the same read — the way the
     // page mounts them.
-    const read = readyAudience({ expected: 40, definitions: [attached()], advisoryPersonnelCount: 7 });
+    const read = readyAudience({
+      expected: 47,
+      expectedStudents: 40,
+      expectedPersonnel: 7,
+      definitions: [attached()],
+    });
     render(
       <>
         <EventAudiencePanel
@@ -323,15 +336,41 @@ describe("Add audience: the attached definitions", () => {
       </>,
     );
 
-    const advisory = await screen.findByText("7 personnel eligible — not counted in expected");
-    const chip = screen.getByText("40 expected");
+    const line = await screen.findByText("7 personnel in the expected audience");
+    const chip = screen.getByText("Expected: 40 students · 7 personnel · 47 total");
 
-    // Two different elements, and the denominator is still the students-only figure: 40, not 47.
-    expect(advisory).not.toBe(chip);
-    expect(chip.contains(advisory)).toBe(false);
-    expect(screen.queryByText("47 expected")).toBeNull();
-    // The advisory sits in the definitions card, not the sections card that holds the chip.
-    expect(chip.closest(".MuiCard-root")?.contains(advisory)).toBe(false);
+    // Two different elements, and the chip's total is students plus personnel: 47, not the old 40.
+    expect(line).not.toBe(chip);
+    expect(chip.contains(line)).toBe(false);
+    expect(screen.queryByText(/not counted/i)).toBeNull();
+    // The line sits in the definitions card, not the sections card that holds the chip.
+    expect(chip.closest(".MuiCard-root")?.contains(line)).toBe(false);
+  });
+
+  // FX-7: the chip's label is three figures long, and MUI's chip is a fixed 24px row that clips it with an
+  // ellipsis at a narrow width. It must wrap instead, and still read as one labelled value.
+  it("lets the expected chip wrap at a narrow width instead of clipping its label", async () => {
+    const read = readyAudience({ expected: 47, expectedStudents: 40, expectedPersonnel: 7 });
+    render(
+      <EventAudiencePanel
+        eventStatus="Draft"
+        read={read}
+        refreshing={false}
+        onRetry={() => {}}
+        attach={{ open: () => {}, warnings: [], dismissWarnings: () => {} }}
+        detach={{ running: undefined, failure: undefined, group: () => {}, student: () => {} }}
+      />,
+    );
+
+    const label = await screen.findByText("Expected: 40 students · 7 personnel · 47 total");
+    const chip = label.closest(".MuiChip-root");
+    expect(chip).not.toBeNull();
+    if (chip === null) return;
+    expect(getComputedStyle(label).whiteSpace).toBe("normal");
+    expect(getComputedStyle(chip).height).toBe("auto");
+    expect(getComputedStyle(chip).maxWidth).toBe("100%");
+    // The accessible name is the whole breakdown, so wrapping changes only how it is painted.
+    expect(chip.textContent).toBe("Expected: 40 students · 7 personnel · 47 total");
   });
 
   it("lets you remove an attached definition", async () => {

@@ -9,7 +9,12 @@
 // set with the pre-registered students — so the figure on the stat cards and the sections card can drop
 // the moment a session is linked, and an operator who is not told why will read it as lost data. When
 // `expectedSource` is `"PreRegistration"` this card says so in words (a chip, and a sentence naming the
-// number), and shows the pre-registered personnel as an advisory line beside it, never inside it.
+// number). It replaces the audience PER GROUP (ADR-015 D-103): students and personnel each switch to the
+// pre-registered side only when a linked session holds a countable registrant of that kind, so the
+// sentence names the source of each. The pre-registered personnel line is a display count.
+//
+// On a terminal event none of that is said: the source describes the sessions as they are now, and
+// they may move after the close while the frozen number does not.
 //
 // ---------------------------------------------------------------------------------------------
 // Three kinds of state, kept apart
@@ -44,13 +49,13 @@ import {
 import HowToRegIcon from "@mui/icons-material/HowToReg";
 import { api, describeApiError } from "../api";
 import { advise } from "../apiGuidance";
-import { audienceEditability, isAudienceLocked } from "../eventAudience";
-import { knownStatus } from "../eventStatus";
+import { audienceEditability, expectedBreakdownText, isAudienceLocked } from "../eventAudience";
+import { isTerminal, knownStatus } from "../eventStatus";
 import { useApiMutation } from "../useApiMutation";
 import { useApiResource } from "../useApiResource";
 import { EXPECTED_SOURCE } from "../types";
 import type { AudienceRead } from "./EventAudiencePanel";
-import type { EventPreRegistrationSession, PreRegistrationSession } from "../types";
+import type { EventAudience, EventPreRegistrationSession, PreRegistrationSession } from "../types";
 
 interface EventPreRegistrationSectionProps {
   eventId: string;
@@ -78,7 +83,13 @@ const EXPECTED_FROM_AUDIENCE = "Expected from audience";
 
 const NOTHING_LINKED =
   "No pre-registration session is linked, so the expected number comes from the audience sections and " +
-  "definitions. Linking a session replaces it with the students pre-registered in that session.";
+  "definitions. Linking a session replaces it, per group, with the people pre-registered in that session.";
+
+/** ADR-015 D-103, in one sentence: replacement is per group, and conditional on a countable registrant. */
+const PER_GROUP_RULE =
+  "Pre-registration replaces the audience per group: students or personnel switch to the pre-registered " +
+  "ones only when a linked session holds a countable registrant of that kind, and otherwise still come " +
+  "from the audience. Unlink every session to go back to the audience.";
 
 const NO_SESSIONS_LEFT =
   "No pre-registration sessions are left to link — they are all linked, or none exist yet.";
@@ -100,8 +111,26 @@ const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one :
 
 const unlinkLabel = (name: string) => `Unlink pre-registration session ${name} from this event`;
 
-/** The personnel advisory, in its own sentence: personnel are never part of the expected number. */
-const advisoryText = (count: number) => `${count} personnel pre-registered — not counted in expected`;
+/** Personnel registered across the linked sessions: a display count, in its own sentence. */
+const personnelRegisteredText = (count: number) => `${count} personnel pre-registered`;
+
+/**
+ * Where each group of the expected number comes from (ADR-015 D-103). Pre-registration replaces the
+ * audience PER GROUP: a population is replaced only when the linked sessions hold a countable registrant
+ * from it, and otherwise it still comes from the audience sections and definitions.
+ */
+function sourceSentences(audience: EventAudience, linkedCount: number): string[] {
+  const sessions = linkedCount === 1 ? "session" : "sessions";
+  const students =
+    audience.expectedSource === EXPECTED_SOURCE.PreRegistration
+      ? `Students: the ones pre-registered in the linked ${sessions}, which replaces the students from the audience sections and definitions.`
+      : "Students: from the audience sections and definitions.";
+  const personnel =
+    audience.expectedPersonnelSource === EXPECTED_SOURCE.PreRegistration
+      ? `Personnel: the ones pre-registered in the linked ${sessions}, which replaces the personnel from the audience definitions.`
+      : `Personnel: from the audience definitions, because no linked session holds a countable personnel registrant.`;
+  return [students, personnel];
+}
 
 function failureTitle(action: PreRegAction): string {
   switch (action.kind) {
@@ -213,7 +242,19 @@ export default function EventPreRegistrationSection({
       () => setDraftName(""),
     );
 
-  const fromPreRegistration = audience?.expectedSource === EXPECTED_SOURCE.PreRegistration;
+  // Either group governed by pre-registration makes the whole number "from pre-registration"; the
+  // sentence below says which group, which is what D-103's per-group rule needs a reader to know. It is
+  // shown whenever a session is linked, even when both groups still come from the audience, because a
+  // linked session that governs nothing is exactly the case a reader needs the rule to explain.
+  const fromPreRegistration =
+    audience?.expectedSource === EXPECTED_SOURCE.PreRegistration ||
+    audience?.expectedPersonnelSource === EXPECTED_SOURCE.PreRegistration;
+
+  // Frozen = terminal (Closed and Cancelled). The source labels describe the linked sessions as they are
+  // NOW, and a session can change after the close while the frozen number cannot — so on a terminal
+  // event they would be a statement the number no longer follows. An unknown status is not hidden.
+  const knownEventStatus = knownStatus(eventStatus);
+  const showSource = knownEventStatus === undefined || !isTerminal(knownEventStatus);
 
   return (
     <Card sx={{ mb: 3 }}>
@@ -230,7 +271,7 @@ export default function EventPreRegistrationSection({
               label={`${preRegistration.totalPreRegisteredStudentCount} pre-registered`}
             />
           )}
-          {audience !== undefined && (
+          {audience !== undefined && showSource && (
             <Chip
               size="small"
               variant={fromPreRegistration ? "filled" : "outlined"}
@@ -260,23 +301,34 @@ export default function EventPreRegistrationSection({
 
         {audience !== undefined && (
           <>
-            {fromPreRegistration ? (
-              <Typography variant="body2" sx={{ mb: 1, maxWidth: "68ch" }}>
-                {`This event expects ${plural(audience.expected, "student", "students")}: the ones pre-registered in the linked ${
-                  linked.length === 1 ? "session" : "sessions"
-                }. That replaces the audience sections and definitions, so the expected number can be lower than the audience alone would give. Unlink every session to go back to the audience.`}
-              </Typography>
-            ) : (
-              linked.length === 0 && (
-                <Typography variant="body2" color="text.secondary" sx={{ mb: 1, maxWidth: "68ch" }}>
-                  {NOTHING_LINKED}
-                </Typography>
-              )
-            )}
+            {showSource &&
+              (linked.length > 0 ? (
+                <Box sx={{ mb: 1, maxWidth: "68ch" }}>
+                  <Typography variant="body2">
+                    {`This event expects ${expectedBreakdownText(audience)}.`}
+                  </Typography>
+                  <Typography variant="body2" sx={{ mt: 0.5 }}>
+                    {PER_GROUP_RULE}
+                  </Typography>
+                  <Stack component="ul" sx={{ m: 0, mt: 0.5, pl: 2.5 }}>
+                    {sourceSentences(audience, linked.length).map((sentence) => (
+                      <Typography key={sentence} component="li" variant="body2">
+                        {sentence}
+                      </Typography>
+                    ))}
+                  </Stack>
+                </Box>
+              ) : (
+                linked.length === 0 && (
+                  <Typography variant="body2" color="text.secondary" sx={{ mb: 1, maxWidth: "68ch" }}>
+                    {NOTHING_LINKED}
+                  </Typography>
+                )
+              ))}
 
             {preRegistration !== null && (
               <Typography variant="body2" color="text.secondary" sx={{ mb: 1.5 }}>
-                {advisoryText(preRegistration.totalAdvisoryPersonnelCount)}
+                {personnelRegisteredText(preRegistration.totalAdvisoryPersonnelCount)}
               </Typography>
             )}
 

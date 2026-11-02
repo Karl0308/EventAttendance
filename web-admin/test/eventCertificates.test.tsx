@@ -208,6 +208,8 @@ const SUMMARY_JSON = () => ({
   eventId: stored.id,
   eventName: stored.name,
   expected: 0,
+  expectedStudents: 0,
+  expectedPersonnel: 0,
   present: 0,
   late: 0,
   absent: 0,
@@ -224,8 +226,10 @@ const AUDIENCE_JSON = () => ({
   groups: [],
   students: [],
   definitions: [],
-  advisoryPersonnelCount: 0,
+  expectedStudents: 0,
+  expectedPersonnel: 0,
   expectedSource: "Audience",
+  expectedPersonnelSource: "Audience",
   preRegistration: null,
 });
 

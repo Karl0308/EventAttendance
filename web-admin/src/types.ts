@@ -977,7 +977,7 @@ export interface EventAudienceDefinition {
   audienceType: string;
   /** Students the definition resolves to; these feed the event's expected count. */
   studentCount: number;
-  /** Personnel the definition resolves to; advisory only, never part of the expected count. */
+  /** Personnel the definition resolves to; a display count (the countable ones feed `expectedPersonnel`). */
   personnelCount: number;
   /** A definition deactivated after it was attached stays attached, and says so. */
   isActive: boolean;
@@ -1002,24 +1002,30 @@ export interface EventAudience {
    * deliberately *not* a synonym for `Closed` — a cancelled event's numbers are equally fixed.
    */
   isFrozen: boolean;
-  /** The invited population (ADR-003 D-19), the same number `GET /events/{id}/summary` reports. */
+  /**
+   * The invited population (ADR-003 D-19, ADR-015 D-102): students plus personnel, the same number
+   * `GET /events/{id}/summary` reports. It already is the total; the two fields below are its parts.
+   */
   expected: number;
+  /** The students in `expected`. */
+  expectedStudents: number;
+  /** The personnel in `expected`. */
+  expectedPersonnel: number;
   groups: EventAudienceGroup[];
   students: EventAudienceStudent[];
   /** Reusable audience definitions attached to the event, alongside the sections above. */
   definitions: EventAudienceDefinition[];
   /**
-   * Personnel the attached definitions resolve to. **Not part of `expected`** — the denominator counts
-   * students only — so it is shown as an advisory, clearly apart from that number.
-   */
-  advisoryPersonnelCount: number;
-  /**
-   * Where `expected` comes from. `"PreRegistration"` means at least one pre-registration session is
-   * linked to the event and the expected set is **replaced** by the pre-registered students — the
-   * sections and definitions above no longer feed it. A real union (unlike `status`) because the
-   * mapper refuses any other value: a source this build cannot name would mislabel the denominator.
+   * Where the *student* side of `expected` comes from (ADR-015 D-103). `"PreRegistration"` means the
+   * linked sessions hold a countable student registrant, so the student side is those registrants and
+   * the sections and definitions above are kept but not resolved for students. A real union (unlike
+   * `status`) because the mapper refuses any other value: a source this build cannot name would
+   * mislabel the denominator. It describes the sessions as they are *now*, so it is not shown on a
+   * frozen event, where it may have moved since close.
    */
   expectedSource: ExpectedSource;
+  /** `expectedSource`'s counterpart for the personnel side, in the same vocabulary. */
+  expectedPersonnelSource: ExpectedSource;
   /** The linked pre-registration sessions and their totals; `null` when nothing is linked. */
   preRegistration: EventPreRegistration | null;
 }
@@ -1036,9 +1042,9 @@ export type ExpectedSource = (typeof EXPECTED_SOURCE)[keyof typeof EXPECTED_SOUR
 export interface EventPreRegistrationSession {
   preRegistrationSessionId: string;
   name: string;
-  /** Students pre-registered in this session; these form the event's expected set. */
+  /** Students pre-registered in this session; these form the event's expected students once one counts. */
   preRegisteredStudentCount: number;
-  /** Personnel pre-registered in this session; advisory only, never part of expected. */
+  /** Personnel pre-registered in this session. A display count: it does not by itself decide the expected personnel. */
   advisoryPersonnelCount: number;
 }
 
@@ -1046,6 +1052,7 @@ export interface EventPreRegistrationSession {
 export interface EventPreRegistration {
   linkedSessions: EventPreRegistrationSession[];
   totalPreRegisteredStudentCount: number;
+  /** Distinct personnel registrants across the sessions, any status. A display count, not the expected personnel. */
   totalAdvisoryPersonnelCount: number;
 }
 
@@ -1079,8 +1086,12 @@ export interface EventAudienceResult {
   studentsAlreadyAttached: number;
   definitionsAttached: number;
   definitionsAlreadyAttached: number;
-  /** The expected count *after* this call, so the denominator can move on screen without a re-read. */
+  /** The expected count *after* this call (students plus personnel), so the denominator can move on screen without a re-read. */
   expected: number;
+  /** The students in `expected`. */
+  expectedStudents: number;
+  /** The personnel in `expected`. */
+  expectedPersonnel: number;
   /**
    * Non-fatal observations, empty on the ordinary case. A group from a non-current term **warns
    * rather than refuses** (ADR-003, Accepted Context), and this array is the only place that says so
@@ -1098,12 +1109,35 @@ export interface EventAudienceResult {
  */
 export type AttendanceStatus = "Present" | "Late" | "Absent" | "Excused";
 
+/** `AttendanceDtoV2.personType` (ADR-015 D-99): who an attendance record belongs to. */
+export const PERSON_TYPE = {
+  Student: "Student",
+  Personnel: "Personnel",
+} as const;
+
+export type PersonType = (typeof PERSON_TYPE)[keyof typeof PERSON_TYPE];
+
+/**
+ * One attendance record (`AttendanceDtoV2`). A personnel record carries no `student*` fields and a
+ * student record carries no `personnel*` ones; `personType` says which, so nothing infers it from
+ * which fields happen to be present.
+ */
 export interface AttendanceRecord {
   id: string;
   eventId: string;
-  studentId: string;
-  studentName: string;
-  studentNumber: string;
+  /** Absent on a personnel record. */
+  studentId?: string;
+  /** Absent on a personnel record. */
+  studentName?: string;
+  /** Absent on a personnel record. */
+  studentNumber?: string;
+  personType: PersonType;
+  /** Absent on a student record. */
+  personnelId?: string;
+  /** Absent on a student record. */
+  personnelNumber?: string;
+  /** Absent on a student record. */
+  personnelName?: string;
   checkInAt?: string;
   checkOutAt?: string;
   status: string; // one of AttendanceStatus above; `string` on the wire
@@ -1506,7 +1540,12 @@ export interface SisImportRunRequest {
 export interface EventSummary {
   eventId: string;
   eventName: string;
+  /** The invited population, students plus personnel (ADR-015 D-102). It already is the total. */
   expected: number;
+  /** The students in `expected`. */
+  expectedStudents: number;
+  /** The personnel in `expected`. */
+  expectedPersonnel: number;
   present: number;
   late: number;
   absent: number;
@@ -1537,8 +1576,13 @@ export interface EventReportRow {
   status: string;
   /** When it starts, UTC ISO. */
   startAt: string;
+  /** The invited population, students plus personnel (ADR-015 D-102). */
   expected: number;
-  /** Expected students with a `Present` or `Late` record — the numerator of `attendanceRate`. */
+  /** The students in `expected`. */
+  expectedStudents: number;
+  /** The personnel in `expected`. */
+  expectedPersonnel: number;
+  /** Expected attendees (students and personnel) with a `Present` or `Late` record — the numerator of `attendanceRate`. */
   attended: number;
   present: number;
   late: number;
@@ -1639,8 +1683,12 @@ export interface EventScan {
   /** The device's idempotency key, where it sent one. */
   deviceTapId?: string;
   deviceId?: string;
-  /** What the server decided. `CardNotFound` today. */
+  /** What the server decided: `CardNotFound`, `PersonnelInactive` or `PersonnelNotInAudience`. */
   serverOutcome: string;
+  /** The personnel member the card resolved to when the tap was refused anyway (D-100). An id only, never a name. */
+  personnelId?: string;
+  /** Why a resolved card produced no row, e.g. `PersonnelClientNotCapable`. Absent otherwise. */
+  reason?: string;
   /**
    * What the *device* claimed, verbatim and often absent. Never authoritative — its value is in
    * disagreeing with `serverOutcome`, which points at a stale manifest, a sync that never ran, or a

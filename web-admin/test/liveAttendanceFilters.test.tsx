@@ -83,6 +83,8 @@ const SUMMARY_JSON = {
   eventId: EVENT_ID,
   eventName: "Freshman Orientation",
   expected: 4,
+  expectedStudents: 4,
+  expectedPersonnel: 0,
   present: 3,
   late: 0,
   absent: 0,
@@ -99,8 +101,10 @@ const AUDIENCE_JSON = {
   groups: [],
   students: [],
   definitions: [],
-  advisoryPersonnelCount: 0,
+  expectedStudents: 4,
+  expectedPersonnel: 0,
   expectedSource: "Audience",
+  expectedPersonnelSource: "Audience",
   preRegistration: null,
 };
 
@@ -178,6 +182,10 @@ const toAttendanceDto = (row: Row) => ({
   checkOutAt: null,
   status: row.status,
   captureMethod: "Rfid",
+  personType: "Student",
+  personnelId: null,
+  personnelNumber: null,
+  personnelName: null,
 });
 
 /** Server-side "contains", case-insensitive — a stand-in for `StudentService`'s fragment match. */

@@ -9,13 +9,14 @@
 // already have been applied is a duplicate the UI causes. One taxonomy, read from one place, is what
 // stops both.
 
-import { ApiError } from "./api";
+import { ApiError, WRITE_LOCK_UNAVAILABLE, tryAgainText } from "./api";
 
 // Statuses this UI actually reacts to. Named so the branch reads as a decision rather than as
 // arithmetic, and so nobody has to remember which side of 500 the comparison is on.
 const HTTP_UNAUTHORIZED = 401;
 const HTTP_FORBIDDEN = 403;
 const HTTP_TOO_MANY_REQUESTS = 429;
+const HTTP_SERVICE_UNAVAILABLE = 503;
 const HTTP_SERVER_ERROR_FLOOR = 500;
 
 /**
@@ -26,7 +27,10 @@ const HTTP_SERVER_ERROR_FLOOR = 500;
  *
  * `"may-duplicate"` — the request may already have been applied and this client cannot tell. A retry
  * might succeed and might create a second row. `POST /events` carries no idempotency key, so there is
- * nothing to make the second send a no-op. **Do not render a one-click retry for this.**
+ * nothing to make the second send a no-op. **Do not render a one-click retry for this.** The one
+ * exception is a resend the SERVER declared safe (`503 WriteLockUnavailable`, ADR-015 D-98): there the
+ * outcome may still be `"unknown"` (an import commits part-way) yet `retryable` is `"safe"`, because
+ * every route that takes the lock upserts or converges.
  *
  * `false` — retrying provably cannot help. Note it does not say the request was harmless: a write that
  * failed `malformed` was answered with a 2xx, so the server accepted it and a second send could still
@@ -62,6 +66,8 @@ export interface Guidance {
 
 /** Said in one place, because it is the instruction that replaces "then retry" on every write. */
 const CHECK_FIRST = "Check the list before sending it again.";
+
+const BUSY_BEFORE_WAIT = "The server was busy with another change to the same card, so this did not finish.";
 
 /**
  * What the user can do about it, chosen from the machine-readable side of the error only —
@@ -142,6 +148,25 @@ export function advise(error: unknown): Guidance {
       };
 
     case "http":
+      if (error.status === HTTP_SERVICE_UNAVAILABLE && error.code === WRITE_LOCK_UNAVAILABLE) {
+        // Keyed on the code as well as the status, deliberately: a bare 503 is a proxy or a restarting
+        // host and proves nothing about what was applied, so it keeps the 5xx arm below. This one is
+        // the server saying another change to the same card held the lock. Personnel create/update and
+        // adding a student's card are one transaction and wrote nothing (`"none"`). The two import
+        // routes mark themselves (`mayCommitPartially`): they commit part-way, so earlier rows may be
+        // saved (`"unknown"`). Every route upserts or converges, so resending is `"safe"` either way.
+        const partial = write && error.mayCommitPartially;
+        return {
+          message:
+            `${BUSY_BEFORE_WAIT} ${tryAgainText(error.retryAfterSeconds)} ` +
+            (partial
+              ? "Rows before the busy one may already be saved. "
+              : "Nothing was saved. ") +
+            "Sending the same request again is safe.",
+          retryable: "safe",
+          serverEffect: partial ? "unknown" : "none",
+        };
+      }
       if (error.status >= HTTP_SERVER_ERROR_FLOOR) {
         // A 500 raised *after* the row committed is the same fact pattern as a connection reset: the
         // status says the server failed, not that it did nothing.

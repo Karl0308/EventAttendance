@@ -42,6 +42,7 @@ import {
   NAME_TAKEN,
   NO_AUDIENCE_ERRORS,
   NO_SCHOOL_TO_FILE_UNDER,
+  SCOPE_COUNTING_HINT,
   VALIDATED_AUDIENCE_FIELDS,
   draftFromAudience,
   draftWithAudienceType,
@@ -437,6 +438,11 @@ function ScopeSelect({
   onChange: (scope: AudienceScope) => void;
 }) {
   const labelId = `${id}-label`;
+  const helperId = `${id}-helper`;
+  // The refusal wins the slot: a form that cannot be saved has one thing to say, and the hint returns
+  // the moment a scope is chosen. `value` is `""` until then, which indexes nothing.
+  const hint = value === "" ? undefined : SCOPE_COUNTING_HINT[value];
+  const helper = error ?? hint;
   return (
     <FormControl fullWidth required error={error !== undefined}>
       <InputLabel id={labelId}>Who it covers</InputLabel>
@@ -447,6 +453,7 @@ function ScopeSelect({
         value={value}
         onBlur={onBlur}
         onChange={(e) => onChange(e.target.value as AudienceScope)}
+        SelectDisplayProps={helper === undefined ? undefined : { "aria-describedby": helperId }}
       >
         {AUDIENCE_SCOPES.map((s) => (
           <MenuItem key={s.value} value={s.value}>
@@ -454,7 +461,7 @@ function ScopeSelect({
           </MenuItem>
         ))}
       </Select>
-      {error !== undefined && <FormHelperText>{error}</FormHelperText>}
+      {helper !== undefined && <FormHelperText id={helperId}>{helper}</FormHelperText>}
     </FormControl>
   );
 }

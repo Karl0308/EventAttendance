@@ -29,7 +29,7 @@ import {
   FROZEN_STUDENTS_ELSEWHERE,
   NO_AUDIENCE_EVER,
   NO_AUDIENCE_YET,
-  advisoryPersonnelText,
+  expectedPersonnelText,
   attachSettledText,
   audienceEditability,
   audienceListsState,
@@ -66,6 +66,8 @@ const NOTHING_HAPPENED: EventAudienceResult = {
   definitionsAttached: 0,
   definitionsAlreadyAttached: 0,
   expected: 0,
+  expectedStudents: 0,
+  expectedPersonnel: 0,
   warnings: [],
 };
 
@@ -147,16 +149,22 @@ describe("a 409 is not an ordinary 4xx", () => {
 });
 
 describe("what one attach did", () => {
-  it("reports an ordinary attach", () => {
-    const text = attachSettledText(resultOf({ groupsAttached: 2, expected: 84 }));
+  // Deliberately updated (F1-3, ADR-015 D-102): this used to expect "84 students are now expected",
+  // counting students alone. Behaviour changed: the sentence now states students, personnel and the total.
+  it("says how many students and personnel are now expected after an attach", () => {
+    const text = attachSettledText(
+      resultOf({ groupsAttached: 2, expected: 99, expectedStudents: 84, expectedPersonnel: 15 }),
+    );
     expect(text).toContain("2 sections attached");
-    expect(text).toContain("84 students are now expected");
+    expect(text).toContain("Now expected: 84 students · 15 personnel · 99 total.");
   });
 
+  // Deliberately updated (F1-3): the singular case used to end "1 student is now expected." and now
+  // ends with the three-figure breakdown, so it reads "1 student · 0 personnel · 1 total".
   it("says one section, not 1 sections", () => {
-    expect(attachSettledText(resultOf({ groupsAttached: 1, expected: 1 }))).toBe(
-      "1 section attached. 1 student is now expected.",
-    );
+    expect(
+      attachSettledText(resultOf({ groupsAttached: 1, expected: 1, expectedStudents: 1 })),
+    ).toBe("1 section attached. Now expected: 1 student · 0 personnel · 1 total.");
   });
 
   it("reads a fully-idempotent re-post as already there, never as a failure", () => {
@@ -201,7 +209,9 @@ describe("what one attach did", () => {
       resultOf({ groupsAttached: 1, expected: 7 }),
       resultOf({ groupsAlreadyAttached: 1, expected: 7 }),
     ]) {
-      expect(attachSettledText(result)).toContain(`now expected`);
+      // Deliberately updated (F1-3): the phrase moved to the front ("Now expected: …"), so it is matched
+      // case-insensitively. What is pinned is unchanged: every outcome states the resulting expected.
+      expect(attachSettledText(result)).toMatch(/now expected/i);
     }
   });
 });
@@ -249,8 +259,10 @@ describe("what the panel's body should be", () => {
     groups: [],
     students: [],
     definitions: [],
-    advisoryPersonnelCount: 0,
+    expectedStudents: 0,
+    expectedPersonnel: 0,
     expectedSource: "Audience",
+    expectedPersonnelSource: "Audience",
     preRegistration: null,
     ...patch,
   });
@@ -379,8 +391,10 @@ describe("audience definitions beside sections", () => {
     groups: [],
     students: [],
     definitions: [],
-    advisoryPersonnelCount: 0,
+    expectedStudents: 0,
+    expectedPersonnel: 0,
     expectedSource: "Audience",
+    expectedPersonnelSource: "Audience",
     preRegistration: null,
     ...patch,
   });
@@ -411,8 +425,12 @@ describe("audience definitions beside sections", () => {
     );
   });
 
-  it("states the advisory as not counted in expected, and names what a remove button removes", () => {
-    expect(advisoryPersonnelText(7)).toBe("7 personnel eligible — not counted in expected");
+  // Deliberately updated (F1-3, ADR-015 D-102): this used to pin "7 personnel eligible — not counted in
+  // expected". Behaviour changed: personnel ARE counted, so the line states them as a count of the
+  // expected audience and must never say "not counted" again.
+  it("states the definitions' personnel as a count, never as not counted, and names what a remove button removes", () => {
+    expect(expectedPersonnelText(7)).toBe("7 personnel in the expected audience");
+    expect(expectedPersonnelText(0)).not.toMatch(/not counted/i);
     expect(removeDefinitionLabel("All Freshmen")).toContain("All Freshmen");
   });
 });

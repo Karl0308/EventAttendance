@@ -8,9 +8,9 @@
 // The two things this panel must not let a reader believe
 // ---------------------------------------------------------------------------------------------
 //
-// 1. **That personnel are part of the expected number.** The denominator counts students. The
-//    definitions may also resolve to personnel, and that figure is an advisory, printed in its own
-//    labelled line inside this card rather than folded into the chip on the sections card.
+// 1. **That personnel are left out of the expected number.** The denominator is students plus
+//    personnel (ADR-015 D-102). The definitions may resolve to personnel, and the card states how many
+//    are in the expected audience, in the same terms as the chip on the sections card.
 //
 // 2. **That an empty picker is a fault.** Definitions are filtered by the event's classification, so an
 //    unclassified event has nothing to offer by design. Saying so beats an empty dropdown.
@@ -35,7 +35,7 @@ import { advise } from "../apiGuidance";
 import {
   AUDIENCE_LOCKED_ELSEWHERE,
   NO_CLASSIFICATION_HINT,
-  advisoryPersonnelText,
+  expectedPersonnelText,
   audienceEditability,
   isAudienceLocked,
   removeDefinitionLabel,
@@ -239,10 +239,10 @@ export default function EventAudienceDefinitionsPanel({
             )}
 
             {audience.definitions.length > 0 && (
-              // Its own labelled line, outside any figure that reads as the denominator: personnel are
-              // never in `expected`, and printing this beside the chip would invite adding the two.
+              // Personnel are part of `expected` (ADR-015 D-102), so this states them as a count of the
+              // expected audience, in the same terms as the chip, not as something set apart from it.
               <Typography variant="body2" color="text.secondary" sx={{ mt: 1.5 }}>
-                {advisoryPersonnelText(audience.advisoryPersonnelCount)}
+                {expectedPersonnelText(audience.expectedPersonnel)}
               </Typography>
             )}
           </Box>

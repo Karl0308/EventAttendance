@@ -36,6 +36,9 @@ const HTTP_FORBIDDEN = 403;
 const HTTP_CONFLICT = 409;
 const HTTP_TOO_MANY_REQUESTS = 429;
 const HTTP_SERVER_ERROR = 500;
+const HTTP_SERVICE_UNAVAILABLE = 503;
+/** `ProblemDetails.code` the card-UID write lock answers its 503 with (ADR-015 D-98). */
+const WRITE_LOCK_UNAVAILABLE = "WriteLockUnavailable";
 /** `ApiError.status` when the failure happened before or outside a response. */
 const NO_STATUS = 0;
 
@@ -56,6 +59,16 @@ interface Case {
   readonly label: string;
   readonly kind: ApiErrorKind;
   readonly status: number;
+  /** `ProblemDetails.code`, where the row's meaning depends on it (a 503 is only safe with the right one). */
+  readonly code?: string;
+  /**
+   * True only where the SERVER declared that sending the same request again is safe (503
+   * WriteLockUnavailable). It is the one exemption from "unknown outcome means no plain retry": the
+   * outcome of an import may be partial, but the resend converges, and the server said so.
+   */
+  readonly serverDeclaredSafeResend?: true;
+  /** The two import routes only: they commit part-way, so a lock refusal leaves earlier rows saved. */
+  readonly mayCommitPartially?: true;
   readonly onWrite: Answer;
   readonly onRead: Answer;
 }
@@ -94,6 +107,31 @@ const MATRIX: readonly Case[] = [
     onRead: SAFE,
   },
   { label: "500 server error", kind: "http", status: HTTP_SERVER_ERROR, onWrite: MAY_DUPLICATE, onRead: SAFE },
+  // A bare 503 is a proxy or a restarting host: it proves nothing about what was applied.
+  { label: "503 bare", kind: "http", status: HTTP_SERVICE_UNAVAILABLE, onWrite: MAY_DUPLICATE, onRead: SAFE },
+  // F1-6 (ADR-015 D-98, JJ ruling): the one 5xx where the server itself says "send it again".
+  // FX-2: the three atomic routes (personnel create/update, add student card) wrote nothing, so the
+  // outcome is `none` and the resend `safe` - an ordinary decided refusal.
+  {
+    label: "503 WriteLockUnavailable (atomic route)",
+    kind: "http",
+    status: HTTP_SERVICE_UNAVAILABLE,
+    code: WRITE_LOCK_UNAVAILABLE,
+    onWrite: SAFE,
+    onRead: SAFE,
+  },
+  // The two import routes commit part-way, so the outcome is `unknown` yet the resend is `safe` because
+  // they upsert or converge. Hence `serverDeclaredSafeResend`.
+  {
+    label: "503 WriteLockUnavailable (import route)",
+    kind: "http",
+    status: HTTP_SERVICE_UNAVAILABLE,
+    code: WRITE_LOCK_UNAVAILABLE,
+    mayCommitPartially: true,
+    serverDeclaredSafeResend: true,
+    onWrite: { retryable: "safe", serverEffect: "unknown" },
+    onRead: SAFE,
+  },
   { label: "network failure", kind: "network", status: NO_STATUS, onWrite: MAY_DUPLICATE, onRead: SAFE },
 
   // A timeout is not a kind of its own — `api.ts`'s `timedOut()` raises `kind: "network"` so that
@@ -118,7 +156,12 @@ const MATRIX: readonly Case[] = [
 ];
 
 const errorFor = (testCase: Case, shape: ApiRequestShape): ApiError =>
-  new ApiError(testCase.kind, testCase.status, `${testCase.label} (${shape})`, { shape });
+  new ApiError(testCase.kind, testCase.status, `${testCase.label} (${shape})`, {
+    shape,
+    problem:
+      testCase.code === undefined ? undefined : { status: testCase.status, code: testCase.code },
+    mayCommitPartially: testCase.mayCommitPartially,
+  });
 
 describe.each(MATRIX)("$label", (testCase: Case) => {
   it("on a write", () => {
@@ -148,20 +191,128 @@ describe("across the whole matrix", () => {
     }
   });
 
-  it("never offers a plain retry on a write that may already have been applied", () => {
+  // Deliberately updated (F1-6): this used to cover EVERY write whose outcome is unknown. Behaviour
+  // changed: a resend the server itself declared safe (503 WriteLockUnavailable) is exempt, because that
+  // route set upserts or converges. Every other unknown-outcome write is still withheld, and the 503
+  // rows below pin both sides of the exemption.
+  it("never offers a plain retry on a write that may already have been applied, unless the server declared the resend safe", () => {
     for (const testCase of MATRIX) {
+      if (testCase.serverDeclaredSafeResend) continue;
       const guidance = advise(errorFor(testCase, "write"));
       if (guidance.serverEffect === "unknown") expect(guidance.retryable).not.toBe("safe");
     }
   });
 
-  it("tells the user to check the list on every write whose outcome is unknown", () => {
+  // Deliberately updated (F1-6), for the same exemption: "check the list" contradicts a server saying
+  // "send it again", so a server-declared safe resend says to wait and resend instead.
+  it("tells the user to check the list on every write whose outcome is unknown, unless the server declared the resend safe", () => {
     for (const testCase of MATRIX) {
+      if (testCase.serverDeclaredSafeResend) continue;
       const guidance = advise(errorFor(testCase, "write"));
       if (guidance.serverEffect === "unknown") {
         expect(guidance.message).toContain("Check the list before sending it again.");
       }
     }
+  });
+
+  it("exempts nothing that the server did not declare", () => {
+    // The exemption is a flag on the row, not a property of the status: only the import-route
+    // WriteLockUnavailable row may carry it, so a future 5xx row cannot inherit it by accident.
+    expect(MATRIX.filter((c) => c.serverDeclaredSafeResend).map((c) => c.label)).toEqual([
+      "503 WriteLockUnavailable (import route)",
+    ]);
+  });
+});
+
+describe("503 WriteLockUnavailable: busy, try again, and the resend is safe (F1-6)", () => {
+  // The negative controls for this arm: drop the `code` check and the bare-503 test goes red; ignore
+  // `retryAfterSeconds` and the seconds test goes red.
+  // `mayCommitPartially` defaults to false: the three atomic routes. The import routes pass true.
+  const lockRefusal = (
+    retryAfterSeconds: number | undefined,
+    shape: ApiRequestShape = "write",
+    mayCommitPartially = false,
+  ) =>
+    new ApiError("http", HTTP_SERVICE_UNAVAILABLE, "busy", {
+      shape,
+      problem: { status: HTTP_SERVICE_UNAVAILABLE, code: WRITE_LOCK_UNAVAILABLE, retryAfterSeconds },
+      mayCommitPartially,
+    });
+
+  it("says busy and try again in N seconds, from Retry-After", () => {
+    const guidance = advise(lockRefusal(5));
+
+    expect(guidance.message).toContain("busy");
+    expect(guidance.message).toContain("Try again in 5 seconds.");
+  });
+
+  it("says 1 second, not 1 seconds", () => {
+    expect(advise(lockRefusal(1)).message).toContain("Try again in 1 second.");
+  });
+
+  it("is safe to resend on a write, so the form offers it again", () => {
+    const guidance = advise(lockRefusal(5));
+
+    expect(guidance.retryable).toBe("safe");
+    expect(isResendUnsafe(lockRefusal(5))).toBe(false);
+    // Said as a fact about a retry, not as an instruction to go and check a list first.
+    expect(guidance.message).toContain("Sending the same request again is safe");
+    expect(guidance.message).not.toContain("Check the list");
+  });
+
+  // Deliberately updated (FX-2): this used to cover every lock route, reporting `unknown` and the
+  // "rows before the busy one" clause for all five. Behaviour changed: only the two import routes
+  // (which mark themselves) say so.
+  it("an import route admits earlier rows may be saved, by reporting the outcome as unknown", () => {
+    const guidance = advise(lockRefusal(5, "write", true));
+
+    expect(guidance.serverEffect).toBe("unknown");
+    expect(guidance.message).toContain("Rows before the busy one may already be saved.");
+    expect(guidance.message).not.toContain("Nothing was saved");
+  });
+
+  it("an atomic route says nothing was saved, so its heading is 'not applied' and no import clause appears", () => {
+    const guidance = advise(lockRefusal(5));
+
+    expect(guidance.serverEffect).toBe("none");
+    expect(guidance.message).toContain("Nothing was saved.");
+    expect(guidance.message).not.toMatch(/import|Rows before/);
+    expect(guidance.retryable).toBe("safe");
+  });
+
+  it("leaves a bare 503 as may-duplicate: a 503 is not safe without the code", () => {
+    const bare = new ApiError("http", HTTP_SERVICE_UNAVAILABLE, "down", {
+      shape: "write",
+      problem: { status: HTTP_SERVICE_UNAVAILABLE, retryAfterSeconds: 5 },
+    });
+
+    expect(advise(bare).retryable).toBe("may-duplicate");
+    expect(isResendUnsafe(bare)).toBe(true);
+    // A Retry-After alone does not make it the lock: no "busy, try again" claim is made.
+    expect(advise(bare).message).not.toContain("Try again in");
+    expect(advise(bare).message).toContain("Check the list before sending it again.");
+  });
+
+  it("leaves a 503 with some other code as may-duplicate", () => {
+    const other = new ApiError("http", HTTP_SERVICE_UNAVAILABLE, "down", {
+      shape: "write",
+      problem: { status: HTTP_SERVICE_UNAVAILABLE, code: "SomethingElse", retryAfterSeconds: 5 },
+    });
+
+    expect(advise(other).retryable).toBe("may-duplicate");
+  });
+
+  it("falls back to 'try again shortly' when Retry-After is missing or not a number", () => {
+    // `readProblem` turns anything but whole seconds ("soon", an HTTP-date) into `undefined` (pinned in
+    // personnelContractApi.test.ts), so what reaches `advise` for either is exactly this.
+    const guidance = advise(lockRefusal(undefined));
+
+    expect(guidance.message).toContain("Try again shortly.");
+    expect(guidance.message).not.toMatch(/\d+ seconds?/);
+  });
+
+  it("changes nothing on a read", () => {
+    expect(advise(lockRefusal(5, "read")).serverEffect).toBe("none");
   });
 });
 

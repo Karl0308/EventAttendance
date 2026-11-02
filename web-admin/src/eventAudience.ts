@@ -113,6 +113,28 @@ export const AUDIENCE_LOCKED_ELSEWHERE =
 /** English, for counts small enough that a rule beats a table. */
 const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
 
+/** The three figures every expected-audience read carries (`expected` is the total, never a part). */
+interface ExpectedCounts {
+  expected: number;
+  expectedStudents: number;
+  expectedPersonnel: number;
+}
+
+/**
+ * "120 students · 15 personnel · 135 total" (ADR-015 D-102, W1). `0 personnel` is printed, never
+ * dropped: an absent figure reads as "not counted", which is the very thing D-102 retired. "personnel"
+ * has no plural form to inflect.
+ */
+export const expectedBreakdownText = ({ expected, expectedStudents, expectedPersonnel }: ExpectedCounts) =>
+  `${expectedSplitText({ expectedStudents, expectedPersonnel })} · ${expected} total`;
+
+/** The two parts without the total ("1 student · 1 personnel"), for a cell that already shows the total. */
+export const expectedSplitText = ({
+  expectedStudents,
+  expectedPersonnel,
+}: Pick<ExpectedCounts, "expectedStudents" | "expectedPersonnel">) =>
+  `${plural(expectedStudents, "student", "students")} · ${expectedPersonnel} personnel`;
+
 /**
  * What to tell the organizer after an attach — and the whole job is that **"already attached" reads
  * as already there, not as a failure.**
@@ -124,7 +146,8 @@ const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one :
  * would have them undoing a save that worked.
  *
  * `expected` is stated because it is the number the whole panel is about, and it comes back on the
- * write specifically so the denominator can move on screen without a follow-up read.
+ * write specifically so the denominator can move on screen without a follow-up read. It is stated as
+ * students plus personnel (ADR-015 D-102), because both are in the denominator now.
  */
 export function attachSettledText(result: EventAudienceResult): string {
   const attached = result.groupsAttached + result.studentsAttached + result.definitionsAttached;
@@ -154,7 +177,7 @@ export function attachSettledText(result: EventAudienceResult): string {
   }
   if (parts.length === 0) parts.push("Nothing was attached.");
 
-  return `${parts.join(" ")} ${plural(result.expected, "student is", "students are")} now expected.`;
+  return `${parts.join(" ")} Now expected: ${expectedBreakdownText(result)}.`;
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -279,12 +302,11 @@ export const removeDefinitionLabel = (name: string) =>
   `Remove audience definition ${name} from this event's audience`;
 
 /**
- * The advisory line for the personnel the attached definitions resolve to. **They are not in the
- * expected count** — the denominator counts students only — so the sentence says so rather than
- * leaving a reader to add it to the chip beside it. "personnel" has no plural form to inflect.
+ * The line for the personnel in the event's expected audience. They are counted (ADR-015 D-102): the
+ * denominator is students plus personnel, so this is a part of the chip beside it and says so.
+ * "personnel" has no plural form to inflect.
  */
-export const advisoryPersonnelText = (count: number) =>
-  `${count} personnel eligible — not counted in expected`;
+export const expectedPersonnelText = (count: number) => `${count} personnel in the expected audience`;
 
 /** Why the definition picker cannot offer anything: the options are filtered by the event's classification. */
 export const NO_CLASSIFICATION_HINT =

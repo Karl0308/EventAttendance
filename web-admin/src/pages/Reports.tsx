@@ -50,6 +50,7 @@ import { useApiResource } from "../useApiResource";
 import { useApiMutation } from "../useApiMutation";
 import { EmptyState, ErrorState, LoadingState } from "../components/ResourceStates";
 import { advise } from "../apiGuidance";
+import { expectedSplitText } from "../eventAudience";
 import { MAX_REPORT_EVENTS } from "../types";
 import type { EventItem, MultiEventReport } from "../types";
 
@@ -340,6 +341,10 @@ function ReportError({
  * Rates are rendered exactly as the server sent them (`.toFixed(1)` on a number the server already
  * rounded to one decimal place, never a client-side division): `EventReportTotalsDto.attendanceRate`
  * is pooled, not averaged, and is not reproducible by re-deriving it from the rows a second way.
+ *
+ * `expected` counts students plus personnel (ADR-015 D-102), and so do `attended` and the rate. Each
+ * row shows its own split. The pooled totals carry none, so the combined row's split is the sum of the
+ * rows' splits while its total and rate stay the server's figures, never recomputed here.
  */
 function ReportResult({ report }: { report: MultiEventReport }) {
   return (
@@ -371,7 +376,14 @@ function ReportResult({ report }: { report: MultiEventReport }) {
               <Cell>{row.eventName}</Cell>
               <Cell>{new Date(row.startAt).toLocaleString()}</Cell>
               <Cell>{row.status}</Cell>
-              <Cell align="right">{row.expected}</Cell>
+              <Cell align="right">
+                {row.expected}
+                {/* The split behind the number (ADR-015 D-102): `expected` is already the total, so
+                    this is a breakdown beside it and is never added to it. */}
+                <Box component="span" sx={{ display: "block", fontWeight: 400, fontSize: "0.75rem", color: "text.secondary" }}>
+                  {expectedSplitText(row)}
+                </Box>
+              </Cell>
               <Cell align="right">{row.attended}</Cell>
               <Cell align="right">{row.present}</Cell>
               <Cell align="right">{row.late}</Cell>
@@ -392,7 +404,18 @@ function ReportResult({ report }: { report: MultiEventReport }) {
               <Cell header colSpan={3}>
                 Combined across {report.totals.eventCount} selected events
               </Cell>
-              <Cell align="right">{report.totals.expected}</Cell>
+              <Cell align="right">
+                {report.totals.expected}
+                {/* The total stays the server's number. Only the split beneath it is summed here, from
+                    the rows: `EventReportTotalsDto.Expected` is documented as the sum of each event's
+                    expected, so the two parts add up to it by the server's own definition. */}
+                <Box component="span" sx={{ display: "block", fontWeight: 400, fontSize: "0.75rem", color: "text.secondary" }}>
+                  {expectedSplitText({
+                    expectedStudents: report.events.reduce((sum, row) => sum + row.expectedStudents, 0),
+                    expectedPersonnel: report.events.reduce((sum, row) => sum + row.expectedPersonnel, 0),
+                  })}
+                </Box>
+              </Cell>
               <Cell align="right">{report.totals.attended}</Cell>
               <Cell align="right">{report.totals.present}</Cell>
               <Cell align="right">{report.totals.late}</Cell>
@@ -412,7 +435,7 @@ const HEADERS = [
   "Event",
   "Starts",
   "Status",
-  "Expected",
+  "Expected (students + personnel)",
   "Attended",
   "Present",
   "Late",
