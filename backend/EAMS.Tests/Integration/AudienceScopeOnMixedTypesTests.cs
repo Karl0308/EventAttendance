@@ -353,9 +353,12 @@ public class AudienceScopeOnMixedTypesTests : IntegrationTest
             $"Expected no scope, read back {criteria}.");
     }
 
-    /// <summary>Through the event path: an Employees-scoped definition is advisory-only (ADR-007 D-70).</summary>
+    /// <summary>
+    /// Through the event path: an Employees-scoped definition adds only its personnel to the denominator
+    /// (ADR-015 D-102), and its mask still keeps every student out.
+    /// </summary>
     [Fact]
-    public async Task An_employees_scoped_definition_adds_nobody_to_the_event_denominator()
+    public async Task An_employees_scoped_definition_adds_only_personnel_to_the_event_denominator()
     {
         var world = await ArrangeAsync();
         using var factory = new EamsApiFactory(Sql.ConnectionString);
@@ -383,10 +386,9 @@ public class AudienceScopeOnMixedTypesTests : IntegrationTest
 
         await using var read = NewDbContext();
         var audience = await EventsOn(read).GetAudienceAsync(eventId);
-        Assert.Equal(0, audience!.Expected);
-        Assert.Equal(2, audience.AdvisoryPersonnelCount);
+        Assert.Equal((2, 0, 2), (audience!.Expected, audience.ExpectedStudents, audience.ExpectedPersonnel));
 
         await using var summaryDb = NewDbContext();
-        Assert.Equal(0, (await EventsOn(summaryDb).GetSummaryAsync(eventId))!.Expected);
+        Assert.Equal(2, (await EventsOn(summaryDb).GetSummaryAsync(eventId))!.Expected);
     }
 }

@@ -13,7 +13,7 @@ namespace EAMS.Tests.Integration;
 /// <summary>
 /// ADR-011 D-82: an Organization audience matches STUDENTS as well as personnel, with one predicate, in the
 /// one matcher (<c>AudienceResolution.BuildQueries</c>), so the resolve read, the live denominator, the
-/// terminal freeze and the manifest all follow. Personnel stay advisory (ADR-007 D-70).
+/// terminal freeze and the manifest all follow. Personnel count beside them (ADR-015 D-102).
 ///
 /// <para>
 /// This class REPLACES the three <c>Today_</c> pins that <see cref="OrganizationMeaningPinTests"/> carried
@@ -195,12 +195,12 @@ public class OrganizationAudienceStudentTests : IntegrationTest
     }
 
     /// <summary>
-    /// Through the real event path (ADR-007 D-70): an event whose ONLY audience is the Organization
-    /// definition expects its two students, and the two personnel appear only as advisory. The audience
-    /// read, the summary and the roster agree on the denominator.
+    /// Through the real event path (ADR-015 D-102): an event whose ONLY audience is the Organization
+    /// definition expects its two students and its two personnel. The audience read, the summary and the
+    /// roster agree on the denominator.
     /// </summary>
     [Fact]
-    public async Task An_event_with_an_organization_definition_counts_its_students_and_reports_personnel_as_advisory()
+    public async Task An_event_with_an_organization_definition_counts_its_students_and_its_personnel()
     {
         var world = await ArrangeAsync();
         await SeedRostersAsync(world.SchoolId);
@@ -209,15 +209,15 @@ public class OrganizationAudienceStudentTests : IntegrationTest
         await using var read = NewDbContext();
         var audience = await EventsOn(read).GetAudienceAsync(eventId);
 
-        Assert.Equal(2, audience!.Expected);               // S-1 and S-2: students are the denominator
-        Assert.Equal(2, audience.AdvisoryPersonnelCount);  // EMP-A and EMP-B: surfaced, not counted
+        // S-1 and S-2, plus EMP-A and EMP-B.
+        Assert.Equal((4, 2, 2), (audience!.Expected, audience.ExpectedStudents, audience.ExpectedPersonnel));
         Assert.Equal(2, Assert.Single(audience.Definitions).PersonnelCount);
 
         await using var summaryDb = NewDbContext();
-        Assert.Equal(2, (await EventsOn(summaryDb).GetSummaryAsync(eventId))!.Expected);
+        Assert.Equal(4, (await EventsOn(summaryDb).GetSummaryAsync(eventId))!.Expected);
 
         await using var rosterDb = NewDbContext();
-        Assert.Equal(2, (await EventsOn(rosterDb).GetRosterAsync(eventId))!.Expected);
+        Assert.Equal(4, (await EventsOn(rosterDb).GetRosterAsync(eventId))!.Expected);
     }
 
     /// <summary>
@@ -285,7 +285,7 @@ public class OrganizationAudienceStudentTests : IntegrationTest
         var (eventId, _) = await ArrangeEventWithOrganizationDefinitionAsync(world);
 
         await using (var read = NewDbContext())
-            Assert.Equal(2, (await EventsOn(read).GetSummaryAsync(eventId))!.Expected); // S-5 already excluded
+            Assert.Equal(2, (await EventsOn(read).GetSummaryAsync(eventId))!.ExpectedStudents); // S-5 already excluded
 
         await using (var db = NewDbContext())
         {
@@ -294,7 +294,7 @@ public class OrganizationAudienceStudentTests : IntegrationTest
         }
 
         await using var after = NewDbContext();
-        Assert.Equal(1, (await EventsOn(after).GetSummaryAsync(eventId))!.Expected);
+        Assert.Equal(1, (await EventsOn(after).GetSummaryAsync(eventId))!.ExpectedStudents);
     }
 
     // ===================================================================================== options
@@ -391,7 +391,7 @@ public class OrganizationAudienceStudentTests : IntegrationTest
 
     /// <summary>
     /// Closing freezes the students an Organization definition reached: an <c>Absent</c> row for each (none
-    /// tapped), none for personnel. The freeze resolves WITH soft-deleted students (ADR-003 D-15, restated
+    /// tapped), and for its personnel too (ADR-015 D-97). The freeze resolves WITH soft-deleted students (ADR-003 D-15, restated
     /// by ADR-007), so the world's soft-deleted CICT student S-5 is frozen too although the live
     /// denominator excluded it: a student deleted before the close is not retroactively dropped from a past
     /// event. AFTER the close, a student moves into the organization and another leaves it, and the frozen
@@ -414,7 +414,9 @@ public class OrganizationAudienceStudentTests : IntegrationTest
         {
             var frozen = await read.AttendanceRecords.AsNoTracking().Where(a => a.EventId == eventId).ToListAsync();
             var names = students.ToDictionary(kv => kv.Value, kv => kv.Key);
-            Assert.Equal(["S-1", "S-2", "S-5"], frozen.Select(a => names[Assert.NotNull(a.StudentId)]).Order().ToList());
+            Assert.Equal(["S-1", "S-2", "S-5"],
+                frozen.Where(a => a.StudentId != null).Select(a => names[a.StudentId!.Value]).Order().ToList());
+            Assert.Equal(2, frozen.Count(a => a.PersonnelId != null)); // EMP-A and EMP-B
             Assert.All(frozen, a => Assert.Equal(AttendanceStatus.Absent, a.Status));
         }
 
@@ -429,9 +431,9 @@ public class OrganizationAudienceStudentTests : IntegrationTest
 
         await using var after = NewDbContext();
         var records = await after.AttendanceRecords.AsNoTracking().Where(a => a.EventId == eventId).ToListAsync();
-        Assert.Equal(3, records.Count);                                   // S-LATE added nothing
+        Assert.Equal(5, records.Count);                                   // S-LATE added nothing
         Assert.Contains(records, r => r.StudentId == students["S-1"]);   // still counted though they left
-        Assert.Equal(3, (await EventsOn(after).GetSummaryAsync(eventId))!.Expected);
+        Assert.Equal(5, (await EventsOn(after).GetSummaryAsync(eventId))!.Expected);
     }
 
     /// <summary>

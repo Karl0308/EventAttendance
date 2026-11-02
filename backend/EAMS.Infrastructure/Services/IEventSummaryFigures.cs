@@ -36,21 +36,22 @@ internal interface IEventSummaryFigures
 }
 
 /// <summary>
-/// A summary plus the numerator of its rate: expected students with a <c>Present</c> or <c>Late</c>
-/// record. Internal, and never serialized — the public contract stays <see cref="EventSummaryDto"/>.
+/// A summary plus the numerator of its rate: expected students and expected personnel with a
+/// <c>Present</c> or <c>Late</c> record (ADR-015 D-102). Internal, and never serialized — the public
+/// contract stays <see cref="EventSummaryDto"/>.
 /// </summary>
 /// <param name="Summary">The figures <c>GET /events/{id}/summary</c> publishes.</param>
 /// <param name="Attended">The numerator of <see cref="EventSummaryDto.AttendanceRate"/>.</param>
 internal readonly record struct EventSummaryFigures(EventSummaryDto Summary, int Attended)
 {
     /// <summary>
-    /// <c>(invited students who attended) / (invited students)</c>, to one decimal place — the one
+    /// <c>(invited people who attended) / (invited people)</c>, to one decimal place — the one
     /// rounding rule for every rate this API publishes, per event and pooled.
     ///
     /// <para>
-    /// <b>The numerator is a count of people drawn from the denominator's own set</b>, produced by
-    /// <c>Intersect</c> — SQL <c>INTERSECT</c>, distinct on both sides — so it cannot exceed
-    /// <paramref name="expected"/> however many rows exist or how they are shaped. That is why there is
+    /// <b>The numerator is a count of people drawn from the denominator's own sets</b>, one population at
+    /// a time, produced by <c>Intersect</c> — SQL <c>INTERSECT</c>, distinct on both sides — so it cannot
+    /// exceed <paramref name="expected"/> however many rows exist or how they are shaped. That is why there is
     /// no clamp here: a <c>Math.Min</c> would have capped a number that was still being computed wrongly
     /// and hidden the walk-ins that made it wrong. They are reported separately instead.
     /// </para>

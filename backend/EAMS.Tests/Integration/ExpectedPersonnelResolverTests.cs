@@ -113,7 +113,7 @@ public class ExpectedPersonnelResolverTests : IntegrationTest
     private async Task<bool> GovernsAsync(World world)
     {
         await using var db = NewDbContext();
-        return await ExpectedPersonnel.PreRegistrationGovernsAsync(db, world.EventId, world.SchoolId, default);
+        return await PreRegistrationSelector.GovernsPersonnelAsync(db, world.EventId, world.SchoolId, default);
     }
 
     // ------------------------------------------------------------------------------ audience only

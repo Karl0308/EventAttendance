@@ -342,11 +342,11 @@ public interface IEventService
     /// §6.3 <c>PATCH /events/{id}/status</c> — Open / Close / Cancel.
     ///
     /// <para>
-    /// <b>The transition to <c>Closed</c> materializes the expected roster</b>: every expected student
-    /// with no attendance record gets one, <c>Absent</c> / <c>Import</c>. That is what fixes the
-    /// denominator and the absentee list in place, so no later roster import can move a past event's
-    /// numbers. Idempotent by construction — <c>UNIQUE(EventId, StudentId, OccurrenceId)</c> — and
-    /// skipped entirely when the event is already <c>Closed</c>.
+    /// <b>The transition to <c>Closed</c> materializes the expected roster</b>: every expected student and
+    /// personnel member with no attendance record gets one, <c>Absent</c> / <c>Import</c>. That is what fixes
+    /// the denominator and the absentee list in place, so no later roster import can move a past event's
+    /// numbers. Idempotent by construction — a unique index per population — and skipped entirely when the
+    /// event is already <c>Closed</c>.
     /// </para>
     /// </summary>
     Task<EventWriteResponse> ChangeStatusAsync(
@@ -414,10 +414,10 @@ public interface IEventService
 
     /// <summary>
     /// <c>POST /events/{eventId}/pre-registration/sessions</c> — link an existing pre-registration session
-    /// to this event (ADR-008 D-71/D-73). A linked session REPLACES the section + definition union as the
-    /// expected set; the attached sections/definitions are kept but not resolved while linked, so unlinking
-    /// restores them with no data loss. N:1 — an event may have many linked sessions; a session links to at
-    /// most one event.
+    /// to this event (ADR-008 D-71/D-73). A linked session REPLACES a population of the expected set only
+    /// when it holds a countable registrant from that population (ADR-015 D-103); the attached
+    /// sections/definitions are kept, so unlinking restores them with no data loss. N:1 — an event may have
+    /// many linked sessions; a session links to at most one event.
     ///
     /// <para>
     /// Refused on a terminal event (<see cref="EventWriteOutcome.EventLocked"/>, 409), mirroring the

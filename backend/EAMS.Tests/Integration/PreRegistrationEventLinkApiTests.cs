@@ -10,10 +10,11 @@ using Xunit;
 namespace EAMS.Tests.Integration;
 
 /// <summary>
-/// Task 2 Phase 3 (ADR-008 D-71..D-75): a pre-registration session links to an event and REPLACES the
-/// section + definition union as the expected audience; the link is reversible; linking/unlinking is
-/// refused once the event is terminal; the student registrants drive the denominator and freeze with it,
-/// while personnel are an advisory count; and the audience read publishes the source and the counts.
+/// Task 2 Phase 3 (ADR-008 D-71..D-75, as amended by ADR-015 D-103): a pre-registration session links to an
+/// event and REPLACES the section + definition union per population, for each population it holds a
+/// countable registrant from; the link is reversible; linking/unlinking is refused once the event is
+/// terminal; the registrants drive the denominator and freeze with it; and the audience read publishes the
+/// sources and the counts. <see cref="PreRegistrationPerPopulationTests"/> holds D-103's named tests.
 ///
 /// <para>
 /// The STANDARD set over real HTTP (sign in with <see cref="IntegrationTest.SignedInClientAsync(Microsoft.AspNetCore.Mvc.Testing.WebApplicationFactory{Program}, string)"/>,
@@ -309,7 +310,7 @@ public class PreRegistrationEventLinkApiTests : IntegrationTest
     // ------------------------------------------------------------------- count accuracy + N:1 dedupe
 
     [Fact]
-    public async Task Counts_dedupe_across_many_linked_sessions_and_personnel_stay_advisory()
+    public async Task Counts_dedupe_across_many_linked_sessions_for_both_populations()
     {
         var world = await ArrangeAsync();
 
@@ -347,18 +348,20 @@ public class PreRegistrationEventLinkApiTests : IntegrationTest
         Assert.Equal(3, preReg.GetProperty("totalPreRegisteredStudentCount").GetInt32());
         Assert.Equal(1, preReg.GetProperty("totalAdvisoryPersonnelCount").GetInt32());
 
-        // The denominator is the three students; personnel are surfaced but excluded.
-        Assert.Equal(3, audience.GetProperty("expected").GetInt32());
+        // The denominator is the three students and the one personnel member (ADR-015 D-102).
+        Assert.Equal(4, audience.GetProperty("expected").GetInt32());
+        Assert.Equal(3, audience.GetProperty("expectedStudents").GetInt32());
+        Assert.Equal(1, audience.GetProperty("expectedPersonnel").GetInt32());
         Assert.Equal(1, audience.GetProperty("advisoryPersonnelCount").GetInt32());
 
-        // The summary agrees — personnel are nowhere in the denominator.
+        // The summary agrees.
         var summary = await client.GetAsync($"{Base(world.EventId)}/summary");
         using var summaryBody = JsonDocument.Parse(await summary.Content.ReadAsStringAsync());
-        Assert.Equal(3, summaryBody.RootElement.GetProperty("expected").GetInt32());
+        Assert.Equal(4, summaryBody.RootElement.GetProperty("expected").GetInt32());
     }
 
     [Fact]
-    public async Task Pre_registered_personnel_are_surfaced_but_never_in_the_expected_denominator()
+    public async Task Pre_registered_personnel_replace_the_personnel_side_of_the_denominator()
     {
         var world = await ArrangeAsync();
         var studentId = await AddStudentAsync(world.SchoolId, "2023-0001");
@@ -377,8 +380,10 @@ public class PreRegistrationEventLinkApiTests : IntegrationTest
             new { preRegistrationSessionId = sessionId })).StatusCode);
 
         var audience = await ReadAudienceAsync(client, world.EventId);
-        Assert.Equal(1, audience.GetProperty("expected").GetInt32());              // the one student
-        Assert.Equal(2, audience.GetProperty("advisoryPersonnelCount").GetInt32()); // the two personnel
+        Assert.Equal(3, audience.GetProperty("expected").GetInt32());
+        Assert.Equal(1, audience.GetProperty("expectedStudents").GetInt32());
+        Assert.Equal(2, audience.GetProperty("expectedPersonnel").GetInt32());
+        Assert.Equal(ExpectedAudienceSource.PreRegistration, audience.GetProperty("expectedPersonnelSource").GetString());
         Assert.Equal(2, audience.GetProperty("preRegistration")
             .GetProperty("totalAdvisoryPersonnelCount").GetInt32());
     }
@@ -487,6 +492,7 @@ public class PreRegistrationEventLinkApiTests : IntegrationTest
     {
         var world = await ArrangeAsync();
         await AttachDefinitionAsync(world.EventId, world.SessionDefinitionId);
+        await AddStudentAsync(world.SchoolId, "2023-0001");
 
         using var factory = new EamsApiFactory(Sql.ConnectionString);
         using var client = await SignedInClientAsync(factory);
@@ -496,10 +502,11 @@ public class PreRegistrationEventLinkApiTests : IntegrationTest
             new { name = "Walk-up Desk" });
         Assert.Equal(HttpStatusCode.OK, created.StatusCode);
 
+        // ADR-015 D-103: a freshly created session has no registrants yet, so it replaces nobody and the
+        // audience still answers. Under ADR-008 D-71 this read 0.
         var audience = await ReadAudienceAsync(client, world.EventId);
-        Assert.Equal(ExpectedAudienceSource.PreRegistration, audience.GetProperty("expectedSource").GetString());
-        // A freshly created session has no registrants yet: the linked-but-empty session makes Expected 0.
-        Assert.Equal(0, audience.GetProperty("expected").GetInt32());
+        Assert.Equal(ExpectedAudienceSource.Audience, audience.GetProperty("expectedSource").GetString());
+        Assert.Equal(1, audience.GetProperty("expected").GetInt32());
 
         var sessions = audience.GetProperty("preRegistration").GetProperty("linkedSessions");
         Assert.Equal(1, sessions.GetArrayLength());

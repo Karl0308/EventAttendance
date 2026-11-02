@@ -80,9 +80,10 @@ internal sealed class ReportService : IReportService
                 missing);
         }
 
-        // PERFORMANCE TRADEOFF, accepted by JJ (P3): a bounded, sequential loop of roughly four
-        // aggregate queries per event — at most ReportLimits.MaxEventsPerReport events, so about 200
-        // round trips in the worst case. No attendance row is materialized; each query is a COUNT.
+        // PERFORMANCE TRADEOFF, accepted by JJ 2026-11-02 pending a VM measurement: a bounded, sequential
+        // loop of about 7 statements per closed event and about 11 per live event (ADR-015 counts two
+        // populations) — at most ReportLimits.MaxEventsPerReport events, so about 350 to 550 round trips
+        // in the worst case. No attendance row is materialized; each aggregate is a COUNT.
         // The set-based alternative would rewrite the shared denominator (live vs frozen audience per
         // event) into a second implementation, which ADR-003 D-12/D-13 record as drifting silently.
         // Sequential because one DbContext cannot run queries concurrently. Revisit only if a

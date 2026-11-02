@@ -17,10 +17,12 @@ namespace EAMS.Tests.Integration;
 /// this repo has been bitten by — see <c>memory/feedback_negative_control_before_claiming_fixed.md</c>):
 ///
 /// <list type="number">
-/// <item><b>Liveness / REPLACE control.</b> A linked session's registrants ARE the live denominator
-/// (not the section+definition union); a registrant added while the event is live MOVES Expected; unlink
-/// RESTORES the union with no data loss. Negative control: neutralise the REPLACE branch in
-/// <c>ExpectedStudentIdsAsync</c> and the linked assertions go red.</item>
+/// <item><b>Liveness / REPLACE control.</b> A linked session's student registrants ARE the live student
+/// denominator (not the section+definition union); a registrant added while the event is live MOVES
+/// Expected; unlink RESTORES the union with no data loss. Negative control: neutralise the REPLACE branch in
+/// <c>ExpectedStudentIdsAsync</c> and the linked assertions go red. Under ADR-015 D-103 this holds per
+/// population, and only with a countable registrant; <see cref="PreRegistrationPerPopulationTests"/> pins
+/// the cases where a linked session replaces nobody.</item>
 /// <item><b>Freeze write/read SYMMETRY control (ADR-003 D-15 over the pre-reg source).</b> A student
 /// registered then soft-deleted BEFORE close is still in the FROZEN denominator (the snapshot resolves
 /// with <c>includeDeleted: true</c>), and a registration change AFTER close does not move the frozen

@@ -177,8 +177,9 @@ public record TapResult(
 /// Technical Plan §6.7/§12 — the Event Attendance Summary.
 /// </summary>
 /// <param name="Expected">
-/// The invited population: students in the event's attached §4.8 groups plus its individually attached
-/// students, de-duplicated, excluding the soft-deleted.
+/// The invited population, <c>|E_s| + |E_p|</c> (ADR-015 D-102): the expected students plus the expected
+/// personnel, each de-duplicated, excluding the soft-deleted while the event is live. It already is the
+/// total; <paramref name="ExpectedStudents"/> and <paramref name="ExpectedPersonnel"/> are its two parts.
 ///
 /// <para>
 /// <b>This used to be the recorded-row count</b>, which made the rate structurally incapable of falling
@@ -195,13 +196,13 @@ public record TapResult(
 /// </para>
 /// </param>
 /// <param name="Present">
-/// Counted over every attendance row on the event, including any belonging to a student the audience
-/// does not name. That is deliberate: these four must reconcile with
+/// Counted over every attendance row on the event, both populations, including any belonging to someone
+/// the audience does not name. That is deliberate: these four must reconcile with
 /// <c>GET /attendance?eventId=</c> and with the roster, or the summary becomes a fifth opinion.
 /// </param>
 /// <param name="Unexpected">
-/// Attendees who were recorded but never invited — walk-ins. Counted as <em>people</em>, so it is
-/// exactly the number of <c>GET /events/{id}/roster</c> entries flagged <c>isExpected: false</c>.
+/// Attendees who were recorded but never invited — walk-ins. Counted as <em>people</em>, per population,
+/// <c>|R_s \ E_s| + |R_p \ E_p|</c> (ADR-015 D-102): the same number the roster's header reports.
 ///
 /// <para>
 /// <b>This is where the over-100% signal went, and it is a better one than the rate was.</b>
@@ -214,15 +215,16 @@ public record TapResult(
 /// </para>
 /// </param>
 /// <param name="AttendanceRate">
-/// The share of the <em>invited</em> who turned up: invited students with a <c>Present</c> or
-/// <c>Late</c> record, over <paramref name="Expected"/>, as a percentage to one decimal place. Zero
-/// when <paramref name="Expected"/> is zero.
+/// The share of the <em>invited</em> who turned up: expected students and expected personnel with a
+/// <c>Present</c> or <c>Late</c> record, over <paramref name="Expected"/>, as a percentage to one decimal
+/// place. Zero when <paramref name="Expected"/> is zero.
 ///
 /// <para>
 /// <b>It cannot exceed 100, structurally rather than by clamping.</b> Numerator and denominator are
-/// both computed over the expected set — the numerator as a SQL <c>INTERSECT</c> against it, which is
-/// distinct on both sides — so the numerator is a subset of the denominator by construction. No cap is
-/// applied and none is needed; a clamp would have hidden the arithmetic rather than fixed it.
+/// both computed over the expected set, one population at a time — each numerator term a SQL
+/// <c>INTERSECT</c> against its own expected set, which is distinct on both sides — so each term is
+/// bounded by its own denominator by construction (ADR-015 D-102). No cap is applied and none is needed;
+/// a clamp would have hidden the arithmetic rather than fixed it.
 /// </para>
 ///
 /// <para>
@@ -232,6 +234,9 @@ public record TapResult(
 /// <c>GET /attendance?eventId=</c> while the rate answers the question it is named for.
 /// </para>
 /// </param>
+/// <param name="ExpectedStudents">The students in <paramref name="Expected"/>.</param>
+/// <param name="ExpectedPersonnel">The personnel in <paramref name="Expected"/>.</param>
 public record EventSummaryDto(
     Guid EventId, string EventName, int Expected, int Present, int Late,
-    int Absent, int Excused, int Unexpected, double AttendanceRate);
+    int Absent, int Excused, int Unexpected, double AttendanceRate,
+    int ExpectedStudents, int ExpectedPersonnel);

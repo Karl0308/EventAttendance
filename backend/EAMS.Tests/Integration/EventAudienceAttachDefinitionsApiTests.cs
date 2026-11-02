@@ -11,8 +11,8 @@ namespace EAMS.Tests.Integration;
 /// <summary>
 /// Task 2 Phase 2 (ADR-007 D-69/D-70): a reusable <c>AudienceDefinition</c> attaches to an event
 /// alongside its sections and individuals, its STUDENT half joins the deduped denominator, it freezes
-/// at the terminal transition exactly as a section does, and its PERSONNEL half is surfaced as an
-/// advisory count that never enters the denominator.
+/// at the terminal transition exactly as a section does, and its PERSONNEL half is counted beside it
+/// (ADR-015 D-102).
 ///
 /// <para>
 /// Service-level like <see cref="EventCloseFreezeTests"/> — the behaviours under test (the live union,
@@ -405,10 +405,10 @@ public class EventAudienceAttachDefinitionsApiTests : IntegrationTest
         }
     }
 
-    // ------------------------------------------------------------------- personnel advisory (D-70)
+    // ------------------------------------------------------------------- personnel (ADR-015 D-102)
 
     [Fact]
-    public async Task A_definitions_personnel_are_advisory_and_never_in_the_student_denominator()
+    public async Task A_definitions_personnel_are_counted_beside_its_students_in_the_denominator()
     {
         var world = await ArrangeAsync();
 
@@ -433,8 +433,8 @@ public class EventAudienceAttachDefinitionsApiTests : IntegrationTest
         {
             var audience = await EventsOn(read).GetAudienceAsync(world.EventId);
 
-            Assert.Equal(1, audience!.Expected);              // the student only
-            Assert.Equal(1, audience.AdvisoryPersonnelCount); // the personnel, surfaced but NOT counted
+            Assert.Equal((2, 1, 1), (audience!.Expected, audience.ExpectedStudents, audience.ExpectedPersonnel));
+            Assert.Equal(1, audience.AdvisoryPersonnelCount); // deprecated: equals ExpectedPersonnel
 
             var definition = Assert.Single(audience.Definitions);
             Assert.Equal(defId, definition.AudienceDefinitionId);
@@ -443,9 +443,9 @@ public class EventAudienceAttachDefinitionsApiTests : IntegrationTest
             Assert.True(definition.IsActive);
         }
 
-        // The summary's denominator agrees — personnel are nowhere in it.
+        // The summary's denominator agrees.
         await using (var read = NewDbContext())
-            Assert.Equal(1, (await EventsOn(read).GetSummaryAsync(world.EventId))!.Expected);
+            Assert.Equal(2, (await EventsOn(read).GetSummaryAsync(world.EventId))!.Expected);
     }
 
     // ------------------------------------------------------------------- detach (removable surface)

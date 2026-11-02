@@ -660,6 +660,11 @@ removed from the definition while the event is Open. The rate stays ≤ 100% and
 | Live DTO, second manifest statement, `Vary` scope | Accepted as built | JJ, 2026-11-02 (D-99, D-100) |
 | `Cache-Control` on tap and batch v2 | `private, no-cache` | JJ, 2026-11-02 (D-99) |
 | Old-client test 3, "both modes" | With and without the header | JJ, 2026-11-02 |
+| From-event session capacity | Seeded from `expectedStudents + expectedPersonnel` | JJ, 2026-11-02 (D-102) |
+| Summary query cost | About 7 per closed event and 11 per live event, accepted for now; measure on the VM before deploy | JJ, 2026-11-02 (D-102) |
+| Roster `Entries` | Student-only until B3, which adds personnel so header and entries add up | JJ, 2026-11-02 (D-101, D-102) |
+| `ExpectedSource` and `expectedPersonnelSource` on a terminal event | Describe the sessions as they are now, so the label may move after close and the frozen numbers do not. No migration; the SPA hides the label on frozen events | JJ, 2026-11-02 (D-103) |
+| Soft-deleted personnel matched at close | Frozen with Absent rows, as D-97 orders and as students are, so `Expected` can rise at close | JJ, 2026-11-02 (D-97) |
 
 ## Open questions
 

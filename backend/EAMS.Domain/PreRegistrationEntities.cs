@@ -74,9 +74,9 @@ public class PreRegistration : AuditableEntity
 }
 
 /// <summary>
-/// Where an event's expected audience is resolved from, published on the audience read so the numbers
-/// explain themselves (ADR-008 D-71). <see cref="PreRegistration"/> when a session is linked and its
-/// student registrants drive the denominator; <see cref="Audience"/> for the section + definition union.
+/// Where one population of an event's expected audience is resolved from, published on the audience read
+/// so the numbers explain themselves (ADR-015 D-103). <see cref="PreRegistration"/> when the linked sessions
+/// hold a countable registrant from that population; <see cref="Audience"/> otherwise.
 /// </summary>
 public static class ExpectedAudienceSource
 {

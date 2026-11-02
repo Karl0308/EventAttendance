@@ -418,8 +418,44 @@ public class ManualPersonnelAttendanceTests : IntegrationTest
     }
 
     /// <summary>
-    /// Not frozen means not expected, whatever the current audience says. This is also the known state
-    /// until B2's freeze writes rows: a closed event refuses all personnel.
+    /// End to end, with nothing seeded: a real tap, a real status change, a real close, then the override.
+    /// D-97 is why this works. The freeze keeps anyone with a row, so a tapper who went <c>Inactive</c> is
+    /// frozen and stays correctable.
+    /// </summary>
+    [Fact]
+    public async Task An_inactive_tapper_is_frozen_by_a_real_close_and_can_be_corrected_afterwards()
+    {
+        var world = await ArrangeAsync();
+
+        await using (var tap = NewDbContext())
+        {
+            var tapped = await AttendanceOn(tap).TapAsync(
+                new TapRequest(world.EventId, PersonnelEventWorld.PersonnelUid, null, "tap", DateTime.UtcNow),
+                new CaptureCapabilities(Personnel: true));
+            Assert.Equal(TapOutcome.Recorded, tapped.Outcome);
+        }
+
+        await SetPersonnelStatusAsync(world.PersonnelId, PersonnelStatus.Inactive);
+
+        await using (var close = NewDbContext())
+        {
+            Assert.Equal(EventWriteOutcome.Saved,
+                (await EventsOn(close).ChangeStatusAsync(world.EventId, EventStatus.Closed)).Outcome);
+        }
+
+        using var factory = new EamsApiFactory(Sql.ConnectionString);
+        using var client = await SignedInClientAsync(factory, world.SchoolId);
+
+        Assert.Equal(HttpStatusCode.OK, (await ManualAsync(
+            client, world.EventId, personnelId: world.PersonnelId, status: AttendanceStatus.Excused)).StatusCode);
+
+        var row = Assert.Single(await RowsAsync(world.EventId), r => r.PersonnelId == world.PersonnelId);
+        Assert.Equal(AttendanceStatus.Excused, row.Status);
+    }
+
+    /// <summary>
+    /// Not frozen means not expected, whatever the current audience says. An event closed before ADR-015
+    /// has no frozen rows, so it refuses all personnel.
     /// </summary>
     [Fact]
     public async Task A_member_outside_the_frozen_set_is_PersonnelNotInAudience_though_the_live_audience_holds_them()

@@ -1298,8 +1298,8 @@ internal sealed class AttendanceService : IAttendanceService
     /// current <c>Status</c> nor <c>IsDeleted</c> nor an existing row is read there: someone who was expected
     /// when the event closed and has since gone inactive or been soft-deleted can still be marked by hand,
     /// because the override is the only route back from a mistake on a closed event (ADR-003 D-17).
-    /// <c>IdsAsync</c> serves the frozen rows on that branch. Until B2's freeze writes them the set is empty,
-    /// so a closed event refuses all personnel: expected, and not to be worked around here.
+    /// <c>IdsAsync</c> serves the frozen rows on that branch. An event closed before ADR-015 has none, so it
+    /// refuses all personnel: expected, and not to be worked around here.
     /// </para>
     /// </summary>
     private async Task<ManualResponse?> RefuseManualPersonnelAsync(

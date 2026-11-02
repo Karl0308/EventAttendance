@@ -14,7 +14,8 @@ namespace EAMS.Infrastructure.Services;
 /// copy stays plausible. The criteria→person-set derivation is exactly that kind of query, so it lives in
 /// one place and both callers use it: <see cref="AudienceDefinitionService"/> (the <c>GET
 /// /event-audiences/{id}/attendees</c> resolve) and <see cref="EventService"/> (the event denominator and
-/// the terminal freeze, ADR-007 D-69/D-70). Neither re-derives it.
+/// the terminal freeze, ADR-007 D-69 and ADR-015 D-95), the latter's personnel side through
+/// <see cref="ExpectedPersonnel"/>. Neither re-derives it.
 /// </para>
 ///
 /// <para>
@@ -143,8 +144,8 @@ internal static class AudienceResolution
 
             case AudienceType.Organization:
             {
-                // Both rosters, one predicate (ADR-011 D-82). Students count toward the denominator and
-                // personnel stay advisory (ADR-007 D-70) — that split is the callers', not this matcher's.
+                // Both rosters, one predicate (ADR-011 D-82). Who is countable is the callers' question,
+                // not this matcher's (ADR-015 D-95).
                 var o = OrgKeys(c.Organizations);
                 return (students.Where(s => s.Organization != null && o.Contains(s.Organization.Trim().ToUpper())),
                         personnel.Where(p => p.Organization != null && o.Contains(p.Organization.Trim().ToUpper())));

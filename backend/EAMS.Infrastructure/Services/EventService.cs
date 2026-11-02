@@ -111,8 +111,8 @@ internal sealed class EventService : IEventService, IEventSummaryFigures
     }
 
     /// <summary>
-    /// §6.7/§12's summary. Five round trips: the event, the four buckets, the denominator, the
-    /// numerator, and the walk-ins. Every one after the first is an aggregate — no attendance row is
+    /// §6.7/§12's summary: the event, the four buckets, then each population's denominator, numerator
+    /// and walk-ins. Every read after the first is an aggregate — no attendance row is
     /// materialized at any point.
     ///
     /// <para>
@@ -207,7 +207,10 @@ internal sealed class EventService : IEventService, IEventSummaryFigures
     /// second copy of this denominator in the report service, which is exactly what ADR-003
     /// D-12/D-13 record as failing silently. So the report calls this, and
     /// <see cref="SummaryForAsync"/> — the live path and <c>GET /events/{id}/summary</c> — reads its
-    /// <see cref="EventSummaryFigures.Summary"/>. Every caller runs the same four queries.
+    /// <see cref="EventSummaryFigures.Summary"/>. Every caller runs the same statements: about 7 per closed
+    /// event and about 11 per live event, which also reads each population's selector and definitions
+    /// (ADR-015). Accepted by JJ 2026-11-02 pending a VM measurement; pinned by
+    /// <c>PersonnelFreezeTests.Figures_cost_seven_statements_on_a_closed_event</c> and its live twin.
     /// </para>
     /// </summary>
     /// <param name="e">The event, already read, tenant-filtered and not soft-deleted.</param>
@@ -217,17 +220,28 @@ internal sealed class EventService : IEventService, IEventSummaryFigures
         Event e, long? ceiling, CancellationToken ct)
     {
         var id = e.Id;
-        var expectedIds = await ExpectedStudentIdsAsync(id, e.SchoolId, e.Status, ct);
+        var expectedStudentIds = await ExpectedStudentIdsAsync(id, e.SchoolId, e.Status, ct);
+        var expectedPersonnelIds = await ExpectedPersonnel.IdsAsync(_db, id, e.SchoolId, e.Status, ct);
 
         var counts = await CountByStatusAsync(id, ceiling, ct);
-        var expected = await expectedIds.CountAsync(ct);
-        var attended = await expectedIds.Intersect(AttendedStudentIds(id, ceiling)).CountAsync(ct);
-        var unexpected = await RecordedStudentIds(id, ceiling).Except(expectedIds).CountAsync(ct);
+        var expectedStudents = await expectedStudentIds.CountAsync(ct);
+        var expectedPersonnel = await expectedPersonnelIds.CountAsync(ct);
 
+        // ADR-015 D-102: one population per ratio. Each term is bounded by its own denominator, so the rate
+        // cannot exceed 100% with a mixed audience, however the walk-ins fall.
+        var attended =
+            await expectedStudentIds.Intersect(AttendedStudentIds(id, ceiling)).CountAsync(ct)
+            + await expectedPersonnelIds.Intersect(AttendedPersonnelIds(id, ceiling)).CountAsync(ct);
+        var unexpected =
+            await RecordedStudentIds(id, ceiling).Except(expectedStudentIds).CountAsync(ct)
+            + await RecordedPersonnelIds(id, ceiling).Except(expectedPersonnelIds).CountAsync(ct);
+
+        var expected = expectedStudents + expectedPersonnel;
         var summary = new EventSummaryDto(
             e.Id, e.Name, expected,
             counts.Present, counts.Late, counts.Absent, counts.Excused, unexpected,
-            EventSummaryFigures.RateOf(attended, expected));
+            EventSummaryFigures.RateOf(attended, expected),
+            expectedStudents, expectedPersonnel);
 
         return new EventSummaryFigures(summary, attended);
     }
@@ -293,6 +307,17 @@ internal sealed class EventService : IEventService, IEventSummaryFigures
     /// <summary>Every student with any attendance row on this event. <c>EXCEPT</c> the expected set gives the walk-ins.</summary>
     private IQueryable<Guid> RecordedStudentIds(Guid eventId, long? ceiling) =>
         AttendanceOn(eventId, ceiling).Where(a => a.StudentId != null).Select(a => a.StudentId!.Value);
+
+    /// <summary>The personnel half of <see cref="AttendedStudentIds"/>, compared the same way (D-102).</summary>
+    private IQueryable<Guid> AttendedPersonnelIds(Guid eventId, long? ceiling) =>
+        AttendanceOn(eventId, ceiling)
+            .Where(a => a.Status == AttendanceStatus.Present || a.Status == AttendanceStatus.Late)
+            .Where(a => a.PersonnelId != null)
+            .Select(a => a.PersonnelId!.Value);
+
+    /// <summary>Every personnel member with any attendance row on this event (D-102).</summary>
+    private IQueryable<Guid> RecordedPersonnelIds(Guid eventId, long? ceiling) =>
+        AttendanceOn(eventId, ceiling).Where(a => a.PersonnelId != null).Select(a => a.PersonnelId!.Value);
 
     /// <summary>
     /// One event's attendance rows, optionally bounded by the live cursor's ceiling (Phase 4e).
@@ -371,12 +396,12 @@ internal sealed class EventService : IEventService, IEventSummaryFigures
         if (EventStatusTransition.HasFrozenAudience(status))
             return AttachedStudentIds(eventId, includeDeleted: true);
 
-        // ADR-008 D-71 — the REPLACE. If ANY pre-registration session is linked to this event, its
-        // student registrants (deduped across sessions, soft-deleted excluded) ARE the live expected set,
-        // instead of the three-source union. The attached sections/definitions are kept but not resolved
-        // while linked. The one "is a session linked?" selector is shared with SnapshotAudienceAsync so the
-        // live read and the freeze cannot disagree (D-15 symmetry).
-        var preRegistered = await LinkedPreRegistrationStudentIdsAsync(
+        // ADR-008 D-71 as amended by ADR-015 D-103 — the per-population REPLACE. When the linked sessions
+        // hold a countable student registrant, those registrants (deduped across sessions, soft-deleted
+        // excluded) ARE the live expected students, instead of the three-source union. The attached
+        // sections/definitions are kept but not resolved while they do. The one selector is shared with
+        // SnapshotAudienceAsync so the live read and the freeze cannot disagree (D-15 symmetry).
+        var preRegistered = await GoverningStudentRegistrantsAsync(
             eventId, schoolId, includeDeleted: false, ct);
         if (preRegistered is not null) return preRegistered;
 
@@ -392,18 +417,14 @@ internal sealed class EventService : IEventService, IEventSummaryFigures
     }
 
     /// <summary>
-    /// ADR-008 D-71 — the ONE "is a pre-registration session linked?" selector, used by BOTH the live
+    /// ADR-015 D-103's <see cref="PreRegistrationSelector"/>, student half, for BOTH the live
     /// <see cref="ExpectedStudentIdsAsync"/> branch and the <see cref="SnapshotAudienceAsync"/> freeze.
-    /// Returns the linked sessions' student registrants as a composable <c>IQueryable&lt;Guid&gt;</c> when any
-    /// session is linked, or <c>null</c> when none is — so a caller takes the pre-reg branch or falls back to
-    /// its union exactly as it does for <see cref="DefinitionStudentIdsAsync"/>.
-    ///
-    /// <para>
-    /// <b>Null vs empty is load-bearing.</b> "No session linked" (null) means resolve the union; "a session
-    /// is linked but has no student registrants" (a non-null, empty query) means <c>Expected = 0</c> — the
-    /// REPLACE stands even when it empties the denominator (ADR-008 Negative consequence), so the linked
-    /// test and the student set are decided together, here, and never written twice (the D-15 trap).
-    /// </para>
+    /// Returns the linked sessions' student registrants as a composable <c>IQueryable&lt;Guid&gt;</c> when
+    /// pre-registration governs the student side, or <c>null</c> when it does not — so a caller takes the
+    /// pre-reg branch or falls back to its union exactly as it does for
+    /// <see cref="DefinitionStudentIdsAsync"/>. A linked session with no countable student registrant is
+    /// that null: the student side falls back to the audience instead of emptying the denominator, which is
+    /// the amendment to ADR-008 D-71.
     ///
     /// <para>
     /// <b>The asymmetry the live/frozen pair needs is the one parameter.</b> The live read excludes
@@ -412,26 +433,12 @@ internal sealed class EventService : IEventService, IEventSummaryFigures
     /// removed from a past event's denominator (D-15), exactly as the section and definition sources do.
     /// </para>
     ///
-    /// <para>
-    /// The <c>SchoolId</c> predicate is explicit for the reason the denominator's and the definition read's
-    /// are: the §11 global filter is inert whenever no tenant is pinned, and this reaches a fresh person set.
-    /// </para>
     /// </summary>
-    private async Task<IQueryable<Guid>?> LinkedPreRegistrationStudentIdsAsync(
-        Guid eventId, Guid schoolId, bool includeDeleted, CancellationToken ct)
-    {
-        var anyLinked = await _db.PreRegistrationSessions.AsNoTracking()
-            .AnyAsync(s => s.EventId == eventId && s.SchoolId == schoolId, ct);
-        if (!anyLinked) return null;
-
-        return _db.PreRegistrations
-            .Where(p => p.Session!.EventId == eventId
-                     && p.SchoolId == schoolId
-                     && p.StudentId != null
-                     && (includeDeleted || !p.Student!.IsDeleted))
-            .Select(p => p.StudentId!.Value)
-            .Distinct();
-    }
+    private async Task<IQueryable<Guid>?> GoverningStudentRegistrantsAsync(
+        Guid eventId, Guid schoolId, bool includeDeleted, CancellationToken ct) =>
+        await PreRegistrationSelector.GovernsStudentsAsync(_db, eventId, schoolId, ct)
+            ? PreRegistrationSelector.StudentRegistrants(_db, eventId, schoolId, includeDeleted)
+            : null;
 
     /// <summary>
     /// The students resolved by every <see cref="AudienceDefinition"/> attached to this event, as one
@@ -448,10 +455,8 @@ internal sealed class EventService : IEventService, IEventSummaryFigures
     /// </para>
     ///
     /// <para>
-    /// <b>Personnel are dropped here, by construction</b> — only the student side of each definition is
-    /// taken. That is ADR-007 D-70: the denominator, the freeze and attendance are student-keyed, so a
-    /// definition's personnel have nowhere to be counted. They are surfaced as an advisory figure on the
-    /// audience read instead of entering any denominator.
+    /// <b>Only the student side of each definition is taken here.</b> The personnel side is resolved by
+    /// <see cref="ExpectedPersonnel"/> and counted beside this one, never mixed into it (ADR-015 D-102).
     /// </para>
     ///
     /// <para>
@@ -603,28 +608,44 @@ internal sealed class EventService : IEventService, IEventSummaryFigures
         }
 
         // The one denominator query, not a fourth opinion of it — see IEventService.GetAudienceAsync.
-        var expected = await (await ExpectedStudentIdsAsync(id, ev.SchoolId, ev.Status, ct)).CountAsync(ct);
+        var expected = await CountExpectedAsync(id, ev.SchoolId, ev.Status, ct);
 
-        var (definitions, advisoryPersonnelCount) = await ReadAttachedDefinitionsAsync(id, ev.SchoolId, ct);
-
-        // ADR-008 D-71/D-72 — the pre-registration read signal. A linked session makes ExpectedSource
-        // "PreRegistration"; Expected above already reflects the pre-reg set (the shared selector), and the
-        // advisory figure reflects the PRE-REG personnel rather than the Phase-2 definition advisory.
+        var definitions = await ReadAttachedDefinitionsAsync(id, ev.SchoolId, ct);
         var preRegistration = await ReadLinkedPreRegistrationAsync(id, ev.SchoolId, ct);
-        var expectedSource = preRegistration is null
-            ? ExpectedAudienceSource.Audience
-            : ExpectedAudienceSource.PreRegistration;
-        var advisory = preRegistration?.TotalAdvisoryPersonnelCount ?? advisoryPersonnelCount;
+
+        // ADR-015 D-102/D-103: one source per population, from the selector the denominator itself uses.
+        var expectedSource = SourceFor(
+            await PreRegistrationSelector.GovernsStudentsAsync(_db, id, ev.SchoolId, ct));
+        var expectedPersonnelSource = SourceFor(
+            await PreRegistrationSelector.GovernsPersonnelAsync(_db, id, ev.SchoolId, ct));
 
         return new EventAudienceDto(
-            ev.Id, ev.Status, isFrozen, expected, groups, students, definitions, advisory,
-            expectedSource, preRegistration);
+            ev.Id, ev.Status, isFrozen, expected.Total, groups, students, definitions, expected.Personnel,
+            expectedSource, preRegistration,
+            expected.Students, expected.Personnel, expectedPersonnelSource);
     }
+
+    private static string SourceFor(bool preRegistrationGoverns) =>
+        preRegistrationGoverns ? ExpectedAudienceSource.PreRegistration : ExpectedAudienceSource.Audience;
+
+    /// <summary>
+    /// Every <c>Expected</c> this API publishes, as its two populations (ADR-015 D-102). The total is
+    /// derived here, never stored, so it cannot drift from its parts.
+    /// </summary>
+    private readonly record struct ExpectedCounts(int Students, int Personnel)
+    {
+        public int Total => Students + Personnel;
+    }
+
+    private async Task<ExpectedCounts> CountExpectedAsync(
+        Guid eventId, Guid schoolId, string status, CancellationToken ct) =>
+        new(await (await ExpectedStudentIdsAsync(eventId, schoolId, status, ct)).CountAsync(ct),
+            await (await ExpectedPersonnel.IdsAsync(_db, eventId, schoolId, status, ct)).CountAsync(ct));
 
     /// <summary>
     /// The pre-registration sessions linked to this event, their per-session counts, and the deduped
-    /// totals (ADR-008 D-71/D-72). <c>null</c> when none is linked — the signal the audience read uses to
-    /// set <see cref="EventAudienceDto.ExpectedSource"/>.
+    /// totals (ADR-008 D-71/D-72). <c>null</c> when none is linked. Display figures only: which side
+    /// pre-registration governs is <see cref="PreRegistrationSelector"/>'s question, never these counts.
     ///
     /// <para>
     /// The counts are current/live figures (soft-deleted excluded), the same way
@@ -667,14 +688,14 @@ internal sealed class EventService : IEventService, IEventSummaryFigures
 
     /// <summary>
     /// The attached <see cref="AudienceDefinition"/> links with a current resolved student/personnel count
-    /// each (ADR-007 D-69), and the deduped advisory personnel total across all of them (D-70).
+    /// each (ADR-007 D-69).
     ///
     /// <para>
     /// <b>The counts are live even on a terminal event</b>, exactly as
     /// <see cref="EventAudienceGroupDto.MemberCount"/> is: the link row is a historical record of what was
     /// invited, but the number beside it describes what the definition resolves to now. The denominator a
     /// frozen event reports is <see cref="EventAudienceDto.Expected"/>, read from the snapshot — these
-    /// per-definition figures never feed it, and the personnel figure never feeds it in any status.
+    /// per-definition figures never feed it.
     /// </para>
     ///
     /// <para>
@@ -682,8 +703,8 @@ internal sealed class EventService : IEventService, IEventSummaryFigures
     /// filter is inert when no tenant is pinned, and these resolve fresh person queries.
     /// </para>
     /// </summary>
-    private async Task<(IReadOnlyList<EventAudienceDefinitionRefDto> Definitions, int AdvisoryPersonnel)>
-        ReadAttachedDefinitionsAsync(Guid eventId, Guid schoolId, CancellationToken ct)
+    private async Task<IReadOnlyList<EventAudienceDefinitionRefDto>> ReadAttachedDefinitionsAsync(
+        Guid eventId, Guid schoolId, CancellationToken ct)
     {
         var links = await _db.EventAudienceDefinitions.AsNoTracking()
             .Where(link => link.EventId == eventId && link.AudienceDefinition!.SchoolId == schoolId)
@@ -702,7 +723,6 @@ internal sealed class EventService : IEventService, IEventSummaryFigures
             .ToListAsync(ct);
 
         var definitions = new List<EventAudienceDefinitionRefDto>(links.Count);
-        IQueryable<Guid>? advisoryPersonnel = null;
 
         foreach (var link in links)
         {
@@ -714,22 +734,16 @@ internal sealed class EventService : IEventService, IEventSummaryFigures
                 ? 0
                 : await students.Where(s => s.SchoolId == schoolId).CountAsync(ct);
 
-            var personnelIds = personnel?.Where(p => p.SchoolId == schoolId).Select(p => p.Id);
-            var personnelCount = personnelIds is null ? 0 : await personnelIds.CountAsync(ct);
+            var personnelCount = personnel is null
+                ? 0
+                : await personnel.Where(p => p.SchoolId == schoolId).CountAsync(ct);
 
             definitions.Add(new EventAudienceDefinitionRefDto(
                 link.AudienceDefinitionId, link.Name, link.AudienceType,
                 studentCount, personnelCount, link.IsActive));
-
-            if (personnelIds is not null)
-                advisoryPersonnel = advisoryPersonnel is null
-                    ? personnelIds
-                    : advisoryPersonnel.Union(personnelIds);
         }
 
-        // UNION is distinct, so a person resolved by two definitions counts once in the advisory total.
-        var advisory = advisoryPersonnel is null ? 0 : await advisoryPersonnel.CountAsync(ct);
-        return (definitions, advisory);
+        return definitions;
     }
 
     // ------------------------------------------------------------------------------ the roster
@@ -900,21 +914,58 @@ internal sealed class EventService : IEventService, IEventSummaryFigures
             r.Record?.Status, r.Record?.CheckInAt, r.Record?.CheckOutAt, r.Record?.CaptureMethod))
             .ToList();
 
+        var personnel = await RosterPersonnelFiguresAsync(id, ev.SchoolId, ev.Status, ct);
+        var expectedStudents = entries.Count(e => e.IsExpected);
+
         return new EventRosterDto(
             ev.Id, ev.Name, ev.Status,
             IsFrozen: EventStatusTransition.HasFrozenAudience(ev.Status),
-            Expected: entries.Count(e => e.IsExpected),
-            Present: entries.Count(e => e.Status == AttendanceStatus.Present),
-            Late: entries.Count(e => e.Status == AttendanceStatus.Late),
-            Absent: entries.Count(e => e.Status == AttendanceStatus.Absent),
-            Excused: entries.Count(e => e.Status == AttendanceStatus.Excused),
-            NotRecorded: entries.Count(e => e.IsExpected && e.Status is null),
+            Expected: expectedStudents + personnel.Expected,
+            Present: entries.Count(e => e.Status == AttendanceStatus.Present) + personnel.Counts.Present,
+            Late: entries.Count(e => e.Status == AttendanceStatus.Late) + personnel.Counts.Late,
+            Absent: entries.Count(e => e.Status == AttendanceStatus.Absent) + personnel.Counts.Absent,
+            Excused: entries.Count(e => e.Status == AttendanceStatus.Excused) + personnel.Counts.Excused,
+            NotRecorded: entries.Count(e => e.IsExpected && e.Status is null) + personnel.NotRecorded,
             // The same people GetSummaryAsync counts as Unexpected, arrived at from the other side: it
             // runs recorded EXCEPT expected in SQL, this counts the rows that survived the same test in
             // the projection above. The two must agree or the roster and the summary describe different
             // events, which is the disagreement CONDITION 1 removed from the rate.
-            Unexpected: entries.Count(e => !e.IsExpected),
-            entries);
+            Unexpected: entries.Count(e => !e.IsExpected) + personnel.Unexpected,
+            entries,
+            expectedStudents, personnel.Expected);
+    }
+
+    /// <summary>The personnel half of the roster's header (ADR-015 D-102).</summary>
+    private readonly record struct RosterPersonnelFigures(
+        int Expected, StatusCounts Counts, int NotRecorded, int Unexpected);
+
+    /// <summary>
+    /// The roster header's personnel half, as aggregates: <see cref="EventRosterDto.Entries"/> lists
+    /// students only, so these cannot be counted from the entries as the student half is. It keeps the
+    /// roster's <c>OccurrenceId == null</c> reading of "their row", the same one its entries use.
+    /// </summary>
+    private async Task<RosterPersonnelFigures> RosterPersonnelFiguresAsync(
+        Guid eventId, Guid schoolId, string status, CancellationToken ct)
+    {
+        var expected = await ExpectedPersonnel.IdsAsync(_db, eventId, schoolId, status, ct);
+        var rows = _db.AttendanceRecords
+            .Where(a => a.EventId == eventId && a.PersonnelId != null && a.OccurrenceId == null);
+        var recorded = rows.Select(a => a.PersonnelId!.Value);
+
+        var counts = await rows
+            .GroupBy(_ => 1)
+            .Select(g => new StatusCounts(
+                g.Count(a => a.Status == AttendanceStatus.Present),
+                g.Count(a => a.Status == AttendanceStatus.Late),
+                g.Count(a => a.Status == AttendanceStatus.Absent),
+                g.Count(a => a.Status == AttendanceStatus.Excused)))
+            .FirstOrDefaultAsync(ct);
+
+        return new RosterPersonnelFigures(
+            await expected.CountAsync(ct),
+            counts,
+            await expected.Except(recorded).CountAsync(ct),
+            await recorded.Except(expected).CountAsync(ct));
     }
 
     // ------------------------------------------------------------------- live attendance (D-29/D-30)
@@ -2125,7 +2176,7 @@ internal sealed class EventService : IEventService, IEventSummaryFigures
         {
             return Saved(ev,
                 $"Event is now {target}. Its audience of {frozen.Expected} " +
-                $"{(frozen.Expected == 1 ? "student" : "students")} has been written down and can no " +
+                $"{(frozen.Expected == 1 ? "attendee" : "attendees")} has been written down and can no " +
                 "longer move; no attendance was recorded, because nobody was expected to attend an " +
                 "event that did not happen.");
         }
@@ -2154,8 +2205,10 @@ internal sealed class EventService : IEventService, IEventSummaryFigures
     /// handled where it happens. Between reading which students already have a record and committing,
     /// a tap can insert one — the organizer closes the event while the last student is walking through
     /// the reader, which is the ordinary case rather than an exotic one. The insert then loses to
-    /// <c>UX_Attendance_Event_Student_Occurrence</c>. Losing is not an error: the row we were about to
-    /// write as <c>Absent</c> now exists as <c>Present</c>, which is the truer record. So the pending
+    /// <c>UX_Attendance_Event_Student_Occurrence</c>, or to its twin
+    /// <c>UX_Attendance_Event_Personnel_Occurrence</c> for a personnel tap (ADR-015 D-97). Losing is not an
+    /// error: the row we were about to write as <c>Absent</c> now exists as <c>Present</c>, which is the
+    /// truer record. So the pending
     /// absentees are dropped, the diff is recomputed against what is now in the table, and the save is
     /// retried once.
     /// </para>
@@ -2179,14 +2232,16 @@ internal sealed class EventService : IEventService, IEventSummaryFigures
             // arithmetic bug rather than a missing write.
             var pending = new List<object>();
             var expected = await SnapshotAudienceAsync(eventId, schoolId, pending, ct);
+            var personnel = await SnapshotPersonnelAsync(eventId, schoolId, pending, ct);
             var absentees = materializeAbsentees
                 ? await StageAbsenteesAsync(eventId, schoolId, expected, pending, ct)
+                  + await StagePersonnelAbsenteesAsync(eventId, schoolId, personnel, pending, ct)
                 : 0;
 
             try
             {
                 await _db.SaveChangesAsync(ct);
-                return new FrozenAudience(expected.Count, absentees);
+                return new FrozenAudience(expected.Count + personnel.Count, absentees);
             }
             catch (DbUpdateException ex)
                 when (attempt < FreezeRetryLimit && SqlServerErrors.IsUniqueViolation(ex))
@@ -2251,10 +2306,10 @@ internal sealed class EventService : IEventService, IEventSummaryFigures
     private async Task<IReadOnlyList<Guid>> SnapshotAudienceAsync(
         Guid eventId, Guid schoolId, List<object> pending, CancellationToken ct)
     {
-        // ADR-008 D-71 freeze parity — the SAME "is a session linked?" selector the live read uses, with
-        // includeDeleted:true (D-15 symmetry). A linked event snapshots the PRE-REGISTERED students, not the
-        // union; the kept sections/definitions are never resolved here while a session drives the audience.
-        var preRegistered = await LinkedPreRegistrationStudentIdsAsync(
+        // ADR-015 D-103 freeze parity — the SAME selector the live read uses, with includeDeleted:true on the
+        // set it yields (D-15 symmetry). When pre-registration governs the student side the PRE-REGISTERED
+        // students are snapshotted, not the union; the kept sections/definitions are not resolved here then.
+        var preRegistered = await GoverningStudentRegistrantsAsync(
             eventId, schoolId, includeDeleted: true, ct);
 
         IQueryable<Guid> expectedQuery;
@@ -2266,8 +2321,7 @@ internal sealed class EventService : IEventService, IEventSummaryFigures
         {
             // All three live sources, resolved once. Attached definitions resolve their STUDENT half with
             // includeDeleted:true — the same rule the frozen read uses — so the set written down is exactly
-            // the set the frozen read will report (ADR-003 D-15, generalised to definitions by ADR-007). A
-            // definition's personnel are never resolved here: they have no row to be, which is D-70.
+            // the set the frozen read will report (ADR-003 D-15, generalised to definitions by ADR-007).
             var baseExpected = GroupMemberStudentIds(eventId)
                 .Union(AttachedStudentIds(eventId, includeDeleted: true));
 
@@ -2288,6 +2342,36 @@ internal sealed class EventService : IEventService, IEventSummaryFigures
         }
 
         return expected;
+    }
+
+    /// <summary>
+    /// ADR-015 D-97: writes the personnel half of the snapshot as <see cref="EventPersonnel"/> rows, staged
+    /// into the freeze's one save (ADR-003 D-21). <see cref="ExpectedPersonnel.ToFreezeAsync"/> says who.
+    ///
+    /// <para>
+    /// The read of what is already frozen is what makes the retry safe, as <c>alreadyAttached</c> does for
+    /// the students: a concurrent close that won <c>UX_EventPersonnel_Event_Personnel</c> has written these
+    /// rows, and the re-diff must not stage them again.
+    /// </para>
+    /// </summary>
+    private async Task<IReadOnlyList<Guid>> SnapshotPersonnelAsync(
+        Guid eventId, Guid schoolId, List<object> pending, CancellationToken ct)
+    {
+        var frozen = await (await ExpectedPersonnel.ToFreezeAsync(_db, eventId, schoolId, ct)).ToListAsync(ct);
+
+        var alreadyFrozen = await _db.EventPersonnel
+            .Where(ep => ep.EventId == eventId)
+            .Select(ep => ep.PersonnelId)
+            .ToListAsync(ct);
+
+        foreach (var personnelId in frozen.Except(alreadyFrozen))
+        {
+            var row = new EventPersonnel { EventId = eventId, PersonnelId = personnelId };
+            _db.EventPersonnel.Add(row);
+            pending.Add(row);
+        }
+
+        return frozen;
     }
 
     /// <summary>
@@ -2348,6 +2432,45 @@ internal sealed class EventService : IEventService, IEventSummaryFigures
             // Id in its initializer, and EF can classify such a graph member as an existing row and
             // turn the insert into an UPDATE that matches nothing. StudentGroupProjection.DiffMembers
             // records the same trap.
+            _db.AttendanceRecords.Add(record);
+            pending.Add(record);
+        }
+
+        return missing.Count;
+    }
+
+    /// <summary>
+    /// The personnel half of <see cref="StageAbsenteesAsync"/> (ADR-015 D-97): the same row, with the same
+    /// reasoning, for every frozen personnel member who has none. <c>OccurrenceId == null</c> matches
+    /// <c>UX_Attendance_Event_Personnel_Occurrence</c>, the index these inserts race a late tap on, and
+    /// <see cref="FreezeAsync"/> resolves that race exactly as it resolves the student one.
+    /// </summary>
+    private async Task<int> StagePersonnelAbsenteesAsync(
+        Guid eventId, Guid schoolId, IReadOnlyList<Guid> frozen, List<object> pending, CancellationToken ct)
+    {
+        if (frozen.Count == 0) return 0;
+
+        var recorded = await _db.AttendanceRecords
+            .Where(a => a.EventId == eventId && a.OccurrenceId == null && a.PersonnelId != null)
+            .Select(a => a.PersonnelId!.Value)
+            .ToListAsync(ct);
+
+        var missing = frozen.Except(recorded).ToList();
+
+        foreach (var personnelId in missing)
+        {
+            var record = new AttendanceRecord
+            {
+                SchoolId = schoolId,
+                EventId = eventId,
+                PersonnelId = personnelId,
+                OccurrenceId = null,
+                CheckInAt = null,
+                Status = AttendanceStatus.Absent,
+                CaptureMethod = CaptureMethod.Import,
+                RecordedByUserId = _currentUser.UserId,
+            };
+
             _db.AttendanceRecords.Add(record);
             pending.Add(record);
         }
@@ -2443,14 +2566,14 @@ internal sealed class EventService : IEventService, IEventSummaryFigures
         var delta = await AttachMissingAsync(id, groupIds, studentIds, definitionIds, ct);
 
         var warnings = await TermWarningsAsync(ev.SchoolId, groups.Select(g => (g.Name, g.TermId)), ct);
-        var expected = await (await ExpectedStudentIdsAsync(id, ev.SchoolId, ev.Status, ct)).CountAsync(ct);
+        var expected = await CountExpectedAsync(id, ev.SchoolId, ev.Status, ct);
 
         return new EventAudienceResponse(EventWriteOutcome.Saved, "Audience updated.",
             new EventAudienceResultDto(
                 id, delta.Groups, delta.Students, delta.Definitions,
                 groupIds.Count - delta.Groups, studentIds.Count - delta.Students,
                 definitionIds.Count - delta.Definitions,
-                expected, warnings));
+                expected.Total, warnings, expected.Students, expected.Personnel));
     }
 
     /// <summary>How much of the requested selection this call actually inserted.</summary>
@@ -2617,10 +2740,11 @@ internal sealed class EventService : IEventService, IEventSummaryFigures
             .Where(link => link.EventId == id && link.AudienceDefinitionId == audienceDefinitionId)
             .ExecuteDeleteAsync(ct);
 
-        var expected = await (await ExpectedStudentIdsAsync(id, ev.SchoolId, ev.Status, ct)).CountAsync(ct);
+        var expected = await CountExpectedAsync(id, ev.SchoolId, ev.Status, ct);
 
         return new EventAudienceResponse(EventWriteOutcome.Saved, "Audience updated.",
-            new EventAudienceResultDto(id, 0, 0, 0, 0, 0, 0, expected, []));
+            new EventAudienceResultDto(
+                id, 0, 0, 0, 0, 0, 0, expected.Total, [], expected.Students, expected.Personnel));
     }
 
     private async Task<EventAudienceResponse> DetachAsync(
@@ -2639,10 +2763,11 @@ internal sealed class EventService : IEventService, IEventSummaryFigures
         // dangerous elsewhere in this model (the ADR-001 D-2 cache guard lives on Students).
         await _db.EventGroups.Where(eg => eg.EventId == id).Where(match).ExecuteDeleteAsync(ct);
 
-        var expected = await (await ExpectedStudentIdsAsync(id, ev.SchoolId, ev.Status, ct)).CountAsync(ct);
+        var expected = await CountExpectedAsync(id, ev.SchoolId, ev.Status, ct);
 
         return new EventAudienceResponse(EventWriteOutcome.Saved, "Audience updated.",
-            new EventAudienceResultDto(id, 0, 0, 0, 0, 0, 0, expected, []));
+            new EventAudienceResultDto(
+                id, 0, 0, 0, 0, 0, 0, expected.Total, [], expected.Students, expected.Personnel));
     }
 
     // -------------------------------------------------------------------- pre-registration link (ADR-008)
@@ -2733,10 +2858,11 @@ internal sealed class EventService : IEventService, IEventSummaryFigures
                 + "it with POST /events/{eventId}/pre-registration/sessions.", null);
         }
 
-        // Capacity seeded from the event's current expected size (the union — no session drives it yet),
-        // floored at 1 so an event resolving to nobody still yields a valid, if empty, session.
-        var expected = await (await ExpectedStudentIdsAsync(eventId, ev.SchoolId, ev.Status, ct)).CountAsync(ct);
-        var capacity = Math.Clamp(expected, 1, PreRegistrationText.MaxCapacity);
+        // Capacity seeded from the event's current expected size, both populations: a session holds staff
+        // registrants as well as students, so a student-only seed would refuse staff. Floored at 1 so an
+        // event resolving to nobody still yields a valid, if empty, session.
+        var expected = await CountExpectedAsync(eventId, ev.SchoolId, ev.Status, ct);
+        var capacity = Math.Clamp(expected.Total, 1, PreRegistrationText.MaxCapacity);
 
         var session = new PreRegistrationSession
         {

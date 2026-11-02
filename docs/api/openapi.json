@@ -13627,7 +13627,7 @@
           },
           "personnelCount": {
             "type": "integer",
-            "description": "Personnel the definition currently resolves to — advisory only, never in the denominator (D-70). Its\r\ncontribution to EAMS.Application.Dtos.EventAudienceDto.AdvisoryPersonnelCount before cross-definition dedupe.",
+            "description": "Personnel the definition currently resolves to, soft-deleted excluded, any `Status`. A display\r\ncount: EAMS.Application.Dtos.EventAudienceDto.ExpectedPersonnel keeps only the countable ones and dedupes across\r\ndefinitions (ADR-015 D-95).",
             "format": "int32"
           },
           "isActive": {
@@ -13655,7 +13655,7 @@
           },
           "expected": {
             "type": "integer",
-            "description": "The invited population — <b>the same number `GET /events/{id}/summary` and\r\n`GET /events/{id}/roster` report for this event</b>, from the same query. It is deliberately\r\nnot derivable from the lists below: on a live event the group members are not enumerated here, and\r\non a terminal event EAMS.Application.Dtos.EventAudienceDto.Students is empty by contract. A caller wanting the denominator\r\nreads this field; a caller wanting the people reads the roster.",
+            "description": "The invited population, students plus personnel (ADR-015 D-102) — <b>the same number\r\n`GET /events/{id}/summary` and `GET /events/{id}/roster` report for this event</b>, from the\r\nsame query. It is deliberately\r\nnot derivable from the lists below: on a live event the group members are not enumerated here, and\r\non a terminal event EAMS.Application.Dtos.EventAudienceDto.Students is empty by contract. A caller wanting the denominator\r\nreads this field; a caller wanting the people reads the roster.",
             "format": "int32"
           },
           "groups": {
@@ -13681,15 +13681,29 @@
           },
           "advisoryPersonnelCount": {
             "type": "integer",
-            "description": "The total personnel the attached definitions currently resolve to, de-duplicated across definitions\r\n(ADR-007 D-70). <b>These are NOT in EAMS.Application.Dtos.EventAudienceDto.Expected</b> — the denominator, the freeze snapshot\r\nand attendance are all student-keyed, so personnel have nowhere to be counted. The figure exists so\r\nthe exclusion is visible rather than silent: an organizer who attaches a personnel-heavy definition\r\ncan see what it resolved to even though none of it enters the student denominator.",
+            "description": "<b>Deprecated:</b> equals EAMS.Application.Dtos.EventAudienceDto.ExpectedPersonnel (ADR-015 D-102). It keeps its wire name for\r\n            clients that still read it; read EAMS.Application.Dtos.EventAudienceDto.ExpectedPersonnel instead.",
             "format": "int32"
           },
           "expectedSource": {
             "type": "string",
-            "description": "Where EAMS.Application.Dtos.EventAudienceDto.Expected is resolved from (ADR-008 D-71) — one of\r\nEAMS.Domain.ExpectedAudienceSource. `\"PreRegistration\"` when one or more\r\npre-registration sessions are linked to this event, in which case EAMS.Application.Dtos.EventAudienceDto.Expected is the\r\nlinked sessions' deduped student registrants and the attached EAMS.Application.Dtos.EventAudienceDto.Groups/EAMS.Application.Dtos.EventAudienceDto.Definitions\r\nare kept but not resolved; otherwise `\"Audience\"` and both keep their Phase-2 meaning. The signal\r\nexists so the FE can explain why attached sections may not be counted."
+            "description": "Where the <em>student</em> side of EAMS.Application.Dtos.EventAudienceDto.Expected is resolved from (ADR-015 D-103) — one of\r\nEAMS.Domain.ExpectedAudienceSource. `\"PreRegistration\"` when the linked sessions hold\r\na countable student registrant, in which case EAMS.Application.Dtos.EventAudienceDto.ExpectedStudents is those registrants and\r\nthe attached EAMS.Application.Dtos.EventAudienceDto.Groups/EAMS.Application.Dtos.EventAudienceDto.Definitions are kept but not resolved for students;\r\notherwise `\"Audience\"`, whether or not a session is linked. The signal exists so the FE can explain\r\nwhy attached sections may not be counted. On a terminal event it describes the sessions as they are now;\r\nthe frozen number is still EAMS.Application.Dtos.EventAudienceDto.Expected."
           },
           "preRegistration": {
             "$ref": "#/components/schemas/EventPreRegistrationDto"
+          },
+          "expectedStudents": {
+            "type": "integer",
+            "description": "The students in EAMS.Application.Dtos.EventAudienceDto.Expected.",
+            "format": "int32"
+          },
+          "expectedPersonnel": {
+            "type": "integer",
+            "description": "The personnel in EAMS.Application.Dtos.EventAudienceDto.Expected.",
+            "format": "int32"
+          },
+          "expectedPersonnelSource": {
+            "type": "string",
+            "description": "EAMS.Application.Dtos.EventAudienceDto.ExpectedSource's counterpart for the personnel side, in the same vocabulary."
           }
         },
         "additionalProperties": false,
@@ -13754,7 +13768,7 @@
               "type": "string",
               "format": "uuid"
             },
-            "description": "Reusable `AudienceDefinition`s to attach alongside the sections and individuals (ADR-007 D-69).\r\nOptional, like the other two. Each must be an active definition in this event's school <em>and</em>\r\nfiled under the event's `EventClassificationId`; an id that is unknown, another tenant's,\r\ninactive, or outside the event's classification is refused identically as\r\nEAMS.Application.Abstractions.EventWriteOutcome.UnknownReference (400), for the same\r\nno-existence-disclosure reason the section and student refs are. The definition's <em>student</em>\r\nhalf joins the expected denominator; its <em>personnel</em> half is excluded and surfaced as an\r\nadvisory count on the audience read (D-70).",
+            "description": "Reusable `AudienceDefinition`s to attach alongside the sections and individuals (ADR-007 D-69).\r\nOptional, like the other two. Each must be an active definition in this event's school <em>and</em>\r\nfiled under the event's `EventClassificationId`; an id that is unknown, another tenant's,\r\ninactive, or outside the event's classification is refused identically as\r\nEAMS.Application.Abstractions.EventWriteOutcome.UnknownReference (400), for the same\r\nno-existence-disclosure reason the section and student refs are. Both halves of the definition join\r\nthe expected denominator, each in its own population (ADR-015 D-95/D-102).",
             "nullable": true
           }
         },
@@ -13796,7 +13810,7 @@
           },
           "expected": {
             "type": "integer",
-            "description": "The event's expected-attendee count after this call — the same number\r\n`GET /events/{id}/summary` reports. Returned here so the UI can show the denominator move as\r\nsections are attached, without a follow-up request.",
+            "description": "The event's expected-attendee count after this call, students plus personnel (ADR-015 D-102) — the\r\nsame number `GET /events/{id}/summary` reports. Returned here so the UI can show the denominator\r\nmove as sections are attached, without a follow-up request.",
             "format": "int32"
           },
           "warnings": {
@@ -13805,6 +13819,16 @@
               "type": "string"
             },
             "description": "Non-fatal observations about what was attached. Empty on the ordinary case. See\r\n`IEventService.AttachAudienceAsync` for why a term mismatch warns rather than refuses."
+          },
+          "expectedStudents": {
+            "type": "integer",
+            "description": "The students in EAMS.Application.Dtos.EventAudienceResultDto.Expected.",
+            "format": "int32"
+          },
+          "expectedPersonnel": {
+            "type": "integer",
+            "description": "The personnel in EAMS.Application.Dtos.EventAudienceResultDto.Expected.",
+            "format": "int32"
           }
         },
         "additionalProperties": false,
@@ -14305,12 +14329,12 @@
           },
           "totalPreRegisteredStudentCount": {
             "type": "integer",
-            "description": "Distinct student registrants across all linked sessions, soft-deleted excluded — a person registered in\r\ntwo linked sessions counts once (a `UNION`, matching how the denominator dedupes). On a live linked\r\nevent this equals EAMS.Application.Dtos.EventAudienceDto.Expected.",
+            "description": "Distinct student registrants across all linked sessions, soft-deleted excluded — a person registered in\r\ntwo linked sessions counts once (a `UNION`, matching how the denominator dedupes). It equals\r\nEAMS.Application.Dtos.EventAudienceDto.ExpectedStudents only when pre-registration governs the student side.",
             "format": "int32"
           },
           "totalAdvisoryPersonnelCount": {
             "type": "integer",
-            "description": "Distinct personnel registrants across all linked sessions, soft-deleted excluded (D-72). Advisory only —\r\npersonnel are never in the denominator, the freeze snapshot or attendance, exactly as a definition's\r\npersonnel are (D-70).",
+            "description": "Distinct personnel registrants across all linked sessions, soft-deleted excluded, any `Status`. A\r\ndisplay count, <b>not</b> ADR-015 D-103's selector: an event whose only staff registrant is Inactive\r\nshows 1 here, yet its personnel side still comes from the audience.",
             "format": "int32"
           }
         },
@@ -14577,7 +14601,7 @@
           },
           "expected": {
             "type": "integer",
-            "description": "The invited population: every student in an attached group, plus every individually attached\r\nstudent, de-duplicated. This is the denominator §4.5 and §12 mean, and it is <em>not</em> the length\r\nof EAMS.Application.Dtos.EventRosterDto.Entries — a student who tapped without being invited is listed with\r\n`IsExpected = false` and is not counted here.\r\n            \r\n\r\n\r\nWhile the event is live the soft-deleted are excluded: a student the roster says does not exist\r\ncannot be expected to attend. Once EAMS.Application.Dtos.EventRosterDto.IsFrozen they are included, because by then this\r\nis a written-down record of who was invited and a student deleted next year must not retroactively\r\nshrink a past event's denominator.\r\n",
+            "description": "The invited population: the expected students plus the expected personnel, each de-duplicated. This is\r\nthe denominator §4.5 and §12 mean, and it is <em>not</em> the length of EAMS.Application.Dtos.EventRosterDto.Entries — a student\r\nwho tapped without being invited is listed with `IsExpected = false` and is not counted here.\r\n            \r\n\r\n\r\nWhile the event is live the soft-deleted are excluded: a student the roster says does not exist\r\ncannot be expected to attend. Once EAMS.Application.Dtos.EventRosterDto.IsFrozen they are included, because by then this\r\nis a written-down record of who was invited and a student deleted next year must not retroactively\r\nshrink a past event's denominator.\r\n",
             "format": "int32"
           },
           "present": {
@@ -14598,12 +14622,12 @@
           },
           "notRecorded": {
             "type": "integer",
-            "description": "Expected students with no attendance row at all. While the event is live this is the running\r\nabsentee list; after a <em>close</em> it is zero, because closing materializes every one of them as\r\nan `Absent` record. After a <em>cancellation</em> it is the whole audience, and that is the\r\nhonest answer: the invitation list was frozen, and nobody attended because the event did not happen.",
+            "description": "Expected attendees with no attendance row at all. While the event is live this is the running\r\nabsentee list; after a <em>close</em> it is zero, because closing materializes every one of them as\r\nan `Absent` record. After a <em>cancellation</em> it is the whole audience, and that is the\r\nhonest answer: the invitation list was frozen, and nobody attended because the event did not happen.",
             "format": "int32"
           },
           "unexpected": {
             "type": "integer",
-            "description": "Entries flagged `IsExpected = false` — recorded but never invited. The same number\r\n`GET /events/{id}/summary` reports under the same name, so the two views of one event agree\r\nabout how many walk-ins it had.",
+            "description": "Entries flagged `IsExpected = false` — recorded but never invited — plus any personnel in the same\r\nposition. The same number `GET /events/{id}/summary` reports under the same name, so the two views\r\nof one event agree about how many walk-ins it had.",
             "format": "int32"
           },
           "entries": {
@@ -14611,10 +14635,20 @@
             "items": {
               "$ref": "#/components/schemas/EventRosterEntryDto"
             }
+          },
+          "expectedStudents": {
+            "type": "integer",
+            "description": "The students in EAMS.Application.Dtos.EventRosterDto.Expected.",
+            "format": "int32"
+          },
+          "expectedPersonnel": {
+            "type": "integer",
+            "description": "The personnel in EAMS.Application.Dtos.EventRosterDto.Expected.",
+            "format": "int32"
           }
         },
         "additionalProperties": false,
-        "description": "`GET /events/{id}/roster` — §6.3's \"expected vs present roster\" and the source of §12's\r\n             Absentee Report.\r\n            \r\n             \r\n<b>The header counts and EAMS.Application.Dtos.EventRosterDto.Entries always reconcile.</b> The buckets are counted over\r\n             exactly the rows listed, so an operator adding up the roster gets the header. They also match\r\n             `GET /events/{id}/summary`, which counts the same attendance rows.\r\n             "
+        "description": "`GET /events/{id}/roster` — §6.3's \"expected vs present roster\" and the source of §12's\r\n             Absentee Report.\r\n            \r\n             \r\n<b>The header counts both populations and EAMS.Application.Dtos.EventRosterDto.Entries lists students</b> (ADR-015 D-102). The\r\n             student part of the header is counted over exactly the rows listed; the personnel part comes from the\r\n             same attendance rows `GET /events/{id}/summary` counts, so the header matches the summary.\r\n             "
       },
       "EventRosterEntryDto": {
         "type": "object",
@@ -14763,12 +14797,12 @@
           },
           "expected": {
             "type": "integer",
-            "description": "The invited population: students in the event's attached §4.8 groups plus its individually attached\r\nstudents, de-duplicated, excluding the soft-deleted.\r\n            \r\n\r\n<b>This used to be the recorded-row count</b>, which made the rate structurally incapable of falling\r\nbelow the share of rows somebody had marked `Absent` by hand, and made an absentee\r\nunrepresentable: a student who never taps has no row, so they were not counted as expected either.\r\nA number that was always about 100% and meant nothing.\r\n\r\n<b>Zero means no audience is attached</b>, not \"nobody was invited to a well-defined event\". Nothing\r\nfalls back to the old count in that case — a denominator that silently changes definition depending\r\non whether a table is empty is worse than one that is honestly absent. `GET /events/{id}/roster`\r\nis where to look: it lists whoever <em>did</em> tap, each flagged `isExpected: false`.\r\n",
+            "description": "The invited population, `|E_s| + |E_p|` (ADR-015 D-102): the expected students plus the expected\r\npersonnel, each de-duplicated, excluding the soft-deleted while the event is live. It already is the\r\ntotal; ExpectedStudents and ExpectedPersonnel are its two parts.\r\n            \r\n\r\n<b>This used to be the recorded-row count</b>, which made the rate structurally incapable of falling\r\nbelow the share of rows somebody had marked `Absent` by hand, and made an absentee\r\nunrepresentable: a student who never taps has no row, so they were not counted as expected either.\r\nA number that was always about 100% and meant nothing.\r\n\r\n<b>Zero means no audience is attached</b>, not \"nobody was invited to a well-defined event\". Nothing\r\nfalls back to the old count in that case — a denominator that silently changes definition depending\r\non whether a table is empty is worse than one that is honestly absent. `GET /events/{id}/roster`\r\nis where to look: it lists whoever <em>did</em> tap, each flagged `isExpected: false`.\r\n",
             "format": "int32"
           },
           "present": {
             "type": "integer",
-            "description": "Counted over every attendance row on the event, including any belonging to a student the audience\r\ndoes not name. That is deliberate: these four must reconcile with\r\n`GET /attendance?eventId=` and with the roster, or the summary becomes a fifth opinion.",
+            "description": "Counted over every attendance row on the event, both populations, including any belonging to someone\r\nthe audience does not name. That is deliberate: these four must reconcile with\r\n`GET /attendance?eventId=` and with the roster, or the summary becomes a fifth opinion.",
             "format": "int32"
           },
           "late": {
@@ -14785,13 +14819,23 @@
           },
           "unexpected": {
             "type": "integer",
-            "description": "Attendees who were recorded but never invited — walk-ins. Counted as <em>people</em>, so it is\r\nexactly the number of `GET /events/{id}/roster` entries flagged `isExpected: false`.\r\n            \r\n\r\n<b>This is where the over-100% signal went, and it is a better one than the rate was.</b>AttendanceRate used to divide every Present and Late row — walk-ins included —\r\nby a denominator that counted only the invited, so twenty-nine expected, twenty-nine present and\r\ntwo tapping alumni read 106.9%. Every underlying row was truthful and the headline number was\r\nimpossible. Folding the walk-ins into the rate was the wrong place to surface them: it corrupted\r\nthe one number an operator reads first, and it said \"something is off\" without saying how many or\r\nwho. Counting them here says both, and the roster names them.\r\n",
+            "description": "Attendees who were recorded but never invited — walk-ins. Counted as <em>people</em>, per population,\r\n`|R_s \\ E_s| + |R_p \\ E_p|` (ADR-015 D-102): the same number the roster's header reports.\r\n            \r\n\r\n<b>This is where the over-100% signal went, and it is a better one than the rate was.</b>AttendanceRate used to divide every Present and Late row — walk-ins included —\r\nby a denominator that counted only the invited, so twenty-nine expected, twenty-nine present and\r\ntwo tapping alumni read 106.9%. Every underlying row was truthful and the headline number was\r\nimpossible. Folding the walk-ins into the rate was the wrong place to surface them: it corrupted\r\nthe one number an operator reads first, and it said \"something is off\" without saying how many or\r\nwho. Counting them here says both, and the roster names them.\r\n",
             "format": "int32"
           },
           "attendanceRate": {
             "type": "number",
-            "description": "The share of the <em>invited</em> who turned up: invited students with a `Present` or\r\n`Late` record, over Expected, as a percentage to one decimal place. Zero\r\nwhen Expected is zero.\r\n            \r\n\r\n<b>It cannot exceed 100, structurally rather than by clamping.</b> Numerator and denominator are\r\nboth computed over the expected set — the numerator as a SQL `INTERSECT` against it, which is\r\ndistinct on both sides — so the numerator is a subset of the denominator by construction. No cap is\r\napplied and none is needed; a clamp would have hidden the arithmetic rather than fixed it.\r\n\r\n\r\nWalk-ins are therefore <em>not</em> in this number. They are not discarded: see\r\nUnexpected, and note that Present and\r\nLate still count every row on the event, so the buckets keep reconciling with\r\n`GET /attendance?eventId=` while the rate answers the question it is named for.\r\n",
+            "description": "The share of the <em>invited</em> who turned up: expected students and expected personnel with a\r\n`Present` or `Late` record, over Expected, as a percentage to one decimal\r\nplace. Zero when Expected is zero.\r\n            \r\n\r\n<b>It cannot exceed 100, structurally rather than by clamping.</b> Numerator and denominator are\r\nboth computed over the expected set, one population at a time — each numerator term a SQL\r\n`INTERSECT` against its own expected set, which is distinct on both sides — so each term is\r\nbounded by its own denominator by construction (ADR-015 D-102). No cap is applied and none is needed;\r\na clamp would have hidden the arithmetic rather than fixed it.\r\n\r\n\r\nWalk-ins are therefore <em>not</em> in this number. They are not discarded: see\r\nUnexpected, and note that Present and\r\nLate still count every row on the event, so the buckets keep reconciling with\r\n`GET /attendance?eventId=` while the rate answers the question it is named for.\r\n",
             "format": "double"
+          },
+          "expectedStudents": {
+            "type": "integer",
+            "description": "The students in Expected.",
+            "format": "int32"
+          },
+          "expectedPersonnel": {
+            "type": "integer",
+            "description": "The personnel in Expected.",
+            "format": "int32"
           }
         },
         "additionalProperties": false,
@@ -14921,7 +14965,7 @@
           },
           "advisoryPersonnelCount": {
             "type": "integer",
-            "description": "This session's distinct personnel registrants, soft-deleted excluded (advisory only, D-72).",
+            "description": "This session's distinct personnel registrants, soft-deleted excluded, any `Status`. A display count.",
             "format": "int32"
           }
         },

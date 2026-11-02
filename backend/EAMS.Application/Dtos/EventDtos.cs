@@ -104,9 +104,8 @@ public record EventStatusRequest(string Status);
 /// filed under the event's <c>EventClassificationId</c>; an id that is unknown, another tenant's,
 /// inactive, or outside the event's classification is refused identically as
 /// <see cref="EAMS.Application.Abstractions.EventWriteOutcome.UnknownReference"/> (400), for the same
-/// no-existence-disclosure reason the section and student refs are. The definition's <em>student</em>
-/// half joins the expected denominator; its <em>personnel</em> half is excluded and surfaced as an
-/// advisory count on the audience read (D-70).
+/// no-existence-disclosure reason the section and student refs are. Both halves of the definition join
+/// the expected denominator, each in its own population (ADR-015 D-95/D-102).
 /// </param>
 public record EventAudienceRequest(
     IReadOnlyList<Guid>? StudentGroupIds,
@@ -123,10 +122,12 @@ public record EventAudienceRequest(
 /// </para>
 /// </summary>
 /// <param name="Expected">
-/// The event's expected-attendee count after this call — the same number
-/// <c>GET /events/{id}/summary</c> reports. Returned here so the UI can show the denominator move as
-/// sections are attached, without a follow-up request.
+/// The event's expected-attendee count after this call, students plus personnel (ADR-015 D-102) — the
+/// same number <c>GET /events/{id}/summary</c> reports. Returned here so the UI can show the denominator
+/// move as sections are attached, without a follow-up request.
 /// </param>
+/// <param name="ExpectedStudents">The students in <see cref="Expected"/>.</param>
+/// <param name="ExpectedPersonnel">The personnel in <see cref="Expected"/>.</param>
 /// <param name="Warnings">
 /// Non-fatal observations about what was attached. Empty on the ordinary case. See
 /// <c>IEventService.AttachAudienceAsync</c> for why a term mismatch warns rather than refuses.
@@ -145,7 +146,9 @@ public record EventAudienceResultDto(
     int StudentsAlreadyAttached,
     int DefinitionsAlreadyAttached,
     int Expected,
-    IReadOnlyList<string> Warnings);
+    IReadOnlyList<string> Warnings,
+    int ExpectedStudents,
+    int ExpectedPersonnel);
 
 /// <summary>
 /// <c>GET /events/{id}/attendees</c> — what is currently attached to an event's audience, as the
@@ -172,8 +175,9 @@ public record EventAudienceResultDto(
 /// about one event.
 /// </param>
 /// <param name="Expected">
-/// The invited population — <b>the same number <c>GET /events/{id}/summary</c> and
-/// <c>GET /events/{id}/roster</c> report for this event</b>, from the same query. It is deliberately
+/// The invited population, students plus personnel (ADR-015 D-102) — <b>the same number
+/// <c>GET /events/{id}/summary</c> and <c>GET /events/{id}/roster</c> report for this event</b>, from the
+/// same query. It is deliberately
 /// not derivable from the lists below: on a live event the group members are not enumerated here, and
 /// on a terminal event <see cref="Students"/> is empty by contract. A caller wanting the denominator
 /// reads this field; a caller wanting the people reads the roster.
@@ -218,24 +222,26 @@ public record EventAudienceResultDto(
 /// figures for display, the same way <see cref="EventAudienceGroupDto.MemberCount"/> is.
 /// </param>
 /// <param name="AdvisoryPersonnelCount">
-/// The total personnel the attached definitions currently resolve to, de-duplicated across definitions
-/// (ADR-007 D-70). <b>These are NOT in <see cref="Expected"/></b> — the denominator, the freeze snapshot
-/// and attendance are all student-keyed, so personnel have nowhere to be counted. The figure exists so
-/// the exclusion is visible rather than silent: an organizer who attaches a personnel-heavy definition
-/// can see what it resolved to even though none of it enters the student denominator.
+/// <b>Deprecated:</b> equals <see cref="ExpectedPersonnel"/> (ADR-015 D-102). It keeps its wire name for
+/// clients that still read it; read <see cref="ExpectedPersonnel"/> instead.
 /// </param>
 /// <param name="ExpectedSource">
-/// Where <see cref="Expected"/> is resolved from (ADR-008 D-71) — one of
-/// <see cref="EAMS.Domain.ExpectedAudienceSource"/>. <c>"PreRegistration"</c> when one or more
-/// pre-registration sessions are linked to this event, in which case <see cref="Expected"/> is the
-/// linked sessions' deduped student registrants and the attached <see cref="Groups"/>/<see cref="Definitions"/>
-/// are kept but not resolved; otherwise <c>"Audience"</c> and both keep their Phase-2 meaning. The signal
-/// exists so the FE can explain why attached sections may not be counted.
+/// Where the <em>student</em> side of <see cref="Expected"/> is resolved from (ADR-015 D-103) — one of
+/// <see cref="EAMS.Domain.ExpectedAudienceSource"/>. <c>"PreRegistration"</c> when the linked sessions hold
+/// a countable student registrant, in which case <see cref="ExpectedStudents"/> is those registrants and
+/// the attached <see cref="Groups"/>/<see cref="Definitions"/> are kept but not resolved for students;
+/// otherwise <c>"Audience"</c>, whether or not a session is linked. The signal exists so the FE can explain
+/// why attached sections may not be counted. On a terminal event it describes the sessions as they are now;
+/// the frozen number is still <see cref="Expected"/>.
 /// </param>
 /// <param name="PreRegistration">
 /// The linked pre-registration sessions and their counts (ADR-008 D-71/D-72), or <c>null</c> when no
-/// session is linked. When present, <see cref="AdvisoryPersonnelCount"/> reflects the pre-registered
-/// personnel (D-72) rather than the Phase-2 definition advisory; when null, the definition advisory stands.
+/// session is linked.
+/// </param>
+/// <param name="ExpectedStudents">The students in <see cref="Expected"/>.</param>
+/// <param name="ExpectedPersonnel">The personnel in <see cref="Expected"/>.</param>
+/// <param name="ExpectedPersonnelSource">
+/// <see cref="ExpectedSource"/>'s counterpart for the personnel side, in the same vocabulary.
 /// </param>
 public record EventAudienceDto(
     Guid EventId,
@@ -247,7 +253,10 @@ public record EventAudienceDto(
     IReadOnlyList<EventAudienceDefinitionRefDto> Definitions,
     int AdvisoryPersonnelCount,
     string ExpectedSource,
-    EventPreRegistrationDto? PreRegistration);
+    EventPreRegistrationDto? PreRegistration,
+    int ExpectedStudents,
+    int ExpectedPersonnel,
+    string ExpectedPersonnelSource);
 
 /// <summary>
 /// The pre-registration sessions linked to an event (ADR-008 D-71/D-73), as the audience read publishes
@@ -255,13 +264,13 @@ public record EventAudienceDto(
 /// </summary>
 /// <param name="TotalPreRegisteredStudentCount">
 /// Distinct student registrants across all linked sessions, soft-deleted excluded — a person registered in
-/// two linked sessions counts once (a <c>UNION</c>, matching how the denominator dedupes). On a live linked
-/// event this equals <see cref="EventAudienceDto.Expected"/>.
+/// two linked sessions counts once (a <c>UNION</c>, matching how the denominator dedupes). It equals
+/// <see cref="EventAudienceDto.ExpectedStudents"/> only when pre-registration governs the student side.
 /// </param>
 /// <param name="TotalAdvisoryPersonnelCount">
-/// Distinct personnel registrants across all linked sessions, soft-deleted excluded (D-72). Advisory only —
-/// personnel are never in the denominator, the freeze snapshot or attendance, exactly as a definition's
-/// personnel are (D-70).
+/// Distinct personnel registrants across all linked sessions, soft-deleted excluded, any <c>Status</c>. A
+/// display count, <b>not</b> ADR-015 D-103's selector: an event whose only staff registrant is Inactive
+/// shows 1 here, yet its personnel side still comes from the audience.
 /// </param>
 public record EventPreRegistrationDto(
     IReadOnlyList<LinkedPreRegistrationSessionDto> LinkedSessions,
@@ -274,7 +283,7 @@ public record EventPreRegistrationDto(
 /// higher than <see cref="EventPreRegistrationDto.TotalPreRegisteredStudentCount"/> when a person is in
 /// more than one linked session — the total dedupes, these do not.
 /// </param>
-/// <param name="AdvisoryPersonnelCount">This session's distinct personnel registrants, soft-deleted excluded (advisory only, D-72).</param>
+/// <param name="AdvisoryPersonnelCount">This session's distinct personnel registrants, soft-deleted excluded, any <c>Status</c>. A display count.</param>
 public record LinkedPreRegistrationSessionDto(
     Guid PreRegistrationSessionId,
     string Name,
@@ -299,8 +308,9 @@ public record CreatePreRegistrationFromEventRequest(string? Name);
 /// and individuals).
 /// </param>
 /// <param name="PersonnelCount">
-/// Personnel the definition currently resolves to — advisory only, never in the denominator (D-70). Its
-/// contribution to <see cref="EventAudienceDto.AdvisoryPersonnelCount"/> before cross-definition dedupe.
+/// Personnel the definition currently resolves to, soft-deleted excluded, any <c>Status</c>. A display
+/// count: <see cref="EventAudienceDto.ExpectedPersonnel"/> keeps only the countable ones and dedupes across
+/// definitions (ADR-015 D-95).
 /// </param>
 /// <param name="IsActive">
 /// The definition's current active flag. A definition can only be <em>attached</em> while active, but one
@@ -344,16 +354,15 @@ public record EventAudienceStudentDto(
 /// Absentee Report.
 ///
 /// <para>
-/// <b>The header counts and <see cref="Entries"/> always reconcile.</b> The buckets are counted over
-/// exactly the rows listed, so an operator adding up the roster gets the header. They also match
-/// <c>GET /events/{id}/summary</c>, which counts the same attendance rows.
+/// <b>The header counts both populations and <see cref="Entries"/> lists students</b> (ADR-015 D-102). The
+/// student part of the header is counted over exactly the rows listed; the personnel part comes from the
+/// same attendance rows <c>GET /events/{id}/summary</c> counts, so the header matches the summary.
 /// </para>
 /// </summary>
 /// <param name="Expected">
-/// The invited population: every student in an attached group, plus every individually attached
-/// student, de-duplicated. This is the denominator §4.5 and §12 mean, and it is <em>not</em> the length
-/// of <see cref="Entries"/> — a student who tapped without being invited is listed with
-/// <c>IsExpected = false</c> and is not counted here.
+/// The invited population: the expected students plus the expected personnel, each de-duplicated. This is
+/// the denominator §4.5 and §12 mean, and it is <em>not</em> the length of <see cref="Entries"/> — a student
+/// who tapped without being invited is listed with <c>IsExpected = false</c> and is not counted here.
 ///
 /// <para>
 /// While the event is live the soft-deleted are excluded: a student the roster says does not exist
@@ -363,16 +372,18 @@ public record EventAudienceStudentDto(
 /// </para>
 /// </param>
 /// <param name="NotRecorded">
-/// Expected students with no attendance row at all. While the event is live this is the running
+/// Expected attendees with no attendance row at all. While the event is live this is the running
 /// absentee list; after a <em>close</em> it is zero, because closing materializes every one of them as
 /// an <c>Absent</c> record. After a <em>cancellation</em> it is the whole audience, and that is the
 /// honest answer: the invitation list was frozen, and nobody attended because the event did not happen.
 /// </param>
 /// <param name="Unexpected">
-/// Entries flagged <c>IsExpected = false</c> — recorded but never invited. The same number
-/// <c>GET /events/{id}/summary</c> reports under the same name, so the two views of one event agree
-/// about how many walk-ins it had.
+/// Entries flagged <c>IsExpected = false</c> — recorded but never invited — plus any personnel in the same
+/// position. The same number <c>GET /events/{id}/summary</c> reports under the same name, so the two views
+/// of one event agree about how many walk-ins it had.
 /// </param>
+/// <param name="ExpectedStudents">The students in <see cref="Expected"/>.</param>
+/// <param name="ExpectedPersonnel">The personnel in <see cref="Expected"/>.</param>
 /// <param name="IsFrozen">
 /// True once this event's audience has been snapshotted — both terminal statuses. The published
 /// statement that these numbers can no longer move on their own: a later roster import that adds
@@ -397,7 +408,9 @@ public record EventRosterDto(
     int Excused,
     int NotRecorded,
     int Unexpected,
-    IReadOnlyList<EventRosterEntryDto> Entries);
+    IReadOnlyList<EventRosterEntryDto> Entries,
+    int ExpectedStudents,
+    int ExpectedPersonnel);
 
 /// <summary>
 /// One line of the roster.

@@ -13,7 +13,7 @@ namespace EAMS.Tests.Integration;
 
 /// <summary>
 /// Pins what "Organization" meant BEFORE <c>Students.Organization</c> (ADR-011), and what must not move
-/// with it: personnel matching, the advisory personnel split (ADR-007 D-70) and a blank-keeps import.
+/// with it: personnel matching, the personnel count (ADR-015 D-102) and a blank-keeps import.
 ///
 /// <para>
 /// This class was written as survivors plus three <c>Today_</c> tests that recorded behaviour the change
@@ -130,15 +130,14 @@ public class OrganizationMeaningPinTests : IntegrationTest
     }
 
     /// <summary>
-    /// SURVIVOR (ADR-007 D-70): personnel resolved by an Organization audience are ADVISORY and never enter
-    /// the student denominator. Through the real event path: the audience is attached to an event that also
-    /// has one individually-attached student. The denominator (<c>Expected</c>, on both the audience read and
-    /// the summary) is that one student; the two personnel appear only as <c>AdvisoryPersonnelCount</c> and
-    /// as the definition's <c>PersonnelCount</c>. The school's other students carry no organization, so the
-    /// numbers hold whether or not Organization audiences also match students after the change.
+    /// ADR-015 D-102 supersedes ADR-007 D-70 here: personnel resolved by an Organization audience count,
+    /// beside the students and never among them. Through the real event path: the audience is attached to
+    /// an event that also has one individually-attached student. <c>Expected</c>, on both the audience read
+    /// and the summary, is that one student plus the two personnel. The school's other students carry no
+    /// organization, so the numbers hold whether or not Organization audiences also match students.
     /// </summary>
     [Fact]
-    public async Task Organization_audience_personnel_are_advisory_and_not_in_the_student_denominator()
+    public async Task Organization_audience_personnel_count_beside_the_students_in_the_denominator()
     {
         var world = await ArrangeAsync();
 
@@ -189,14 +188,14 @@ public class OrganizationMeaningPinTests : IntegrationTest
         await using var read = NewDbContext();
         var audience = await EventsOn(read).GetAudienceAsync(eventId);
 
-        Assert.Equal(1, audience!.Expected);               // the attached student only
-        Assert.Equal(2, audience.AdvisoryPersonnelCount);  // EMP-A and EMP-B, surfaced but NOT counted
+        // The attached student, plus EMP-A and EMP-B.
+        Assert.Equal((3, 1, 2), (audience!.Expected, audience.ExpectedStudents, audience.ExpectedPersonnel));
 
         var definition = Assert.Single(audience.Definitions);
         Assert.Equal(2, definition.PersonnelCount);
 
         await using var readSummary = NewDbContext();
-        Assert.Equal(1, (await EventsOn(readSummary).GetSummaryAsync(eventId))!.Expected);
+        Assert.Equal(3, (await EventsOn(readSummary).GetSummaryAsync(eventId))!.Expected);
     }
 
     /// <summary>
