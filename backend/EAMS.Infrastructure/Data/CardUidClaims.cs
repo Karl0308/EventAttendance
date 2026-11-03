@@ -1,5 +1,6 @@
 using System.Data;
 using EAMS.Application.Abstractions;
+using EAMS.Application.Dtos;
 using System.Text;
 using Microsoft.Data.SqlClient;
 using Microsoft.EntityFrameworkCore;
@@ -17,11 +18,24 @@ internal enum CardUidHolderKind
 }
 
 /// <summary>
-/// Who holds a claimed UID: the student or personnel record, its number for the refusal message, and —
-/// for a student — the card row itself.
+/// Who holds a claimed UID: the student or personnel record, its number and display name for the
+/// refusal, and — for a student — the card row itself.
 /// </summary>
 internal sealed record CardUidHolder(
-    CardUidHolderKind Kind, Guid HolderId, string HolderNumber, Guid? RfidCardId);
+    CardUidHolderKind Kind, Guid HolderId, string HolderNumber, Guid? RfidCardId, string HolderName)
+{
+    /// <summary>
+    /// The refusal's structured <c>holder</c> (#706 F2). Admin card routes only — the caller must never put
+    /// it on a capture response.
+    /// </summary>
+    public CardUidHolderDto ToDto() => new(
+        Kind == CardUidHolderKind.Personnel ? AttendeePersonType.Personnel : AttendeePersonType.Student,
+        HolderNumber, HolderName);
+
+    /// <summary>"First Middle Last" — the same composition as <c>Student.FullName</c> and <c>Personnel.FullName</c>.</summary>
+    public static string DisplayName(string firstName, string? middleName, string lastName) =>
+        string.Join(' ', new[] { firstName, middleName, lastName }.Where(s => !string.IsNullOrWhiteSpace(s)));
+}
 
 /// <summary>
 /// ADR-015 D-98 — one card UID identifies one person in a school, across <c>RfidCards</c> and
@@ -182,25 +196,31 @@ internal static class CardUidClaims
 
         var cards = await db.RfidCards.IgnoreQueryFilters().AsNoTracking()
             .Where(c => c.SchoolId == schoolId && c.IsActive && uids.Contains(c.CardUid))
-            .Select(c => new { c.CardUid, c.Id, c.StudentId, c.Student!.StudentNumber })
+            .Select(c => new
+            {
+                c.CardUid, c.Id, c.StudentId, c.Student!.StudentNumber,
+                c.Student.FirstName, c.Student.MiddleName, c.Student.LastName,
+            })
             .ToListAsync(ct);
 
         foreach (var card in cards)
             holders.TryAdd(card.CardUid, new CardUidHolder(
-                CardUidHolderKind.Student, card.StudentId, card.StudentNumber, card.Id));
+                CardUidHolderKind.Student, card.StudentId, card.StudentNumber, card.Id,
+                CardUidHolder.DisplayName(card.FirstName, card.MiddleName, card.LastName)));
 
         var personnel = await db.Personnel.IgnoreQueryFilters().AsNoTracking()
             .Where(p => p.SchoolId == schoolId && !p.IsDeleted && p.RfidUid != null
                         && uids.Contains(p.RfidUid)
                         && (excludingPersonnelId == null || p.Id != excludingPersonnelId))
-            .Select(p => new { p.RfidUid, p.Id, p.PersonnelNumber })
+            .Select(p => new { p.RfidUid, p.Id, p.PersonnelNumber, p.FirstName, p.MiddleName, p.LastName })
             .ToListAsync(ct);
 
         foreach (var person in personnel)
         {
             if (person.RfidUid is not { } uid) continue;
             holders.TryAdd(uid, new CardUidHolder(
-                CardUidHolderKind.Personnel, person.Id, person.PersonnelNumber, null));
+                CardUidHolderKind.Personnel, person.Id, person.PersonnelNumber, null,
+                CardUidHolder.DisplayName(person.FirstName, person.MiddleName, person.LastName)));
         }
 
         return holders;

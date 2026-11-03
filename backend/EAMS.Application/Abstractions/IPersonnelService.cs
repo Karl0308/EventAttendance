@@ -25,7 +25,12 @@ public enum PersonnelWriteOutcome
 }
 
 /// <summary>The result of a personnel write. <see cref="Personnel"/> is null unless it saved.</summary>
-public record PersonnelWriteResponse(PersonnelWriteOutcome Outcome, string Message, PersonnelDto? Personnel);
+/// <param name="Holder">
+/// Set on <see cref="PersonnelWriteOutcome.DuplicateRfid"/> when the holder is known (#706 F2); the API puts
+/// it on the 409 as the <c>holder</c> extension. Null otherwise.
+/// </param>
+public record PersonnelWriteResponse(
+    PersonnelWriteOutcome Outcome, string Message, PersonnelDto? Personnel, CardUidHolderDto? Holder = null);
 
 /// <summary>
 /// <b>The Academic Community's Personnel tab (StudentsEmployees.docx) — faculty and employees master

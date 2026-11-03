@@ -21,13 +21,16 @@ namespace EAMS.Application.Dtos;
 /// </para>
 /// </summary>
 /// <param name="StudentNumber">
-/// A fragment of the registrar's student number, compared verbatim (after trimming the edges). Not
+/// A fragment of the attendee's number — the registrar's student number on a student row, the personnel
+/// number on a personnel row (ADR-015, #706 F2) — compared verbatim (after trimming the edges). Not
 /// card-normalized: <c>2023-0001</c> must go on matching itself, the reasoning
-/// <c>StudentService.ListAsync</c> records for its own search.
+/// <c>StudentService.ListAsync</c> records for its own search. The name keeps "student" for contract
+/// stability.
 /// </param>
 /// <param name="StudentName">
-/// A fragment of the student's name — any one name part, or a run across them in display order
-/// (<c>First Last</c> or <c>First Middle Last</c>). Case-insensitive under the database's collation.
+/// A fragment of the attendee's name — student or personnel — any one name part, or a run across them in
+/// display order (<c>First Last</c> or <c>First Middle Last</c>). Case-insensitive under the database's
+/// collation.
 /// </param>
 /// <param name="CardUid">
 /// A fragment of the serial of <b>the card that made the tap</b> — the row's own <c>RfidCardId</c>,
@@ -35,7 +38,12 @@ namespace EAMS.Application.Dtos;
 /// compared, so <c>25-03</c>, <c>25:03</c> and <c>2503</c> are one search. A row with no card (a manual
 /// entry, an import-materialized absence) never matches.
 /// </param>
-public sealed record AttendanceListSearch(string? StudentNumber, string? StudentName, string? CardUid)
+/// <param name="PersonType">
+/// <c>Student</c> or <c>Personnel</c> (<see cref="AttendeePersonType"/>), already canonical — the HTTP
+/// boundary refuses any other value. Null means both populations.
+/// </param>
+public sealed record AttendanceListSearch(
+    string? StudentNumber, string? StudentName, string? CardUid, string? PersonType = null)
 {
     /// <summary>
     /// The longest student-number fragment accepted. A fragment longer than the column

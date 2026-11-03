@@ -7,7 +7,36 @@ public static class AttendeePersonType
 {
     public const string Student = "Student";
     public const string Personnel = "Personnel";
+
+    public static readonly IReadOnlyList<string> All = [Student, Personnel];
+
+    /// <summary>
+    /// Maps any casing of a value (edges trimmed) onto its canonical spelling; refuses anything else, and
+    /// null/blank. The <c>GET /attendance?personType=</c> filter reads it.
+    /// </summary>
+    public static bool TryNormalize(string? value, out string canonical)
+    {
+        canonical = "";
+        if (string.IsNullOrWhiteSpace(value)) return false;
+
+        var trimmed = value.Trim();
+        var match = All.FirstOrDefault(v => string.Equals(v, trimmed, StringComparison.OrdinalIgnoreCase));
+        if (match is null) return false;
+
+        canonical = match;
+        return true;
+    }
 }
+
+/// <summary>
+/// Who already holds a card UID, carried on the duplicate-card 409 as the ProblemDetails extension
+/// <c>holder</c> (ADR-015 D-98, JJ 2026-11-02 #706 F2) so the admin SPA can say "This card is already
+/// assigned to &lt;name / number&gt;." Admin card routes only; never on a capture route.
+/// </summary>
+/// <param name="PersonType"><c>Student</c> or <c>Personnel</c> — <see cref="AttendeePersonType"/>.</param>
+/// <param name="Number">The student number or personnel number.</param>
+/// <param name="Name">The display name, "First Middle Last", as <c>Student.FullName</c> / <c>Personnel.FullName</c>.</param>
+public sealed record CardUidHolderDto(string PersonType, string Number, string Name);
 
 /// <summary>
 /// The v2 attendance record (ADR-015 D-99): every <see cref="AttendanceDto"/> member, in the same order,

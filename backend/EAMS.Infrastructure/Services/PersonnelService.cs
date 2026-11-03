@@ -506,9 +506,10 @@ internal sealed class PersonnelService : IPersonnelService
         holder.Kind == CardUidHolderKind.Personnel
             ? new(PersonnelWriteOutcome.DuplicateRfid,
                 $"This school already has an active personnel record ('{holder.HolderNumber}') with RFID " +
-                $"UID '{uid}'. Remove it from the other record first, or use a different card.", null)
+                $"UID '{uid}'. Remove it from the other record first, or use a different card.", null,
+                holder.ToDto())
             : new(PersonnelWriteOutcome.DuplicateRfid,
                 $"RFID UID '{uid}' is already active on a card of student '{holder.HolderNumber}' in this " +
                 "school. One UID identifies one person (ADR-015 D-98), across students and personnel; " +
-                "deactivate that student's card first, or use a different card.", null);
+                "deactivate that student's card first, or use a different card.", null, holder.ToDto());
 }

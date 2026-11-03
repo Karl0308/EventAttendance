@@ -1047,11 +1047,11 @@ internal sealed class StudentService : IStudentService
                 $"Card UID '{uid}' is already held by personnel record '{holder.HolderNumber}' in this " +
                 "school. One UID identifies one person (ADR-015 D-98), across students and personnel; " +
                 "remove it from that personnel record first and this card can be issued.",
-                null)
+                null, holder.ToDto())
             : new(StudentWriteOutcome.CardUidInUse,
                 $"Card UID '{uid}' is already active on student '{holder.HolderNumber}' in this school. " +
                 "ADR-001 D-3 scopes uniqueness to UNIQUE(SchoolId, CardUid) WHERE IsActive = 1, so one " +
                 "UID identifies one student at a time; deactivate the existing card first and this one " +
                 "can be issued.",
-                null);
+                null, holder.ToDto());
 }

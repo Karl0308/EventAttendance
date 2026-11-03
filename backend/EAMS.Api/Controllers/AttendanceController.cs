@@ -29,6 +29,9 @@ public class AttendanceController : ControllerBase
     /// </summary>
     internal const string ErrorCodeProperty = "code";
 
+    /// <summary><c>GET /attendance</c>'s refusal of a <c>personType</c> outside <see cref="AttendeePersonType.All"/>.</summary>
+    internal const string UnknownPersonTypeCode = "UnknownPersonType";
+
     /// <summary>
     /// The server's clock, on the error bodies as well as the success ones. The published contract
     /// promises <c>serverTime</c> on every response, and the response that needs it most is
@@ -102,20 +105,28 @@ public class AttendanceController : ControllerBase
     /// <para>
     /// <b>Rows are v2 and may be personnel (ADR-015 D-99).</b> Branch on <c>personType</c>: on a
     /// <c>Personnel</c> row the three student members are null and the three personnel members are set.
-    /// The search filters read the student's columns, so a personnel row never matches one.
+    /// <c>studentNumber</c> and <c>studentName</c> match both populations — the student's number and name
+    /// on a student row, the personnel number and name on a personnel row; the parameter names keep
+    /// "student" for contract stability. <c>personType</c> narrows to one population.
     /// </para>
     /// </remarks>
     /// <param name="eventId">Restrict to one event.</param>
     /// <param name="studentId">Restrict to one student.</param>
     /// <param name="status">One of <c>Present</c>, <c>Late</c>, <c>Absent</c>, <c>Excused</c>.</param>
+    /// <param name="personType">
+    /// <c>Student</c> or <c>Personnel</c> (any casing): only that population's rows. Absent or blank means
+    /// both. Any other value is a 400 with <c>code: "UnknownPersonType"</c>.
+    /// </param>
     /// <param name="studentNumber">
-    /// A fragment of the student number, matched as written (edges trimmed): <c>2023-00</c> finds
-    /// <c>2023-0001</c>. Bounded by this parameter's <c>maxLength</c>, the column's own width.
+    /// A fragment of the attendee's number — the student number on a student row, the personnel number on
+    /// a personnel row — matched as written (edges trimmed): <c>2023-00</c> finds <c>2023-0001</c>. Bounded
+    /// by this parameter's <c>maxLength</c>, the column's own width.
     /// </param>
     /// <param name="studentName">
-    /// A fragment of the student's name, case-insensitive: any one of first, middle or last name, or a
-    /// run across them in display order (<c>Maria Santos</c>, <c>Maria Reyes Santos</c>). Bounded by this
-    /// parameter's <c>maxLength</c>: three name parts at column width and the two spaces between them.
+    /// A fragment of the attendee's name — student or personnel — case-insensitive: any one of first,
+    /// middle or last name, or a run across them in display order (<c>Maria Santos</c>,
+    /// <c>Maria Reyes Santos</c>). Bounded by this parameter's <c>maxLength</c>: three name parts at column
+    /// width and the two spaces between them.
     /// </param>
     /// <param name="cardUid">
     /// A fragment of the serial of <b>the card that made the tap</b> — not of any other card the
@@ -136,8 +147,9 @@ public class AttendanceController : ControllerBase
     /// <param name="ct">Cancellation token.</param>
     /// <response code="200">One page of matching rows, possibly empty. Never a 404 for an empty filter.</response>
     /// <response code="400">
-    /// A text filter was longer than its limit, or <c>cardUid</c> contained no letter or digit — which
-    /// normalizes to an empty fragment and would match every tapped row rather than none.
+    /// A text filter was longer than its limit, <c>cardUid</c> contained no letter or digit — which
+    /// normalizes to an empty fragment and would match every tapped row rather than none — or
+    /// <c>personType</c> was neither <c>Student</c> nor <c>Personnel</c>.
     /// </response>
     [HttpGet]
     [Authorize(AuthenticationSchemes = JwtBearerDefaults.AuthenticationScheme, Policy = EamsPermissions.AttendanceRead)]
@@ -146,6 +158,7 @@ public class AttendanceController : ControllerBase
     [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status400BadRequest)]
     public async Task<ActionResult<PagedResult<AttendanceDtoV2>>> List(
         [FromQuery] Guid? eventId, [FromQuery] Guid? studentId, [FromQuery] string? status,
+        [FromQuery] string? personType,
         [FromQuery][StringLength(AttendanceListSearch.StudentNumberMaxLength)] string? studentNumber,
         [FromQuery][StringLength(AttendanceListSearch.StudentNameMaxLength)] string? studentName,
         [FromQuery][StringLength(AttendanceListSearch.CardUidMaxLength)] string? cardUid,
@@ -169,9 +182,29 @@ public class AttendanceController : ControllerBase
             return StatusCode(StatusCodes.Status400BadRequest, problem);
         }
 
+        // Refused, not ignored: a typo read as "both" would show students under a Personnel tab.
+        string? canonicalPersonType = null;
+        if (!string.IsNullOrWhiteSpace(personType))
+        {
+            if (AttendeePersonType.TryNormalize(personType, out var canonical))
+            {
+                canonicalPersonType = canonical;
+            }
+            else
+            {
+                var problem = ProblemDetailsFactory.CreateProblemDetails(
+                    HttpContext, statusCode: StatusCodes.Status400BadRequest,
+                    title: "That attendance search cannot be run.",
+                    detail: $"personType must be '{AttendeePersonType.Student}' or " +
+                            $"'{AttendeePersonType.Personnel}'. Leave it out to list both.");
+                problem.Extensions[ErrorCodeProperty] = UnknownPersonTypeCode;
+                return StatusCode(StatusCodes.Status400BadRequest, problem);
+            }
+        }
+
         return Ok(await _attendance.ListAsync(
             eventId, studentId, status, PageRequest.From(page, pageSize),
-            new AttendanceListSearch(studentNumber, studentName, cardUid), ct));
+            new AttendanceListSearch(studentNumber, studentName, cardUid, canonicalPersonType), ct));
     }
 
     /// <summary>

@@ -86,7 +86,11 @@ public class PersonnelController : ControllerBase
     /// </summary>
     /// <response code="201">The created record. <c>Location</c> names it.</response>
     /// <response code="400">A field breaks a column rule or the status is undocumented.</response>
-    /// <response code="409">The ID or RFID UID is already in use, or no school could be resolved.</response>
+    /// <response code="409">
+    /// The ID or RFID UID is already in use, or no school could be resolved. A <c>DuplicateRfid</c> carries
+    /// <c>holder: { personType, number, name }</c> naming the student or personnel record holding the card —
+    /// absent only when the UID was lost to a concurrent write, so treat it as optional.
+    /// </response>
     /// <response code="503">
     /// <c>WriteLockUnavailable</c>: another change to the same card held its lock. Nothing was written.
     /// Send the same request again after <c>Retry-After</c> seconds.
@@ -112,7 +116,11 @@ public class PersonnelController : ControllerBase
     /// <response code="200">The updated record.</response>
     /// <response code="400">A field breaks a column rule or the status is undocumented.</response>
     /// <response code="404">No such record.</response>
-    /// <response code="409">The ID or RFID UID is already in use by another record.</response>
+    /// <response code="409">
+    /// The ID or RFID UID is already in use by another record. A <c>DuplicateRfid</c> carries
+    /// <c>holder: { personType, number, name }</c> naming the student or personnel record holding the card —
+    /// absent only when the UID was lost to a concurrent write, so treat it as optional.
+    /// </response>
     /// <response code="503">
     /// <c>WriteLockUnavailable</c>: another change to the same card held its lock. Nothing was written.
     /// Send the same request again after <c>Retry-After</c> seconds.
@@ -233,6 +241,10 @@ public class PersonnelController : ControllerBase
             HttpContext, statusCode: status, title: TitleFor(response.Outcome), detail: response.Message);
 
         problem.Extensions[ErrorCodeProperty] = response.Outcome.ToString();
+
+        // #706 F2: who holds the card, structured — the same extension StudentsController's 409 carries.
+        if (response.Holder is not null)
+            problem.Extensions[StudentsController.HolderProperty] = response.Holder;
 
         return StatusCode(status, problem);
     }

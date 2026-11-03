@@ -729,7 +729,7 @@
           "Attendance"
         ],
         "summary": "`GET /attendance` — recorded attendance rows, every filter optional.",
-        "description": "\r\n\r\n             A back-office read rather than something to poll: offset-paged, newest check-in first. The live\r\n             dashboard's read is `GET /attendance/live/{eventId}`, which is cursored.\r\n             \r\n\r\n\r\n  <b>The two are not variations on one endpoint and must not be made into one.</b> This answers\r\n             \"give me rows 40 to 60 of what matched\"; the live one answers \"what changed after this cursor\",\r\n             and its `since`/`cursor`/`hasMore` shape is frozen published contract\r\n             (D-29/D-30/D-42) that a mobile client polls today. Offset paging over a live feed also loses\r\n             rows outright — an insert below the offset shifts everything up by one and the next page skips\r\n             it — which is exactly why that endpoint was built on a `rowversion` cursor instead.\r\n             \r\n\r\n\r\n  <b>Live Attendance's search (client QA Q7): `studentNumber`, `studentName` and\r\n             `cardUid`.</b> Each is an optional fragment — a \"contains\" match — and every filter on this\r\n             route, these three included, combines with AND. Absent or blank means that filter is not\r\n             applied. They only ever narrow attendance rows, so a student who has no row for the event never\r\n             appears through them. The rows returned are the same `AttendanceDtoV2` as without them; no\r\n             field is added to say which filter matched.\r\n             \r\n\r\n\r\n  <b>Rows are v2 and may be personnel (ADR-015 D-99).</b> Branch on `personType`: on a\r\n             `Personnel` row the three student members are null and the three personnel members are set.\r\n             The search filters read the student's columns, so a personnel row never matches one.\r\n             ",
+        "description": "\r\n\r\n             A back-office read rather than something to poll: offset-paged, newest check-in first. The live\r\n             dashboard's read is `GET /attendance/live/{eventId}`, which is cursored.\r\n             \r\n\r\n\r\n  <b>The two are not variations on one endpoint and must not be made into one.</b> This answers\r\n             \"give me rows 40 to 60 of what matched\"; the live one answers \"what changed after this cursor\",\r\n             and its `since`/`cursor`/`hasMore` shape is frozen published contract\r\n             (D-29/D-30/D-42) that a mobile client polls today. Offset paging over a live feed also loses\r\n             rows outright — an insert below the offset shifts everything up by one and the next page skips\r\n             it — which is exactly why that endpoint was built on a `rowversion` cursor instead.\r\n             \r\n\r\n\r\n  <b>Live Attendance's search (client QA Q7): `studentNumber`, `studentName` and\r\n             `cardUid`.</b> Each is an optional fragment — a \"contains\" match — and every filter on this\r\n             route, these three included, combines with AND. Absent or blank means that filter is not\r\n             applied. They only ever narrow attendance rows, so a student who has no row for the event never\r\n             appears through them. The rows returned are the same `AttendanceDtoV2` as without them; no\r\n             field is added to say which filter matched.\r\n             \r\n\r\n\r\n  <b>Rows are v2 and may be personnel (ADR-015 D-99).</b> Branch on `personType`: on a\r\n             `Personnel` row the three student members are null and the three personnel members are set.\r\n             `studentNumber` and `studentName` match both populations — the student's number and name\r\n             on a student row, the personnel number and name on a personnel row; the parameter names keep\r\n             \"student\" for contract stability. `personType` narrows to one population.\r\n             ",
         "parameters": [
           {
             "name": "eventId",
@@ -758,9 +758,17 @@
             }
           },
           {
+            "name": "personType",
+            "in": "query",
+            "description": "`Student` or `Personnel` (any casing): only that population's rows. Absent or blank means\r\n             both. Any other value is a 400 with `code: \"UnknownPersonType\"`.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
             "name": "studentNumber",
             "in": "query",
-            "description": "A fragment of the student number, matched as written (edges trimmed): `2023-00` finds\r\n`2023-0001`. Bounded by this parameter's `maxLength`, the column's own width.",
+            "description": "A fragment of the attendee's number — the student number on a student row, the personnel number on\r\na personnel row — matched as written (edges trimmed): `2023-00` finds `2023-0001`. Bounded\r\nby this parameter's `maxLength`, the column's own width.",
             "schema": {
               "maxLength": 50,
               "minLength": 0,
@@ -770,7 +778,7 @@
           {
             "name": "studentName",
             "in": "query",
-            "description": "A fragment of the student's name, case-insensitive: any one of first, middle or last name, or a\r\nrun across them in display order (`Maria Santos`, `Maria Reyes Santos`). Bounded by this\r\nparameter's `maxLength`: three name parts at column width and the two spaces between them.",
+            "description": "A fragment of the attendee's name — student or personnel — case-insensitive: any one of first,\r\nmiddle or last name, or a run across them in display order (`Maria Santos`,\r\n`Maria Reyes Santos`). Bounded by this parameter's `maxLength`: three name parts at column\r\nwidth and the two spaces between them.",
             "schema": {
               "maxLength": 302,
               "minLength": 0,
@@ -828,7 +836,7 @@
             }
           },
           "400": {
-            "description": "A text filter was longer than its limit, or `cardUid` contained no letter or digit — which\r\nnormalizes to an empty fragment and would match every tapped row rather than none.",
+            "description": "A text filter was longer than its limit, `cardUid` contained no letter or digit — which\r\nnormalizes to an empty fragment and would match every tapped row rather than none — or\r\n`personType` was neither `Student` nor `Personnel`.",
             "content": {
               "text/plain": {
                 "schema": {
@@ -7167,7 +7175,7 @@
             }
           },
           "409": {
-            "description": "The ID or RFID UID is already in use, or no school could be resolved.",
+            "description": "The ID or RFID UID is already in use, or no school could be resolved. A `DuplicateRfid` carries\r\n`holder: { personType, number, name }` naming the student or personnel record holding the card —\r\nabsent only when the UID was lost to a concurrent write, so treat it as optional.",
             "content": {
               "text/plain": {
                 "schema": {
@@ -7422,7 +7430,7 @@
             }
           },
           "409": {
-            "description": "The ID or RFID UID is already in use by another record.",
+            "description": "The ID or RFID UID is already in use by another record. A `DuplicateRfid` carries\r\n`holder: { personType, number, name }` naming the student or personnel record holding the card —\r\nabsent only when the UID was lost to a concurrent write, so treat it as optional.",
             "content": {
               "text/plain": {
                 "schema": {
@@ -11304,7 +11312,7 @@
             }
           },
           "409": {
-            "description": "Conflict",
+            "description": "`CardUidInUse`: the UID is held by another student's active card or by a personnel record. The\r\n             body carries `holder: { personType, number, name }` naming who — absent only when the UID was\r\n             lost to a concurrent write, so treat it as optional.",
             "content": {
               "text/plain": {
                 "schema": {

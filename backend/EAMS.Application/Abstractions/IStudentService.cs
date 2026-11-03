@@ -119,7 +119,12 @@ public record CardSearchResponse(
     CardSearchOutcome Outcome, string Message, PagedResult<CardMatchDto>? Matches);
 
 /// <summary>The result of a write against one card. <paramref name="Card"/> is null unless it saved.</summary>
-public record StudentCardResponse(StudentWriteOutcome Outcome, string Message, CardDto? Card);
+/// <param name="Holder">
+/// Set on <see cref="StudentWriteOutcome.CardUidInUse"/> when the holder is known (#706 F2); the API puts it
+/// on the 409 as the <c>holder</c> extension. Null otherwise.
+/// </param>
+public record StudentCardResponse(
+    StudentWriteOutcome Outcome, string Message, CardDto? Card, CardUidHolderDto? Holder = null);
 
 /// <summary>Technical Plan §6.2. Implemented in EAMS.Infrastructure; controllers see only this.</summary>
 public interface IStudentService

@@ -121,31 +121,48 @@ internal sealed class AttendanceService : IAttendanceService
     private static IQueryable<AttendanceRecord> ApplySearch(
         IQueryable<AttendanceRecord> q, AttendanceListSearch search)
     {
+        // ADR-015 D-101: a row is a student's when PersonnelId is null (CK_AttendanceRecords_StudentOrPersonnel).
+        // The value is already canonical — the HTTP boundary refused anything else.
+        if (search.PersonType == AttendeePersonType.Student) q = q.Where(a => a.PersonnelId == null);
+        else if (search.PersonType == AttendeePersonType.Personnel) q = q.Where(a => a.PersonnelId != null);
+
         if (!string.IsNullOrWhiteSpace(search.StudentNumber))
         {
             // Verbatim, not card-normalized: the registrar's value keeps its dashes, and '2023-0001'
-            // has to go on matching itself.
+            // has to go on matching itself. Each side reads its own population's number (#706 F2); the
+            // navigation that is not this row's is null, and SQL's LEFT JOIN makes that a non-match.
             var number = search.StudentNumber.Trim();
-            q = q.Where(a => a.Student!.StudentNumber.Contains(number));
+            q = q.Where(a =>
+                (a.Student != null && a.Student.StudentNumber.Contains(number))
+                || (a.Personnel != null && a.Personnel.PersonnelNumber.Contains(number)));
         }
 
         if (!string.IsNullOrWhiteSpace(search.StudentName))
         {
-            // Student.FullName is computed in the domain and ignored by the model, so it cannot be
-            // queried. Its two possible SQL shapes are spelled out instead: 'First Last' when there is
-            // no middle name and 'First Middle Last' when there is. Each part is also matched alone,
-            // which the joined forms already cover but which keeps a surname search obviously correct.
-            // Case-insensitivity is the column collation's (SQL Server's default is CI), exactly as on
-            // GET /students.
+            // Student.FullName and Personnel.FullName are computed in the domain and ignored by the
+            // model, so they cannot be queried. Their two possible SQL shapes are spelled out instead:
+            // 'First Last' when there is no middle name and 'First Middle Last' when there is. Each part
+            // is also matched alone, which the joined forms already cover but which keeps a surname search
+            // obviously correct. Case-insensitivity is the column collation's (SQL Server's default is
+            // CI), exactly as on GET /students. Personnel rows match on the same shapes (#706 F2).
             var name = search.StudentName.Trim();
             q = q.Where(a =>
-                a.Student!.FirstName.Contains(name)
-                || a.Student.LastName.Contains(name)
-                || (a.Student.MiddleName != null && a.Student.MiddleName.Contains(name))
-                || (a.Student.FirstName + " " + a.Student.LastName).Contains(name)
-                || (a.Student.MiddleName != null
-                    && (a.Student.FirstName + " " + a.Student.MiddleName + " " + a.Student.LastName)
-                        .Contains(name)));
+                (a.Student != null
+                    && (a.Student.FirstName.Contains(name)
+                        || a.Student.LastName.Contains(name)
+                        || (a.Student.MiddleName != null && a.Student.MiddleName.Contains(name))
+                        || (a.Student.FirstName + " " + a.Student.LastName).Contains(name)
+                        || (a.Student.MiddleName != null
+                            && (a.Student.FirstName + " " + a.Student.MiddleName + " " + a.Student.LastName)
+                                .Contains(name))))
+                || (a.Personnel != null
+                    && (a.Personnel.FirstName.Contains(name)
+                        || a.Personnel.LastName.Contains(name)
+                        || (a.Personnel.MiddleName != null && a.Personnel.MiddleName.Contains(name))
+                        || (a.Personnel.FirstName + " " + a.Personnel.LastName).Contains(name)
+                        || (a.Personnel.MiddleName != null
+                            && (a.Personnel.FirstName + " " + a.Personnel.MiddleName + " "
+                                + a.Personnel.LastName).Contains(name)))));
         }
 
         if (!string.IsNullOrWhiteSpace(search.CardUid))

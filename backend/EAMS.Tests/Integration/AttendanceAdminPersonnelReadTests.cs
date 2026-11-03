@@ -179,4 +179,115 @@ public class AttendanceAdminPersonnelReadTests : IntegrationTest
             response.StatusCode == HttpStatusCode.OK,
             $"GET {route}: {(int)response.StatusCode} {await response.Content.ReadAsStringAsync()}");
     }
+
+    // ===================================================== #706 F2: personType filter and personnel search
+
+    private async Task<List<JsonElement>> ListRowsAsync(PersonnelEventWorld world, string query)
+    {
+        using var factory = new EamsApiFactory(Sql.ConnectionString);
+        using var client = await SignedInClientAsync(factory, world.SchoolId);
+
+        var body = await JsonFromAsync(client, $"/api/v1/attendance?eventId={world.EventId}{query}");
+        var rows = body.GetProperty("items").EnumerateArray().ToList();
+        Assert.Equal(rows.Count, body.GetProperty("total").GetInt32());
+        return rows;
+    }
+
+    [Theory]
+    [InlineData("Student")]
+    [InlineData("student")]
+    public async Task List_personType_Student_returns_only_student_rows(string value)
+    {
+        var world = await ArrangeWithRowsAsync();
+
+        var rows = await ListRowsAsync(world, $"&personType={value}");
+
+        AssertIsTheStudentRow(Assert.Single(rows), world);
+    }
+
+    [Theory]
+    [InlineData("Personnel")]
+    [InlineData(" PERSONNEL ")]
+    public async Task List_personType_Personnel_returns_only_personnel_rows(string value)
+    {
+        var world = await ArrangeWithRowsAsync();
+
+        var rows = await ListRowsAsync(world, $"&personType={Uri.EscapeDataString(value)}");
+
+        AssertIsThePersonnelRow(Assert.Single(rows), world);
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("&personType=")]
+    public async Task List_without_personType_returns_both_populations(string query)
+    {
+        var world = await ArrangeWithRowsAsync();
+
+        var rows = await ListRowsAsync(world, query);
+
+        Assert.Equal(2, rows.Count);
+        AssertIsThePersonnelRow(RowOf(rows, AttendeePersonType.Personnel), world);
+        AssertIsTheStudentRow(RowOf(rows, AttendeePersonType.Student), world);
+    }
+
+    [Theory]
+    [InlineData("Staff")]
+    [InlineData("Students")]
+    public async Task List_refuses_an_unknown_personType_with_400(string value)
+    {
+        var world = await ArrangeWithRowsAsync();
+        using var factory = new EamsApiFactory(Sql.ConnectionString);
+        using var client = await SignedInClientAsync(factory, world.SchoolId);
+
+        var response = await client.GetAsync($"/api/v1/attendance?eventId={world.EventId}&personType={value}");
+        var text = await response.Content.ReadAsStringAsync();
+
+        Assert.True(response.StatusCode == HttpStatusCode.BadRequest, $"{(int)response.StatusCode} {text}");
+        using var document = JsonDocument.Parse(text);
+        Assert.Equal("UnknownPersonType", document.RootElement.GetProperty("code").GetString());
+    }
+
+    [Fact]
+    public async Task List_number_fragment_matches_the_personnel_number_on_a_personnel_row()
+    {
+        var world = await ArrangeWithRowsAsync();
+
+        var rows = await ListRowsAsync(world, "&studentNumber=EMP-00");
+
+        AssertIsThePersonnelRow(Assert.Single(rows), world);
+    }
+
+    [Fact]
+    public async Task List_number_fragment_still_matches_the_student_number_on_a_student_row()
+    {
+        var world = await ArrangeWithRowsAsync();
+
+        var rows = await ListRowsAsync(world, "&studentNumber=2023-00");
+
+        AssertIsTheStudentRow(Assert.Single(rows), world);
+    }
+
+    [Theory]
+    [InlineData("rizal")]
+    [InlineData("Jose P Rizal")]
+    [InlineData("Jose Rizal")]
+    public async Task List_name_fragment_matches_the_personnel_name_on_a_personnel_row(string fragment)
+    {
+        var world = await ArrangeWithRowsAsync();
+
+        var rows = await ListRowsAsync(world, $"&studentName={Uri.EscapeDataString(fragment)}");
+
+        AssertIsThePersonnelRow(Assert.Single(rows), world);
+    }
+
+    [Fact]
+    public async Task List_personType_ands_with_the_number_filter()
+    {
+        var world = await ArrangeWithRowsAsync();
+
+        var rows = await ListRowsAsync(world, "&personType=Student&studentNumber=EMP-00");
+
+        Assert.Empty(rows);
+    }
 }

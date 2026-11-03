@@ -669,6 +669,8 @@ removed from the definition while the event is Open. The rate stays ≤ 100% and
 | Roster on `events.read` lists expected staff (id, number, name) to holders without `personnel.read` | Accepted: the same fields Viewers already see for students, and header and entries must add up | JJ, 2026-11-02 (D-101, D-104) |
 | `EventReportRowDto` gains `ExpectedStudents` and `ExpectedPersonnel` | Accepted; additive | JJ, 2026-11-02 (D-102) |
 | Roster `recorded` for personnel | Any attendance row counts, as for students and the summary | JJ, 2026-11-02 (D-101) |
+| Duplicate-card 409 names the holder for the SPA | `CardUidInUse` / `DuplicateRfid` ProblemDetails gain extension `holder: { personType, number, name }` (name = `FullName`; no email or position). Admin routes only; absent when the UID was lost to a concurrent write. Detail text unchanged | JJ, 2026-11-02 (D-98, #706 F2) |
+| `GET /attendance` for the personnel grid | New `personType` filter (`Student` / `Personnel`, any casing; absent = both; other = 400 `UnknownPersonType`). `studentNumber` and `studentName` also match personnel number and name; parameter names kept for contract stability | JJ, 2026-11-02 (D-99, #706 F2) |
 
 ## Open questions
 

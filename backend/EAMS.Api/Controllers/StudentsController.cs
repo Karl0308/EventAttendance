@@ -32,6 +32,12 @@ public class StudentsController : ControllerBase
     /// </summary>
     internal const string ErrorCodeProperty = "code";
 
+    /// <summary>
+    /// The duplicate-card 409's structured holder, <c>{ personType, number, name }</c> (#706 F2, ADR-015
+    /// D-98). Same name on <c>PersonnelController</c>'s <c>DuplicateRfid</c> 409.
+    /// </summary>
+    internal const string HolderProperty = "holder";
+
     private readonly IStudentService _students;
     public StudentsController(IStudentService students) => _students = students;
 
@@ -242,6 +248,11 @@ public class StudentsController : ControllerBase
     /// the new card is actually visible on — <c>GET /students/{id}</c> returns it in <c>cards[]</c>.
     /// </para>
     /// </summary>
+    /// <response code="409">
+    /// <c>CardUidInUse</c>: the UID is held by another student's active card or by a personnel record. The
+    /// body carries <c>holder: { personType, number, name }</c> naming who — absent only when the UID was
+    /// lost to a concurrent write, so treat it as optional.
+    /// </response>
     /// <response code="503">
     /// <c>WriteLockUnavailable</c>: another change to the same card held its lock. Nothing was written.
     /// Send the same request again after <c>Retry-After</c> seconds.
@@ -341,15 +352,18 @@ public class StudentsController : ControllerBase
         Problem(response.Outcome, response.Message);
 
     private ObjectResult CardFailure(StudentCardResponse response) =>
-        Problem(response.Outcome, response.Message);
+        Problem(response.Outcome, response.Message, response.Holder);
 
-    private ObjectResult Problem(StudentWriteOutcome outcome, string message)
+    private ObjectResult Problem(StudentWriteOutcome outcome, string message, CardUidHolderDto? holder = null)
     {
         var status = StatusCodeFor(outcome);
         var problem = ProblemDetailsFactory.CreateProblemDetails(
             HttpContext, statusCode: status, title: TitleFor(outcome), detail: message);
 
         problem.Extensions[ErrorCodeProperty] = outcome.ToString();
+
+        // #706 F2: who holds the card, structured, so the SPA need not parse the detail. Admin-gated route.
+        if (holder is not null) problem.Extensions[HolderProperty] = holder;
 
         return StatusCode(status, problem);
     }
