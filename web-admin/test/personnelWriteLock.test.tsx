@@ -13,6 +13,18 @@ import { act, cleanup, fireEvent, render, screen } from "@testing-library/react"
 import { ApiError } from "../src/api";
 import { WriteFailureAlert } from "../src/components/WriteFailureAlert";
 import PersonnelPage from "../src/pages/Personnel";
+import AuthProvider from "../src/components/AuthProvider";
+import { beginSession, resetSessionForTests } from "../src/authSession";
+import type { AuthUser } from "../src/types";
+
+// The page gates its write controls on `personnel.write` (#706 F2-5), so it is rendered signed in with it.
+const WRITER: AuthUser = {
+  id: "11111111-1111-1111-1111-111111111111",
+  schoolId: "22222222-2222-2222-2222-222222222222",
+  email: "registrar@usa.edu.ph",
+  fullName: "Reg Istrar",
+  permissions: ["personnel.read", "personnel.write"],
+};
 
 const json = (status: number, body: unknown, headers: Record<string, string> = {}) =>
   new Response(JSON.stringify(body), {
@@ -27,6 +39,8 @@ const CSV =
 let importReply: () => Response;
 
 beforeEach(() => {
+  resetSessionForTests();
+  beginSession("access-token-1", WRITER);
   importReply = () =>
     json(
       503,
@@ -48,10 +62,15 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   vi.unstubAllGlobals();
+  resetSessionForTests();
 });
 
 async function pressImportWithAFile(): Promise<void> {
-  render(<PersonnelPage />);
+  render(
+    <AuthProvider>
+      <PersonnelPage />
+    </AuthProvider>,
+  );
   fireEvent.click(await screen.findByRole("button", { name: /import csv/i }));
   const input = document.querySelector<HTMLInputElement>('input[type="file"]');
   if (input === null) throw new Error("The import dialog has no file input.");
@@ -113,6 +132,17 @@ describe("the failure heading on a 503 WriteLockUnavailable", () => {
     expect(screen.queryByText("The record may have been created")).toBeNull();
     expect(document.body.textContent).not.toMatch(/import|Rows before/i);
     expect(screen.queryByText("withheld")).toBeNull();
+  });
+
+  // F1 carry-over (#706 F2): the alert prints `describeApiError` (which carries the wait) and the
+  // guidance (which used to repeat it), so a busy refusal read "Try again in 5 seconds." twice.
+  it("says 'Try again in 5 seconds.' exactly once", () => {
+    show(refusal(false));
+
+    const text = document.body.textContent ?? "";
+    expect(text.split("Try again in 5 seconds.").length - 1).toBe(1);
+    // The rest of the guidance is untouched.
+    expect(text).toContain("Sending the same request again is safe.");
   });
 
   it("an import route is headed 'may have been created' and says earlier rows may be saved", () => {

@@ -154,7 +154,7 @@ export default function CardLookupDialog({ onClose, onViewStudent }: CardLookupD
                 <AlertTitle>Could not search cards</AlertTitle>
                 <Typography variant="body2">{describeApiError(result.error)}</Typography>
                 <Typography variant="body2" sx={{ mt: 1 }}>
-                  {advise(result.error).message}
+                  {advise(result.error, { waitShown: true }).message}
                 </Typography>
               </Alert>
             )

@@ -319,11 +319,9 @@ export default function EventPreRegistrationSection({
                   </Stack>
                 </Box>
               ) : (
-                linked.length === 0 && (
-                  <Typography variant="body2" color="text.secondary" sx={{ mb: 1, maxWidth: "68ch" }}>
-                    {NOTHING_LINKED}
-                  </Typography>
-                )
+                <Typography variant="body2" color="text.secondary" sx={{ mb: 1, maxWidth: "68ch" }}>
+                  {NOTHING_LINKED}
+                </Typography>
               ))}
 
             {preRegistration !== null && (

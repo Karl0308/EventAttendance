@@ -38,11 +38,14 @@ import type {
   EventPreRegistrationSession,
   ExpectedSource,
   PersonType,
+  CardHolder,
   EventItem,
   EventStatusName,
   EventWriteRequest,
   AttendanceRecord,
   AttendanceFilters,
+  ManualAttendanceRequest,
+  ManualAttendanceResult,
   EventSummary,
   EventReportRow,
   EventReportTotals,
@@ -98,6 +101,7 @@ import type {
 // rather than tucked in beside the code that uses it: a reader scanning these lines has to be able to
 // learn that `api.ts` holds the only caller of `getDeviceKey()`. Everything it provides is inert
 // outside `import.meta.env.DEV`, so nothing it names survives a production build.
+import { holderSentence } from "./cardHolder";
 import { DEVICE_KEY_SCHEME, deviceKeyStatus, getDeviceKey } from "./deviceKey";
 
 // The session this seam signs its requests with. `api.ts` is the only module that reads the access
@@ -185,6 +189,11 @@ export interface ApiProblem {
    * number of seconds (the HTTP-date form is not interpreted: this server sends seconds).
    */
   retryAfterSeconds?: number;
+  /**
+   * Who holds the card on a duplicate-card 409 (`CardUidInUse` / `DuplicateRfid`), when the server
+   * could name them. Optional by contract: absent on a lost race and on a duplicate personnel number.
+   */
+  holder?: CardHolder;
 }
 
 /**
@@ -408,6 +417,19 @@ const isStringArray = (value: unknown): value is string[] =>
 const optStrs = (value: unknown): readonly string[] | undefined =>
   isStringArray(value) ? value : undefined;
 
+/**
+ * `ProblemDetails.holder`. Read tolerantly, like `optStrs`: it rides an error body, so an off-contract
+ * value must not hide the status and detail the body also carried. Anything but a complete
+ * `{ personType, number, name }` collapses to `undefined`, and callers fall back to `detail`.
+ */
+const optHolder = (value: unknown): CardHolder | undefined => {
+  if (!isRow(value)) return undefined;
+  const { personType, number, name } = value;
+  if (personType !== PERSON_TYPE.Student && personType !== PERSON_TYPE.Personnel) return undefined;
+  if (typeof number !== "string" || typeof name !== "string") return undefined;
+  return { personType, number, name };
+};
+
 // ---------------------------------------------------------------------------------------------
 // Transport
 // ---------------------------------------------------------------------------------------------
@@ -452,6 +474,7 @@ async function readProblem(res: Response): Promise<ApiProblem> {
     serverTime: optStr(row.serverTime),
     missingEventIds: optStrs(row.missingEventIds),
     retryAfterSeconds: parseRetryAfterSeconds(res.headers.get("Retry-After")),
+    holder: optHolder(row.holder),
   };
 }
 
@@ -483,7 +506,10 @@ function httpError(
   shape: ApiRequestShape,
   mayCommitPartially = false,
 ): ApiError {
-  const reason = problem.detail ?? problem.title ?? problem.code ?? "no detail supplied";
+  // The holder sentence outranks `detail` on a duplicate card: it names the person, which is what the
+  // operator needs to act. Absent (a lost race), the server's own detail is used as before.
+  const reason =
+    holderSentence(problem.holder) ?? problem.detail ?? problem.title ?? problem.code ?? "no detail supplied";
   // The wait is put into the message HERE, not only in `advise()`: several screens render
   // `describeApiError` alone (the personnel import dialog, the personnel toast, the first SIS run), and
   // a busy refusal that never says how long to wait is the one message that sends people straight back.
@@ -2583,8 +2609,43 @@ async function listAttendance(
       studentNumber: filters?.studentNumber,
       studentName: filters?.studentName,
       cardUid: filters?.cardUid,
+      personType: filters?.personType,
     },
     toAttendance,
+  );
+}
+
+/** `TapResultV2` narrowed for the manual route. `success` is deprecated on the wire and not read. */
+function toManualAttendanceResult(row: Row, what: string): ManualAttendanceResult {
+  const record = row.record;
+  return {
+    code: reqStr(row, "code", what),
+    message: reqStr(row, "message", what),
+    record: record === null || record === undefined ? undefined : toAttendance(asRow(record, what), what),
+  };
+}
+
+/**
+ * `POST /attendance/manual` — mark one student **or** one personnel member present by hand (the
+ * organizer override, `attendance.write`; #706 F2-2). It keeps working on a `Closed` event: that is the
+ * only recovery route out of a terminal status.
+ *
+ * The route takes its arguments from the **query string**, so the query is assembled here and the body
+ * is an empty object (`RequestBody` has no body-less POST). Refusals arrive as RFC 7807 with a stable
+ * `code`: 400 `PersonRequired` / `InvalidStatus` / `InvalidNotes`, 404 `EventNotFound` /
+ * `StudentNotFound` / `PersonnelNotFound` / `PersonnelInactive` / `PersonnelNotInAudience`.
+ * `manualAttendance.ts` words them; branch on `ApiError.code`, never on the prose.
+ */
+async function recordManualAttendance(request: ManualAttendanceRequest): Promise<ManualAttendanceResult> {
+  const query = new URLSearchParams({ eventId: request.eventId, status: request.status });
+  if (request.studentId !== undefined) query.set("studentId", request.studentId);
+  if (request.personnelId !== undefined) query.set("personnelId", request.personnelId);
+  return writeJson(
+    "POST /attendance/manual",
+    `/attendance/manual?${query.toString()}`,
+    { method: "POST", payload: {} },
+    "The attendance was recorded",
+    toManualAttendanceResult,
   );
 }
 
@@ -4481,6 +4542,7 @@ export const api = {
   deleteEvent,
   getEvent,
   listAttendance,
+  recordManualAttendance,
   eventSummary,
   multiEventReportSummary,
   getEventAudience,

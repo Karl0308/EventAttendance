@@ -19,10 +19,10 @@ import { isResendUnsafe } from "../apiGuidance";
 import {
   EMPTY_PERSONNEL_DRAFT,
   NUMBER_TAKEN,
-  RFID_TAKEN,
   draftFromPersonnel,
   isDuplicateNumber,
   isDuplicateRfid,
+  rfidTakenText,
   validatePersonnel,
 } from "../personnelDraft";
 import type { PersonnelDraft, PersonnelFieldErrors } from "../personnelDraft";
@@ -75,7 +75,7 @@ export default function PersonnelFormDialog({ personnel, onClose, onSubmit, runn
   };
 
   const numberError = numberRefusal ? NUMBER_TAKEN : show("personnelNumber");
-  const rfidError = rfidRefusal ? RFID_TAKEN : undefined;
+  const rfidError = rfidRefusal ? rfidTakenText(failure.error) : undefined;
 
   return (
     <Dialog open onClose={onClose} fullWidth maxWidth="sm">

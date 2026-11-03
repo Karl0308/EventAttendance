@@ -373,6 +373,9 @@ const WARNING_LABELS: Record<string, string> = {
   SectionUnspecified: "No section named",
   StudentIdentityConflict: "Student details disagree",
   RfidCardRevoked: "Card was withdrawn",
+  // ADR-015 D-98: nothing was withdrawn, so the "Card was withdrawn" label above would send an operator
+  // looking for a card somebody deactivated. The serial belongs to a personnel record; the fix is there.
+  RfidCardHeldByPersonnel: "Card belongs to personnel",
   RfidCardFromLegacyMapping: "Card from an old mapping",
   // Kept although the built-in v4 profile maps no category column (ADR-009 D-76): batches that ran
   // under v3, or any profile that maps category columns, still carry these codes in their history.

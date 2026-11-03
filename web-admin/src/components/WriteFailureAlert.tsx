@@ -47,7 +47,8 @@ export function WriteFailureAlert({
   mayHaveApplied,
   resendWithheld,
 }: WriteFailureAlertProps) {
-  const guidance = advise(error);
+  // `describeApiError` below already says how long to wait on a busy refusal; say it once.
+  const guidance = advise(error, { waitShown: true });
 
   return (
     <Alert severity="error" role="alert" sx={{ mb: 2 }}>

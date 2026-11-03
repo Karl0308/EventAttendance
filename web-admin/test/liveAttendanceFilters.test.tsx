@@ -408,7 +408,7 @@ describe("Live Attendance filters", () => {
     await show();
     const before = attendanceRequests().length;
 
-    fireEvent.change(screen.getByLabelText(/student number/i), { target: { value: "2026-0002" } });
+    fireEvent.change(screen.getByLabelText(/id number/i), { target: { value: "2026-0002" } });
     await settle();
 
     expect(attendanceRequests().length).toBe(before + 1);
@@ -442,7 +442,7 @@ describe("Live Attendance filters", () => {
   it("combines all three filters into one request", async () => {
     await show();
 
-    fireEvent.change(screen.getByLabelText(/student number/i), { target: { value: "2026-0001" } });
+    fireEvent.change(screen.getByLabelText(/id number/i), { target: { value: "2026-0001" } });
     fireEvent.change(screen.getByLabelText(/^name$/i), { target: { value: "Maria" } });
     fireEvent.change(screen.getByLabelText(/card serial/i), { target: { value: "25-01" } });
     await settle();
@@ -456,7 +456,7 @@ describe("Live Attendance filters", () => {
   it("clearing all filters restores the full list", async () => {
     await show();
 
-    fireEvent.change(screen.getByLabelText(/student number/i), { target: { value: "2026-0002" } });
+    fireEvent.change(screen.getByLabelText(/id number/i), { target: { value: "2026-0002" } });
     await settle();
     expect(screen.queryByText("Maria Santos")).toBeFalsy();
 
@@ -478,7 +478,7 @@ describe("Live Attendance filters", () => {
     fireEvent.click(screen.getByRole("button", { name: /^clear filters$/i }));
     await settle();
 
-    expect(document.activeElement).toBe(screen.getByLabelText(/student number/i));
+    expect(document.activeElement).toBe(screen.getByLabelText(/id number/i));
     expect(document.activeElement).not.toBe(document.body);
   });
 
@@ -559,7 +559,7 @@ describe("Live Attendance filters", () => {
   it("gives every filter input an accessible label", async () => {
     await show();
 
-    expect(screen.getByLabelText(/student number/i)).toBeTruthy();
+    expect(screen.getByLabelText(/id number/i)).toBeTruthy();
     expect(screen.getByLabelText(/^name$/i)).toBeTruthy();
     expect(screen.getByLabelText(/card serial/i)).toBeTruthy();
   });
@@ -570,7 +570,7 @@ describe("Live Attendance filters", () => {
     // `AttendanceListSearch.StudentNumberMaxLength` / `.StudentNameMaxLength` / `.CardUidMaxLength` in
     // `EAMS.Application/Dtos/AttendanceListSearch.cs`, restated in `docs/api/openapi.json`'s
     // `GET /attendance` parameters as `maxLength: 50` / `302` / `256`.
-    expect((screen.getByLabelText(/student number/i) as HTMLInputElement).maxLength).toBe(50);
+    expect((screen.getByLabelText(/id number/i) as HTMLInputElement).maxLength).toBe(50);
     expect((screen.getByLabelText(/^name$/i) as HTMLInputElement).maxLength).toBe(302);
     expect((screen.getByLabelText(/card serial/i) as HTMLInputElement).maxLength).toBe(256);
   });

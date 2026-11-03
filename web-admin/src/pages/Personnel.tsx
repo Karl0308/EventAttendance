@@ -30,6 +30,8 @@ import UploadFileIcon from "@mui/icons-material/UploadFile";
 import { api, describeApiError } from "../api";
 import { useApiResource } from "../useApiResource";
 import { useApiMutation } from "../useApiMutation";
+import { useSignedInUser } from "../authContext";
+import { grants, PERMISSIONS } from "../permissions";
 import { EmptyState, ErrorState, LoadingState } from "../components/ResourceStates";
 import PersonnelFormDialog from "../components/PersonnelFormDialog";
 import PersonnelImportDialog from "../components/PersonnelImportDialog";
@@ -48,6 +50,11 @@ const NO_PERSONNEL =
 
 const NO_VALUE = "—";
 
+/** Said instead of the write controls, so a read-only user is not left looking for buttons that are not there. */
+const READ_ONLY_NOTE =
+  "You can view personnel but not change them. Adding, editing, removing and importing need the " +
+  "personnel.write permission; ask an EAMS administrator if you need it.";
+
 interface Notice {
   severity: "success" | "error";
   text: string;
@@ -56,6 +63,10 @@ const NOTICE_MS = 6000;
 const NO_AUTO_HIDE = null;
 
 export default function PersonnelPage() {
+  // A convenience, not a control: the server refuses every write below without `personnel.write` too
+  // (ADR-015 D-104). Hiding the controls just spares a read-only user buttons whose only outcome is a 403.
+  const user = useSignedInUser();
+  const canWrite = grants(user.permissions, PERMISSIONS.personnelWrite);
   const personnel = useApiResource(loadPersonnel, []);
   // Server state for the form's suggestions. Its failure must not block the page or the form (the field
   // takes typed input regardless), but it is shown below rather than swallowed.
@@ -156,6 +167,42 @@ export default function PersonnelPage() {
     });
   };
 
+  const actionsColumn: GridColDef<Personnel> = {
+    field: "actions",
+    headerName: "Actions",
+    width: 110,
+    sortable: false,
+    filterable: false,
+    disableColumnMenu: true,
+    renderCell: (p) => (
+      <Stack direction="row" spacing={0.5} alignItems="center" sx={{ height: "100%" }}>
+        <IconButton
+          sx={{ p: 1 }}
+          onClick={() => {
+            edit.reset();
+            setEditing(p.row);
+          }}
+          aria-label={`Edit ${p.row.fullName}`}
+          title={`Edit ${p.row.fullName}`}
+        >
+          <EditIcon fontSize="small" />
+        </IconButton>
+        <IconButton
+          sx={{ p: 1 }}
+          color="error"
+          onClick={() => {
+            remove.reset();
+            setDeleting(p.row);
+          }}
+          aria-label={`Remove ${p.row.fullName}`}
+          title={`Remove ${p.row.fullName}`}
+        >
+          <DeleteIcon fontSize="small" />
+        </IconButton>
+      </Stack>
+    ),
+  };
+
   const cols: GridColDef<Personnel>[] = [
     { field: "personnelNumber", headerName: "ID", width: 120 },
     { field: "fullName", headerName: "Name", flex: 1, minWidth: 180 },
@@ -174,41 +221,7 @@ export default function PersonnelPage() {
           <Chip size="small" label={p.row.status} variant="outlined" />
         ),
     },
-    {
-      field: "actions",
-      headerName: "Actions",
-      width: 110,
-      sortable: false,
-      filterable: false,
-      disableColumnMenu: true,
-      renderCell: (p) => (
-        <Stack direction="row" spacing={0.5} alignItems="center" sx={{ height: "100%" }}>
-          <IconButton
-            sx={{ p: 1 }}
-            onClick={() => {
-              edit.reset();
-              setEditing(p.row);
-            }}
-            aria-label={`Edit ${p.row.fullName}`}
-            title={`Edit ${p.row.fullName}`}
-          >
-            <EditIcon fontSize="small" />
-          </IconButton>
-          <IconButton
-            sx={{ p: 1 }}
-            color="error"
-            onClick={() => {
-              remove.reset();
-              setDeleting(p.row);
-            }}
-            aria-label={`Remove ${p.row.fullName}`}
-            title={`Remove ${p.row.fullName}`}
-          >
-            <DeleteIcon fontSize="small" />
-          </IconButton>
-        </Stack>
-      ),
-    },
+    ...(canWrite ? [actionsColumn] : []),
   ];
 
   return (
@@ -225,19 +238,23 @@ export default function PersonnelPage() {
           >
             {download.status === "running" ? "Exporting…" : "Export CSV"}
           </Button>
-          <Button startIcon={<UploadFileIcon />} onClick={openImport}>
-            Import CSV
-          </Button>
-          <Button
-            variant="contained"
-            startIcon={<AddIcon />}
-            onClick={() => {
-              create.reset();
-              setCreating(true);
-            }}
-          >
-            Add personnel
-          </Button>
+          {canWrite && (
+            <Button startIcon={<UploadFileIcon />} onClick={openImport}>
+              Import CSV
+            </Button>
+          )}
+          {canWrite && (
+            <Button
+              variant="contained"
+              startIcon={<AddIcon />}
+              onClick={() => {
+                create.reset();
+                setCreating(true);
+              }}
+            >
+              Add personnel
+            </Button>
+          )}
         </Stack>
       </Stack>
 
@@ -246,6 +263,12 @@ export default function PersonnelPage() {
         narrow the list. Removing a record keeps it for historical attendance and frees its ID and card
         for reuse.
       </Typography>
+
+      {!canWrite && (
+        <Alert severity="info" role="status" sx={{ mb: 2 }}>
+          {READ_ONLY_NOTE}
+        </Alert>
+      )}
 
       {organizations.status === "error" && (
         <Alert

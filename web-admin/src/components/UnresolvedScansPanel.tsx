@@ -14,6 +14,7 @@ import {
   Typography,
 } from "@mui/material";
 import HelpOutlineIcon from "@mui/icons-material/HelpOutline";
+import { describeScanReason } from "../scanReasons";
 import type { EventScanLog } from "../types";
 import { EmptyState, ErrorState, LoadingState } from "./ResourceStates";
 
@@ -128,7 +129,17 @@ export default function UnresolvedScansPanel({
                           <span>{new Date(scan.scannedAt).toLocaleString()}</span>
                         </Tooltip>
                       </TableCell>
-                      <TableCell>{scan.serverOutcome}</TableCell>
+                      <TableCell>
+                        {scan.serverOutcome}
+                        {/* The card WAS recognised as a person's, so "unrecognised" alone would
+                            mislead; this says why no attendance row exists and what to do about it
+                            (update the capture app). */}
+                        {describeScanReason(scan.reason) !== undefined && (
+                          <Typography variant="body2" color="text.secondary">
+                            {describeScanReason(scan.reason)}
+                          </Typography>
+                        )}
+                      </TableCell>
                       <TableCell>
                         {/* The device's own claim, and only interesting when it disagrees. A device
                             reporting it found a card the server could not place means its cached

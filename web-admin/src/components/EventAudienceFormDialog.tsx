@@ -78,6 +78,10 @@ const FIELD = {
   criteria: "event-audience-criteria",
 } as const;
 
+const READ_ONLY_NOTE =
+  "You can view this audience but not change it. Creating and editing audiences needs the " +
+  "events.write permission; ask an EAMS administrator if you need it.";
+
 const HEADING_NOT_SAVED = "The event audience was not saved";
 const HEADING_MAYBE_SAVED = "The event audience may have been saved";
 
@@ -146,6 +150,9 @@ export default function EventAudienceFormDialog({
   // The audience page opens on `events.read`, but building a Specific-individuals audience is a write, so a
   // Viewer makes no people call: it would be refused and show an error they cannot act on.
   const canLoadPeople = grants(useSignedInUser().permissions, PERMISSIONS.eventsWrite);
+  // The same permission gates every write in this dialog, so a Viewer gets a note and no save button
+  // rather than a form whose only outcome is a 403.
+  const canWrite = canLoadPeople;
   useEffect(() => {
     if (!canLoadPeople || !needsPeople || people !== undefined || peopleLoading || peopleError !== undefined) {
       return;
@@ -235,6 +242,12 @@ export default function EventAudienceFormDialog({
             />
           )}
 
+          {!canWrite && (
+            <Alert severity="info" role="status" sx={{ mb: 2 }}>
+              {READ_ONLY_NOTE}
+            </Alert>
+          )}
+
           <Stack spacing={2.5} sx={{ mt: 1 }}>
             <TextField
               id={FIELD.name}
@@ -300,6 +313,7 @@ export default function EventAudienceFormDialog({
               people={people}
               peopleLoading={peopleLoading}
               peopleError={peopleError}
+              canChoosePeople={canWrite}
               error={errorFor("criteria")}
               scopeError={errorFor("scope")}
               onScopeBlur={() => markTouched("scope")}
@@ -310,19 +324,30 @@ export default function EventAudienceFormDialog({
 
         <DialogActions>
           <Button onClick={onClose}>Cancel</Button>
-          <Button
-            type="submit"
-            variant="contained"
-            disabled={running || resendUnsafe}
-            startIcon={running ? <CircularProgress size={16} color="inherit" /> : undefined}
-          >
-            {running ? "Saving…" : editing ? "Save changes" : "Create audience"}
-          </Button>
+          {canWrite && (
+            <Button
+              type="submit"
+              variant="contained"
+              disabled={running || resendUnsafe}
+              startIcon={running ? <CircularProgress size={16} color="inherit" /> : undefined}
+            >
+              {running ? "Saving…" : editing ? "Save changes" : "Create audience"}
+            </Button>
+          )}
         </DialogActions>
       </form>
     </Dialog>
   );
 }
+
+/**
+ * What a Viewer (no `events.write`) sees where the people picker would be. The picker is fed by routes a
+ * Viewer is refused, so rendering it would show an empty box that looks broken; this says what the
+ * audience holds and why it cannot be edited, using only the ids already on the definition.
+ */
+const readOnlyPeopleNote = (students: number, personnel: number): string =>
+  `This audience names ${students} ${students === 1 ? "student" : "students"} and ${personnel} ` +
+  `${personnel === 1 ? "employee" : "employees"}. Choosing who is in it needs the events.write permission.`;
 
 const person = (
   id: string,
@@ -341,6 +366,7 @@ function CriteriaFields({
   people,
   peopleLoading,
   peopleError,
+  canChoosePeople,
   error,
   scopeError,
   onScopeBlur,
@@ -353,6 +379,7 @@ function CriteriaFields({
   people: PersonOption[] | undefined;
   peopleLoading: boolean;
   peopleError: unknown;
+  canChoosePeople: boolean;
   error: string | undefined;
   scopeError: string | undefined;
   onScopeBlur: () => void;
@@ -371,6 +398,13 @@ function CriteriaFields({
   }
 
   if (type === "SpecificIndividuals") {
+    if (!canChoosePeople) {
+      return (
+        <Alert severity="info" role="status">
+          {readOnlyPeopleNote(criteria.studentIds?.length ?? 0, criteria.personnelIds?.length ?? 0)}
+        </Alert>
+      );
+    }
     return (
       <PeoplePicker
         people={people}

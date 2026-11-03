@@ -1118,6 +1118,17 @@ export const PERSON_TYPE = {
 export type PersonType = (typeof PERSON_TYPE)[keyof typeof PERSON_TYPE];
 
 /**
+ * Who already holds a card UID (`CardUidHolderDto`, ADR-015 D-98), carried on the duplicate-card 409 as
+ * the ProblemDetails extension `holder`. The server omits it when the UID was lost to a concurrent
+ * write, and on a duplicate personnel NUMBER, so a reader must treat the whole object as optional.
+ */
+export interface CardHolder {
+  personType: PersonType;
+  number: string;
+  name: string;
+}
+
+/**
  * One attendance record (`AttendanceDtoV2`). A personnel record carries no `student*` fields and a
  * student record carries no `personnel*` ones; `personType` says which, so nothing infers it from
  * which fields happen to be present.
@@ -1145,6 +1156,24 @@ export interface AttendanceRecord {
 }
 
 /**
+ * `POST /attendance/manual` — the organizer override (#706 F2-2). The route reads its arguments from the
+ * query string and takes **exactly one** of `studentId` / `personnelId`; sending both, or neither, is a
+ * `400 PersonRequired`. The union makes that unrepresentable here rather than checked at the call site.
+ */
+export type ManualAttendanceRequest = {
+  eventId: string;
+  status: AttendanceStatus;
+} & ({ studentId: string; personnelId?: never } | { personnelId: string; studentId?: never });
+
+/** `TapResultV2` as `POST /attendance/manual` returns it on success (`code` is `Saved`). */
+export interface ManualAttendanceResult {
+  code: string;
+  message: string;
+  /** The record written. Read from the body; absent only if the server sent none. */
+  record?: AttendanceRecord;
+}
+
+/**
  * Live Attendance's search (client QA Q7), matching `GET /attendance`'s three optional query
  * parameters exactly. Each is a fragment — a "contains" match — and all three combine with AND; a
  * blank or absent field applies no filter for that column. `cardUid` is sent exactly as the operator
@@ -1152,9 +1181,16 @@ export interface AttendanceRecord {
  * here too would just be a second, possibly-diverging opinion of what the server already does.
  */
 export interface AttendanceFilters {
+  /**
+   * Fragment of the attendee's number — the student number on a student row, the personnel number on
+   * a personnel row (#706 F2). The parameter keeps its `student` name for contract stability.
+   */
   studentNumber?: string;
+  /** Fragment of the attendee's name, student or personnel (#706 F2); same name-stability note. */
   studentName?: string;
   cardUid?: string;
+  /** Narrows to one population. Absent means both; the server refuses any other value (400). */
+  personType?: PersonType;
 }
 
 // ---------------------------------------------------------------------------------------------

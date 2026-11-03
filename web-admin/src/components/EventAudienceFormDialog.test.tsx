@@ -126,4 +126,31 @@ describe("EventAudienceFormDialog — people picker source", () => {
     expect(full).not.toHaveBeenCalled();
     expect(screen.queryByRole("alert")).toBeNull();
   });
+
+  // #706 F2-2 carry-over: the Viewer used to see an empty picker and a save button, with no word on why.
+  it("shows a Viewer a read-only note instead of an empty picker and a save button", async () => {
+    beginSession("t", userWith(PERMISSIONS.eventsRead));
+    vi.spyOn(api, "listStudents");
+    vi.spyOn(api, "listPersonnelPicker");
+
+    showDialog();
+    await waitFor(() => expect(api.listAudienceOptions).toHaveBeenCalled());
+
+    expect(screen.queryByLabelText("Students and employees")).toBeNull();
+    expect(screen.queryByRole("button", { name: /save changes|create audience/i })).toBeNull();
+    expect(screen.getAllByText(/events\.write permission/i).length).toBeGreaterThan(0);
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(screen.getByRole("button", { name: "Cancel" })).toBeTruthy();
+  });
+
+  it("still offers an Organizer the picker and the save button", async () => {
+    vi.spyOn(api, "listStudents").mockResolvedValue([STUDENT]);
+    vi.spyOn(api, "listPersonnelPicker").mockResolvedValue([STAFF]);
+
+    showDialog();
+
+    expect(await screen.findByLabelText("Students and employees")).toBeTruthy();
+    expect(screen.getByRole("button", { name: /save changes/i })).toBeTruthy();
+    expect(screen.queryByText(/events\.write permission/i)).toBeNull();
+  });
 });

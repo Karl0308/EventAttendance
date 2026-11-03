@@ -23,14 +23,14 @@ const HTTP_SERVER_ERROR_FLOOR = 500;
  * Whether pressing the same button again is worth offering, and what it would cost.
  *
  * `"safe"` — the request provably changed nothing, so sending it again is free. True of every read,
- * and of a write the server *decided* against (a 400 refusal, a 409 conflict).
+ * and of a write the server *decided* against (a 400 refusal, a 409 conflict). The one exception to
+ * "provably changed nothing" is a resend the SERVER declared safe (`503 WriteLockUnavailable`, ADR-015
+ * D-98): there the outcome may still be `"unknown"` (an import commits part-way) yet `retryable` is
+ * `"safe"`, because every route that takes the lock upserts or converges.
  *
  * `"may-duplicate"` — the request may already have been applied and this client cannot tell. A retry
  * might succeed and might create a second row. `POST /events` carries no idempotency key, so there is
- * nothing to make the second send a no-op. **Do not render a one-click retry for this.** The one
- * exception is a resend the SERVER declared safe (`503 WriteLockUnavailable`, ADR-015 D-98): there the
- * outcome may still be `"unknown"` (an import commits part-way) yet `retryable` is `"safe"`, because
- * every route that takes the lock upserts or converges.
+ * nothing to make the second send a no-op. **Do not render a one-click retry for this.**
  *
  * `false` — retrying provably cannot help. Note it does not say the request was harmless: a write that
  * failed `malformed` was answered with a 2xx, so the server accepted it and a second send could still
@@ -64,6 +64,15 @@ export interface Guidance {
   serverEffect: ServerEffect;
 }
 
+/**
+ * `waitShown`: the caller also prints `describeApiError(error)`, which already carries the wait
+ * ("Try again in N seconds.") for a busy refusal. Asking for the guidance without it stops the same
+ * sentence appearing twice in one alert.
+ */
+export interface AdviseOptions {
+  waitShown?: boolean;
+}
+
 /** Said in one place, because it is the instruction that replaces "then retry" on every write. */
 const CHECK_FIRST = "Check the list before sending it again.";
 
@@ -94,7 +103,7 @@ const BUSY_BEFORE_WAIT = "The server was busy with another change to the same ca
  * error screen — and with no error boundary in `src/`, blanks the page at the exact moment the user
  * was being told what went wrong.
  */
-export function advise(error: unknown): Guidance {
+export function advise(error: unknown, options: AdviseOptions = {}): Guidance {
   if (!(error instanceof ApiError)) {
     // Not from the seam at all: a synchronous throw on the way to `fetch`, so nothing was sent.
     return {
@@ -158,7 +167,7 @@ export function advise(error: unknown): Guidance {
         const partial = write && error.mayCommitPartially;
         return {
           message:
-            `${BUSY_BEFORE_WAIT} ${tryAgainText(error.retryAfterSeconds)} ` +
+            `${BUSY_BEFORE_WAIT} ${options.waitShown ? "" : `${tryAgainText(error.retryAfterSeconds)} `}` +
             (partial
               ? "Rows before the busy one may already be saved. "
               : "Nothing was saved. ") +

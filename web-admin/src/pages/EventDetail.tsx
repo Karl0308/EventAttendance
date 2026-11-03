@@ -25,6 +25,7 @@ import SensorsIcon from "@mui/icons-material/Sensors";
 import EditIcon from "@mui/icons-material/Edit";
 import DeleteOutlineIcon from "@mui/icons-material/DeleteOutline";
 import EmailIcon from "@mui/icons-material/Email";
+import HowToRegIcon from "@mui/icons-material/HowToReg";
 import { api, describeApiError } from "../api";
 import { advise } from "../apiGuidance";
 import { useApiResource } from "../useApiResource";
@@ -44,6 +45,7 @@ import UnresolvedScansPanel from "../components/UnresolvedScansPanel";
 import type { ScanLogRead } from "../components/UnresolvedScansPanel";
 import type { AudienceRead, DetachTarget } from "../components/EventAudiencePanel";
 import AudiencePickerDialog from "../components/AudiencePickerDialog";
+import MarkPresentDialog from "../components/MarkPresentDialog";
 // Rendered only behind `import.meta.env.DEV` below. That flag is a compile-time literal, so the
 // production build drops the element, this import, the panel and `deviceKey.ts` along with it — which
 // is what keeps a capture credential out of the published artefact.
@@ -51,6 +53,17 @@ import DevDeviceKeyPanel from "../components/DevDeviceKeyPanel";
 import { knownMode, localFrom, requestForCertificatesToggle } from "../eventDraft";
 import type { EditScope } from "../eventDraft";
 import { attachSettledText, expectedBreakdownText } from "../eventAudience";
+import {
+  attendeeName,
+  attendeeNumber,
+  PERSON_TYPE_FILTER_OPTIONS,
+  PERSON_TYPE_LABEL,
+  personTypeParam,
+  toPersonTypeFilter,
+} from "../attendanceRows";
+import type { PersonTypeFilter } from "../attendanceRows";
+import { manualSavedText } from "../manualAttendance";
+import type { ManualAttendee } from "../manualAttendance";
 import { statusActionsFor, statusSettledText } from "../eventStatus";
 import type { StatusChange } from "../eventStatus";
 import { EVENT_STATUS } from "../types";
@@ -63,6 +76,7 @@ import type {
   EventItem,
   EventStatusName,
   EventWriteRequest,
+  ManualAttendanceRequest,
 } from "../types";
 
 // A deep link to a deleted or mistyped event is an answer, not a failure: `api.eventDetail` maps that
@@ -373,6 +387,8 @@ export default function EventDetail() {
   const [studentNumberFilter, setStudentNumberFilter] = useState("");
   const [studentNameFilter, setStudentNameFilter] = useState("");
   const [cardUidFilter, setCardUidFilter] = useState("");
+  /** A select, not typed text, so it needs no debounce: it settles on the change itself. */
+  const [personTypeFilter, setPersonTypeFilter] = useState<PersonTypeFilter>("All");
 
   const studentNumberQuery = useDebounced(studentNumberFilter.trim(), FILTER_SETTLE_MS);
   const studentNameQuery = useDebounced(studentNameFilter.trim(), FILTER_SETTLE_MS);
@@ -385,7 +401,10 @@ export default function EventDetail() {
    * would be reporting a filter the server never actually applied.
    */
   const hasFilters =
-    studentNumberQuery !== "" || studentNameQuery !== "" || cardUidQuery.trim() !== "";
+    studentNumberQuery !== "" ||
+    studentNameQuery !== "" ||
+    cardUidQuery.trim() !== "" ||
+    personTypeFilter !== "All";
 
   /** What Clear Filters returns focus to — the alternative is focus falling to `document.body` the
    *  instant the button it was on disables itself or (in the two empty states) unmounts. */
@@ -395,6 +414,7 @@ export default function EventDetail() {
     setStudentNumberFilter("");
     setStudentNameFilter("");
     setCardUidFilter("");
+    setPersonTypeFilter("All");
     studentNumberInputRef.current?.focus();
   };
 
@@ -414,8 +434,9 @@ export default function EventDetail() {
         studentNumber: studentNumberQuery === "" ? undefined : studentNumberQuery,
         studentName: studentNameQuery === "" ? undefined : studentNameQuery,
         cardUid: cardUidQuery === "" ? undefined : cardUidQuery,
+        personType: personTypeParam(personTypeFilter),
       }),
-    [id, studentNumberQuery, studentNameQuery, cardUidQuery],
+    [id, studentNumberQuery, studentNameQuery, cardUidQuery, personTypeFilter],
   );
 
   /**
@@ -478,6 +499,12 @@ export default function EventDetail() {
   /** Whether the audience picker is on screen. It is about the event as a whole, so it holds nothing. */
   const [picking, setPicking] = useState(false);
 
+  /** Whether "Mark present by hand" is open (#706 F2-2). Like `picking`, it is about the event as a whole. */
+  const [markingPresent, setMarkingPresent] = useState(false);
+  const manual = useApiMutation((request: ManualAttendanceRequest) =>
+    api.recordManualAttendance(request),
+  );
+
   /**
    * What the last successful attach warned about — held **here**, above the dialog that produced it.
    *
@@ -513,11 +540,13 @@ export default function EventDetail() {
    */
   const panelMounted = useRef(false);
   const pickerOpen = useRef(picking);
+  const markOpen = useRef(markingPresent);
   useLayoutEffect(() => {
     editOpen.current = editing !== undefined;
     deleteOpen.current = deleting !== undefined;
     changeOpen.current = changing !== undefined;
     pickerOpen.current = picking;
+    markOpen.current = markingPresent;
     panelMounted.current = detail.status === "ready" && detail.data.event !== undefined;
   });
 
@@ -769,6 +798,29 @@ export default function EventDetail() {
     });
   };
 
+  const submitManual = (request: ManualAttendanceRequest, attendee: ManualAttendee) => {
+    void manual.run(request).then((settled) => {
+      if (settled.outcome === "ignored") return;
+
+      // Either way: a failed write may still have landed, so the grid and the summary are re-read. The
+      // filters in the boxes are left as they are — a person marked present who does not match them is
+      // correctly absent from the grid until the operator clears them.
+      detail.reload();
+      attendance.reload();
+
+      if (settled.outcome === "succeeded") {
+        setMarkingPresent(false);
+        announce({ severity: "success", text: manualSavedText(attendee) });
+        return;
+      }
+
+      // The dialog shows its own failure; the Snackbar is only for when it has gone.
+      if (!markOpen.current) {
+        announce({ severity: "error", text: describeApiError(settled.error) });
+      }
+    });
+  };
+
   const removeFromAudience = (target: DetachTarget, subject: string) => {
     setDetaching(target);
     void detach.run(target).then((settled) => {
@@ -827,8 +879,27 @@ export default function EventDetail() {
   );
 
   const cols: GridColDef<AttendanceRecord>[] = [
-    { field: "studentNumber", headerName: "Student No.", width: 130 },
-    { field: "studentName", headerName: "Name", flex: 1, minWidth: 180 },
+    // Bound to the record's own population (`attendanceRows.ts`), not to `studentNumber`/`studentName`:
+    // a personnel record has neither, and those columns would go blank on every one of its rows.
+    {
+      field: "personType",
+      headerName: "Type",
+      width: 110,
+      valueGetter: (_v, row) => PERSON_TYPE_LABEL[row.personType],
+    },
+    {
+      field: "attendeeNumber",
+      headerName: "ID No.",
+      width: 130,
+      valueGetter: (_v, row) => attendeeNumber(row) ?? "—",
+    },
+    {
+      field: "attendeeName",
+      headerName: "Name",
+      flex: 1,
+      minWidth: 180,
+      valueGetter: (_v, row) => attendeeName(row) ?? "—",
+    },
     {
       field: "checkInAt",
       headerName: "Check-in",
@@ -1166,9 +1237,23 @@ export default function EventDetail() {
                 that in fact has plenty, just none matching. */}
             <Stack direction="row" spacing={2} flexWrap="wrap" alignItems="flex-end" sx={{ mb: 2 }}>
               <TextField
+                select
                 size="small"
-                label="Student number"
-                helperText="Matches a fragment of the student number"
+                label="Show"
+                value={personTypeFilter}
+                onChange={(e) => setPersonTypeFilter(toPersonTypeFilter(e.target.value))}
+                sx={{ minWidth: 140 }}
+              >
+                {PERSON_TYPE_FILTER_OPTIONS.map((option) => (
+                  <MenuItem key={option.value} value={option.value}>
+                    {option.label}
+                  </MenuItem>
+                ))}
+              </TextField>
+              <TextField
+                size="small"
+                label="ID number"
+                helperText="Matches a fragment of a student or personnel number"
                 placeholder="e.g. 2023-00"
                 value={studentNumberFilter}
                 onChange={(e) => setStudentNumberFilter(e.target.value)}
@@ -1179,7 +1264,7 @@ export default function EventDetail() {
               <TextField
                 size="small"
                 label="Name"
-                helperText="Matches a fragment of the student's name"
+                helperText="Matches a fragment of a student's or personnel member's name"
                 placeholder="e.g. Maria Santos"
                 value={studentNameFilter}
                 onChange={(e) => setStudentNameFilter(e.target.value)}
@@ -1199,7 +1284,12 @@ export default function EventDetail() {
               <Button
                 size="small"
                 onClick={clearFilters}
-                disabled={studentNumberFilter === "" && studentNameFilter === "" && cardUidFilter === ""}
+                disabled={
+                  studentNumberFilter === "" &&
+                  studentNameFilter === "" &&
+                  cardUidFilter === "" &&
+                  personTypeFilter === "All"
+                }
               >
                 Clear filters
               </Button>
@@ -1244,6 +1334,20 @@ export default function EventDetail() {
                   describedby` still ties the button to that visible text directly, and native
                   `disabled` is what makes "sends nothing" a platform guarantee rather than something
                   this file merely omitted to wire up. */}
+              {canWriteAttendance && (
+                <Button
+                  size="small"
+                  variant="outlined"
+                  startIcon={<HowToRegIcon />}
+                  onClick={() => {
+                    manual.reset();
+                    setMarkingPresent(true);
+                  }}
+                >
+                  Mark present by hand
+                </Button>
+              )}
+
               {event.issuesCertificates && (
                 <>
                   <Button
@@ -1356,6 +1460,17 @@ export default function EventDetail() {
           onSubmit={submitAttach}
           running={attach.status === "running"}
           failure={attach.status === "failed" ? { error: attach.error } : undefined}
+        />
+      )}
+
+      {markingPresent && event !== undefined && (
+        <MarkPresentDialog
+          eventId={event.id}
+          eventName={event.name}
+          onClose={() => setMarkingPresent(false)}
+          onSubmit={submitManual}
+          running={manual.status === "running"}
+          failure={manual.status === "failed" ? { error: manual.error } : undefined}
         />
       )}
 

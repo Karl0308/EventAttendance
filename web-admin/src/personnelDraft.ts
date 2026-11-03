@@ -2,6 +2,7 @@
 // pure functions, no React or MUI. Create and edit take the same body, so one validator serves both.
 
 import { ApiError } from "./api";
+import { holderSentence } from "./cardHolder";
 import { cleanText } from "./studentDraft";
 import type { Personnel, PersonnelStatusName, PersonnelWriteRequest } from "./types";
 import { PERSONNEL_STATUSES } from "./types";
@@ -98,3 +99,10 @@ export const isDuplicateRfid = (error: unknown): boolean => isProblem(error, "Du
 
 export const NUMBER_TAKEN = "Another personnel record in this school already uses this ID.";
 export const RFID_TAKEN = "Another active personnel record already uses this card. Use a different card.";
+
+/**
+ * The card refusal sentence for a `DuplicateRfid` error: who holds it when the server said, else the
+ * generic line. The fallback is for a lost race, where the server cannot name a holder.
+ */
+export const rfidTakenText = (error: unknown): string =>
+  (error instanceof ApiError ? holderSentence(error.problem?.holder) : undefined) ?? RFID_TAKEN;

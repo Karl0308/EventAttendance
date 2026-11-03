@@ -557,6 +557,7 @@ describe("describeImportWarning — the mapped set", () => {
     "SectionUnspecified",
     "StudentIdentityConflict",
     "RfidCardRevoked",
+    "RfidCardHeldByPersonnel",
     "RfidCardFromLegacyMapping",
     "ClassificationUnavailable",
     "ClassificationConflict",
@@ -567,8 +568,8 @@ describe("describeImportWarning — the mapped set", () => {
     "OrganizationTooLong",
   ];
 
-  it("mirrors exactly 15 codes — the count changes only when the backend's list does", () => {
-    expect(KNOWN_WARNING_CODES).toHaveLength(15);
+  it("mirrors exactly 16 codes — the count changes only when the backend's list does", () => {
+    expect(KNOWN_WARNING_CODES).toHaveLength(16);
   });
 
   it.each(KNOWN_WARNING_CODES)("maps %s to words, not the raw token", (code) => {
@@ -581,6 +582,15 @@ describe("describeImportWarning — the mapped set", () => {
     // move it rather than to look it up. A label that collapsed the two would undo the reason the
     // backend split them into separate codes in the first place.
     expect(describeImportWarning("ClassificationWrongAxis")).toBe("Category in the wrong column");
+  });
+
+  it("labels RfidCardHeldByPersonnel as personnel, never as a withdrawn card (#706 F2-3)", () => {
+    // Nothing was withdrawn: the serial belongs to a personnel record. "Card was withdrawn" would send
+    // an operator looking for a deactivated card when the fix is on the Personnel tab.
+    expect(describeImportWarning("RfidCardHeldByPersonnel")).toBe("Card belongs to personnel");
+    expect(describeImportWarning("RfidCardHeldByPersonnel")).not.toBe(
+      describeImportWarning("RfidCardRevoked"),
+    );
   });
 
   it("gives OrganizationTooLong a label that says the stored organization was kept", () => {
