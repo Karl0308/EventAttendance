@@ -195,12 +195,22 @@ internal class EamsDbContext : DbContext
     /// only after this method would have looked — so without the explicit call the guard would inspect
     /// a change tracker that had not yet noticed the assignment, and would pass everything.
     /// </para>
+    ///
+    /// <para>
+    /// <b>...but only when automatic detection is on</b>, because the guard's job is to inspect exactly
+    /// what this save will write. With <c>AutoDetectChangesEnabled</c> off, <c>SaveChanges</c> writes
+    /// only changes already detected — so those are what the guard checks, and an undetected assignment
+    /// is neither saved nor refused. Scanning anyway is not extra safety, it is a full pass over the
+    /// tracker on every save: the roster import's fan-out turns detection off precisely to avoid that,
+    /// and this unconditional call put it back, ~1,600 times over a million tracked entities at 100,000
+    /// rows (2026-11-24).
+    /// </para>
     /// </summary>
     private void GuardDerivedAcademicFields()
     {
         if (_academicCacheRefreshInProgress) return;
 
-        ChangeTracker.DetectChanges();
+        if (ChangeTracker.AutoDetectChangesEnabled) ChangeTracker.DetectChanges();
 
         foreach (var entry in ChangeTracker.Entries<Student>())
         {

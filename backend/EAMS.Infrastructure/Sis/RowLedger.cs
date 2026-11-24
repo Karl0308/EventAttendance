@@ -1,5 +1,7 @@
 using EAMS.Domain;
 using EAMS.Infrastructure.Data;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.ChangeTracking;
 
 namespace EAMS.Infrastructure.Sis;
 
@@ -132,7 +134,7 @@ internal sealed class RowLedger
         public string? FailureMessage { get; set; }
         public List<(string Code, string Message)> Warnings { get; } = [];
         public List<(string Type, Guid Id, string Action)> Touches { get; } = [];
-        public List<Action> Deferred { get; } = [];
+        public List<(object Target, Action Write)> Deferred { get; } = [];
     }
 
     private readonly Dictionary<Guid, Entry> _entries;
@@ -200,9 +202,16 @@ internal sealed class RowLedger
     /// write contributes to the chunk accounting below, so a row's ceiling is still counted purely in
     /// fan-out rows.
     /// </para>
+    ///
+    /// <para>
+    /// <b><paramref name="target"/> is the entity <paramref name="write"/> mutates</b>, and it is required
+    /// because the fan-out runs with automatic change detection off (see <see cref="ApplyInChunks"/>):
+    /// <see cref="Stage"/> scans exactly that entity after the write, so a write against anything else is
+    /// never saved. Still typed as <see cref="object"/>, for the same domain-blindness as the action.
+    /// </para>
     /// </summary>
-    public void DeferUntilStaged(SisImportRow row, Action write) =>
-        _entries[row.Id].Deferred.Add(write);
+    public void DeferUntilStaged(SisImportRow row, object target, Action write) =>
+        _entries[row.Id].Deferred.Add((target, write));
 
     /// <summary>
     /// Folds everything collected into the staged rows: one terminal result each, plus the fan-out
@@ -256,6 +265,16 @@ internal sealed class RowLedger
             }
 
             Stage(db, row, entry);
+
+            // Scanned here, per row, because the caller runs this fold with automatic change detection
+            // off. Left on, every chunk's save re-scanned the whole tracker — at 100,000 rows that is the
+            // staged rows, every student, card, enrollment and term record the earlier passes loaded, and
+            // every fan-out row already saved — so the fan-out was quadratic (2026-11-24: 90,000 of 800,000
+            // fan-out rows after fifteen minutes, and slowing).
+            // Stage writes to exactly two kinds of tracked entity: this row (Result, WarningCode,
+            // WarningMessage, ErrorMessage, SkipReason) and each deferred write's declared target, which
+            // Stage scans itself. Its inserts go through DbSet.Add, which tracks them without a scan.
+            DetectScalarChanges(db.Entry(row));
             pending += fanOut;
         }
 
@@ -272,7 +291,11 @@ internal sealed class RowLedger
         // it must share a transaction with this row's warning, and the failure branch still writes one
         // — so skipping it for a failed row would re-open, for that row alone, the exact window
         // DeferUntilStaged exists to close.
-        foreach (var write in entry.Deferred) write();
+        foreach (var (target, write) in entry.Deferred)
+        {
+            write();
+            DetectScalarChanges(db.Entry(target));
+        }
 
         row.WarningCode = null;
         row.WarningMessage = null;
@@ -331,6 +354,35 @@ internal sealed class RowLedger
         row.SkipReason = entry.Warnings.Any(w => w.Code == SisImportWarningCode.InstructorPlaceholder)
             ? SisImportSkipReason.InstructorPlaceholder
             : SisImportSkipReason.NoChange;
+    }
+
+    /// <summary>
+    /// Marks modified each scalar property of <paramref name="entry"/> whose current value differs from
+    /// its snapshot — EF's own per-property comparison, compared with the property's value comparer — and
+    /// nothing else.
+    ///
+    /// <para>
+    /// <b>Not <see cref="EntityEntry.DetectChanges"/>, and that is the measured difference.</b> EF's
+    /// per-entry scan also walks up to every principal and scans it, navigations included. For a staged
+    /// row the principal is its batch, whose <c>Rows</c> collection holds every row of the file, so the
+    /// scan built a 100,000-entry set for every row and the fan-out was still quadratic — sampled on
+    /// 2026-11-24 with every stack inside <c>ChangeDetector.DetectNavigationChange</c>. Stage changes no
+    /// navigation (its inserts are tracked by <c>DbSet.Add</c>) and no key, so scalars are the whole of
+    /// what it can have changed.
+    /// </para>
+    /// </summary>
+    private static void DetectScalarChanges(EntityEntry entry)
+    {
+        // An insert writes every column, and a detached entity writes nothing: neither has a "modified".
+        if (entry.State is not (EntityState.Unchanged or EntityState.Modified)) return;
+
+        foreach (var property in entry.Properties)
+        {
+            if (property.IsModified || property.Metadata.IsKey()) continue;
+
+            if (!property.Metadata.GetValueComparer().Equals(property.CurrentValue, property.OriginalValue))
+                property.IsModified = true;
+        }
     }
 
     /// <summary>

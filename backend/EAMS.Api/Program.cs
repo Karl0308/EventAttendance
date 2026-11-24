@@ -2,6 +2,7 @@
 using EAMS.Api;
 using EAMS.Api.Authentication;
 using EAMS.Api.Authorization;
+using EAMS.Api.Compression;
 using EAMS.Api.Controllers;
 using EAMS.Api.Cors;
 using EAMS.Api.Identity;
@@ -280,6 +281,9 @@ builder.Services.AddHttpContextAccessor();
 // request scope is inert: ClaimsSchoolContext consults it only when HttpContext is null.
 builder.Services.AddScoped<AmbientTenant>();
 
+// Gzip for the capture manifest only — see ManifestCompression for the measurement and the scope.
+builder.Services.AddManifestCompression();
+
 builder.Services.Replace(ServiceDescriptor.Scoped<ISchoolContext, ClaimsSchoolContext>());
 builder.Services.Replace(ServiceDescriptor.Scoped<IDeviceContext, ClaimsDeviceContext>());
 
@@ -408,6 +412,9 @@ if (app.Environment.IsDevelopment())
 // Routing is called explicitly rather than left to the framework's implicit insertion, because the
 // three middlewares below have to sit between it and the endpoints, in this order, and an implicit
 // UseRouting would put them all on the wrong side of it.
+// Ahead of routing so it wraps the manifest's body writer; a no-op branch for every other route.
+app.UseManifestCompression();
+
 app.UseRouting();
 
 // Runs on every request, and runs the DEFAULT scheme only — the device one. It returns NoResult when

@@ -380,9 +380,16 @@ internal sealed class SisImportService : ISisImportService
         // the trail — whose entire job is to say what happened — say it twice with different answers.
         // ExecuteDelete rather than loading and removing: these rows carry no guarded columns and there
         // can be several thousand of them.
-        var rowIds = staged.Select(r => r.Id).ToList();
+        //
+        // Keyed by the batch through a subquery, NOT by `staged`'s ids. Under compatibility level 110 a
+        // `.Contains(list)` is inlined as one literal per element, and at 100,000 rows that statement
+        // spent 68 seconds compiling before SQL Server gave up with error 8623 ("ran out of internal
+        // resources") — the first statement of every run, so no roster that size could import at all.
+        // The subquery is the same set (`staged` is exactly this batch's rows) at a constant SQL size.
+        var batchId = batch.Id;
         await _db.SisImportRowEntities.IgnoreQueryFilters()
-            .Where(e => rowIds.Contains(e.SisImportRowId))
+            .Where(e => _db.SisImportRows.IgnoreQueryFilters()
+                .Any(r => r.Id == e.SisImportRowId && r.BatchId == batchId))
             .ExecuteDeleteAsync(ct);
 
         var ledger = new RowLedger(staged);
@@ -435,9 +442,28 @@ internal sealed class SisImportService : ISisImportService
         // ResolveClassificationsAsync hands it to RowLedger.DeferUntilStaged, which applies it inside
         // these chunked saves alongside the row it belongs to. Anything else that ever wants to
         // remember "an operator was told this" belongs on the same side of this boundary.
-        foreach (var _ in ledger.ApplyInChunks(_db, FanOutSaveChunkSize))
+        //
+        // AUTOMATIC CHANGE DETECTION IS OFF FOR THE FOLD, and that is a throughput fix, not a style. With
+        // it on, each chunk's SaveChanges scanned every tracked entity — the staged rows plus every
+        // student, card, enrollment and term record the earlier passes loaded, plus every fan-out row
+        // already saved — so a 100,000-row roster's ~1,600 saves were quadratic: measured on 2026-11-24 at
+        // 90,000 of its 800,000 fan-out rows after fifteen minutes and slowing, and about 150 seconds for
+        // all of them with this change. RowLedger.ApplyInChunks scans exactly what Stage
+        // writes (each row, and each deferred write's declared target) instead. Everything before this
+        // point has been saved, so nothing earlier relies on a scan here; the finally restores the
+        // setting before the batch save below, which scans normally.
+        _db.ChangeTracker.DetectChanges();
+        _db.ChangeTracker.AutoDetectChangesEnabled = false;
+        try
         {
-            await _db.SaveChangesAsync(ct);
+            foreach (var _ in ledger.ApplyInChunks(_db, FanOutSaveChunkSize))
+            {
+                await _db.SaveChangesAsync(ct);
+            }
+        }
+        finally
+        {
+            _db.ChangeTracker.AutoDetectChangesEnabled = true;
         }
 
         // ---- the batch row, alone -----------------------------------------------------------------
@@ -1600,9 +1626,11 @@ internal sealed class SisImportService : ISisImportService
         var cardUids = live.Select(r => r.CardUid).OfType<string>()
             .Distinct(StringComparer.Ordinal).ToList();
 
-        var students = await _db.Students.IgnoreQueryFilters()
-            .Where(s => s.SchoolId == schoolId && regNos.Contains(s.StudentNumber))
-            .ToDictionaryAsync(s => s.StudentNumber, StringComparer.Ordinal, ct);
+        // Chunked: one IN list per InListChunks.Size keys. A whole roster's student numbers inlined as a
+        // single compatibility-110 IN list is the statement that fails with error 8623 at 100,000 rows.
+        var students = (await InListChunks.ToListInChunksAsync(regNos, chunk => _db.Students.IgnoreQueryFilters()
+                .Where(s => s.SchoolId == schoolId && chunk.Contains(s.StudentNumber)), ct))
+            .ToDictionary(s => s.StudentNumber, StringComparer.Ordinal);
 
         // Every card carrying one of these UIDs, active or not — see ResolveCards for why the inactive
         // ones have to be visible. Include(Student) so a mismatch can name the other student rather
@@ -1610,10 +1638,9 @@ internal sealed class SisImportService : ISisImportService
         // file (that is how the two rows drifted apart), so it cannot be recovered from `students`.
         var cards = cardUids.Count == 0
             ? new Dictionary<string, List<RfidCard>>(StringComparer.Ordinal)
-            : (await _db.RfidCards.IgnoreQueryFilters()
+            : (await InListChunks.ToListInChunksAsync(cardUids, chunk => _db.RfidCards.IgnoreQueryFilters()
                     .Include(c => c.Student)
-                    .Where(c => c.SchoolId == schoolId && cardUids.Contains(c.CardUid))
-                    .ToListAsync(ct))
+                    .Where(c => c.SchoolId == schoolId && chunk.Contains(c.CardUid)), ct))
                 .GroupBy(c => c.CardUid, StringComparer.Ordinal)
                 .ToDictionary(g => g.Key, g => g.ToList(), StringComparer.Ordinal);
 
@@ -1639,16 +1666,16 @@ internal sealed class SisImportService : ISisImportService
         // branch: there was no enrollment id in scope to record. On a re-import — the steady state —
         // that is every enrollment touch pointing into the wrong table, so
         // IX_SisImportRowEntities_Entity answers "which rows touched enrollment X?" with nothing.
-        var enrollments = (await _db.Enrollments.IgnoreQueryFilters()
-                .Where(e => offeringIds.Contains(e.CourseOfferingId))
-                .Select(e => new { e.Id, e.StudentId, e.CourseOfferingId })
-                .ToListAsync(ct))
+        var enrollments = (await InListChunks.ToListInChunksAsync(offeringIds, chunk => _db.Enrollments
+                .IgnoreQueryFilters()
+                .Where(e => chunk.Contains(e.CourseOfferingId))
+                .Select(e => new { e.Id, e.StudentId, e.CourseOfferingId }), ct))
             .ToDictionary(e => (e.StudentId, e.CourseOfferingId), e => e.Id);
 
-        var assignments = (await _db.CourseOfferingInstructors.IgnoreQueryFilters()
-                .Where(a => offeringIds.Contains(a.CourseOfferingId))
-                .Select(a => new { a.Id, a.CourseOfferingId, a.InstructorId })
-                .ToListAsync(ct))
+        var assignments = (await InListChunks.ToListInChunksAsync(offeringIds, chunk => _db.CourseOfferingInstructors
+                .IgnoreQueryFilters()
+                .Where(a => chunk.Contains(a.CourseOfferingId))
+                .Select(a => new { a.Id, a.CourseOfferingId, a.InstructorId }), ct))
             .ToDictionary(a => (a.CourseOfferingId, a.InstructorId), a => a.Id);
 
         var resolvedStudents = ResolveStudents(schoolId, live, students, ledger);
@@ -2021,8 +2048,8 @@ internal sealed class SisImportService : ISisImportService
         // On a first import every student is new, so the statement is skipped outright; on a
         // re-import — the steady state — it asks only about people who could answer. That does not
         // make the remaining lists cheap: this pass is one of four inlined IN lists the importer
-        // already issues at roster scale, and none of them has been measured against the real
-        // 21,497-row file.
+        // already issues at roster scale. Since 2026-11-24 every one of them goes through
+        // InListChunks, after a single 100,000-element list failed outright (error 8623).
         var studentIds = students.Values
             .Where(s => s.Action != SisImportEntityAction.Inserted)
             .Select(s => s.Entity.Id)
@@ -2034,9 +2061,9 @@ internal sealed class SisImportService : ISisImportService
         // the row the index would collide with.
         var existing = studentIds.Count == 0
             ? []
-            : (await _db.StudentClassifications.IgnoreQueryFilters()
-                    .Where(a => studentIds.Contains(a.StudentId))
-                    .ToListAsync(ct))
+            : (await InListChunks.ToListInChunksAsync(studentIds, chunk => _db.StudentClassifications
+                    .IgnoreQueryFilters()
+                    .Where(a => chunk.Contains(a.StudentId)), ct))
                 .ToDictionary(a => (a.StudentId, a.Axis), a => a);
 
         foreach (var group in GroupRows(live, r => r.RegNo))
@@ -2197,6 +2224,7 @@ internal sealed class SisImportService : ISisImportService
 
                         ledger.DeferUntilStaged(
                             namingRow.Staged,
+                            heldAssignment,
                             () => heldAssignment.ReportedRosterValue = reportedValue);
                     }
 
@@ -2846,9 +2874,9 @@ internal sealed class SisImportService : ISisImportService
             .GroupBy(r => r.RegNo, StringComparer.Ordinal)
             .ToDictionary(g => g.Key, g => g.First().ProgramCode, StringComparer.Ordinal);
 
-        var students = await _db.Students.IgnoreQueryFilters()
-            .Where(s => s.SchoolId == term.SchoolId && regNos.Contains(s.StudentNumber))
-            .ToListAsync(ct);
+        // Chunked for the reason ResolveFactsAsync gives: the whole roster's numbers in one IN list.
+        var students = await InListChunks.ToListInChunksAsync(regNos, chunk => _db.Students.IgnoreQueryFilters()
+            .Where(s => s.SchoolId == term.SchoolId && chunk.Contains(s.StudentNumber)), ct);
 
         var now = DateTime.UtcNow;
 

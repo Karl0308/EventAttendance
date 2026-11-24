@@ -194,26 +194,29 @@ internal static class CardUidClaims
 
         var uids = normalizedUids.Distinct(StringComparer.Ordinal).ToList();
 
-        var cards = await db.RfidCards.IgnoreQueryFilters().AsNoTracking()
-            .Where(c => c.SchoolId == schoolId && c.IsActive && uids.Contains(c.CardUid))
+        // Chunked (InListChunks): a first roster import asks about every card in the file at once, and a
+        // single compatibility-110 IN list of 100,000 literals is a statement SQL Server cannot plan.
+        // Both projections carry the row's Id, so the helper's de-duplication is by value and exact.
+        var cards = await InListChunks.ToListInChunksAsync(uids, chunk => db.RfidCards.IgnoreQueryFilters()
+            .AsNoTracking()
+            .Where(c => c.SchoolId == schoolId && c.IsActive && chunk.Contains(c.CardUid))
             .Select(c => new
             {
                 c.CardUid, c.Id, c.StudentId, c.Student!.StudentNumber,
                 c.Student.FirstName, c.Student.MiddleName, c.Student.LastName,
-            })
-            .ToListAsync(ct);
+            }), ct);
 
         foreach (var card in cards)
             holders.TryAdd(card.CardUid, new CardUidHolder(
                 CardUidHolderKind.Student, card.StudentId, card.StudentNumber, card.Id,
                 CardUidHolder.DisplayName(card.FirstName, card.MiddleName, card.LastName)));
 
-        var personnel = await db.Personnel.IgnoreQueryFilters().AsNoTracking()
+        var personnel = await InListChunks.ToListInChunksAsync(uids, chunk => db.Personnel.IgnoreQueryFilters()
+            .AsNoTracking()
             .Where(p => p.SchoolId == schoolId && !p.IsDeleted && p.RfidUid != null
-                        && uids.Contains(p.RfidUid)
+                        && chunk.Contains(p.RfidUid)
                         && (excludingPersonnelId == null || p.Id != excludingPersonnelId))
-            .Select(p => new { p.RfidUid, p.Id, p.PersonnelNumber, p.FirstName, p.MiddleName, p.LastName })
-            .ToListAsync(ct);
+            .Select(p => new { p.RfidUid, p.Id, p.PersonnelNumber, p.FirstName, p.MiddleName, p.LastName }), ct);
 
         foreach (var person in personnel)
         {

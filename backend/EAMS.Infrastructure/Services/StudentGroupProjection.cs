@@ -299,10 +299,12 @@ internal sealed class StudentGroupProjection : IStudentGroupProjection
 
         if (offerings.Count == 0) return [];
 
-        var offeringIds = offerings.Select(o => o.Id).ToList();
-
+        // Joined to the term's offerings on the server rather than filtered by `offerings`' ids. The two are
+        // the same set, but under compatibility level 110 the id list is inlined as one literal per
+        // offering, and a statement's compile cost grows faster than its literal count (see InListChunks).
+        var termId = term.Id;
         var enrollments = await _db.Enrollments.IgnoreQueryFilters().AsNoTracking()
-            .Where(e => offeringIds.Contains(e.CourseOfferingId) && e.Student!.SchoolId == term.SchoolId)
+            .Where(e => e.CourseOffering!.TermId == termId && e.Student!.SchoolId == term.SchoolId)
             .Select(e => new { e.StudentId, e.CourseOfferingId })
             .ToListAsync(ct);
 
@@ -314,10 +316,10 @@ internal sealed class StudentGroupProjection : IStudentGroupProjection
         // the very table EventGroups reads. Every other read in this class carries the same guard;
         // this one is the reason the class doc's "explicit SchoolId everywhere" claim is worth
         // stating. A course that fails it simply falls through to the "?" label below.
-        var courses = await _db.Courses.IgnoreQueryFilters().AsNoTracking()
-            .Where(c => courseIds.Contains(c.Id) && c.SchoolId == term.SchoolId)
-            .Select(c => new { c.Id, c.Code, c.CodeKey })
-            .ToListAsync(ct);
+        var courses = await InListChunks.ToListInChunksAsync(courseIds, chunk => _db.Courses.IgnoreQueryFilters()
+            .AsNoTracking()
+            .Where(c => chunk.Contains(c.Id) && c.SchoolId == term.SchoolId)
+            .Select(c => new { c.Id, c.Code, c.CodeKey }), ct);
         var courseCodes = courses.ToDictionary(c => c.Id, c => c.Code);
 
         // ADR-010 D-77: a section-only offering hangs off the school's placeholder course, which is a

@@ -256,4 +256,46 @@ public class AcademicCacheGuardTests : IntegrationTest
         await using var read = NewDbContext();
         Assert.Empty(await read.Students.Where(s => s.AcademicCacheUpdatedAt != null).ToListAsync());
     }
+
+    /// <summary>
+    /// The guard inspects what the save will write. With automatic detection off — the roster import's
+    /// fan-out runs that way at 100,000 rows — a change the caller has detected is still refused...
+    /// </summary>
+    [Fact]
+    public async Task With_automatic_detection_off_a_detected_derived_write_is_still_refused()
+    {
+        var studentId = await ArrangeStudentAsync();
+
+        await using var db = NewDbContext();
+        var student = await db.Students.SingleAsync(s => s.Id == studentId);
+        db.ChangeTracker.AutoDetectChangesEnabled = false;
+        student.Section = "BSFS 2-A";
+        db.Entry(student).DetectChanges();
+
+        var rejected = await Assert.ThrowsAsync<AcademicCacheWriteException>(() => db.SaveChangesAsync());
+        Assert.Equal(nameof(Student.Section), rejected.PropertyName);
+    }
+
+    /// <summary>
+    /// ...and one it has not detected is neither refused nor written, because SaveChanges does not write
+    /// it. Pinned so that the guard declining to scan is read as the contract it is, not as a hole: the
+    /// value on disk is unchanged.
+    /// </summary>
+    [Fact]
+    public async Task With_automatic_detection_off_an_undetected_derived_write_is_not_saved()
+    {
+        var studentId = await ArrangeStudentAsync();
+
+        await using (var db = NewDbContext())
+        {
+            var student = await db.Students.SingleAsync(s => s.Id == studentId);
+            db.ChangeTracker.AutoDetectChangesEnabled = false;
+            student.Section = "BSFS 2-A";
+
+            await db.SaveChangesAsync();
+        }
+
+        await using var read = NewDbContext();
+        Assert.Equal("A", (await read.Students.SingleAsync(s => s.Id == studentId)).Section);
+    }
 }
