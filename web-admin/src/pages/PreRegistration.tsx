@@ -34,6 +34,7 @@ import {
 import { DataGrid, type GridColDef } from "@mui/x-data-grid";
 import AddIcon from "@mui/icons-material/Add";
 import GroupAddIcon from "@mui/icons-material/GroupAdd";
+import GroupsIcon from "@mui/icons-material/Groups";
 import DeleteIcon from "@mui/icons-material/Delete";
 import LockIcon from "@mui/icons-material/Lock";
 import LockOpenIcon from "@mui/icons-material/LockOpen";
@@ -41,7 +42,6 @@ import { api, describeApiError } from "../api";
 import { useApiResource } from "../useApiResource";
 import { useApiMutation } from "../useApiMutation";
 import { useCan, useSignedInUser } from "../authContext";
-import { withActionsFor } from "../gridColumns";
 import { grants, PERMISSIONS } from "../permissions";
 import { EmptyState, ErrorState, LoadingState } from "../components/ResourceStates";
 import type {
@@ -166,20 +166,22 @@ export default function PreRegistration() {
           <IconButton
             sx={{ p: 1.25 }}
             onClick={() => setManaging(p.row)}
-            aria-label={`Manage ${p.row.name}`}
-            title={`Manage ${p.row.name}`}
+            aria-label={canWriteEvents ? `Manage ${p.row.name}` : `View registrants of ${p.row.name}`}
+            title={canWriteEvents ? `Manage ${p.row.name}` : `View registrants of ${p.row.name}`}
           >
-            <GroupAddIcon fontSize="small" />
+            {canWriteEvents ? <GroupAddIcon fontSize="small" /> : <GroupsIcon fontSize="small" />}
           </IconButton>
-          <IconButton
-            sx={{ p: 1.25 }}
-            color={p.row.isClosed ? "success" : "warning"}
-            onClick={() => toggleClosed(p.row)}
-            aria-label={p.row.isClosed ? `Reopen ${p.row.name}` : `Close ${p.row.name}`}
-            title={p.row.isClosed ? `Reopen ${p.row.name}` : `Close ${p.row.name}`}
-          >
-            {p.row.isClosed ? <LockOpenIcon fontSize="small" /> : <LockIcon fontSize="small" />}
-          </IconButton>
+          {canWriteEvents && (
+            <IconButton
+              sx={{ p: 1.25 }}
+              color={p.row.isClosed ? "success" : "warning"}
+              onClick={() => toggleClosed(p.row)}
+              aria-label={p.row.isClosed ? `Reopen ${p.row.name}` : `Close ${p.row.name}`}
+              title={p.row.isClosed ? `Reopen ${p.row.name}` : `Close ${p.row.name}`}
+            >
+              {p.row.isClosed ? <LockOpenIcon fontSize="small" /> : <LockIcon fontSize="small" />}
+            </IconButton>
+          )}
         </Stack>
       ),
     },
@@ -231,7 +233,7 @@ export default function PreRegistration() {
           <div style={{ height: 520, width: "100%" }}>
             <DataGrid
               rows={sessions.data}
-              columns={withActionsFor(cols, canWriteEvents)}
+              columns={cols}
               getRowId={(r) => r.id}
               disableRowSelectionOnClick
               pageSizeOptions={[10, 25]}
@@ -399,8 +401,9 @@ function ManageSessionDialog({
   const [notice, setNotice] = useState<Notice | undefined>(undefined);
 
   // People for the manual picker, loaded once. Pre-registration opens on `events.read`, but registering
-  // by hand is a write, so no people load is made for a Viewer (the picker still renders, empty) —
-  // it would otherwise be refused and surface an error the user could do nothing about.
+  // and removing are writes. `canPickPeople` is therefore also this dialog's write gate: a Viewer gets
+  // the registrant list alone, with no register form, no Remove, and no people load that would be
+  // refused and surface an error the user could do nothing about.
   const canPickPeople = grants(useSignedInUser().permissions, PERMISSIONS.eventsWrite);
   const [people, setPeople] = useState<PersonOption[] | undefined>(undefined);
   const [peopleError, setPeopleError] = useState<unknown>(undefined);
@@ -483,7 +486,7 @@ function ManageSessionDialog({
           {session.isClosed && <Chip label="Closed" variant="outlined" />}
         </Stack>
 
-        {session.isClosed ? (
+        {!canPickPeople ? null : session.isClosed ? (
           <Alert severity="info" sx={{ mb: 2 }}>
             This session is closed. Reopen it from the sessions list to register more attendees.
           </Alert>
@@ -567,16 +570,18 @@ function ManageSessionDialog({
                 <ListItem
                   key={r.id}
                   secondaryAction={
-                    <IconButton
-                      edge="end"
-                      color="error"
-                      onClick={() => removeOne(r)}
-                      aria-label={`Remove ${r.fullName}`}
-                      title={`Remove ${r.fullName}`}
-                      disabled={remove.status === "running"}
-                    >
-                      <DeleteIcon fontSize="small" />
-                    </IconButton>
+                    canPickPeople ? (
+                      <IconButton
+                        edge="end"
+                        color="error"
+                        onClick={() => removeOne(r)}
+                        aria-label={`Remove ${r.fullName}`}
+                        title={`Remove ${r.fullName}`}
+                        disabled={remove.status === "running"}
+                      >
+                        <DeleteIcon fontSize="small" />
+                      </IconButton>
+                    ) : undefined
                   }
                 >
                   <ListItemText

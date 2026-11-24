@@ -225,6 +225,7 @@ describe("EventDetail", () => {
     expect(button(/^edit$/i)).not.toBeNull();
     expect(button(/^delete$/i)).not.toBeNull();
     expect(screen.queryByText(/simulate rfid tap/i)).not.toBeNull();
+    expect(button(/mark present by hand/i)).not.toBeNull();
   });
 });
 

@@ -15,6 +15,7 @@
 
 import { ApiError } from "./api";
 import { IMPORT_PHASES, SIS_IMPORT_STATUS } from "./types";
+import type { SisImportBatch } from "./types";
 
 // ---------------------------------------------------------------------------------------------
 // What may be uploaded
@@ -464,6 +465,79 @@ export const POLL_INTERVAL_MS = 2_000;
  */
 export const importProgressPath = (batchId: string): string =>
   `/students/import/${encodeURIComponent(batchId)}`;
+
+// ---------------------------------------------------------------------------------------------
+// One run at a time
+// ---------------------------------------------------------------------------------------------
+
+/**
+ * Where this browser remembers the batch it last pressed Run on.
+ *
+ * There is no "list batches" read to ask the server which run is live, and a run takes minutes — long
+ * enough for an operator to come back to Import roster, stage a second file and press Run on it. Two
+ * concurrent runs over one roster contend for the same rows. So the id of the run this browser started
+ * is kept, and the import screen asks the API whether that batch is still `Running` before it offers
+ * a new upload. `localStorage` rather than `sessionStorage` so a reopened tab is covered too; the value
+ * is a batch id and nothing else, and it is always verified against the API before it blocks anything.
+ */
+export const ACTIVE_IMPORT_STORAGE_KEY = "eams.roster-import.active-batch";
+
+export const rememberActiveImport = (batchId: string): void => {
+  try {
+    localStorage.setItem(ACTIVE_IMPORT_STORAGE_KEY, batchId);
+  } catch (cause: unknown) {
+    // Storage refused (private mode, quota). The guard is LOST for this run: the server refuses only a
+    // re-run of the same batch, not a different concurrent batch, so nothing else stops a second file
+    // being staged and run. There is no user action to offer, so it is logged, not shown.
+    console.warn("EAMS: could not remember the running roster import; the one-run guard is off.", cause);
+  }
+};
+
+export const activeImportBatchId = (): string | undefined => {
+  try {
+    return localStorage.getItem(ACTIVE_IMPORT_STORAGE_KEY) ?? undefined;
+  } catch (cause: unknown) {
+    // Treated as "nothing remembered", which is the guard being lost, as in `rememberActiveImport`.
+    console.warn("EAMS: could not read the remembered roster import; the one-run guard is off.", cause);
+    return undefined;
+  }
+};
+
+/** Forgets the remembered run — only if it is still `batchId`, so a late call cannot clear a newer one. */
+export const forgetActiveImport = (batchId: string): void => {
+  try {
+    if (localStorage.getItem(ACTIVE_IMPORT_STORAGE_KEY) === batchId) {
+      localStorage.removeItem(ACTIVE_IMPORT_STORAGE_KEY);
+    }
+  } catch (cause: unknown) {
+    // Worst case a stale id stays; the next read verifies it against the API before it blocks anything.
+    console.warn("EAMS: could not clear the remembered roster import.", cause);
+  }
+};
+
+/**
+ * After a refused run, releases the guard only if the batch is not `Running`.
+ *
+ * A refusal is not proof that nothing is running: a 409 on a batch that is already `Running` is exactly
+ * the case where the guard must stay. So the batch is read back. If the read fails the guard is kept —
+ * a lock that is wrongly held clears itself on the next verified read, one wrongly dropped does not.
+ */
+export async function forgetActiveImportUnlessRunning(
+  batchId: string,
+  read: (id: string) => Promise<SisImportBatch | undefined>,
+): Promise<void> {
+  try {
+    const batch = await read(batchId);
+    if (batch?.status !== SIS_IMPORT_STATUS.Running) forgetActiveImport(batchId);
+  } catch (cause: unknown) {
+    console.warn("EAMS: could not re-read the roster import after a refused run; keeping the guard.", cause);
+  }
+}
+
+export const IMPORT_ALREADY_RUNNING =
+  "A roster import is already running. Starting another over the same roster would make the two " +
+  "contend for the same rows, so a new file cannot be staged until this one finishes. It cannot be " +
+  "cancelled; open it to watch it.";
 
 // ---------------------------------------------------------------------------------------------
 // The template download (Task 5, client QA #470 B1, #472 Q1/Q2)

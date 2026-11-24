@@ -71,19 +71,24 @@ import { useApiMutation } from "../useApiMutation";
 import { EmptyState, ErrorState, LoadingState } from "../components/ResourceStates";
 import { WriteFailureAlert } from "../components/WriteFailureAlert";
 import {
+  IMPORT_ALREADY_RUNNING,
   ROSTER_FILE_EXTENSION,
   RUN_IS_IDEMPOTENT,
   TEMPLATE_HAS_INSTRUCTIONS_SHEET,
   TERM_IS_NOT_INFERRED,
   UPLOAD_WRITES_NOTHING,
+  activeImportBatchId,
   describeSize,
+  forgetActiveImport,
+  forgetActiveImportUnlessRunning,
   importProgressPath,
+  rememberActiveImport,
   rosterFileProblem,
   saveBlob,
   uploadRefusalOf,
 } from "../sisImport";
 import { SIS_IMPORT_STATUS } from "../types";
-import type { SisImportPreview, Term } from "../types";
+import type { SisImportBatch, SisImportPreview, Term } from "../types";
 
 const TERM_FIELD_ID = "roster-import-term";
 const FILE_FIELD_ID = "roster-import-file";
@@ -174,6 +179,25 @@ export default function StudentsImport() {
   const [fileProblem, setFileProblem] = useState<string | undefined>(undefined);
 
   const [stage, setStage] = useState<Stage>({ name: "choose" });
+
+  /**
+   * The run this browser started and may still be going. Read once, synchronously, so that a browser
+   * with nothing remembered never waits on a lookup; when something is remembered it is verified
+   * against the API, because a stale id must not lock the screen. Only `Running` blocks: a `Pending`
+   * batch is staged and unrun, and a terminal one is finished.
+   */
+  const [rememberedRun] = useState(activeImportBatchId);
+  const activeRun = useApiResource<SisImportBatch | undefined>(async () => {
+    if (rememberedRun === undefined) return undefined;
+    const batch = await api.getImportBatch(rememberedRun);
+    if (batch === undefined || batch.status !== SIS_IMPORT_STATUS.Running) {
+      forgetActiveImport(rememberedRun);
+      return undefined;
+    }
+    return batch;
+  }, [rememberedRun]);
+  const checkingActiveRun = rememberedRun !== undefined && activeRun.status === "loading";
+  const runningBatch = activeRun.status === "ready" ? activeRun.data : undefined;
 
   const upload = useApiMutation((chosen: File, term: string) => api.uploadRoster(chosen, term));
   const run = useApiMutation((batchId: string, term: string) =>
@@ -275,6 +299,10 @@ export default function StudentsImport() {
    */
   const submitRun = (batchId: string, term: string) => {
     setCheckNote(undefined);
+    // Remembered before the request goes out, not after: the request may outlive its time budget (a
+    // long run) and the operator may leave while it is open, and the guard has to hold for exactly
+    // that case.
+    rememberActiveImport(batchId);
     // The check's own failure state is cleared too, and not only its note: without this, "The batch
     // could not be read" from a previous press survives beside the next run's outcome, describing a
     // request that is two attempts old.
@@ -283,7 +311,12 @@ export default function StudentsImport() {
       // `ignored` is a second press dropped while the first was in flight. Nothing was sent, so
       // nothing has changed and the screen must not move.
       if (settled.outcome === "ignored") return;
-      if (settled.outcome === "failed" && advise(settled.error).serverEffect === "none") return;
+      if (settled.outcome === "failed" && advise(settled.error).serverEffect === "none") {
+        // The server decided no, but that does not mean nothing is running (a 409 on a batch that is
+        // already Running). Release the guard only if the batch is not Running.
+        void forgetActiveImportUnlessRunning(batchId, api.getImportBatch);
+        return;
+      }
       navigate(importProgressPath(batchId), { state: { termId: term } });
     });
   };
@@ -364,7 +397,39 @@ export default function StudentsImport() {
         ))}
       </Stepper>
 
-      {stage.name === "choose" && (
+      {checkingActiveRun && (
+        <Paper variant="outlined" sx={{ p: 3 }}>
+          <LoadingState label="Checking whether an import is already running…" />
+        </Paper>
+      )}
+
+      {activeRun.status === "error" && (
+        <Alert severity="warning" sx={{ mb: 3 }}>
+          <AlertTitle>Could not check for a running import</AlertTitle>
+          <Typography variant="body2">
+            {describeApiError(activeRun.error)} If you started an import a moment ago, open it from
+            its address rather than staging another file.
+          </Typography>
+        </Alert>
+      )}
+
+      {runningBatch !== undefined && (
+        <Alert severity="warning" role="alert" sx={{ mb: 3 }}>
+          <AlertTitle>An import is already running</AlertTitle>
+          <Typography variant="body2">{IMPORT_ALREADY_RUNNING}</Typography>
+          <Button
+            component={RouterLink}
+            to={importProgressPath(runningBatch.id)}
+            size="small"
+            sx={{ mt: 1 }}
+            color="inherit"
+          >
+            Watch the running import
+          </Button>
+        </Alert>
+      )}
+
+      {!checkingActiveRun && runningBatch === undefined && stage.name === "choose" && (
         <ChooseStep
           terms={terms}
           termId={termId}
@@ -383,7 +448,7 @@ export default function StudentsImport() {
         />
       )}
 
-      {stage.name === "preview" && (
+      {!checkingActiveRun && runningBatch === undefined && stage.name === "preview" && (
         <PreviewStep
           preview={stage.preview}
           termId={stage.termId}

@@ -80,7 +80,10 @@ import {
   RUN_IS_IDEMPOTENT,
   describeImportPhase,
   describeImportWarning,
+  forgetActiveImport,
+  forgetActiveImportUnlessRunning,
   importOutcomeOf,
+  rememberActiveImport,
 } from "../sisImport";
 import { SIS_IMPORT_ROW_RESULT, SIS_IMPORT_STATUS } from "../types";
 import type { SisImportBatch, SisImportRow } from "../types";
@@ -241,9 +244,23 @@ export default function StudentsImportProgress() {
     heading.current?.focus();
   }, [status]);
 
+  /**
+   * A finished batch releases the "one run at a time" guard `StudentsImport` reads. Cleared here, where
+   * the terminal status is actually observed, rather than guessed at from the run POST — which on a
+   * long import is abandoned by its time budget long before the run ends.
+   */
+  const isTerminal = batch?.isTerminal === true;
+  useEffect(() => {
+    if (isTerminal && batchId !== undefined) forgetActiveImport(batchId);
+  }, [isTerminal, batchId]);
+
   const startRunAgain = () => {
     if (batchId === undefined || termId === undefined) return;
+    rememberActiveImport(batchId);
     void run.run(batchId, termId).then((settled) => {
+      if (settled.outcome === "failed" && advise(settled.error).serverEffect === "none") {
+        void forgetActiveImportUnlessRunning(batchId, api.getImportBatch);
+      }
       if (settled.outcome !== "succeeded") return;
       // 202: what came back is a `Running` batch, so the answer to "what happened?" is the poll, not
       // this reply. Restarting it is the whole handling.

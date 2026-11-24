@@ -4010,22 +4010,48 @@ async function uploadRoster(file: File, termId: string): Promise<SisImportPrevie
  * for a batch whose state forbids the run, which is a term mismatch or a batch that has already run.
  */
 async function runImport(batchId: string, request: SisImportRunRequest): Promise<SisImportBatch> {
-  return writeJson(
-    "POST /sis/import/{batchId}/run",
-    `/sis/import/${encodeURIComponent(batchId)}/run`,
-    { method: "POST", payload: request },
-    "The import was started",
-    toImportBatch,
-    // The ordinary read budget, and the ten-minute one this used to carry is **deleted** rather than
-    // left unused. It existed because the run happened inside this request and the clock therefore had
-    // to be the size of the operator's roster; the 202 moved the work off the request, so what is
-    // being timed now is a server accepting a job — a bounded question, answered in milliseconds. A
-    // constant left lying about would be reached for again by the next long-looking write, and it
-    // would be just as wrong there.
-    REQUEST_TIMEOUT_MS,
-    // Commits in passes: a lock refusal part-way leaves earlier passes saved and the batch Failed.
-    true,
-  );
+  try {
+    return await writeJson(
+      "POST /sis/import/{batchId}/run",
+      `/sis/import/${encodeURIComponent(batchId)}/run`,
+      { method: "POST", payload: request },
+      "The import was started",
+      toImportBatch,
+      // The ordinary read budget. The API may answer 202 at once (detached run) or, on a build that
+      // still runs the import inside the request, hold the connection for the whole run — minutes at
+      // 100k rows, and not cancellable. Either way this seam must not turn "the budget ran out" into
+      // an error: see the catch below.
+      REQUEST_TIMEOUT_MS,
+      // Commits in passes: a lock refusal part-way leaves earlier passes saved and the batch Failed.
+      true,
+    );
+  } catch (error: unknown) {
+    if (!isRunBudgetTimeout(error)) throw error;
+    // The budget expired with the run still going on the server. That is the expected shape of a long
+    // import, not a failure, and it must not surface as "may duplicate" — resending would only start a
+    // second run of a batch that is already Running. Read the batch back so the caller gets a real
+    // batch to watch. If even the read fails the original timeout is rethrown: the caller still holds
+    // the batch id and the progress route is where it polls.
+    let readBackError: unknown;
+    const batch = await getImportBatch(batchId).catch((cause: unknown) => {
+      readBackError = cause;
+      return undefined;
+    });
+    if (batch !== undefined) return batch;
+    if (!(error instanceof ApiError) || readBackError === undefined) throw error;
+    // Same timeout, with the failed read-back attached so the reason it could not be confirmed is kept.
+    throw new ApiError(error.kind, error.status, error.message, {
+      shape: error.shape,
+      problem: error.problem,
+      mayCommitPartially: error.mayCommitPartially,
+      cause: readBackError,
+    });
+  }
+}
+
+/** A write that ran out its time budget (as opposed to being refused or never reaching the server). */
+function isRunBudgetTimeout(error: unknown): boolean {
+  return error instanceof ApiError && error.kind === "network" && isTimeout(error.cause);
 }
 
 /**

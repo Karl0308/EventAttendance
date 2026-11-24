@@ -33,6 +33,8 @@ interface Props {
   onSubmit: (permissionCodes: string[]) => void;
   running: boolean;
   failure: { error: unknown } | undefined;
+  /** A role the viewer may look at but not change: the checkboxes are fixed and there is no Save. */
+  readOnly?: boolean;
 }
 
 export default function RolePermissionsDialog({
@@ -42,6 +44,7 @@ export default function RolePermissionsDialog({
   onSubmit,
   running,
   failure,
+  readOnly = false,
 }: Props) {
   const [selected, setSelected] = useState<ReadonlySet<string>>(new Set(role.permissionCodes));
 
@@ -57,7 +60,10 @@ export default function RolePermissionsDialog({
 
   return (
     <Dialog open onClose={onClose} fullWidth maxWidth="sm" aria-labelledby={TITLE_ID}>
-      <DialogTitle id={TITLE_ID}>Permissions for {role.name}</DialogTitle>
+      <DialogTitle id={TITLE_ID}>
+        Permissions for {role.name}
+        {readOnly ? " (view only)" : ""}
+      </DialogTitle>
       <DialogContent>
         {failure !== undefined && (
           <Alert severity="error" role="alert" sx={{ mb: 2 }}>
@@ -81,7 +87,12 @@ export default function RolePermissionsDialog({
                   <FormControlLabel
                     key={code}
                     control={
-                      <Checkbox size="small" checked={selected.has(code)} onChange={() => toggle(code)} />
+                      <Checkbox
+                        size="small"
+                        checked={selected.has(code)}
+                        onChange={() => toggle(code)}
+                        disabled={readOnly}
+                      />
                     }
                     // The action half, with the full code as the accessible/hover label so it is never
                     // ambiguous which permission a checkbox is.
@@ -97,15 +108,17 @@ export default function RolePermissionsDialog({
         </Stack>
       </DialogContent>
       <DialogActions>
-        <Button onClick={onClose}>Cancel</Button>
-        <Button
-          variant="contained"
-          onClick={() => onSubmit([...selected])}
-          disabled={running}
-          startIcon={running ? <CircularProgress size={16} color="inherit" /> : undefined}
-        >
-          {running ? "Saving…" : "Save permissions"}
-        </Button>
+        <Button onClick={onClose}>{readOnly ? "Close" : "Cancel"}</Button>
+        {!readOnly && (
+          <Button
+            variant="contained"
+            onClick={() => onSubmit([...selected])}
+            disabled={running}
+            startIcon={running ? <CircularProgress size={16} color="inherit" /> : undefined}
+          >
+            {running ? "Saving…" : "Save permissions"}
+          </Button>
+        )}
       </DialogActions>
     </Dialog>
   );

@@ -5,6 +5,7 @@
 import { useMemo, useRef, useState } from "react";
 import {
   Alert,
+  AlertTitle,
   Button,
   Chip,
   Dialog,
@@ -19,6 +20,8 @@ import {
   Typography,
 } from "@mui/material";
 import { describeApiError } from "../api";
+import { advise } from "../apiGuidance";
+import { PersonnelImportInterrupted, type PersonnelImportProgress } from "../personnelImportChunks";
 import type { PersonnelImportResult, PersonnelWriteRequest } from "../types";
 
 /** The request fields a CSV column can fill. */
@@ -172,11 +175,39 @@ interface Props {
   onClose: () => void;
   onImport: (rows: PersonnelWriteRequest[]) => void;
   running: boolean;
+  /** Which chunk is in flight, while a large file is being sent in pieces. */
+  progress?: PersonnelImportProgress;
   result: PersonnelImportResult | undefined;
   error: unknown;
 }
 
-export default function PersonnelImportDialog({ onClose, onImport, running, result, error }: Props) {
+/** What a stopped import says about the rows that did land — they are kept, and a re-import is safe. */
+function InterruptedAlert({ error }: { error: PersonnelImportInterrupted }) {
+  const { failedChunk, chunks, rowsSaved, partial } = error;
+  // A refusal the server decided means the failed chunk wrote nothing. Anything else (a timeout, a
+  // dropped connection, a 5xx) may have been applied before it failed.
+  const failedChunkMaySaved = advise(error.cause).serverEffect !== "none";
+  return (
+    <Alert severity="error" role="alert">
+      <AlertTitle>
+        The import stopped at chunk {failedChunk} of {chunks}
+      </AlertTitle>
+      <Typography variant="body2">{describeApiError(error.cause)}</Typography>
+      <Typography variant="body2" sx={{ mt: 1 }}>
+        {rowsSaved > 0
+          ? `${rowsSaved} rows before this chunk were processed and what was saved is kept (${partial.created} created, ${partial.updated} updated, ${partial.failed} failed). `
+          : "Nothing was saved before this chunk. "}
+        {failedChunkMaySaved
+          ? `Rows in chunk ${failedChunk} may also have been saved. `
+          : `Nothing in chunk ${failedChunk} was saved. `}
+        The rest of the file was not sent. Importing the same file again is safe: rows are matched by
+        Personnel ID, so the saved ones are simply updated.
+      </Typography>
+    </Alert>
+  );
+}
+
+export default function PersonnelImportDialog({ onClose, onImport, running, progress, result, error }: Props) {
   const [text, setText] = useState<string | undefined>(undefined);
   const [fileName, setFileName] = useState<string | undefined>(undefined);
   const [readError, setReadError] = useState<string | undefined>(undefined);
@@ -249,10 +280,20 @@ export default function PersonnelImportDialog({ onClose, onImport, running, resu
               </Alert>
             )}
 
-            {error !== undefined && (
-              <Alert severity="error" role="alert">
-                {describeApiError(error)}
+            {running && progress !== undefined && (
+              <Alert severity="info" role="status">
+                Importing chunk {progress.chunk} of {progress.chunks}… Keep this window open.
               </Alert>
+            )}
+
+            {error instanceof PersonnelImportInterrupted ? (
+              <InterruptedAlert error={error} />
+            ) : (
+              error !== undefined && (
+                <Alert severity="error" role="alert">
+                  {describeApiError(error)}
+                </Alert>
+              )
             )}
           </Stack>
         ) : (

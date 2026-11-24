@@ -102,6 +102,8 @@ interface StudentCardsDialogProps {
    */
   student: Student;
   onClose: () => void;
+  /** Read-only view for a token without `students.write`: the card list, no Detach and no attach form. */
+  readOnly?: boolean;
   attach: {
     running: boolean;
     failure: { error: unknown } | undefined;
@@ -123,6 +125,7 @@ interface StudentCardsDialogProps {
 export default function StudentCardsDialog({
   student,
   onClose,
+  readOnly = false,
   attach,
   detach,
 }: StudentCardsDialogProps) {
@@ -167,7 +170,11 @@ export default function StudentCardsDialog({
             ) : (
               <Stack spacing={1} sx={{ mb: 2 }}>
                 {active.map((card) => (
-                  <CardRow key={card.id} card={card} onDetach={() => detach.start(card)} />
+                  <CardRow
+                    key={card.id}
+                    card={card}
+                    onDetach={readOnly ? undefined : () => detach.start(card)}
+                  />
                 ))}
               </Stack>
             )}
@@ -191,14 +198,16 @@ export default function StudentCardsDialog({
             {/* Keyed on the number of successful attaches, so a success empties the two boxes by
                 remounting the form rather than by an effect watching for the moment they settle. The
                 remount is also what returns focus to the UID box — see `focusOnMount`. */}
-            <AttachCardForm
-              key={attach.succeeded}
-              focusOnMount={attach.succeeded > 0}
-              cards={student.cards}
-              running={attach.running}
-              failure={attach.failure}
-              onSubmit={attach.submit}
-            />
+            {!readOnly && (
+              <AttachCardForm
+                key={attach.succeeded}
+                focusOnMount={attach.succeeded > 0}
+                cards={student.cards}
+                running={attach.running}
+                failure={attach.failure}
+                onSubmit={attach.submit}
+              />
+            )}
           </DialogContent>
 
           <DialogActions>
@@ -234,9 +243,9 @@ function CardRow({ card, onDetach }: { card: Card; onDetach: (() => void) | unde
         )}
       </Box>
 
-      {onDetach === undefined ? (
+      {!card.isActive ? (
         <Chip size="small" label="Detached" />
-      ) : (
+      ) : onDetach === undefined ? null : (
         <Button
           size="small"
           color="error"

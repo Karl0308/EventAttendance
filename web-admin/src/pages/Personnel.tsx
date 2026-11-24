@@ -36,6 +36,11 @@ import { EmptyState, ErrorState, LoadingState } from "../components/ResourceStat
 import PersonnelFormDialog from "../components/PersonnelFormDialog";
 import PersonnelImportDialog from "../components/PersonnelImportDialog";
 import { saveBlob } from "../sisImport";
+import {
+  importInChunks,
+  PersonnelImportInterrupted,
+  type PersonnelImportProgress,
+} from "../personnelImportChunks";
 import type { Personnel, PersonnelImportResult, PersonnelWriteRequest } from "../types";
 
 const loadPersonnel = () => api.listPersonnel();
@@ -76,7 +81,11 @@ export default function PersonnelPage() {
   const create = useApiMutation((request: PersonnelWriteRequest) => api.createPersonnel(request));
   const edit = useApiMutation((id: string, request: PersonnelWriteRequest) => api.updatePersonnel(id, request));
   const remove = useApiMutation((id: string) => api.deletePersonnel(id));
-  const importMut = useApiMutation((rows: PersonnelWriteRequest[]) => api.importPersonnel(rows));
+  // Sent in chunks of 500 (see `personnelImportChunks`) so no single request outlives the read budget.
+  const [importProgress, setImportProgress] = useState<PersonnelImportProgress | undefined>(undefined);
+  const importMut = useApiMutation((rows: PersonnelWriteRequest[]) =>
+    importInChunks(rows, (chunk) => api.importPersonnel(chunk), setImportProgress),
+  );
   const download = useApiMutation(() => api.downloadPersonnelCsv());
 
   const [creating, setCreating] = useState(false);
@@ -118,18 +127,26 @@ export default function PersonnelPage() {
   const openImport = () => {
     importMut.reset();
     setImportResult(undefined);
+    setImportProgress(undefined);
     setImporting(true);
   };
 
   const runImport = (rows: PersonnelWriteRequest[]) => {
+    setImportProgress(undefined);
     void importMut.run(rows).then((s) => {
       if (s.outcome === "ignored") return;
       if (s.outcome === "succeeded") {
         setImportResult(s.data);
         personnel.reload();
         organizations.reload();
+      } else if (s.error instanceof PersonnelImportInterrupted) {
+        // Earlier chunks are saved and kept, and the failed chunk itself may have been applied before
+        // it failed (a timeout says nothing), so the list is always re-read. The failure itself is said
+        // in the dialog (importMut.error), which names the chunk and what was kept.
+        personnel.reload();
+        organizations.reload();
       }
-      // A failure (e.g. empty/oversized batch) surfaces in the dialog via importMut.error.
+      // Any other failure surfaces in the dialog via importMut.error.
     });
   };
 
@@ -374,6 +391,7 @@ export default function PersonnelPage() {
           onClose={() => setImporting(false)}
           onImport={runImport}
           running={importMut.status === "running"}
+          progress={importMut.status === "running" ? importProgress : undefined}
           result={importResult}
           error={importMut.status === "failed" ? importMut.error : undefined}
         />

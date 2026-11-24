@@ -36,7 +36,6 @@ import ToggleOffIcon from "@mui/icons-material/ToggleOff";
 import { api, describeApiError } from "../api";
 import { useCan } from "../authContext";
 import { PERMISSIONS } from "../permissions";
-import { withActionsFor } from "../gridColumns";
 import { useApiResource } from "../useApiResource";
 import { useApiMutation } from "../useApiMutation";
 import { EmptyState, ErrorState, LoadingState } from "../components/ResourceStates";
@@ -244,6 +243,7 @@ export default function EventAudiences() {
       renderCell: (p) => (
         <RowActions
           audience={p.row}
+          canWrite={canWriteEvents}
           onView={openView}
           onEdit={openEdit}
           onToggleActive={toggleActive}
@@ -315,7 +315,7 @@ export default function EventAudiences() {
             <div style={{ height: 520, width: "100%" }}>
               <DataGrid
                 rows={audiences.data}
-                columns={withActionsFor(cols, canWriteEvents)}
+                columns={cols}
                 getRowId={(r) => r.id}
                 disableRowSelectionOnClick
                 pageSizeOptions={[10, 25]}
@@ -475,12 +475,15 @@ function AttendeesDialog({
 
 function RowActions({
   audience,
+  canWrite,
   onView,
   onEdit,
   onToggleActive,
   onDelete,
 }: {
   audience: AudienceDefinition;
+  /** Without `events.write` only View is drawn. */
+  canWrite: boolean;
   onView: (a: AudienceDefinition) => void;
   onEdit: (a: AudienceDefinition) => void;
   onToggleActive: (a: AudienceDefinition) => void;
@@ -501,34 +504,38 @@ function RowActions({
         <GroupsIcon fontSize="small" />
       </IconButton>
 
-      <IconButton
-        sx={{ p: 1.25 }}
-        onClick={() => onEdit(audience)}
-        aria-label={`Edit ${audience.name}`}
-        title={`Edit ${audience.name}`}
-      >
-        <EditIcon fontSize="small" />
-      </IconButton>
+      {canWrite && (
+        <>
+          <IconButton
+            sx={{ p: 1.25 }}
+            onClick={() => onEdit(audience)}
+            aria-label={`Edit ${audience.name}`}
+            title={`Edit ${audience.name}`}
+          >
+            <EditIcon fontSize="small" />
+          </IconButton>
 
-      <IconButton
-        sx={{ p: 1.25 }}
-        color={audience.isActive ? "warning" : "success"}
-        onClick={() => onToggleActive(audience)}
-        aria-label={toggleLabel}
-        title={toggleLabel}
-      >
-        {audience.isActive ? <ToggleOffIcon fontSize="small" /> : <ToggleOnIcon fontSize="small" />}
-      </IconButton>
+          <IconButton
+            sx={{ p: 1.25 }}
+            color={audience.isActive ? "warning" : "success"}
+            onClick={() => onToggleActive(audience)}
+            aria-label={toggleLabel}
+            title={toggleLabel}
+          >
+            {audience.isActive ? <ToggleOffIcon fontSize="small" /> : <ToggleOnIcon fontSize="small" />}
+          </IconButton>
 
-      <IconButton
-        sx={{ p: 1.25 }}
-        color="error"
-        onClick={() => onDelete(audience)}
-        aria-label={`Delete ${audience.name}`}
-        title={`Delete ${audience.name}`}
-      >
-        <DeleteIcon fontSize="small" />
-      </IconButton>
+          <IconButton
+            sx={{ p: 1.25 }}
+            color="error"
+            onClick={() => onDelete(audience)}
+            aria-label={`Delete ${audience.name}`}
+            title={`Delete ${audience.name}`}
+          >
+            <DeleteIcon fontSize="small" />
+          </IconButton>
+        </>
+      )}
     </Stack>
   );
 }

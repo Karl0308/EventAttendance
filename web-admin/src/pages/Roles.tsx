@@ -27,7 +27,6 @@ import DeleteIcon from "@mui/icons-material/Delete";
 import { api, describeApiError } from "../api";
 import { useCan } from "../authContext";
 import { PERMISSIONS } from "../permissions";
-import { withActionsFor } from "../gridColumns";
 import { useApiResource } from "../useApiResource";
 import { useApiMutation } from "../useApiMutation";
 import { EmptyState, ErrorState, LoadingState } from "../components/ResourceStates";
@@ -171,6 +170,7 @@ export default function Roles() {
       renderCell: (p) => (
         <RowActions
           role={p.row}
+          canWrite={canWriteRoles}
           onEdit={(r) => {
             edit.reset();
             setEditing(r);
@@ -232,7 +232,7 @@ export default function Roles() {
             <div style={{ height: 520, width: "100%" }}>
               <DataGrid
                 rows={roles.data}
-                columns={withActionsFor(cols, canWriteRoles)}
+                columns={cols}
                 getRowId={(r) => r.id}
                 disableRowSelectionOnClick
                 pageSizeOptions={[10, 25]}
@@ -273,6 +273,7 @@ export default function Roles() {
           onSubmit={(codes) => submitPerms(permingRole.id, codes)}
           running={setPerms.status === "running"}
           failure={setPerms.status === "failed" ? { error: setPerms.error } : undefined}
+          readOnly={!canWriteRoles}
         />
       )}
 
@@ -325,11 +326,14 @@ export default function Roles() {
 
 function RowActions({
   role,
+  canWrite,
   onEdit,
   onPerms,
   onDelete,
 }: {
   role: Role;
+  /** Without `roles.write` only the read-only permission view is drawn. */
+  canWrite: boolean;
   onEdit: (r: Role) => void;
   onPerms: (r: Role) => void;
   onDelete: (r: Role) => void;
@@ -338,6 +342,20 @@ function RowActions({
   // tooltip) is discoverable rather than the buttons silently missing on some rows.
   const builtIn = role.isSystem;
   const why = builtIn ? " — built-in roles cannot be changed" : "";
+  if (!canWrite) {
+    return (
+      <Stack direction="row" spacing={0.5} alignItems="center" sx={{ height: "100%" }}>
+        <IconButton
+          sx={{ p: 1 }}
+          onClick={() => onPerms(role)}
+          aria-label={`View permissions for ${role.name}`}
+          title={`View permissions for ${role.name}`}
+        >
+          <TuneIcon fontSize="small" />
+        </IconButton>
+      </Stack>
+    );
+  }
   return (
     <Stack direction="row" spacing={0.5} alignItems="center" sx={{ height: "100%" }}>
       <IconButton

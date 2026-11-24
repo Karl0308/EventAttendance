@@ -22,7 +22,6 @@ import DeleteOutlineIcon from "@mui/icons-material/DeleteOutline";
 import { api, describeApiError } from "../api";
 import { useCan } from "../authContext";
 import { PERMISSIONS } from "../permissions";
-import { withActionsFor } from "../gridColumns";
 import { useApiResource } from "../useApiResource";
 import { useApiMutation } from "../useApiMutation";
 import { useDebounced } from "../useDebounced";
@@ -609,6 +608,7 @@ export default function Students() {
       renderCell: (p) => (
         <RowActions
           student={p.row}
+          canWrite={canWriteStudents}
           onEdit={openEdit}
           onCards={openCards}
           onDelete={openDelete}
@@ -719,7 +719,7 @@ export default function Students() {
           <div style={{ height: 520, width: "100%" }}>
             <DataGrid
               rows={rows ?? []}
-              columns={withActionsFor(cols, canWriteStudents)}
+              columns={cols}
               getRowId={(r) => r.id}
               disableRowSelectionOnClick
               // Server-side, all of it. `rowCount` is the filter's total rather than `rows.length`,
@@ -775,6 +775,7 @@ export default function Students() {
         <StudentCardsDialog
           student={managing}
           onClose={closeCards}
+          readOnly={!canWriteStudents}
           attach={{
             running: attach.status === "running",
             failure: attach.status === "failed" ? { error: attach.error } : undefined,
@@ -842,27 +843,32 @@ export default function Students() {
  */
 function RowActions({
   student,
+  canWrite,
   onEdit,
   onCards,
   onDelete,
 }: {
   student: Student;
+  /** Without `students.write` only the read-only card list is offered; Edit and Delete are not drawn. */
+  canWrite: boolean;
   onEdit: (student: Student) => void;
   onCards: (student: Student) => void;
   onDelete: (student: Student) => void;
 }) {
   return (
     <Stack direction="row" spacing={0.5} alignItems="center" sx={{ height: "100%" }}>
-      <IconButton
-        // 44 × 44, which is the smallest touch target that can be hit reliably; MUI's own default is
-        // 40 and these three sit side by side in a narrow column.
-        sx={{ p: 1.25 }}
-        onClick={() => onEdit(student)}
-        aria-label={`Edit ${student.fullName}`}
-        title={`Edit ${student.fullName}`}
-      >
-        <EditIcon fontSize="small" />
-      </IconButton>
+      {canWrite && (
+        <IconButton
+          // 44 × 44, which is the smallest touch target that can be hit reliably; MUI's own default is
+          // 40 and these three sit side by side in a narrow column.
+          sx={{ p: 1.25 }}
+          onClick={() => onEdit(student)}
+          aria-label={`Edit ${student.fullName}`}
+          title={`Edit ${student.fullName}`}
+        >
+          <EditIcon fontSize="small" />
+        </IconButton>
+      )}
 
       <IconButton
         sx={{ p: 1.25 }}
@@ -873,15 +879,17 @@ function RowActions({
         <CreditCardIcon fontSize="small" />
       </IconButton>
 
-      <IconButton
-        sx={{ p: 1.25 }}
-        color="error"
-        onClick={() => onDelete(student)}
-        aria-label={`Delete ${student.fullName}`}
-        title={`Delete ${student.fullName}`}
-      >
-        <DeleteOutlineIcon fontSize="small" />
-      </IconButton>
+      {canWrite && (
+        <IconButton
+          sx={{ p: 1.25 }}
+          color="error"
+          onClick={() => onDelete(student)}
+          aria-label={`Delete ${student.fullName}`}
+          title={`Delete ${student.fullName}`}
+        >
+          <DeleteOutlineIcon fontSize="small" />
+        </IconButton>
+      )}
     </Stack>
   );
 }
