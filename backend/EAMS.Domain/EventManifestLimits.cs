@@ -21,8 +21,14 @@ public static class EventManifestLimits
     /// be compared against something real, and so a test can fail if the ceiling is ever moved back
     /// underneath it.
     /// </para>
+    ///
+    /// <para>
+    /// <b>Raised to 70,000 on 2026-11-24</b>, ahead of the go-live dry run: the client reports roughly
+    /// 70,000 students and personnel together. That figure is the client's, not yet measured from an
+    /// import; replace it with the real count once the go-live roster lands.
+    /// </para>
     /// </summary>
-    public const int LargestObservedRoster = 21_493;
+    public const int LargestObservedRoster = 70_000;
 
     /// <summary>
     /// Attendees per manifest. Over this the endpoint is a loud <c>413 ManifestTooLarge</c>.
@@ -46,9 +52,10 @@ public static class EventManifestLimits
     /// </para>
     ///
     /// <para>
-    /// <b>50,000 is deliberately more than double the roster</b>, so it survives several intakes and
-    /// is not re-tripped in a term. It is still a real ceiling rather than an effective infinity: at
-    /// roughly a quarter-kilobyte of JSON per attendee, a manifest at this bound is around twelve
+    /// <b>150,000 is deliberately more than double the roster</b> (it was 50,000 until the 70,000-person
+    /// go-live population of 2026-11-24 put an all-campus event over it), so it survives several intakes
+    /// and is not re-tripped in a term. It is still a real ceiling rather than an effective infinity: at
+    /// roughly a quarter-kilobyte of JSON per attendee, a manifest at this bound is around thirty-seven
     /// megabytes, which is the honest reason not to simply remove the check. Raising it further is a
     /// decision about response size and device memory, not about whether the event is legitimate.
     /// </para>
@@ -60,5 +67,5 @@ public static class EventManifestLimits
     /// published client instruction is therefore "stop, tell the operator, report it to us".
     /// </para>
     /// </summary>
-    public const int MaxAttendees = 50_000;
+    public const int MaxAttendees = 150_000;
 }
