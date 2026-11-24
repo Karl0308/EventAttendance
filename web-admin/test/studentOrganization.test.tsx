@@ -26,6 +26,7 @@ import { act, cleanup, fireEvent, render, screen } from "@testing-library/react"
 import { MemoryRouter } from "react-router-dom";
 
 import Students from "../src/pages/Students";
+import AuthProvider from "../src/components/AuthProvider";
 import { beginSession, resetSessionForTests } from "../src/authSession";
 import type { AuthUser } from "../src/types";
 
@@ -113,7 +114,9 @@ function serve(): void {
 async function show() {
   const rendered = render(
     <MemoryRouter initialEntries={["/students"]}>
-      <Students />
+      <AuthProvider>
+        <Students />
+      </AuthProvider>
     </MemoryRouter>,
   );
   await act(async () => {});

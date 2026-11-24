@@ -20,6 +20,8 @@ import {
 } from "@mui/material";
 import { DataGrid, type GridColDef } from "@mui/x-data-grid";
 import { api, describeApiError } from "../api";
+import { useCan } from "../authContext";
+import { PERMISSIONS } from "../permissions";
 import { useApiResource } from "../useApiResource";
 import { useApiMutation } from "../useApiMutation";
 import { ErrorState, LoadingState } from "../components/ResourceStates";
@@ -30,6 +32,8 @@ const loadEntries = () => api.listManualIdEntries();
 const PERSON_TYPES = ["Student", "Employee"] as const;
 
 export default function ManualRfidRecords() {
+  // A convenience, not a control: `POST /scans/manual-id` is refused without `attendance.write` regardless.
+  const canRecord = useCan(PERMISSIONS.attendanceWrite);
   const entries = useApiResource(loadEntries, []);
   const record = useApiMutation((request: ManualIdEntryRequest) => api.recordManualId(request));
 
@@ -105,58 +109,61 @@ export default function ManualRfidRecords() {
         against the roster and kept so it can be reconciled once the card is registered.
       </Typography>
 
-      <Card variant="outlined" sx={{ mb: 3 }}>
-        <CardContent>
-          <form onSubmit={submit}>
-            <Stack direction={{ xs: "column", md: "row" }} spacing={2} alignItems={{ md: "flex-start" }}>
-              <TextField
-                label="RFID UID"
-                value={cardUid}
-                onChange={(e) => setCardUid(e.target.value)}
-                size="small"
-                required
-                helperText="Separators are stripped and it is upper-cased."
-              />
-              <TextField
-                label="ID number"
-                value={idNumber}
-                onChange={(e) => setIdNumber(e.target.value)}
-                size="small"
-                required
-              />
-              <TextField
-                label="Type"
-                select
-                value={personType}
-                onChange={(e) => setPersonType(e.target.value as (typeof PERSON_TYPES)[number])}
-                size="small"
-                sx={{ minWidth: 140 }}
-              >
-                {PERSON_TYPES.map((t) => (
-                  <MenuItem key={t} value={t}>
-                    {t}
-                  </MenuItem>
-                ))}
-              </TextField>
-              <TextField
-                label="Note (optional)"
-                value={note}
-                onChange={(e) => setNote(e.target.value)}
-                size="small"
-                sx={{ flex: 1 }}
-              />
-              <Button
-                type="submit"
-                variant="contained"
-                disabled={!canSubmit || record.status === "running"}
-                sx={{ mt: { xs: 0, md: 0.5 } }}
-              >
-                {record.status === "running" ? "Saving…" : "Record"}
-              </Button>
-            </Stack>
-          </form>
-        </CardContent>
-      </Card>
+      {/* The whole form goes, not just its button: a Viewer has nothing to type a record into. */}
+      {canRecord && (
+        <Card variant="outlined" sx={{ mb: 3 }}>
+          <CardContent>
+            <form onSubmit={submit}>
+              <Stack direction={{ xs: "column", md: "row" }} spacing={2} alignItems={{ md: "flex-start" }}>
+                <TextField
+                  label="RFID UID"
+                  value={cardUid}
+                  onChange={(e) => setCardUid(e.target.value)}
+                  size="small"
+                  required
+                  helperText="Separators are stripped and it is upper-cased."
+                />
+                <TextField
+                  label="ID number"
+                  value={idNumber}
+                  onChange={(e) => setIdNumber(e.target.value)}
+                  size="small"
+                  required
+                />
+                <TextField
+                  label="Type"
+                  select
+                  value={personType}
+                  onChange={(e) => setPersonType(e.target.value as (typeof PERSON_TYPES)[number])}
+                  size="small"
+                  sx={{ minWidth: 140 }}
+                >
+                  {PERSON_TYPES.map((t) => (
+                    <MenuItem key={t} value={t}>
+                      {t}
+                    </MenuItem>
+                  ))}
+                </TextField>
+                <TextField
+                  label="Note (optional)"
+                  value={note}
+                  onChange={(e) => setNote(e.target.value)}
+                  size="small"
+                  sx={{ flex: 1 }}
+                />
+                <Button
+                  type="submit"
+                  variant="contained"
+                  disabled={!canSubmit || record.status === "running"}
+                  sx={{ mt: { xs: 0, md: 0.5 } }}
+                >
+                  {record.status === "running" ? "Saving…" : "Record"}
+                </Button>
+              </Stack>
+            </form>
+          </CardContent>
+        </Card>
+      )}
 
       {entries.status === "loading" && <LoadingState label="Loading records…" />}
       {entries.status === "error" && (

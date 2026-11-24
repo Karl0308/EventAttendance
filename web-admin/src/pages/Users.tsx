@@ -23,6 +23,9 @@ import BadgeIcon from "@mui/icons-material/Badge";
 import ToggleOnIcon from "@mui/icons-material/ToggleOn";
 import ToggleOffIcon from "@mui/icons-material/ToggleOff";
 import { api, describeApiError } from "../api";
+import { useCan } from "../authContext";
+import { PERMISSIONS } from "../permissions";
+import { withActionsFor } from "../gridColumns";
 import { useApiResource } from "../useApiResource";
 import { useApiMutation } from "../useApiMutation";
 import { EmptyState, ErrorState, LoadingState } from "../components/ResourceStates";
@@ -48,6 +51,8 @@ const NOTICE_MS = 6000;
 const NO_AUTO_HIDE = null;
 
 export default function Users() {
+  // A convenience, not a control: every user write is refused without `users.write` regardless.
+  const canWriteUsers = useCan(PERMISSIONS.usersWrite);
   const users = useApiResource(loadUsers, []);
   const roles = useApiResource(loadRoles, []);
 
@@ -209,14 +214,16 @@ export default function Users() {
         <Typography variant="h5" fontWeight={700}>
           Users
         </Typography>
-        <Button
-          variant="contained"
-          startIcon={<AddIcon />}
-          onClick={openCreate}
-          disabled={roles.status !== "ready"}
-        >
-          Create user
-        </Button>
+        {canWriteUsers && (
+          <Button
+            variant="contained"
+            startIcon={<AddIcon />}
+            onClick={openCreate}
+            disabled={roles.status !== "ready"}
+          >
+            Create user
+          </Button>
+        )}
       </Stack>
 
       <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
@@ -246,7 +253,7 @@ export default function Users() {
             <div style={{ height: 560, width: "100%" }}>
               <DataGrid
                 rows={users.data}
-                columns={cols}
+                columns={withActionsFor(cols, canWriteUsers)}
                 getRowId={(r) => r.id}
                 disableRowSelectionOnClick
                 pageSizeOptions={[10, 25, 50]}

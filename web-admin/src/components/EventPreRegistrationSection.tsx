@@ -49,6 +49,8 @@ import {
 import HowToRegIcon from "@mui/icons-material/HowToReg";
 import { api, describeApiError } from "../api";
 import { advise } from "../apiGuidance";
+import { useCan } from "../authContext";
+import { PERMISSIONS } from "../permissions";
 import { audienceEditability, expectedBreakdownText, isAudienceLocked } from "../eventAudience";
 import { isTerminal, knownStatus } from "../eventStatus";
 import { useApiMutation } from "../useApiMutation";
@@ -151,6 +153,9 @@ export default function EventPreRegistrationSection({
   onAnnounce,
 }: EventPreRegistrationSectionProps) {
   const editable = audienceEditability(eventStatus);
+  // A convenience, not a control: link, unlink and create are refused without `events.write` regardless.
+  // A read-only role (Viewer) sees what is linked, without the picker, the name field or the buttons.
+  const canWrite = useCan(PERMISSIONS.eventsWrite);
   const audience = read.status === "ready" ? read.audience : undefined;
   const preRegistration = audience?.preRegistration ?? null;
   const linked: readonly EventPreRegistrationSession[] = preRegistration?.linkedSessions ?? [];
@@ -353,22 +358,24 @@ export default function EventPreRegistrationSection({
                           {session.advisoryPersonnelCount} personnel
                         </Typography>
                       </Box>
-                      <Button
-                        size="small"
-                        color="error"
-                        onClick={() => unlink(session)}
-                        disabled={controlsDisabled}
-                        aria-label={unlinkLabel(session.name)}
-                        startIcon={
-                          running &&
-                          attempted?.kind === "unlink" &&
-                          attempted.sessionId === session.preRegistrationSessionId ? (
-                            <CircularProgress size={16} color="inherit" aria-hidden />
-                          ) : undefined
-                        }
-                      >
-                        Unlink
-                      </Button>
+                      {canWrite && (
+                        <Button
+                          size="small"
+                          color="error"
+                          onClick={() => unlink(session)}
+                          disabled={controlsDisabled}
+                          aria-label={unlinkLabel(session.name)}
+                          startIcon={
+                            running &&
+                            attempted?.kind === "unlink" &&
+                            attempted.sessionId === session.preRegistrationSessionId ? (
+                              <CircularProgress size={16} color="inherit" aria-hidden />
+                            ) : undefined
+                          }
+                        >
+                          Unlink
+                        </Button>
+                      )}
                     </Stack>
                   ))}
                 </Stack>
@@ -377,90 +384,94 @@ export default function EventPreRegistrationSection({
           </>
         )}
 
-        <Stack direction={{ xs: "column", sm: "row" }} spacing={1} alignItems="flex-start">
-          <Autocomplete<PreRegistrationSession, false, false, false>
-            fullWidth
-            size="small"
-            options={offered}
-            value={selected}
-            onChange={(_event, next) => {
-              // A failure from the last attempt is about the last pick, not this one.
-              write.reset();
-              setSelectedId(next === null ? null : next.id);
-            }}
-            getOptionLabel={(session) => session.name}
-            getOptionDisabled={linkedElsewhere}
-            isOptionEqualToValue={(a, b) => a.id === b.id}
-            disabled={controlsDisabled}
-            loading={editable.can && sessions.status === "loading"}
-            noOptionsText={
-              sessions.status === "error" ? "The sessions could not be loaded." : NO_SESSIONS_LEFT
-            }
-            renderOption={(props, session) => {
-              // `key` is spread by MUI inside `props`; pulled out so it is not spread into the JSX.
-              const { key, ...rest } = props;
-              return (
-                <li key={key} {...rest}>
-                  <Box>
-                    <Typography>{session.name}</Typography>
-                    <Typography variant="body2" color="text.secondary">
-                      {session.audienceName} · {session.registeredCount} registered
-                      {session.isClosed ? " · closed" : ""}
-                      {linkedElsewhere(session)
-                        ? ` · linked to ${session.eventName ?? ANOTHER_EVENT}`
-                        : ""}
-                    </Typography>
-                  </Box>
-                </li>
-              );
-            }}
-            renderInput={(params) => (
-              <TextField {...params} label={PICKER_LABEL} placeholder="Type to search" />
+        {canWrite && (
+          <>
+            <Stack direction={{ xs: "column", sm: "row" }} spacing={1} alignItems="flex-start">
+              <Autocomplete<PreRegistrationSession, false, false, false>
+                fullWidth
+                size="small"
+                options={offered}
+                value={selected}
+                onChange={(_event, next) => {
+                  // A failure from the last attempt is about the last pick, not this one.
+                  write.reset();
+                  setSelectedId(next === null ? null : next.id);
+                }}
+                getOptionLabel={(session) => session.name}
+                getOptionDisabled={linkedElsewhere}
+                isOptionEqualToValue={(a, b) => a.id === b.id}
+                disabled={controlsDisabled}
+                loading={editable.can && sessions.status === "loading"}
+                noOptionsText={
+                  sessions.status === "error" ? "The sessions could not be loaded." : NO_SESSIONS_LEFT
+                }
+                renderOption={(props, session) => {
+                  // `key` is spread by MUI inside `props`; pulled out so it is not spread into the JSX.
+                  const { key, ...rest } = props;
+                  return (
+                    <li key={key} {...rest}>
+                      <Box>
+                        <Typography>{session.name}</Typography>
+                        <Typography variant="body2" color="text.secondary">
+                          {session.audienceName} · {session.registeredCount} registered
+                          {session.isClosed ? " · closed" : ""}
+                          {linkedElsewhere(session)
+                            ? ` · linked to ${session.eventName ?? ANOTHER_EVENT}`
+                            : ""}
+                        </Typography>
+                      </Box>
+                    </li>
+                  );
+                }}
+                renderInput={(params) => (
+                  <TextField {...params} label={PICKER_LABEL} placeholder="Type to search" />
+                )}
+              />
+              <Button
+                variant="contained"
+                onClick={link}
+                disabled={controlsDisabled || selected === null}
+                startIcon={
+                  running && attempted?.kind === "link" ? (
+                    <CircularProgress size={16} color="inherit" aria-hidden />
+                  ) : undefined
+                }
+                sx={{ whiteSpace: "nowrap", flexShrink: 0 }}
+              >
+                Link Pre-Registration
+              </Button>
+            </Stack>
+
+            <Stack direction={{ xs: "column", sm: "row" }} spacing={1} alignItems="flex-start" sx={{ mt: 2 }}>
+              <TextField
+                fullWidth
+                size="small"
+                label={NAME_LABEL}
+                value={draftName}
+                onChange={(e) => setDraftName(e.target.value)}
+                disabled={controlsDisabled}
+              />
+              <Button
+                variant="outlined"
+                onClick={create}
+                disabled={controlsDisabled}
+                startIcon={
+                  running && attempted?.kind === "create" ? (
+                    <CircularProgress size={16} color="inherit" aria-hidden />
+                  ) : undefined
+                }
+                sx={{ whiteSpace: "nowrap", flexShrink: 0 }}
+              >
+                Create from event
+              </Button>
+            </Stack>
+
+            {hint !== undefined && (
+              <Typography variant="body2" color="text.secondary" sx={{ mt: 1.5, maxWidth: "68ch" }}>
+                {hint}
+              </Typography>
             )}
-          />
-          <Button
-            variant="contained"
-            onClick={link}
-            disabled={controlsDisabled || selected === null}
-            startIcon={
-              running && attempted?.kind === "link" ? (
-                <CircularProgress size={16} color="inherit" aria-hidden />
-              ) : undefined
-            }
-            sx={{ whiteSpace: "nowrap", flexShrink: 0 }}
-          >
-            Link Pre-Registration
-          </Button>
-        </Stack>
-
-        <Stack direction={{ xs: "column", sm: "row" }} spacing={1} alignItems="flex-start" sx={{ mt: 2 }}>
-          <TextField
-            fullWidth
-            size="small"
-            label={NAME_LABEL}
-            value={draftName}
-            onChange={(e) => setDraftName(e.target.value)}
-            disabled={controlsDisabled}
-          />
-          <Button
-            variant="outlined"
-            onClick={create}
-            disabled={controlsDisabled}
-            startIcon={
-              running && attempted?.kind === "create" ? (
-                <CircularProgress size={16} color="inherit" aria-hidden />
-              ) : undefined
-            }
-            sx={{ whiteSpace: "nowrap", flexShrink: 0 }}
-          >
-            Create from event
-          </Button>
-        </Stack>
-
-        {hint !== undefined && (
-          <Typography variant="body2" color="text.secondary" sx={{ mt: 1.5, maxWidth: "68ch" }}>
-            {hint}
-          </Typography>
+          </>
         )}
 
         {editable.can && sessions.status === "error" && (

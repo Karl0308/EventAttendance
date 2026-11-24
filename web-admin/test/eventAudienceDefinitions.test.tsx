@@ -21,11 +21,14 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 
+import AuthProvider from "../src/components/AuthProvider";
+import { beginSession, resetSessionForTests } from "../src/authSession";
 import EventAudienceDefinitionsSection from "../src/components/EventAudienceDefinitionsSection";
 import EventAudiencePanel from "../src/components/EventAudiencePanel";
 import type { AudienceRead } from "../src/components/EventAudiencePanel";
 import { NO_CLASSIFICATION_HINT } from "../src/eventAudience";
 import type { EventAudience, EventAudienceDefinition } from "../src/types";
+import type { AuthUser } from "../src/types";
 
 const EVENT_ID = "44444444-4444-4444-8444-444444444444";
 const INSTITUTIONAL = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
@@ -142,15 +145,17 @@ interface Props {
 
 function section(props: Props, onChanged = vi.fn(), onAnnounce = vi.fn()) {
   return (
-    <EventAudienceDefinitionsSection
-      eventId={EVENT_ID}
-      eventStatus={props.status}
-      eventClassificationId={props.classificationId}
-      eventClassificationName={props.classificationName}
-      read={props.read}
-      onChanged={onChanged}
-      onAnnounce={onAnnounce}
-    />
+    <AuthProvider>
+      <EventAudienceDefinitionsSection
+        eventId={EVENT_ID}
+        eventStatus={props.status}
+        eventClassificationId={props.classificationId}
+        eventClassificationName={props.classificationName}
+        read={props.read}
+        onChanged={onChanged}
+        onAnnounce={onAnnounce}
+      />
+    </AuthProvider>
   );
 }
 
@@ -178,13 +183,25 @@ async function openedOptionNames(): Promise<string[]> {
     .map((o) => o.textContent ?? "");
 }
 
+/** An organizer: reads and writes events. The write controls these tests drive are gated on the second. */
+const ORGANIZER: AuthUser = {
+  id: "11111111-1111-1111-1111-111111111111",
+  schoolId: "22222222-2222-2222-2222-222222222222",
+  email: "organizer@usa.edu.ph",
+  fullName: "Or Ganizer",
+  permissions: ["events.read", "events.write"],
+};
+
 beforeEach(() => {
+  resetSessionForTests();
+  beginSession("access-token-1", ORGANIZER);
   requests = [];
   serve();
 });
 
 afterEach(() => {
   cleanup();
+  resetSessionForTests();
   vi.unstubAllGlobals();
 });
 
@@ -323,7 +340,7 @@ describe("Add audience: the attached definitions", () => {
       definitions: [attached()],
     });
     render(
-      <>
+      <AuthProvider>
         <EventAudiencePanel
           eventStatus="Draft"
           read={read}
@@ -333,7 +350,7 @@ describe("Add audience: the attached definitions", () => {
           detach={{ running: undefined, failure: undefined, group: () => {}, student: () => {} }}
         />
         {section({ ...base, read })}
-      </>,
+      </AuthProvider>,
     );
 
     const line = await screen.findByText("7 personnel in the expected audience");
@@ -352,14 +369,16 @@ describe("Add audience: the attached definitions", () => {
   it("lets the expected chip wrap at a narrow width instead of clipping its label", async () => {
     const read = readyAudience({ expected: 47, expectedStudents: 40, expectedPersonnel: 7 });
     render(
-      <EventAudiencePanel
-        eventStatus="Draft"
-        read={read}
-        refreshing={false}
-        onRetry={() => {}}
-        attach={{ open: () => {}, warnings: [], dismissWarnings: () => {} }}
-        detach={{ running: undefined, failure: undefined, group: () => {}, student: () => {} }}
-      />,
+      <AuthProvider>
+        <EventAudiencePanel
+          eventStatus="Draft"
+          read={read}
+          refreshing={false}
+          onRetry={() => {}}
+          attach={{ open: () => {}, warnings: [], dismissWarnings: () => {} }}
+          detach={{ running: undefined, failure: undefined, group: () => {}, student: () => {} }}
+        />
+      </AuthProvider>,
     );
 
     const label = await screen.findByText("Expected: 40 students · 7 personnel · 47 total");

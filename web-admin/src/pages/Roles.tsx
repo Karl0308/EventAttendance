@@ -25,6 +25,9 @@ import EditIcon from "@mui/icons-material/Edit";
 import TuneIcon from "@mui/icons-material/Tune";
 import DeleteIcon from "@mui/icons-material/Delete";
 import { api, describeApiError } from "../api";
+import { useCan } from "../authContext";
+import { PERMISSIONS } from "../permissions";
+import { withActionsFor } from "../gridColumns";
 import { useApiResource } from "../useApiResource";
 import { useApiMutation } from "../useApiMutation";
 import { EmptyState, ErrorState, LoadingState } from "../components/ResourceStates";
@@ -45,6 +48,8 @@ const NOTICE_MS = 6000;
 const NO_AUTO_HIDE = null;
 
 export default function Roles() {
+  // A convenience, not a control: every role write is refused without `roles.write` regardless.
+  const canWriteRoles = useCan(PERMISSIONS.rolesWrite);
   const roles = useApiResource(loadRoles, []);
   const permissions = useApiResource(loadPermissions, []);
 
@@ -189,16 +194,18 @@ export default function Roles() {
         <Typography variant="h5" fontWeight={700}>
           Roles
         </Typography>
-        <Button
-          variant="contained"
-          startIcon={<AddIcon />}
-          onClick={() => {
-            create.reset();
-            setCreating(true);
-          }}
-        >
-          Create role
-        </Button>
+        {canWriteRoles && (
+          <Button
+            variant="contained"
+            startIcon={<AddIcon />}
+            onClick={() => {
+              create.reset();
+              setCreating(true);
+            }}
+          >
+            Create role
+          </Button>
+        )}
       </Stack>
 
       <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
@@ -225,7 +232,7 @@ export default function Roles() {
             <div style={{ height: 520, width: "100%" }}>
               <DataGrid
                 rows={roles.data}
-                columns={cols}
+                columns={withActionsFor(cols, canWriteRoles)}
                 getRowId={(r) => r.id}
                 disableRowSelectionOnClick
                 pageSizeOptions={[10, 25]}

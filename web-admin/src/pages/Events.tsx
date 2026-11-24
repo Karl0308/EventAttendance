@@ -16,6 +16,8 @@ import LocationOnIcon from "@mui/icons-material/LocationOn";
 import ScheduleIcon from "@mui/icons-material/Schedule";
 import { api, describeApiError } from "../api";
 import type { EventWriteRequest } from "../types";
+import { useCan } from "../authContext";
+import { PERMISSIONS } from "../permissions";
 import { useApiResource } from "../useApiResource";
 import { useApiMutation } from "../useApiMutation";
 import { EmptyState, ErrorState, LoadingState } from "../components/ResourceStates";
@@ -46,6 +48,8 @@ const statusColor = (s: string) =>
   s === "Open" ? "success" : s === "Closed" ? "default" : s === "Cancelled" ? "error" : "warning";
 
 export default function Events() {
+  // A convenience, not a control: `POST /events` is refused without `events.write` either way.
+  const canWriteEvents = useCan(PERMISSIONS.eventsWrite);
   // No deps: the read takes nothing, so it runs once per mount and again only on Retry.
   const events = useApiResource(loadEvents, []);
   const nav = useNavigate();
@@ -137,9 +141,11 @@ export default function Events() {
         <Typography variant="h5" fontWeight={700}>
           Events
         </Typography>
-        <Button variant="contained" startIcon={<AddIcon />} onClick={openDialog}>
-          New event
-        </Button>
+        {canWriteEvents && (
+          <Button variant="contained" startIcon={<AddIcon />} onClick={openDialog}>
+            New event
+          </Button>
+        )}
       </Stack>
 
       {events.status === "loading" && <LoadingState label="Loading events…" />}

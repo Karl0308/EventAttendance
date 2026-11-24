@@ -1007,7 +1007,7 @@ export default function EventDetail() {
                 {/* One button per reachable target, never a menu of all four. Two at most, and each
                     opens its own confirmation: which transition is being made is the whole content of
                     that confirmation, so it cannot be a shared "Are you sure?" over a dropdown. */}
-                {statusActions?.changes.map((change) => (
+                {canWriteEvents && statusActions?.changes.map((change) => (
                   <Button
                     key={change.target}
                     size="small"
@@ -1017,40 +1017,45 @@ export default function EventDetail() {
                     {change.verb} event
                   </Button>
                 ))}
-                {/* Rendered whether or not it can be pressed, so the action is discoverable and its
-                    absence is never silent. When it cannot, the sentence below says why — a control
-                    that greys out without saying why leaves the user hunting for a permission they
-                    do not lack. */}
-                <Button
-                  size="small"
-                  startIcon={<EditIcon />}
-                  onClick={() => openEdit(event)}
-                  disabled={editability?.can !== true}
-                >
-                  Edit
-                </Button>
-                {/* Never disabled by status: a soft delete is allowed from every one of them,
-                    including Closed, because the attendance rows survive it untouched. */}
-                <Button
-                  size="small"
-                  color="error"
-                  startIcon={<DeleteOutlineIcon />}
-                  onClick={() => openDelete(event)}
-                >
-                  Delete
-                </Button>
+                {/* Edit and Delete are `events.write` — absent, not disabled, for a read-only role (Viewer). */}
+                {canWriteEvents && (
+                  <>
+                    {/* Rendered whether or not it can be pressed, so the action is discoverable and its
+                        absence is never silent. When it cannot, the sentence below says why — a control
+                        that greys out without saying why leaves the user hunting for a permission they
+                        do not lack. */}
+                    <Button
+                      size="small"
+                      startIcon={<EditIcon />}
+                      onClick={() => openEdit(event)}
+                      disabled={editability?.can !== true}
+                    >
+                      Edit
+                    </Button>
+                    {/* Never disabled by status: a soft delete is allowed from every one of them,
+                        including Closed, because the attendance rows survive it untouched. */}
+                    <Button
+                      size="small"
+                      color="error"
+                      startIcon={<DeleteOutlineIcon />}
+                      onClick={() => openDelete(event)}
+                    >
+                      Delete
+                    </Button>
+                  </>
+                )}
               </Stack>
             </Stack>
 
             {/* Measured in characters, because the limit being avoided is a line too long to track
                 back to its start rather than a number of pixels. */}
-            {statusActions?.noneBecause !== undefined && (
+            {canWriteEvents && statusActions?.noneBecause !== undefined && (
               <Typography variant="body2" color="text.secondary" sx={{ mb: 2, maxWidth: "68ch" }}>
                 {statusActions.noneBecause}
               </Typography>
             )}
 
-            {editability?.can === false && (
+            {canWriteEvents && editability?.can === false && (
               <Typography variant="body2" color="text.secondary" sx={{ mb: 2, maxWidth: "68ch" }}>
                 {editability.reason}
               </Typography>
@@ -1183,7 +1188,7 @@ export default function EventDetail() {
                 look like a separate system rather than the same event. */}
             <UnresolvedScansPanel read={scansRead} onRetry={scans.reload} />
 
-            {event.status === EVENT_STATUS.Open && (
+            {canWriteAttendance && event.status === EVENT_STATUS.Open && (
               <Card sx={{ mb: 3, bgcolor: "#fff8e1" }}>
                 <CardContent>
                   {data.roster.status === "unavailable" ? (

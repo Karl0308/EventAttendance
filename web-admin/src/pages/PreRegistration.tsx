@@ -40,7 +40,8 @@ import LockOpenIcon from "@mui/icons-material/LockOpen";
 import { api, describeApiError } from "../api";
 import { useApiResource } from "../useApiResource";
 import { useApiMutation } from "../useApiMutation";
-import { useSignedInUser } from "../authContext";
+import { useCan, useSignedInUser } from "../authContext";
+import { withActionsFor } from "../gridColumns";
 import { grants, PERMISSIONS } from "../permissions";
 import { EmptyState, ErrorState, LoadingState } from "../components/ResourceStates";
 import type {
@@ -72,6 +73,8 @@ const NOTICE_MS = 6000;
 const NO_AUTO_HIDE = null;
 
 export default function PreRegistration() {
+  // A convenience, not a control: every session write is refused without `events.write` regardless.
+  const canWriteEvents = useCan(PERMISSIONS.eventsWrite);
   const sessions = useApiResource(loadSessions, []);
   const audiences = useApiResource(loadAudiences, []);
 
@@ -182,7 +185,7 @@ export default function PreRegistration() {
     },
   ];
 
-  const noAudiences = audiences.status === "ready" && activeAudiences.length === 0;
+  const noAudiences = canWriteEvents && audiences.status === "ready" && activeAudiences.length === 0;
 
   return (
     <Box>
@@ -190,17 +193,19 @@ export default function PreRegistration() {
         <Typography variant="h5" fontWeight={700}>
           Pre-registration
         </Typography>
-        <Button
-          variant="contained"
-          startIcon={<AddIcon />}
-          onClick={() => {
-            create.reset();
-            setCreating(true);
-          }}
-          disabled={activeAudiences.length === 0}
-        >
-          Create session
-        </Button>
+        {canWriteEvents && (
+          <Button
+            variant="contained"
+            startIcon={<AddIcon />}
+            onClick={() => {
+              create.reset();
+              setCreating(true);
+            }}
+            disabled={activeAudiences.length === 0}
+          >
+            Create session
+          </Button>
+        )}
       </Stack>
 
       <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
@@ -226,7 +231,7 @@ export default function PreRegistration() {
           <div style={{ height: 520, width: "100%" }}>
             <DataGrid
               rows={sessions.data}
-              columns={cols}
+              columns={withActionsFor(cols, canWriteEvents)}
               getRowId={(r) => r.id}
               disableRowSelectionOnClick
               pageSizeOptions={[10, 25]}

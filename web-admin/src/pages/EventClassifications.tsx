@@ -29,6 +29,9 @@ import DeleteIcon from "@mui/icons-material/Delete";
 import ToggleOnIcon from "@mui/icons-material/ToggleOn";
 import ToggleOffIcon from "@mui/icons-material/ToggleOff";
 import { api, describeApiError } from "../api";
+import { useCan } from "../authContext";
+import { PERMISSIONS } from "../permissions";
+import { withActionsFor } from "../gridColumns";
 import { useApiResource } from "../useApiResource";
 import { useApiMutation } from "../useApiMutation";
 import { EmptyState, ErrorState, LoadingState } from "../components/ResourceStates";
@@ -53,6 +56,8 @@ const NOTICE_MS = 6000;
 const NO_AUTO_HIDE = null;
 
 export default function EventClassifications() {
+  // A convenience, not a control: every classification write is refused without `events.write` regardless.
+  const canWriteEvents = useCan(PERMISSIONS.eventsWrite);
   const classifications = useApiResource(loadClassifications, []);
 
   const create = useApiMutation((request: EventClassificationWriteRequest) =>
@@ -226,9 +231,11 @@ export default function EventClassifications() {
         <Typography variant="h5" fontWeight={700}>
           Event classifications
         </Typography>
-        <Button variant="contained" startIcon={<AddIcon />} onClick={openCreate}>
-          Create classification
-        </Button>
+        {canWriteEvents && (
+          <Button variant="contained" startIcon={<AddIcon />} onClick={openCreate}>
+            Create classification
+          </Button>
+        )}
       </Stack>
 
       <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
@@ -260,7 +267,7 @@ export default function EventClassifications() {
             <div style={{ height: 520, width: "100%" }}>
               <DataGrid
                 rows={classifications.data}
-                columns={cols}
+                columns={withActionsFor(cols, canWriteEvents)}
                 getRowId={(r) => r.id}
                 disableRowSelectionOnClick
                 pageSizeOptions={[10, 25]}

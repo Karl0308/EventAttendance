@@ -21,9 +21,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 
+import AuthProvider from "../src/components/AuthProvider";
+import { beginSession, resetSessionForTests } from "../src/authSession";
 import EventPreRegistrationSection from "../src/components/EventPreRegistrationSection";
 import type { AudienceRead } from "../src/components/EventAudiencePanel";
 import type { EventAudience } from "../src/types";
+import type { AuthUser } from "../src/types";
 
 const EVENT_ID = "44444444-4444-4444-8444-444444444444";
 const LINKED_ID = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
@@ -128,13 +131,15 @@ const unlinkedAudience = (): AudienceRead =>
 
 function section(read: AudienceRead, status = "Draft", onChanged = vi.fn(), onAnnounce = vi.fn()) {
   return (
-    <EventPreRegistrationSection
-      eventId={EVENT_ID}
-      eventStatus={status}
-      read={read}
-      onChanged={onChanged}
-      onAnnounce={onAnnounce}
-    />
+    <AuthProvider>
+      <EventPreRegistrationSection
+        eventId={EVENT_ID}
+        eventStatus={status}
+        read={read}
+        onChanged={onChanged}
+        onAnnounce={onAnnounce}
+      />
+    </AuthProvider>
   );
 }
 
@@ -153,13 +158,25 @@ async function openPicker(): Promise<void> {
   await screen.findByRole("listbox");
 }
 
+/** An organizer: reads and writes events. The write controls these tests drive are gated on the second. */
+const ORGANIZER: AuthUser = {
+  id: "11111111-1111-1111-1111-111111111111",
+  schoolId: "22222222-2222-2222-2222-222222222222",
+  email: "organizer@usa.edu.ph",
+  fullName: "Or Ganizer",
+  permissions: ["events.read", "events.write"],
+};
+
 beforeEach(() => {
+  resetSessionForTests();
+  beginSession("access-token-1", ORGANIZER);
   requests = [];
   serve();
 });
 
 afterEach(() => {
   cleanup();
+  resetSessionForTests();
   vi.unstubAllGlobals();
 });
 

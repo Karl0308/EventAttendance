@@ -20,6 +20,9 @@ import PersonSearchIcon from "@mui/icons-material/PersonSearch";
 import DownloadIcon from "@mui/icons-material/Download";
 import DeleteOutlineIcon from "@mui/icons-material/DeleteOutline";
 import { api, describeApiError } from "../api";
+import { useCan } from "../authContext";
+import { PERMISSIONS } from "../permissions";
+import { withActionsFor } from "../gridColumns";
 import { useApiResource } from "../useApiResource";
 import { useApiMutation } from "../useApiMutation";
 import { useDebounced } from "../useDebounced";
@@ -187,6 +190,10 @@ function activeCardSummary(cards: readonly Card[]): string {
 }
 
 export default function Students() {
+  // A convenience, not a control: each write below is refused by the server without the same code.
+  // Hiding them gives a read-only role (Viewer) a strictly read-only screen.
+  const canWriteStudents = useCan(PERMISSIONS.studentsWrite);
+  const canImportRoster = useCan(PERMISSIONS.sisImport);
   const [search, setSearch] = useState("");
   const [paginationModel, setPaginationModel] = useState({
     page: 0,
@@ -632,17 +639,21 @@ export default function Students() {
           </Button>
           {/* The entry point to §10. A link rather than a button that navigates: it is a destination
               with its own URL, so it must open in a new tab, be copied, and be announced as a link. */}
-          <Button
-            component={RouterLink}
-            to="/students/import"
-            variant="outlined"
-            startIcon={<UploadFileIcon />}
-          >
-            Import roster
-          </Button>
-          <Button variant="contained" startIcon={<AddIcon />} onClick={openCreate}>
-            New student
-          </Button>
+          {canImportRoster && (
+            <Button
+              component={RouterLink}
+              to="/students/import"
+              variant="outlined"
+              startIcon={<UploadFileIcon />}
+            >
+              Import roster
+            </Button>
+          )}
+          {canWriteStudents && (
+            <Button variant="contained" startIcon={<AddIcon />} onClick={openCreate}>
+              New student
+            </Button>
+          )}
         </Stack>
       </Stack>
 
@@ -708,7 +719,7 @@ export default function Students() {
           <div style={{ height: 520, width: "100%" }}>
             <DataGrid
               rows={rows ?? []}
-              columns={cols}
+              columns={withActionsFor(cols, canWriteStudents)}
               getRowId={(r) => r.id}
               disableRowSelectionOnClick
               // Server-side, all of it. `rowCount` is the filter's total rather than `rows.length`,

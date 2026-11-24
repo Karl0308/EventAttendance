@@ -32,6 +32,8 @@ import {
 import PlaylistAddIcon from "@mui/icons-material/PlaylistAdd";
 import { describeApiError } from "../api";
 import { advise } from "../apiGuidance";
+import { useCan } from "../authContext";
+import { PERMISSIONS } from "../permissions";
 import {
   AUDIENCE_LOCKED_ELSEWHERE,
   NO_CLASSIFICATION_HINT,
@@ -89,6 +91,9 @@ export default function EventAudienceDefinitionsPanel({
   detach,
 }: EventAudienceDefinitionsPanelProps) {
   const editable = audienceEditability(eventStatus);
+  // A convenience, not a control: attach and detach are refused without `events.write` regardless. A
+  // read-only role (Viewer) sees what is attached, without the picker or the Remove buttons.
+  const canWrite = useCan(PERMISSIONS.eventsWrite);
   const audience = read.status === "ready" ? read.audience : undefined;
   const attachedIds = new Set((audience?.definitions ?? []).map((d) => d.audienceDefinitionId));
 
@@ -120,80 +125,84 @@ export default function EventAudienceDefinitionsPanel({
         <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap" sx={{ mb: 1 }}>
           <PlaylistAddIcon color="primary" aria-hidden />
           <Typography variant="h6" component="h2">
-            Add audience
+            {canWrite ? "Add audience" : "Audience definitions"}
           </Typography>
           {classification?.name !== undefined && (
             <Chip size="small" variant="outlined" label={classification.name} />
           )}
         </Stack>
 
-        <Stack direction={{ xs: "column", sm: "row" }} spacing={1} alignItems="flex-start">
-          <Autocomplete<AudienceDefinition, true>
-            multiple
-            disableCloseOnSelect
-            fullWidth
-            size="small"
-            options={offered}
-            value={[...selected]}
-            onChange={(_event, next) => onSelect(next)}
-            getOptionLabel={(definition) => definition.name}
-            isOptionEqualToValue={(a, b) => a.id === b.id}
-            disabled={pickerDisabled}
-            loading={hasClassification && options.status === "loading"}
-            noOptionsText={
-              options.status === "error" ? "The definitions could not be loaded." : NO_MATCHING_DEFINITIONS
-            }
-            renderOption={(props, definition) => {
-              // `key` is spread by MUI inside `props`; pulled out so it is not spread into the JSX.
-              const { key, ...rest } = props;
-              return (
-                <li key={key} {...rest}>
-                  <Box>
-                    <Typography>{definition.name}</Typography>
-                    <Typography variant="body2" color="text.secondary">
-                      {definition.audienceType}
-                    </Typography>
-                  </Box>
-                </li>
-              );
-            }}
-            renderInput={(params) => (
-              <TextField {...params} label={PICKER_LABEL} placeholder="Type to search" helperText={helper} />
+        {canWrite && (
+          <>
+            <Stack direction={{ xs: "column", sm: "row" }} spacing={1} alignItems="flex-start">
+              <Autocomplete<AudienceDefinition, true>
+                multiple
+                disableCloseOnSelect
+                fullWidth
+                size="small"
+                options={offered}
+                value={[...selected]}
+                onChange={(_event, next) => onSelect(next)}
+                getOptionLabel={(definition) => definition.name}
+                isOptionEqualToValue={(a, b) => a.id === b.id}
+                disabled={pickerDisabled}
+                loading={hasClassification && options.status === "loading"}
+                noOptionsText={
+                  options.status === "error" ? "The definitions could not be loaded." : NO_MATCHING_DEFINITIONS
+                }
+                renderOption={(props, definition) => {
+                  // `key` is spread by MUI inside `props`; pulled out so it is not spread into the JSX.
+                  const { key, ...rest } = props;
+                  return (
+                    <li key={key} {...rest}>
+                      <Box>
+                        <Typography>{definition.name}</Typography>
+                        <Typography variant="body2" color="text.secondary">
+                          {definition.audienceType}
+                        </Typography>
+                      </Box>
+                    </li>
+                  );
+                }}
+                renderInput={(params) => (
+                  <TextField {...params} label={PICKER_LABEL} placeholder="Type to search" helperText={helper} />
+                )}
+              />
+              <Button
+                variant="contained"
+                startIcon={
+                  attach.running ? <CircularProgress size={16} color="inherit" aria-hidden /> : undefined
+                }
+                onClick={attach.submit}
+                disabled={pickerDisabled || selected.length === 0}
+                sx={{ whiteSpace: "nowrap", flexShrink: 0 }}
+              >
+                {attach.running ? "Attaching…" : "Attach selected"}
+              </Button>
+            </Stack>
+
+            {hasClassification && options.status === "error" && (
+              <Alert
+                severity="error"
+                role="alert"
+                sx={{ mt: 2 }}
+                action={
+                  advise(options.error).retryable === "safe" ? (
+                    <Button color="inherit" size="small" onClick={onRetryOptions}>
+                      Retry
+                    </Button>
+                  ) : undefined
+                }
+              >
+                <AlertTitle>The audience definitions could not be loaded</AlertTitle>
+                <Typography variant="body2">{describeApiError(options.error)}</Typography>
+              </Alert>
             )}
-          />
-          <Button
-            variant="contained"
-            startIcon={
-              attach.running ? <CircularProgress size={16} color="inherit" aria-hidden /> : undefined
-            }
-            onClick={attach.submit}
-            disabled={pickerDisabled || selected.length === 0}
-            sx={{ whiteSpace: "nowrap", flexShrink: 0 }}
-          >
-            {attach.running ? "Attaching…" : "Attach selected"}
-          </Button>
-        </Stack>
 
-        {hasClassification && options.status === "error" && (
-          <Alert
-            severity="error"
-            role="alert"
-            sx={{ mt: 2 }}
-            action={
-              advise(options.error).retryable === "safe" ? (
-                <Button color="inherit" size="small" onClick={onRetryOptions}>
-                  Retry
-                </Button>
-              ) : undefined
-            }
-          >
-            <AlertTitle>The audience definitions could not be loaded</AlertTitle>
-            <Typography variant="body2">{describeApiError(options.error)}</Typography>
-          </Alert>
-        )}
-
-        {attach.failure !== undefined && (
-          <FailureAlert title="Those definitions were not attached" failure={attach.failure} />
+            {attach.failure !== undefined && (
+              <FailureAlert title="Those definitions were not attached" failure={attach.failure} />
+            )}
+          </>
         )}
         {detach.failure !== undefined && (
           <FailureAlert title="That definition was not removed" failure={detach.failure} />
@@ -230,7 +239,7 @@ export default function EventAudienceDefinitionsPanel({
                   <DefinitionRow
                     key={definition.audienceDefinitionId}
                     definition={definition}
-                    canEdit={editable.can}
+                    canEdit={editable.can && canWrite}
                     running={detach.running === definition.audienceDefinitionId}
                     onRemove={() => detach.remove(definition)}
                   />

@@ -14,6 +14,7 @@ import { createContext, useContext } from "react";
 
 import type { AuthUser } from "./types";
 import type { SessionState } from "./authSession";
+import { grants, type PermissionCode } from "./permissions";
 
 export interface AuthContextValue {
   readonly session: SessionState;
@@ -58,4 +59,14 @@ export function useSignedInUser(): AuthUser {
     );
   }
   return session.user;
+}
+
+/**
+ * Whether the signed-in token carries a permission. For hiding a *control* the user could not use —
+ * the Create / Edit / Delete / Import / Record buttons and the grid Actions column — so a read-only
+ * role (Viewer) sees a read-only screen. A convenience, not a control: the endpoint refuses without
+ * the same code regardless. See `PermissionGuard` for the same rule on whole routes and nav entries.
+ */
+export function useCan(permission: PermissionCode): boolean {
+  return grants(useSignedInUser().permissions, permission);
 }

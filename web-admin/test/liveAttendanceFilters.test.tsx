@@ -48,7 +48,7 @@ const OPERATOR: AuthUser = {
   schoolId: "22222222-2222-2222-2222-222222222222",
   email: "registrar@usa.edu.ph",
   fullName: "Reg Istrar",
-  permissions: ["events.read", "events.write"],
+  permissions: ["events.read", "events.write", "attendance.write"],
 };
 
 /** A well-formed device key, so the tap simulator's `POST /attendance/tap` is reachable in tests. */

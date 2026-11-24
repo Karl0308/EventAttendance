@@ -36,6 +36,8 @@ import GroupsIcon from "@mui/icons-material/Groups";
 import PersonAddAltIcon from "@mui/icons-material/PersonAddAlt";
 import { describeApiError } from "../api";
 import { advise } from "../apiGuidance";
+import { useCan } from "../authContext";
+import { PERMISSIONS } from "../permissions";
 import {
   AUDIENCE_LOCKED_ELSEWHERE,
   FROZEN_STUDENTS_ELSEWHERE,
@@ -109,6 +111,9 @@ export default function EventAudiencePanel({
   detach,
 }: EventAudiencePanelProps) {
   const editable = audienceEditability(eventStatus);
+  // A convenience, not a control: attach and detach are refused without `events.write` regardless. A
+  // read-only role (Viewer) sees who is expected, with nothing to add or remove.
+  const canWrite = useCan(PERMISSIONS.eventsWrite);
   const audience = read.status === "ready" ? read.audience : undefined;
   const locked = detach.failure !== undefined && isAudienceLocked(detach.failure.error);
 
@@ -155,15 +160,17 @@ export default function EventAudiencePanel({
             </Box>
           </Stack>
 
-          <Button
-            size="small"
-            variant="outlined"
-            startIcon={<PersonAddAltIcon />}
-            onClick={attach.open}
-            disabled={!editable.can || read.status !== "ready" || audience === undefined}
-          >
-            Add sections
-          </Button>
+          {canWrite && (
+            <Button
+              size="small"
+              variant="outlined"
+              startIcon={<PersonAddAltIcon />}
+              onClick={attach.open}
+              disabled={!editable.can || read.status !== "ready" || audience === undefined}
+            >
+              Add sections
+            </Button>
+          )}
         </Stack>
 
         {/* Why the button above cannot be pressed. Printed for a terminal event whether or not the
@@ -240,7 +247,7 @@ export default function EventAudiencePanel({
         )}
 
         {audience !== undefined && (
-          <AudienceLists audience={audience} canEdit={editable.can} detach={detach} />
+          <AudienceLists audience={audience} canEdit={editable.can && canWrite} detach={detach} />
         )}
       </CardContent>
     </Card>

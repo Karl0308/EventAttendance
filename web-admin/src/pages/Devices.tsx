@@ -30,6 +30,9 @@ import EditIcon from "@mui/icons-material/Edit";
 import VpnKeyIcon from "@mui/icons-material/VpnKey";
 import KeyOffIcon from "@mui/icons-material/KeyOff";
 import { api, describeApiError } from "../api";
+import { useCan } from "../authContext";
+import { PERMISSIONS } from "../permissions";
+import { withActionsFor } from "../gridColumns";
 import { useApiResource } from "../useApiResource";
 import { useApiMutation } from "../useApiMutation";
 import { EmptyState, ErrorState, LoadingState } from "../components/ResourceStates";
@@ -142,6 +145,8 @@ const whenText = (iso: string | undefined): string =>
   iso === undefined ? NO_VALUE : new Date(iso).toLocaleString();
 
 export default function Devices() {
+  // A convenience, not a control: every device write is refused without `devices.write` regardless.
+  const canWriteDevices = useCan(PERMISSIONS.devicesWrite);
   // No deps: the read takes nothing, so it runs once per mount, and again on Retry or after a write.
   const devices = useApiResource(loadDevices, []);
   const [search, setSearch] = useState("");
@@ -474,9 +479,11 @@ export default function Devices() {
         <Typography variant="h5" fontWeight={700}>
           Devices
         </Typography>
-        <Button variant="contained" startIcon={<AddIcon />} onClick={openCreate}>
-          Register device
-        </Button>
+        {canWriteDevices && (
+          <Button variant="contained" startIcon={<AddIcon />} onClick={openCreate}>
+            Register device
+          </Button>
+        )}
       </Stack>
 
       {devices.status === "loading" && <LoadingState label="Loading devices…" />}
@@ -515,7 +522,7 @@ export default function Devices() {
               <div style={{ height: 520, width: "100%" }}>
                 <DataGrid
                   rows={filtered}
-                  columns={cols}
+                  columns={withActionsFor(cols, canWriteDevices)}
                   getRowId={(r) => r.id}
                   disableRowSelectionOnClick
                   pageSizeOptions={[10, 25]}

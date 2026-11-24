@@ -100,8 +100,18 @@ describe("PreRegistration manual picker", () => {
     const picker = vi.spyOn(api, "listPersonnelPicker");
     const full = vi.spyOn(api, "listPersonnel");
 
-    await openManage();
+    // A Viewer has no Manage button to open the dialog with (the Actions column is write-only), so
+    // there is no people load to trigger: the page settles on the session list and stays quiet.
+    render(
+      <MemoryRouter>
+        <AuthProvider>
+          <PreRegistration />
+        </AuthProvider>
+      </MemoryRouter>,
+    );
+    await screen.findByText("Orientation");
 
+    expect(screen.queryByRole("button", { name: "Manage Orientation" })).toBeNull();
     expect(students).not.toHaveBeenCalled();
     expect(picker).not.toHaveBeenCalled();
     expect(full).not.toHaveBeenCalled();

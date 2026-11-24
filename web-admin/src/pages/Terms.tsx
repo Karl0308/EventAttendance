@@ -23,6 +23,9 @@ import EditIcon from "@mui/icons-material/Edit";
 import StarIcon from "@mui/icons-material/Star";
 import StarBorderIcon from "@mui/icons-material/StarBorder";
 import { api, describeApiError } from "../api";
+import { useCan } from "../authContext";
+import { PERMISSIONS } from "../permissions";
+import { withActionsFor } from "../gridColumns";
 import { useApiResource } from "../useApiResource";
 import { useApiMutation } from "../useApiMutation";
 import { EmptyState, ErrorState, LoadingState } from "../components/ResourceStates";
@@ -68,6 +71,8 @@ interface CurrentChange {
 }
 
 export default function Terms() {
+  // A convenience, not a control: every term write is refused without `academic.write` regardless.
+  const canWriteTerms = useCan(PERMISSIONS.academicWrite);
   // No deps: the read takes nothing, so it runs once per mount, and again on Retry or after a write.
   const terms = useApiResource(loadTerms, []);
 
@@ -284,9 +289,11 @@ export default function Terms() {
         <Typography variant="h5" fontWeight={700}>
           Terms
         </Typography>
-        <Button variant="contained" startIcon={<AddIcon />} onClick={openCreate}>
-          Create term
-        </Button>
+        {canWriteTerms && (
+          <Button variant="contained" startIcon={<AddIcon />} onClick={openCreate}>
+            Create term
+          </Button>
+        )}
       </Stack>
 
       <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
@@ -321,7 +328,7 @@ export default function Terms() {
             <div style={{ height: 520, width: "100%" }}>
               <DataGrid
                 rows={terms.data}
-                columns={cols}
+                columns={withActionsFor(cols, canWriteTerms)}
                 getRowId={(r) => r.id}
                 disableRowSelectionOnClick
                 pageSizeOptions={[10, 25]}
