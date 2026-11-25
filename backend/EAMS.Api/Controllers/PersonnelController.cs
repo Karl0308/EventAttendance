@@ -29,8 +29,13 @@ public class PersonnelController : ControllerBase
     internal const string ErrorCodeProperty = "code";
 
     private readonly IPersonnelService _personnel;
+    private readonly IPersonnelMigrationService _migration;
 
-    public PersonnelController(IPersonnelService personnel) => _personnel = personnel;
+    public PersonnelController(IPersonnelService personnel, IPersonnelMigrationService migration)
+    {
+        _personnel = personnel;
+        _migration = migration;
+    }
 
     /// <summary>
     /// <c>GET /personnel</c> — one page of the school's personnel, active first then by name, filtered.
@@ -216,6 +221,39 @@ public class PersonnelController : ControllerBase
                 $"The import has {rows.Count} rows; at most {MaxImportRows} are accepted in one call.", null));
 
         return Ok(await _personnel.ImportAsync(rows, ct));
+    }
+
+    // ------------------------------------------------------------------- migrate from students
+
+    /// <summary>
+    /// <c>POST /personnel/migrate-from-students</c> (JJ, 2026-11-25) — moves live students whose trimmed
+    /// number starts with <c>prefix</c> into Personnel: upsert by number, move the active card's UID, soft-
+    /// delete the student. Past attendance stays on the student. <c>dryRun</c> (the default) writes nothing.
+    /// </summary>
+    /// <response code="200">
+    /// The per-student plan (dry run) or outcome (run). A student that cannot be moved is a <c>Conflict</c>
+    /// row with a <c>conflictCode</c>, never a failed request. Re-running is safe: moved students no longer match.
+    /// </response>
+    /// <response code="400">The prefix is too short or too long.</response>
+    /// <response code="409">No school could be resolved.</response>
+    /// <response code="503">
+    /// <c>WriteLockUnavailable</c>: another change to one of the cards held its lock. Earlier batches may
+    /// already be applied; send the same request again after <c>Retry-After</c> seconds.
+    /// </response>
+    [HttpPost("migrate-from-students")]
+    [Authorize(AuthenticationSchemes = JwtBearerDefaults.AuthenticationScheme, Policy = EamsPermissions.PersonnelMigrate)]
+    [HasPermissionNotEnforced(EamsPermissions.PersonnelMigrate)]
+    [ProducesResponseType(typeof(MigrateFromStudentsResultDto), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status409Conflict)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status503ServiceUnavailable)]
+    public async Task<ActionResult<MigrateFromStudentsResultDto>> MigrateFromStudents(
+        [FromBody] MigrateFromStudentsRequest request, CancellationToken ct)
+    {
+        var response = await _migration.MigrateFromStudentsAsync(request, ct);
+        return response.Outcome == PersonnelWriteOutcome.Saved
+            ? Ok(response.Result)
+            : Failure(new PersonnelWriteResponse(response.Outcome, response.Message, null));
     }
 
     // -------------------------------------------------------------------------------- translation

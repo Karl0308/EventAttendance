@@ -129,6 +129,9 @@ public static class DependencyInjection
         // service; takes an ISchoolContext for the same reason — a create decides which school to file the
         // record under.
         services.AddScoped<IPersonnelService, PersonnelService>();
+
+        // JJ, 2026-11-25: moves staff imported as students into Personnel (POST /personnel/migrate-from-students).
+        services.AddScoped<IPersonnelMigrationService, PersonnelMigrationService>();
         // One scoped EventService per request, reached through two interfaces: the public
         // IEventService, and the internal IEventSummaryFigures the report service below depends on —
         // so the report calls the one summary implementation on the same instance and DbContext,

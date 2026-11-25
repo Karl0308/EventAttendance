@@ -32,6 +32,8 @@ export const PERMISSIONS = {
    */
   personnelRead: "personnel.read",
   personnelWrite: "personnel.write",
+  /** `POST /personnel/migrate-from-students` — moving students into Personnel; a separate grant from `personnel.write`. */
+  personnelMigrate: "personnel.migrate",
   eventsRead: "events.read",
   eventsWrite: "events.write",
   attendanceRead: "attendance.read",

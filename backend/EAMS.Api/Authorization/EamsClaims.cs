@@ -295,6 +295,18 @@ public static class EamsPermissions
     public const string PersonnelWrite = "personnel.write";
 
     /// <summary>
+    /// <c>POST /personnel/migrate-from-students</c> (JJ, 2026-11-25) — moving students whose number starts
+    /// with a prefix into Personnel: their card moves and the student is soft-deleted, in bulk.
+    ///
+    /// <para>
+    /// <b>Its own code rather than <see cref="PersonnelWrite"/></b>, because it also rewrites the student
+    /// roster — the one surface <c>students.write</c> keeps import-only. Administrators only; existing
+    /// installations receive the grant from <c>GrantPersonnelMigrate</c>.
+    /// </para>
+    /// </summary>
+    public const string PersonnelMigrate = "personnel.migrate";
+
+    /// <summary>
     /// §6.7's reports module — <c>GET /reports/event/{eventId}/summary</c> and
     /// <c>GET /reports/events/summary</c>. <b>Administrators only.</b>
     ///

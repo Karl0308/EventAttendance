@@ -385,16 +385,17 @@ internal sealed class PersonnelService : IPersonnelService
     private static string? Fragment(string? value) =>
         string.IsNullOrWhiteSpace(value) ? null : value.Trim();
 
-    private sealed record Fields(
+    internal sealed record Fields(
         string Number, string FirstName, string? MiddleName, string LastName, string? Email,
         string? Classification, string? Department, string? Organization, string? Position,
         string? RfidUid, string Status);
 
     /// <summary>
     /// Trims, length-checks, normalizes the status and the RFID UID, and yields the values to store —
-    /// or a 400 naming the field. <c>false</c> return means <paramref name="refused"/> is set.
+    /// or a 400 naming the field. <c>false</c> return means <paramref name="refused"/> is set. Internal so
+    /// <c>PersonnelMigrationService</c> applies exactly these rules to a student it moves.
     /// </summary>
-    private static bool Normalize(
+    internal static bool Normalize(
         PersonnelWriteRequest request, out Fields fields, out PersonnelWriteResponse? refused)
     {
         fields = null!;

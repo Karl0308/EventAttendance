@@ -198,7 +198,8 @@ public class PermissionRegistryTests
     [Fact]
     public void Every_personnel_route_is_gated_by_a_personnel_code_on_both_attributes()
     {
-        string[] personnelCodes = [EamsPermissions.PersonnelRead, EamsPermissions.PersonnelWrite];
+        string[] personnelCodes =
+            [EamsPermissions.PersonnelRead, EamsPermissions.PersonnelWrite, EamsPermissions.PersonnelMigrate];
 
         var actions = typeof(EAMS.Api.Controllers.PersonnelController)
             .GetMethods(BindingFlags.Public | BindingFlags.Instance | BindingFlags.DeclaredOnly)

@@ -7712,6 +7712,120 @@
         ]
       }
     },
+    "/api/v1/personnel/migrate-from-students": {
+      "post": {
+        "tags": [
+          "Personnel"
+        ],
+        "summary": "`POST /personnel/migrate-from-students` (JJ, 2026-11-25) — moves live students whose trimmed\r\n            number starts with `prefix` into Personnel: upsert by number, move the active card's UID, soft-\r\n            delete the student. Past attendance stays on the student. `dryRun` (the default) writes nothing.",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MigrateFromStudentsRequest"
+              }
+            },
+            "text/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MigrateFromStudentsRequest"
+              }
+            },
+            "application/*+json": {
+              "schema": {
+                "$ref": "#/components/schemas/MigrateFromStudentsRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The per-student plan (dry run) or outcome (run). A student that cannot be moved is a `Conflict`\r\nrow with a `conflictCode`, never a failed request. Re-running is safe: moved students no longer match.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/MigrateFromStudentsResultDto"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MigrateFromStudentsResultDto"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MigrateFromStudentsResultDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The prefix is too short or too long.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "No school could be resolved.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "`WriteLockUnavailable`: another change to one of the cards held its lock. Earlier batches may\r\n            already be applied; send the same request again after `Retry-After` seconds.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "Bearer": []
+          }
+        ]
+      }
+    },
     "/api/v1/pre-registration/sessions": {
       "get": {
         "tags": [
@@ -15172,6 +15286,97 @@
         ],
         "type": "string",
         "description": "The `code` returned by `POST /attendance/manual` — the organizer override, which is\nnot a device path.\n\n**Frozen published contract on the same terms as `TapOutcomeCode`**, and pinned by the\nsame kind of test. It travels through the identical `code` field, so one accessor\nreads both.\n\n`POST /attendance/manual` deliberately keeps working on a `Closed` event: it is the\nonly recovery route out of a terminal status.\n\n| `code` | HTTP |\n|---|---|\n| `Saved` | 200 |\n| `EventNotFound` | 404 |\n| `StudentNotFound` | 404 |\n| `InvalidStatus` | 400 |\n| `InvalidNotes` | 400 |\n| `PersonRequired` | 400 |\n| `PersonnelNotFound` | 404 |\n| `PersonnelInactive` | 404 |\n| `PersonnelNotInAudience` | 404 |"
+      },
+      "MigrateFromStudentsRequest": {
+        "type": "object",
+        "properties": {
+          "prefix": {
+            "type": "string",
+            "description": "Students whose trimmed student number starts with this are moved. Null or blank takes\r\nEAMS.Application.Dtos.MigrateFromStudentsRequest.DefaultPrefix. Trimmed; at least EAMS.Application.Dtos.MigrateFromStudentsRequest.MinPrefixLength characters.",
+            "nullable": true
+          },
+          "dryRun": {
+            "type": "boolean",
+            "description": "True (the default, also when omitted) previews and writes nothing."
+          }
+        },
+        "additionalProperties": false,
+        "description": "The body of `POST /personnel/migrate-from-students`."
+      },
+      "MigrateFromStudentsResultDto": {
+        "type": "object",
+        "properties": {
+          "dryRun": {
+            "type": "boolean"
+          },
+          "prefix": {
+            "type": "string"
+          },
+          "matched": {
+            "type": "integer",
+            "description": "Live students whose trimmed number starts with `Prefix`.",
+            "format": "int32"
+          },
+          "created": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "updated": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "conflicts": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "rows": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/MigrateFromStudentsRowDto"
+            }
+          }
+        },
+        "additionalProperties": false,
+        "description": "The outcome of a migration call. On a dry run the counts are what a run would do."
+      },
+      "MigrateFromStudentsRowDto": {
+        "type": "object",
+        "properties": {
+          "studentId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "studentNumber": {
+            "type": "string"
+          },
+          "fullName": {
+            "type": "string"
+          },
+          "rfidUid": {
+            "type": "string",
+            "description": "The normalized UID of the student's active card, or null when it has none.",
+            "nullable": true
+          },
+          "outcome": {
+            "type": "string"
+          },
+          "conflictCode": {
+            "type": "string",
+            "description": "A EAMS.Application.Dtos.MigrateFromStudentsConflict value; null unless `Outcome` is `Conflict`.",
+            "nullable": true
+          },
+          "message": {
+            "type": "string"
+          },
+          "personnelId": {
+            "type": "string",
+            "description": "The personnel record written to; null on a dry-run create and on a conflict.",
+            "format": "uuid",
+            "nullable": true
+          }
+        },
+        "additionalProperties": false,
+        "description": "One matched student and its outcome."
       },
       "MultiEventReportDto": {
         "type": "object",

@@ -526,6 +526,54 @@ export interface PersonnelImportResult {
   errors: PersonnelImportError[];
 }
 
+/** `MigrateFromStudentsRowDto.outcome` — what a matched student would do (dry run) or did (run). */
+export const MIGRATE_OUTCOMES = ["Create", "Update", "Conflict"] as const;
+export type MigrateOutcome = (typeof MIGRATE_OUTCOMES)[number];
+
+/** `MigrateFromStudentsConflict` — why a matched student could not be moved. Set only on a `Conflict` row. */
+export const MIGRATE_CONFLICT_CODES = [
+  "ActiveEvent",
+  "UidHeldByOtherPersonnel",
+  "PersonnelHasDifferentCard",
+  "MultipleActiveCards",
+  "NameMissing",
+  "Invalid",
+  "ConcurrentChange",
+] as const;
+export type MigrateConflictCode = (typeof MIGRATE_CONFLICT_CODES)[number];
+
+/** The body of `POST /personnel/migrate-from-students`. */
+export interface MigrateFromStudentsRequest {
+  /** Trimmed server-side; at least 4 characters. The server defaults it to `7200` when omitted. */
+  prefix?: string;
+  /** True (the server default) previews and writes nothing. */
+  dryRun?: boolean;
+}
+
+/** One matched student and its outcome. */
+export interface MigrateFromStudentsRow {
+  studentId: string;
+  studentNumber: string;
+  fullName: string;
+  rfidUid?: string;
+  outcome: MigrateOutcome;
+  conflictCode?: MigrateConflictCode;
+  message: string;
+  /** The personnel record written to; unset on a dry-run create and on a conflict. */
+  personnelId?: string;
+}
+
+/** `MigrateFromStudentsResultDto` — the plan (dry run) or the outcome (run). */
+export interface MigrateFromStudentsResult {
+  dryRun: boolean;
+  prefix: string;
+  matched: number;
+  created: number;
+  updated: number;
+  conflicts: number;
+  rows: MigrateFromStudentsRow[];
+}
+
 export interface Student {
   id: string;
   studentNumber: string;

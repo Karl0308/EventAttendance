@@ -10,6 +10,8 @@ import {
   EXPECTED_SOURCE,
   GROUP_SOURCE_TYPE,
   GROUP_TYPE_SECTION,
+  MIGRATE_CONFLICT_CODES,
+  MIGRATE_OUTCOMES,
   PERSON_TYPE,
   SIS_IMPORT_STATUS,
 } from "./types";
@@ -90,6 +92,11 @@ import type {
   PersonnelPickerEntry,
   PersonnelWriteRequest,
   PersonnelImportResult,
+  MigrateFromStudentsRequest,
+  MigrateFromStudentsResult,
+  MigrateFromStudentsRow,
+  MigrateOutcome,
+  MigrateConflictCode,
   ClearanceReport,
   ClearanceStudent,
   ClearanceEvent,
@@ -3235,6 +3242,81 @@ async function importPersonnel(rows: PersonnelWriteRequest[]): Promise<Personnel
   );
 }
 
+/** A required string that must be one of `allowed` — a drifted enum value fails loud rather than rendering blank. */
+function reqOneOf<T extends string>(row: Row, key: string, allowed: readonly T[], what: string): T {
+  const value = reqStr(row, key, what);
+  const hit = allowed.find((a) => a === value);
+  if (hit === undefined) {
+    throw offContract(what, `\`${key}\` should be one of ${allowed.join(", ")}, got "${value}"`);
+  }
+  return hit;
+}
+
+/** `MigrateFromStudentsRowDto`. `conflictCode` is read whenever present, so a code on a non-Conflict row is drift. */
+function toMigrateRow(row: Row, what: string): MigrateFromStudentsRow {
+  const outcome: MigrateOutcome = reqOneOf(row, "outcome", MIGRATE_OUTCOMES, what);
+  const rawCode = row.conflictCode;
+  let conflictCode: MigrateConflictCode | undefined;
+  if (rawCode !== undefined && rawCode !== null) {
+    conflictCode = reqOneOf(row, "conflictCode", MIGRATE_CONFLICT_CODES, what);
+  }
+  if (outcome === "Conflict" && conflictCode === undefined) {
+    throw offContract(what, "`conflictCode` is required when `outcome` is Conflict");
+  }
+  return {
+    studentId: reqStr(row, "studentId", what),
+    studentNumber: reqStr(row, "studentNumber", what),
+    fullName: reqStr(row, "fullName", what),
+    rfidUid: nullableStr(row, "rfidUid", what),
+    outcome,
+    conflictCode,
+    message: reqStr(row, "message", what),
+    personnelId: nullableStr(row, "personnelId", what),
+  };
+}
+
+/** `MigrateFromStudentsResultDto`. */
+function toMigrateResult(row: Row, what: string): MigrateFromStudentsResult {
+  return {
+    dryRun: reqBool(row, "dryRun", what),
+    prefix: reqStr(row, "prefix", what),
+    matched: reqNum(row, "matched", what),
+    created: reqNum(row, "created", what),
+    updated: reqNum(row, "updated", what),
+    conflicts: reqNum(row, "conflicts", what),
+    rows: asRows(row.rows, `${what}.rows`).map((r, i) => toMigrateRow(r, `${what}.rows[${i}]`)),
+  };
+}
+
+/**
+ * The budget for `migrateStudentsToPersonnel`. A run walks every matched student under a card-UID lock and
+ * commits in batches, so it is longer than a read; a dry run reads the same set. Generous, to bound a hung
+ * request rather than police a slow one.
+ */
+const MIGRATE_TIMEOUT_MS = 120_000;
+
+/**
+ * `POST /personnel/migrate-from-students` — moves live students whose number starts with `prefix` into
+ * Personnel (upsert by number, the active card's UID moves, the student is soft-deleted). `dryRun: true`
+ * writes nothing. A student that cannot move is a `Conflict` row, not a failed request. **400** for a bad
+ * prefix, **409** when no school resolves, **503** (with `Retry-After`) while the card lock is busy.
+ *
+ * A real run commits in batches, so a refusal part-way may leave earlier students moved (`mayCommitPartially`);
+ * a dry run writes nothing, so it is a plain read-shaped refusal either way.
+ */
+async function migrateStudentsToPersonnel(
+  request: MigrateFromStudentsRequest,
+): Promise<MigrateFromStudentsResult> {
+  return writeJson(
+    "POST /personnel/migrate-from-students", "/personnel/migrate-from-students",
+    { method: "POST", payload: request },
+    request.dryRun === false ? "The students were moved" : "The preview was produced",
+    toMigrateResult,
+    MIGRATE_TIMEOUT_MS,
+    request.dryRun === false,
+  );
+}
+
 const PERSONNEL_CSV_FALLBACK_FILENAME = "EAMS-personnel.csv";
 
 /** `GET /personnel/export.csv` — every record as a CSV whose columns are exactly the import columns. */
@@ -4632,6 +4714,7 @@ export const api = {
   updatePersonnel,
   deletePersonnel,
   importPersonnel,
+  migrateStudentsToPersonnel,
   downloadPersonnelCsv,
   exportStudentsCsv,
   clearanceReport,

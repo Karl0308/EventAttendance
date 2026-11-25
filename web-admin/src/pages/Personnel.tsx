@@ -27,6 +27,7 @@ import EditIcon from "@mui/icons-material/Edit";
 import DeleteIcon from "@mui/icons-material/Delete";
 import DownloadIcon from "@mui/icons-material/Download";
 import UploadFileIcon from "@mui/icons-material/UploadFile";
+import DriveFileMoveIcon from "@mui/icons-material/DriveFileMove";
 import { api, describeApiError } from "../api";
 import { useApiResource } from "../useApiResource";
 import { useApiMutation } from "../useApiMutation";
@@ -35,13 +36,19 @@ import { grants, PERMISSIONS } from "../permissions";
 import { EmptyState, ErrorState, LoadingState } from "../components/ResourceStates";
 import PersonnelFormDialog from "../components/PersonnelFormDialog";
 import PersonnelImportDialog from "../components/PersonnelImportDialog";
+import MigrateStudentsDialog from "../components/MigrateStudentsDialog";
 import { saveBlob } from "../sisImport";
 import {
   importInChunks,
   PersonnelImportInterrupted,
   type PersonnelImportProgress,
 } from "../personnelImportChunks";
-import type { Personnel, PersonnelImportResult, PersonnelWriteRequest } from "../types";
+import type {
+  MigrateFromStudentsResult,
+  Personnel,
+  PersonnelImportResult,
+  PersonnelWriteRequest,
+} from "../types";
 
 const loadPersonnel = () => api.listPersonnel();
 const loadOrganizations = () => api.listPersonnelOrganizations();
@@ -72,6 +79,9 @@ export default function PersonnelPage() {
   // (ADR-015 D-104). Hiding the controls just spares a read-only user buttons whose only outcome is a 403.
   const user = useSignedInUser();
   const canWrite = grants(user.permissions, PERMISSIONS.personnelWrite);
+  // Its own grant, separate from `personnel.write`: moving students is the one write that also deletes from
+  // the Students list, so the server refuses it without `personnel.migrate` whatever else the role holds.
+  const canMigrate = grants(user.permissions, PERMISSIONS.personnelMigrate);
   const personnel = useApiResource(loadPersonnel, []);
   // Server state for the form's suggestions. Its failure must not block the page or the form (the field
   // takes typed input regardless), but it is shown below rather than swallowed.
@@ -86,6 +96,13 @@ export default function PersonnelPage() {
   const importMut = useApiMutation((rows: PersonnelWriteRequest[]) =>
     importInChunks(rows, (chunk) => api.importPersonnel(chunk), setImportProgress),
   );
+  // Page-owned, like the import: closing the dialog must not cancel a move that is already running.
+  const previewMut = useApiMutation((prefix: string) =>
+    api.migrateStudentsToPersonnel({ prefix, dryRun: true }),
+  );
+  const migrateMut = useApiMutation((prefix: string) =>
+    api.migrateStudentsToPersonnel({ prefix, dryRun: false }),
+  );
   const download = useApiMutation(() => api.downloadPersonnelCsv());
 
   const [creating, setCreating] = useState(false);
@@ -93,6 +110,9 @@ export default function PersonnelPage() {
   const [deleting, setDeleting] = useState<Personnel | undefined>(undefined);
   const [importing, setImporting] = useState(false);
   const [importResult, setImportResult] = useState<PersonnelImportResult | undefined>(undefined);
+  const [migrating, setMigrating] = useState(false);
+  const [preview, setPreview] = useState<MigrateFromStudentsResult | undefined>(undefined);
+  const [migrateResult, setMigrateResult] = useState<MigrateFromStudentsResult | undefined>(undefined);
 
   const createOpen = useRef(creating);
   const editOpen = useRef(editing !== undefined);
@@ -147,6 +167,33 @@ export default function PersonnelPage() {
         organizations.reload();
       }
       // Any other failure surfaces in the dialog via importMut.error.
+    });
+  };
+
+  const openMigrate = () => {
+    previewMut.reset();
+    migrateMut.reset();
+    setPreview(undefined);
+    setMigrateResult(undefined);
+    setMigrating(true);
+  };
+
+  const runPreview = (prefix: string) => {
+    migrateMut.reset();
+    void previewMut.run(prefix).then((s) => {
+      if (s.outcome === "succeeded") setPreview(s.data);
+      // A failure surfaces in the dialog via previewMut.error.
+    });
+  };
+
+  const runMigrate = (prefix: string) => {
+    void migrateMut.run(prefix).then((s) => {
+      if (s.outcome === "ignored") return;
+      // Re-read here rather than on close, so a run that outlives its dialog still refreshes the list — on
+      // success and on failure alike, since a batch may have committed before the error.
+      personnel.reload();
+      if (s.outcome === "succeeded") setMigrateResult(s.data);
+      // A failure surfaces in the dialog via migrateMut.error.
     });
   };
 
@@ -255,6 +302,11 @@ export default function PersonnelPage() {
           >
             {download.status === "running" ? "Exporting…" : "Export CSV"}
           </Button>
+          {canMigrate && (
+            <Button startIcon={<DriveFileMoveIcon />} onClick={openMigrate}>
+              Move students to Personnel
+            </Button>
+          )}
           {canWrite && (
             <Button startIcon={<UploadFileIcon />} onClick={openImport}>
               Import CSV
@@ -394,6 +446,20 @@ export default function PersonnelPage() {
           progress={importMut.status === "running" ? importProgress : undefined}
           result={importResult}
           error={importMut.status === "failed" ? importMut.error : undefined}
+        />
+      )}
+
+      {migrating && (
+        <MigrateStudentsDialog
+          onClose={() => setMigrating(false)}
+          onPreview={runPreview}
+          onRun={runMigrate}
+          previewing={previewMut.status === "running"}
+          preview={preview}
+          previewError={previewMut.status === "failed" ? previewMut.error : undefined}
+          running={migrateMut.status === "running"}
+          result={migrateResult}
+          runError={migrateMut.status === "failed" ? migrateMut.error : undefined}
         />
       )}
 

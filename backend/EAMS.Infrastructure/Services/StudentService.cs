@@ -98,8 +98,17 @@ internal sealed class StudentService : IStudentService
     /// </para>
     /// </summary>
     /// <returns>College name by (school, raw <c>Course</c> value), for the values that resolved.</returns>
-    private async Task<IReadOnlyDictionary<(Guid SchoolId, string Course), string>> DepartmentsAsync(
-        IEnumerable<(Guid SchoolId, string? Course)> students, CancellationToken ct)
+    private Task<IReadOnlyDictionary<(Guid SchoolId, string Course), string>> DepartmentsAsync(
+        IEnumerable<(Guid SchoolId, string? Course)> students, CancellationToken ct) =>
+        DepartmentsAsync(_db, students, ct);
+
+    /// <summary>
+    /// The department resolver above, on a given
+    /// context — internal so <c>PersonnelMigrationService</c> files a moved student under the department the
+    /// Students tab shows for them, not a re-derivation of it.
+    /// </summary>
+    internal static async Task<IReadOnlyDictionary<(Guid SchoolId, string Course), string>> DepartmentsAsync(
+        EamsDbContext db, IEnumerable<(Guid SchoolId, string? Course)> students, CancellationToken ct)
     {
         // A non-null key implies a non-null Course, so the "" never reaches the result.
         var wanted = students
@@ -112,7 +121,7 @@ internal sealed class StudentService : IStudentService
         var schoolIds = wanted.Select(w => w.SchoolId).Distinct().ToList();
         var keys = wanted.Select(w => w.Key!).Distinct(StringComparer.Ordinal).ToList();
 
-        var colleges = await _db.Programs.AsNoTracking()
+        var colleges = await db.Programs.AsNoTracking()
             .Where(p => schoolIds.Contains(p.SchoolId) && keys.Contains(p.CodeKey))
             .Select(p => new { p.SchoolId, p.CodeKey, College = p.College!.Name })
             .ToListAsync(ct);
@@ -128,7 +137,7 @@ internal sealed class StudentService : IStudentService
         return departments;
     }
 
-    private static string? DepartmentOf(
+    internal static string? DepartmentOf(
         IReadOnlyDictionary<(Guid SchoolId, string Course), string> departments, Guid schoolId, string? course) =>
         course is not null && departments.TryGetValue((schoolId, course), out var college) ? college : null;
 

@@ -175,9 +175,12 @@ public class PersonnelPermissionGrantMigrationTests : IntegrationTest
 
             await MigrateToAsync(connectionString, PreviousMigration);
 
+            // Migrating this far back also unwinds the later GrantPersonnelMigrate (personnel.migrate), so
+            // each admin loses three grants: the two personnel codes plus that one.
+            const int adminGrantsRemovedByThisAndLater = 3;
             Assert.Equal(0, await PermissionRowsAsync(connectionString));
-            Assert.Equal(before[EamsRoleNames.SuperAdmin] - 2, await AllGrantsAsync(connectionString, EamsRoleNames.SuperAdmin));
-            Assert.Equal(before[EamsRoleNames.SchoolAdmin] - 2, await AllGrantsAsync(connectionString, EamsRoleNames.SchoolAdmin));
+            Assert.Equal(before[EamsRoleNames.SuperAdmin] - adminGrantsRemovedByThisAndLater, await AllGrantsAsync(connectionString, EamsRoleNames.SuperAdmin));
+            Assert.Equal(before[EamsRoleNames.SchoolAdmin] - adminGrantsRemovedByThisAndLater, await AllGrantsAsync(connectionString, EamsRoleNames.SchoolAdmin));
             Assert.Equal(before[EamsRoleNames.Organizer], await AllGrantsAsync(connectionString, EamsRoleNames.Organizer));
             Assert.Equal(before[EamsRoleNames.Viewer], await AllGrantsAsync(connectionString, EamsRoleNames.Viewer));
             Assert.Equal(EamsRoleNames.All.Count, await CountAsync(connectionString, "SELECT COUNT(*) FROM [Roles];"));
