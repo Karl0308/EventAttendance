@@ -156,10 +156,10 @@ public static class SisImportStatus
 /// </list>
 ///
 /// <para>
-/// <b>Nothing writes these yet.</b> The column, the constants and the DTO fields land together so the
-/// schema change is one migration rather than three; the writer is a later phase. Until then every
-/// batch's <c>ProgressPhase</c> is NULL, which honestly reads as "this run predates progress
-/// reporting".
+/// <b>Written by the run's progress heartbeat</b> (<c>SisImportService.StampPhaseAsync</c>, ADR-004
+/// D-54.5): one stamp as each phase starts, and <see cref="Done"/> once the last one finishes. A
+/// batch that ran before progress reporting existed still reads NULL, which honestly says "this run
+/// predates progress reporting".
 /// </para>
 /// </summary>
 public static class SisImportPhase

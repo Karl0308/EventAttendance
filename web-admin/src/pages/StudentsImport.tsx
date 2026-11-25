@@ -82,6 +82,7 @@ import {
   describeSize,
   forgetActiveImport,
   forgetActiveImportUnlessRunning,
+  importAlreadyRunningOf,
   importProgressPath,
   judgeRememberedImport,
   rememberActiveImport,
@@ -440,7 +441,7 @@ export default function StudentsImport() {
       )}
 
       {staleBatch !== undefined && (
-        <Alert severity="warning" sx={{ mb: 3 }}>
+        <Alert severity="warning" role="status" sx={{ mb: 3 }}>
           <AlertTitle>The previous import appears to have stopped</AlertTitle>
           <Typography variant="body2">{IMPORT_APPEARS_STOPPED}</Typography>
           <Button
@@ -736,6 +737,7 @@ function PreviewStep({
 }) {
   const { batch } = preview;
   const resendUnsafe = failure !== undefined && isResendUnsafe(failure.error);
+  const alreadyRunning = failure === undefined ? undefined : importAlreadyRunningOf(failure.error);
   // The term the operator chose, confirmed against what the server filed the batch under. They agree
   // in every ordinary case; when they do not, the run is about to be refused with a 409 and saying so
   // here is more use than the refusal is.
@@ -779,7 +781,25 @@ function PreviewStep({
         </Alert>
       )}
 
-      {failure !== undefined && (
+      {failure !== undefined && alreadyRunning !== undefined && (
+        <Alert severity="warning" role="alert" sx={{ mb: 2 }}>
+          <AlertTitle>Another import is already running</AlertTitle>
+          {/* The server's own sentence: it names the running batch, file and last progress, says this
+              batch was not changed, and states the abandonment rule — more than this screen knows. */}
+          <Typography variant="body2">{alreadyRunning.detail}</Typography>
+          <Button
+            component={RouterLink}
+            to={importProgressPath(alreadyRunning.runningBatchId)}
+            size="small"
+            sx={{ mt: 1 }}
+            color="inherit"
+          >
+            Watch the running import
+          </Button>
+        </Alert>
+      )}
+
+      {failure !== undefined && alreadyRunning === undefined && (
         <WriteFailureAlert
           error={failure.error}
           notApplied={HEADING_NOT_RUN}

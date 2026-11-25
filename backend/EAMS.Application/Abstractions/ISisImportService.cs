@@ -122,3 +122,27 @@ public sealed class SisImportBatchNotFoundException : SisImportException
 {
     public SisImportBatchNotFoundException(string message) : base(message) { }
 }
+
+/// <summary>
+/// The batch could not be run because <b>another</b> batch for the same school is running (ADR-004
+/// D-54.4, one running import per school). The refused batch was not changed and can be run once the
+/// other one finishes.
+///
+/// <para>
+/// <b>Its own type, still a <see cref="SisImportException"/>.</b> It stays on the existing 409 path, but a
+/// caller has to tell "this batch already ran" (upload the file again) from "another batch is running"
+/// (wait, then press Run again on this one). The two fixes are different, so the 409 body carries
+/// <see cref="Code"/> and <see cref="RunningBatchId"/> for this case only.
+/// </para>
+/// </summary>
+public sealed class SisImportRunInProgressException : SisImportException
+{
+    /// <summary>The machine-readable <c>code</c> on the 409 problem body.</summary>
+    public const string Code = "ImportAlreadyRunning";
+
+    public SisImportRunInProgressException(Guid runningBatchId, string message) : base(message) =>
+        RunningBatchId = runningBatchId;
+
+    /// <summary>The batch whose run is holding this school's one running slot.</summary>
+    public Guid RunningBatchId { get; }
+}

@@ -1,8 +1,10 @@
-﻿using System.Text.Json;
+﻿using System.Data;
+using System.Text.Json;
 using EAMS.Application.Abstractions;
 using EAMS.Application.Dtos;
 using EAMS.Domain;
 using EAMS.Infrastructure.Data;
+using Microsoft.Data.SqlClient;
 using Microsoft.EntityFrameworkCore;
 
 namespace EAMS.Infrastructure.Sis;
@@ -198,7 +200,21 @@ internal sealed class SisImportService : ISisImportService
         // check stays because it is where the *reason* lives: the WHERE clause of the claim can say
         // which statuses are re-runnable but not why, and because refusing here saves an already-run
         // batch a term load and a full staged-row read before the same refusal.
-        if (snapshot.Status is not (SisImportStatus.Pending or SisImportStatus.Failed))
+        //
+        // A Running batch whose stamp is stale or missing is the third re-runnable case (lazy reclaim,
+        // D-54.5). Its run died with a process, and "run it again" has to work without waiting for a
+        // restart's sweep. A Running batch with a live stamp is a run in progress and is refused here.
+        var deadRun = snapshot.Status == SisImportStatus.Running
+                      && !SisImportRunLiveness.IsLive(snapshot.ProgressUpdatedAt, DateTime.UtcNow);
+
+        if (snapshot.Status == SisImportStatus.Running && !deadRun)
+            throw new SisImportException(
+                $"Batch {batchId} is being imported right now (last progress {snapshot.ProgressPhase} at " +
+                $"{snapshot.ProgressUpdatedAt:yyyy-MM-dd HH:mm:ss} UTC). Wait for it to finish. If it has " +
+                "stopped, it can be run again " +
+                $"{SisImportRunLiveness.StaleAfter.TotalMinutes:0} minutes after its last progress.");
+
+        if (snapshot.Status is not (SisImportStatus.Pending or SisImportStatus.Failed) && !deadRun)
             throw new SisImportException(
                 $"Batch {batchId} has already been run (status {snapshot.Status}). Upload the file " +
                 "again to import it a second time; a completed batch is kept as the record of what " +
@@ -221,7 +237,12 @@ internal sealed class SisImportService : ISisImportService
         // Running with nothing running, which is the zombie ADR-004 exists to eliminate.
         var claimedAt = DateTime.UtcNow;
 
-        if (!await TryClaimAsync(batchId, claimedAt, ct))
+        var claim = await TryClaimAsync(batchId, snapshot.SchoolId, claimedAt, ct);
+
+        if (claim.BlockedBy is { } running)
+            throw new SisImportRunInProgressException(running.Id, RunInProgressMessage(running));
+
+        if (!claim.Claimed)
             throw new SisImportException(
                 $"Batch {batchId} was claimed by another run. A batch runs once at a time, and the " +
                 "claim is a single statement, so exactly one caller wins and the rest are told this. " +
@@ -251,7 +272,7 @@ internal sealed class SisImportService : ISisImportService
 
         try
         {
-            await ExecuteAsync(batch, term, staged, ct);
+            await ExecuteAsync(batch, term, staged, claimedAt, ct);
         }
         // Cancellation included, and the carve-out that used to be here is what produced two
         // permanently stuck batches on the deployment VM.
@@ -266,6 +287,12 @@ internal sealed class SisImportService : ISisImportService
         //
         // The status write below already uses CancellationToken.None, so it still lands when the token
         // that got us here is the one that was cancelled.
+        catch (SisImportRunSupersededException)
+        {
+            // Not ours any more: a reclaim took the batch over, and its run owns the row. Failing it
+            // here would mark the new run's batch Failed under it. Nothing to write, just stop.
+            throw;
+        }
         catch (Exception ex)
         {
             // Marked and rethrown, never swallowed. The batch says the run stopped and how far it got;
@@ -279,17 +306,22 @@ internal sealed class SisImportService : ISisImportService
             // inside this catch, replace the original exception with it, and never persist the status —
             // leaving the batch stuck in Running, which is exactly what this block exists to prevent.
             // ExecuteUpdate issues one UPDATE against the batch row and touches no tracked graph.
+            //
+            // Fenced by StartedAt == claimedAt, like every progress stamp. If this run was reclaimed
+            // while it failed, the row belongs to the new run and this update touches nothing.
             batch.Status = SisImportStatus.Failed;
             batch.FinishedAt = DateTime.UtcNow;
+            batch.FailureReason = FailureReasonFor(ex);
 
             try
             {
                 _db.ChangeTracker.Clear();
                 await _db.SisImportBatches.IgnoreQueryFilters()
-                    .Where(b => b.Id == batch.Id)
+                    .Where(b => b.Id == batch.Id && b.StartedAt == claimedAt)
                     .ExecuteUpdateAsync(
                         s => s.SetProperty(b => b.Status, batch.Status)
-                              .SetProperty(b => b.FinishedAt, batch.FinishedAt),
+                              .SetProperty(b => b.FinishedAt, batch.FinishedAt)
+                              .SetProperty(b => b.FailureReason, batch.FailureReason),
                         CancellationToken.None);
             }
             catch (Exception statusWriteFailure)
@@ -305,6 +337,23 @@ internal sealed class SisImportService : ISisImportService
         }
 
         return ToDto(batch, term);
+    }
+
+    /// <summary><c>SisImportBatches.FailureReason</c>'s column width (D-54.7).</summary>
+    private const int FailureReasonMaxLength = 400;
+
+    /// <summary>
+    /// The operator's sentence for a run that threw. It names the exception type and nothing else
+    /// from the exception. A message can be long, or can carry SQL or data from the file, and the log
+    /// keeps the full detail.
+    /// </summary>
+    private static string FailureReasonFor(Exception ex)
+    {
+        var reason =
+            $"The import stopped with an error before it finished ({ex.GetType().Name}). Rows it had " +
+            "already written are kept, and running it again is safe. If it fails again, the server log " +
+            "has the details.";
+        return reason.Length <= FailureReasonMaxLength ? reason : reason[..FailureReasonMaxLength];
     }
 
     /// <summary>
@@ -347,12 +396,198 @@ internal sealed class SisImportService : ISisImportService
     /// they are the progress writer's to fill; what this statement owes them is only that they do not
     /// describe a previous run.
     /// </para>
+    ///
+    /// <para>
+    /// <b>One running import per school.</b> The same statement refuses when another batch of the same
+    /// school holds the slot: it has a live progress stamp (<see cref="SisImportRunLiveness.StaleAfter"/>)
+    /// and is either <c>Running</c>, or already carries its outcome status while in one of
+    /// <see cref="SisImportRunLiveness.PostOutcomePhases"/>. <c>Tally</c> saves the outcome before the
+    /// student cache and group projection run, and those two phases still write to the school.
+    /// Two imports into one school write the same students, cards and enrollments through the same
+    /// upserts, and their counters and fan-outs overwrite each other. A stale or unstamped batch does
+    /// not block. It is presumed dead, and letting it block would lock the school out of imports until
+    /// the next restart's sweep.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>Lazy reclaim.</b> The batch itself may also be claimed from <c>Running</c> when its stamp is
+    /// stale or missing. Its run died with a process, and the remedy the sweep writes ("run it
+    /// again") must work without a restart.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>Commit replay.</b> If the commit reaches the server but the client sees a transient fault,
+    /// the execution strategy runs the delegate again. That attempt would find the batch
+    /// <c>Running</c> with a live stamp, refuse it, and strand a batch nobody is running. So each
+    /// attempt first checks whether the row already carries <em>this</em> claim's
+    /// <c>StartedAt</c>. <paramref name="claimedAt"/> is taken once per call, so that match can only
+    /// come from an earlier attempt of the same call. This does the job of
+    /// <c>ExecuteInTransactionAsync</c>'s <c>verifySucceeded</c> without that API returning
+    /// <c>default</c> for the outcome on a verified success.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>Why the statement runs under a per-school app lock.</b> A row lock settles a race between two
+    /// claims of the <em>same</em> batch. It does not settle a race between two <em>different</em>
+    /// batches. Under READ COMMITTED each claim's <c>NOT EXISTS</c> reads the other's row before the
+    /// other has written it, so both can pass (write skew). Lock hints on the subquery would make the
+    /// two claims wait on each other's target rows in opposite orders, which deadlocks. A
+    /// transaction-owned <c>sp_getapplock</c> on <see cref="RunLockResource"/>, taken before the
+    /// statement, puts claims for one school in a queue. The second claim's <c>NOT EXISTS</c> then
+    /// runs after the first has committed and sees its <c>Running</c>. The lock is held for one
+    /// UPDATE, so for milliseconds. It needs no schema change, and it works at compatibility level 110.
+    /// A filtered unique index on <c>(SchoolId) WHERE Status = 'Running'</c> was the alternative. It was
+    /// not taken: it cannot see staleness, so one dead batch would block its school until a restart,
+    /// and creating it would fail outright wherever two zombies already share a school.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>The refusal names the blocker.</b> It is read inside the same transaction, while the lock is
+    /// still held. Only a claim moves a batch into <c>Running</c>, and every claim queues on this lock,
+    /// so the batch named is the one that blocked this claim.
+    /// </para>
     /// </summary>
-    private async Task<bool> TryClaimAsync(Guid batchId, DateTime claimedAt, CancellationToken ct)
+    private async Task<ClaimOutcome> TryClaimAsync(
+        Guid batchId, Guid schoolId, DateTime claimedAt, CancellationToken ct)
     {
+        var liveSince = SisImportRunLiveness.LiveSince(claimedAt);
+
+        // The production registration enables EnableRetryOnFailure, and EF refuses a user transaction
+        // outside the strategy. Replaying the delegate is safe because the transaction commits only on
+        // success, so a failed attempt leaves nothing behind.
+        var strategy = _db.Database.CreateExecutionStrategy();
+
+        return await strategy.ExecuteAsync(async () =>
+        {
+            await using var tx = await _db.Database.BeginTransactionAsync(ct);
+
+            await LockSchoolRunSlotAsync(schoolId, ct);
+
+            // Commit replay: an earlier attempt of this same call already committed the claim.
+            var alreadyOurs = await _db.SisImportBatches.IgnoreQueryFilters().AsNoTracking()
+                .AnyAsync(b => b.Id == batchId
+                               && b.Status == SisImportStatus.Running
+                               && b.StartedAt == claimedAt, ct);
+            if (alreadyOurs) return new ClaimOutcome(true, null);
+
+            var claimed = await TryClaimUnderLockAsync(batchId, claimedAt, liveSince, ct);
+
+            if (claimed)
+            {
+                await tx.CommitAsync(ct);
+                return new ClaimOutcome(true, null);
+            }
+
+            var outcomeStatuses = SisImportRunLiveness.OutcomeStatuses;
+            var postOutcomePhases = SisImportRunLiveness.PostOutcomePhases;
+
+            // The same "holds the slot" predicate as the claim's NOT EXISTS. Keep the two in step.
+            var blocker = await _db.SisImportBatches.IgnoreQueryFilters().AsNoTracking()
+                .Where(o => o.SchoolId == schoolId
+                            && o.Id != batchId
+                            && (o.Status == SisImportStatus.Running
+                                || (outcomeStatuses.Contains(o.Status)
+                                    // `!` only quiets the nullable analysis of string[].Contains. It
+                                    // becomes SQL `ProgressPhase IN (...)`, which is never true for
+                                    // NULL, so an unstamped batch is correctly not counted live.
+                                    && postOutcomePhases.Contains(o.ProgressPhase!)))
+                            && o.ProgressUpdatedAt != null
+                            && o.ProgressUpdatedAt >= liveSince)
+                .OrderBy(o => o.StartedAt)
+                .Select(o => new RunningBatch(
+                    o.Id, o.FileName, o.StartedAt, o.ProgressPhase, o.ProgressUpdatedAt))
+                .FirstOrDefaultAsync(ct);
+
+            // No commit. Nothing was written, and the transaction (and with it the lock) is rolled back on
+            // dispose.
+            return new ClaimOutcome(false, blocker);
+        });
+    }
+
+    /// <summary>The result of a claim. <c>BlockedBy</c> is set only when another live run in the school refused it.</summary>
+    private sealed record ClaimOutcome(bool Claimed, RunningBatch? BlockedBy);
+
+    /// <summary>The batch holding a school's running slot, as the refusal describes it.</summary>
+    private sealed record RunningBatch(
+        Guid Id, string? FileName, DateTime? StartedAt, string? Phase, DateTime? ProgressUpdatedAt);
+
+    /// <summary>
+    /// The operator's sentence for <see cref="SisImportRunInProgressException"/>. It names the blocking
+    /// batch, says this one was not changed, and says when a dead blocker stops counting.
+    /// </summary>
+    private static string RunInProgressMessage(RunningBatch running) =>
+        $"Another roster import for this school is already running: batch {running.Id}" +
+        (running.FileName is { Length: > 0 } name ? $" ('{name}')" : "") +
+        $", started {running.StartedAt:yyyy-MM-dd HH:mm:ss} UTC, last progress " +
+        $"{running.Phase ?? "(none)"} at {running.ProgressUpdatedAt:yyyy-MM-dd HH:mm:ss} UTC. One import " +
+        "runs at a time per school, because two imports writing the same students, cards and enrollments " +
+        "at once overwrite each other. This batch was not changed: wait for that import to finish, then " +
+        "run this batch again. If that import has stopped, it is treated as abandoned " +
+        $"{SisImportRunLiveness.StaleAfter.TotalMinutes:0} minutes after its last progress, and this batch " +
+        "can be run then.";
+
+    /// <summary>D-98's lock timeout, reused. The lock is held for one UPDATE, so in practice a wait never gets near it.</summary>
+    private const int RunLockTimeoutMilliseconds = CardUidClaims.LockTimeoutMilliseconds;
+
+    /// <summary>The app-lock resource that serializes run claims within one school. Fits <c>nvarchar(255)</c>.</summary>
+    internal static string RunLockResource(Guid schoolId) => $"eams/sis-import-run/{schoolId:N}";
+
+    /// <summary>
+    /// Takes the school's transaction-owned run-claim lock, and checks the return code.
+    /// <c>sp_getapplock</c> reports a timeout or a deadlock as a return value, not as an error, so an
+    /// unchecked call would carry on without the lock it thinks it holds (the same rule as
+    /// <see cref="CardUidClaims"/>).
+    /// </summary>
+    private async Task LockSchoolRunSlotAsync(Guid schoolId, CancellationToken ct)
+    {
+        var rc = new SqlParameter("@rc", SqlDbType.Int) { Direction = ParameterDirection.Output };
+
+        await _db.Database.ExecuteSqlRawAsync(
+            "DECLARE @r int; EXEC @r = sys.sp_getapplock @Resource = @res, @LockMode = N'Exclusive', " +
+            "@LockOwner = N'Transaction', @LockTimeout = @timeout; SET @rc = @r;",
+            [
+                new SqlParameter("@res", SqlDbType.NVarChar, 255) { Value = RunLockResource(schoolId) },
+                new SqlParameter("@timeout", SqlDbType.Int) { Value = RunLockTimeoutMilliseconds },
+                rc,
+            ],
+            ct);
+
+        if ((int)rc.Value < 0)
+            throw new SisImportException(
+                $"Another import for this school was being started at the same moment, and this one " +
+                $"could not get its turn (lock result {(int)rc.Value}). Nothing was changed. Run the " +
+                "batch again in a few seconds.");
+    }
+
+    /// <summary>
+    /// The claim statement itself. It must run inside the transaction that holds
+    /// <see cref="LockSchoolRunSlotAsync"/>'s lock.
+    /// </summary>
+    private async Task<bool> TryClaimUnderLockAsync(
+        Guid batchId, DateTime claimedAt, DateTime liveSince, CancellationToken ct)
+    {
+        var outcomeStatuses = SisImportRunLiveness.OutcomeStatuses;
+        var postOutcomePhases = SisImportRunLiveness.PostOutcomePhases;
+
         var claimed = await _db.SisImportBatches.IgnoreQueryFilters()
             .Where(b => b.Id == batchId
-                        && (b.Status == SisImportStatus.Pending || b.Status == SisImportStatus.Failed))
+                        && (b.Status == SisImportStatus.Pending
+                            || b.Status == SisImportStatus.Failed
+                            // Lazy reclaim of this batch's own dead run.
+                            || (b.Status == SisImportStatus.Running
+                                && (b.ProgressUpdatedAt == null || b.ProgressUpdatedAt < liveSince)))
+                        // Another batch holds the slot. The blocker read in TryClaimAsync repeats this.
+                        && !_db.SisImportBatches.IgnoreQueryFilters().Any(o =>
+                            o.SchoolId == b.SchoolId
+                            && o.Id != b.Id
+                            && (o.Status == SisImportStatus.Running
+                                || (outcomeStatuses.Contains(o.Status)
+                                    // `!` only quiets the nullable analysis of string[].Contains. It
+                                    // becomes SQL `ProgressPhase IN (...)`, which is never true for
+                                    // NULL, so an unstamped batch is correctly not counted live.
+                                    && postOutcomePhases.Contains(o.ProgressPhase!)))
+                            && o.ProgressUpdatedAt != null
+                            && o.ProgressUpdatedAt >= liveSince))
             .ExecuteUpdateAsync(
                 s => s.SetProperty(b => b.Status, SisImportStatus.Running)
                       .SetProperty(b => b.StartedAt, (DateTime?)claimedAt)
@@ -373,7 +608,8 @@ internal sealed class SisImportService : ISisImportService
     }
 
     private async Task ExecuteAsync(
-        SisImportBatch batch, Term term, IReadOnlyList<SisImportRow> staged, CancellationToken ct)
+        SisImportBatch batch, Term term, IReadOnlyList<SisImportRow> staged, DateTime claimedAt,
+        CancellationToken ct)
     {
         // Only ever non-empty when this is a retry of a Failed batch. The fan-out is rebuilt from
         // scratch each run, so leaving the previous attempt's rows would double every entry and make
@@ -387,28 +623,39 @@ internal sealed class SisImportService : ISisImportService
         // resources") — the first statement of every run, so no roster that size could import at all.
         // The subquery is the same set (`staged` is exactly this batch's rows) at a constant SQL size.
         var batchId = batch.Id;
+        await StampPhaseAsync(batchId, claimedAt, SisImportPhase.ClearingPreviousRun, ct);
         await _db.SisImportRowEntities.IgnoreQueryFilters()
             .Where(e => _db.SisImportRows.IgnoreQueryFilters()
                 .Any(r => r.Id == e.SisImportRowId && r.BatchId == batchId))
             .ExecuteDeleteAsync(ct);
 
+        await StampPhaseAsync(batchId, claimedAt, SisImportPhase.ParsingRows, ct);
         var ledger = new RowLedger(staged);
         var mapped = await ResolveMappedColumnsAsync(batch, ct);
         var parsed = ParseRows(staged, mapped, ledger);
 
+        await StampPhaseAsync(batchId, claimedAt, SisImportPhase.ResolvingDimensions, ct);
         var dimensions = await ResolveDimensionsAsync(term, parsed, mapped.SectionOnly, ledger, ct);
         await _db.SaveChangesAsync(ct);
 
         // The fact pass can fail rows of its own — one whose RFID serial belongs to another student —
         // and those rows are excluded from the derived cache for the same reason they were excluded
         // from the facts: a failed row must not have contributed anything, including a Section string.
+        await StampPhaseAsync(batchId, claimedAt, SisImportPhase.ResolvingFacts, ct);
         var (mismatchedRows, cardIssues) = await ResolveFactsAsync(term, parsed, dimensions, ledger, ct);
+
+        // WritingFacts covers the card pass too. That pass is the rest of the fact write, kept as a
+        // separate unit only for the D-98 lock order, and SisImportPhase.Working has no step of its own
+        // for it.
+        await StampPhaseAsync(batchId, claimedAt, SisImportPhase.WritingFacts, ct);
         await _db.SaveChangesAsync(ct);
 
         // ADR-015 D-98: the card pass is its own short unit, after the fact save so every student a new
         // card points at already exists, and before the fan-out so its row warnings and touches are
         // folded with everything else.
         await IssueCardsAsync(term.SchoolId, cardIssues, ledger, ct);
+
+        await StampPhaseAsync(batchId, claimedAt, SisImportPhase.RecordingRowResults, ct);
 
         // ---- the fan-out, in saves of its own -----------------------------------------------------
         //
@@ -471,12 +718,109 @@ internal sealed class SisImportService : ISisImportService
         // Never in the same save as a SisImportRowEntity insert. That is the whole of the change above,
         // and no read-back can see it — the rows on disk are identical either way — which is why
         // SisImportSaveBoundaryTests asserts about save boundaries instead.
+        //
+        // Fenced by a fresh stamp immediately before it. The tracked save updates by key only, and
+        // fencing it directly would mean making StartedAt a concurrency token, which is a model change.
+        // The stamp is enough. It throws if the run has been superseded, and if it lands it leaves the
+        // stamp fresh. A reclaim needs a stale stamp, so none can happen between this stamp and the
+        // save. The fan-out above is fenced only as far as its phase stamp; a phase longer than
+        // StaleAfter is the accepted limit.
+        await StampPhaseAsync(batchId, claimedAt, SisImportPhase.RecordingRowResults, ct);
         Tally(batch, staged);
         batch.FinishedAt = DateTime.UtcNow;
         await _db.SaveChangesAsync(ct);
 
+        await StampPhaseAsync(batchId, claimedAt, SisImportPhase.RefreshingStudentCache, ct);
         await RefreshStudentCacheAsync(term, parsed, dimensions, mismatchedRows, ct);
+
+        await StampPhaseAsync(batchId, claimedAt, SisImportPhase.SyncingStudentGroups, ct);
         await _projection.SyncTermAsync(term.Id, ct);
+
+        var done = await StampPhaseAsync(batchId, claimedAt, SisImportPhase.Done, ct);
+
+        // The stamps go through ExecuteUpdate, so the tracked batch still holds the claim's progress
+        // values, and the run's response would report "ClearingPreviousRun" for a finished batch.
+        // Nothing saves through this context after this point. Detaching first means writing the stamped
+        // values onto the instance can never turn into a tracked progress write, which
+        // SisImportSaveBoundaryTests forbids.
+        _db.Entry(batch).State = EntityState.Detached;
+        batch.ProgressPhase = done.Phase;
+        batch.ProgressPhaseNumber = done.Number;
+        batch.ProgressPhaseCount = done.Count;
+        batch.ProgressUnitsDone = null;
+        batch.ProgressUnitsTotal = null;
+        batch.ProgressUpdatedAt = done.At;
+    }
+
+    /// <summary>One progress stamp, as written. See <see cref="StampPhaseAsync"/>.</summary>
+    private readonly record struct PhaseStamp(string Phase, int Number, int Count, DateTime At);
+
+    /// <summary>
+    /// The progress heartbeat (ADR-004 D-54.5): records that the run has entered
+    /// <paramref name="phase"/> and refreshes <c>ProgressUpdatedAt</c>. That stamp is what the startup
+    /// sweep and the one-run-per-school claim read to tell a live run from a dead one.
+    ///
+    /// <para>
+    /// <b>The cadence is one stamp per phase change, so the longest gap is the longest phase.</b>
+    /// <see cref="SisImportRunLiveness.StaleAfter"/> explains why its threshold is safely above that.
+    /// The unit counters are cleared at every change, because a count belongs to the phase it was
+    /// counted in.
+    /// </para>
+    ///
+    /// <para>
+    /// <b><c>ExecuteUpdate</c>, never the tracked batch.</b> A tracked write would put the progress columns
+    /// into the run's own saves and hold the batch row under the run's lock, which is the interval a
+    /// poller reads it in (<c>SisImportSaveBoundaryTests</c>' permanent assertion). There is no status
+    /// filter, because the last three stamps come after <c>Tally</c> has already saved the outcome.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>Fenced by the claim.</b> The update matches <c>Id</c> <em>and</em>
+    /// <c>StartedAt == claimedAt</c>, so it only lands while this run still owns the batch. A run
+    /// whose stamp went stale can be reclaimed (lazy reclaim, D-54.5), and the reclaim writes a new
+    /// <c>StartedAt</c>. The old run's next stamp then updates zero rows and throws
+    /// <see cref="SisImportRunSupersededException"/>, so the old run stops instead of writing over the
+    /// new one.
+    /// </para>
+    ///
+    /// <para>
+    /// <see cref="SisImportPhase.Done"/> is stamped as phase <c>Working.Count</c> of <c>Working.Count</c>
+    /// ("8 of 8"). Counting it as a ninth step would read as one step still left (see
+    /// <see cref="SisImportPhase.Working"/>).
+    /// </para>
+    /// </summary>
+    private async Task<PhaseStamp> StampPhaseAsync(
+        Guid batchId, DateTime claimedAt, string phase, CancellationToken ct)
+    {
+        var count = SisImportPhase.Working.Count;
+        var number = phase == SisImportPhase.Done ? count : PhaseNumberOf(phase);
+        var at = DateTime.UtcNow;
+
+        var stamped = await _db.SisImportBatches.IgnoreQueryFilters()
+            .Where(b => b.Id == batchId && b.StartedAt == claimedAt)
+            .ExecuteUpdateAsync(
+                s => s.SetProperty(b => b.ProgressPhase, (string?)phase)
+                      .SetProperty(b => b.ProgressPhaseNumber, (int?)number)
+                      .SetProperty(b => b.ProgressPhaseCount, (int?)count)
+                      .SetProperty(b => b.ProgressUnitsDone, (int?)null)
+                      .SetProperty(b => b.ProgressUnitsTotal, (int?)null)
+                      .SetProperty(b => b.ProgressUpdatedAt, (DateTime?)at),
+                ct);
+
+        if (stamped != 1)
+            throw new SisImportRunSupersededException(batchId, claimedAt, phase);
+
+        return new PhaseStamp(phase, number, count, at);
+    }
+
+    /// <summary>The 1-based position of a working phase in <see cref="SisImportPhase.Working"/>.</summary>
+    private static int PhaseNumberOf(string phase)
+    {
+        for (var i = 0; i < SisImportPhase.Working.Count; i++)
+            if (SisImportPhase.Working[i] == phase) return i + 1;
+
+        throw new ArgumentOutOfRangeException(
+            nameof(phase), phase, "Not a working phase in SisImportPhase.Working.");
     }
 
     /// <summary>
@@ -3095,7 +3439,8 @@ internal sealed class SisImportService : ISisImportService
         batch.FileHash, batch.Status, batch.TotalRows, batch.InsertedRows, batch.UpdatedRows,
         batch.FailedRows, batch.SkippedRows, batch.WarningRows, batch.StartedAt, batch.FinishedAt,
         // Passed straight through, nulls included. The claim stamps ProgressPhase and
-        // ProgressUpdatedAt (D-54.4); the rest stay null until the progress writer lands. Null here is
+        // ProgressUpdatedAt (D-54.4), the heartbeat stamps the phase fields (D-54.5), and the unit pair
+        // stays null because nothing counts units yet. Null here is
         // the honest "nothing to report" rather than a gap to be filled in with zeros on the way out.
         batch.ProgressPhase, batch.ProgressPhaseNumber, batch.ProgressPhaseCount,
         batch.ProgressUnitsDone, batch.ProgressUnitsTotal, batch.ProgressUpdatedAt,

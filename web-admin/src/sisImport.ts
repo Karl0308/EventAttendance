@@ -13,7 +13,7 @@
 //      staged batch and a completed one are both "the API answered", and only one of them may be shown
 //      on a screen whose heading is "The import finished".
 
-import { ApiError } from "./api";
+import { ApiError, IMPORT_ALREADY_RUNNING_CODE } from "./api";
 import { IMPORT_PHASES, SIS_IMPORT_STATUS } from "./types";
 import type { SisImportBatch } from "./types";
 
@@ -82,6 +82,7 @@ export function rosterFileProblem(file: File): string | undefined {
 // ---------------------------------------------------------------------------------------------
 
 const HTTP_BAD_REQUEST = 400;
+const HTTP_CONFLICT = 409;
 const HTTP_CONTENT_TOO_LARGE = 413;
 const HTTP_UNPROCESSABLE_CONTENT = 422;
 
@@ -542,17 +543,19 @@ export const IMPORT_ALREADY_RUNNING =
 /**
  * How long after its last progress stamp a `Running` batch is still believed to be running: 30 minutes.
  *
- * Why a ceiling on the run's length rather than a heartbeat gap: today the server stamps
- * `ProgressUpdatedAt` exactly once, when the run is claimed (`TryClaimAsync`); no progress writer
- * refreshes it afterwards, so the stamp does not move during a healthy run and "has it moved?" would
- * read every long run as dead. The stamp's age is therefore the run's age, and the threshold has to
- * clear the longest legitimate run. A 100k-row roster takes about nine minutes, the manifest ceiling is
- * 150,000 rows, and 30 minutes is a little over three times that run. If the app pool is recycled
- * mid-run, the server leaves the batch `Running` forever (nothing recovers it), so without this the
- * browser that started it would be locked out of importing permanently. If a progress writer later
- * refreshes the stamp each phase, this can shrink to a few minutes with no other change.
+ * **This must equal the server's threshold** — `SisImportRunLiveness.StaleAfter`
+ * (`EAMS.Infrastructure/Sis/SisImportRunLiveness.cs`, 30 minutes). The server uses it to refuse a second
+ * run (`409 ImportAlreadyRunning`) and to sweep abandoned batches to `Failed` at startup; this screen
+ * uses it to decide whether the remembered batch still blocks staging. If the two disagree, the screen
+ * offers a new file the server then refuses, or blocks one the server would accept. Change them
+ * together; do not shorten this one alone.
+ *
+ * The server heartbeats `ProgressUpdatedAt` at each of its phases, so the stamp's age is the time since
+ * the run last reported, not the run's age. The ceiling is still generous on purpose: the largest
+ * single phase of a 100k-row roster (the whole run is about nine minutes) must fit well inside it.
  */
-export const IMPORT_STALE_AFTER_MS = 30 * 60 * 1000;
+export const IMPORT_STALE_AFTER_MINUTES = 30;
+export const IMPORT_STALE_AFTER_MS = IMPORT_STALE_AFTER_MINUTES * 60 * 1000;
 
 /** What the remembered batch means for staging a new file. */
 export type RememberedImportVerdict =
@@ -581,11 +584,39 @@ export function judgeRememberedImport(
   return now - lastSign > IMPORT_STALE_AFTER_MS ? "stale" : "running";
 }
 
+/** Built from `IMPORT_STALE_AFTER_MINUTES` so the sentence cannot drift from the threshold it reports. */
 export const IMPORT_APPEARS_STOPPED =
   "The last roster import started from this browser still says it is running, but it has not reported " +
-  "any progress for over half an hour, so it has probably stopped (for example, the server was " +
-  "restarted mid-run). You can stage a new file now. Open the previous import first to check what it " +
-  "did before you import again.";
+  `any progress for over ${IMPORT_STALE_AFTER_MINUTES} minutes, so it has probably stopped (for ` +
+  "example, the server was restarted mid-run). You can stage a new file now. Open the previous import " +
+  "first to check what it did before you import again.";
+
+/** What `409 ImportAlreadyRunning` means to the screen: the server's sentence and the run to go and watch. */
+export interface ImportAlreadyRunningRefusal {
+  detail: string;
+  runningBatchId: string;
+}
+
+/** Said when the 409 carries the code but no `detail`, which the server always sends today. */
+const IMPORT_ALREADY_RUNNING_FALLBACK_DETAIL =
+  "Another import is already running in this school, so this batch was not run. Open the running " +
+  "import to watch it, then run this batch again once it has finished.";
+
+/**
+ * Recognises the run's `409 ImportAlreadyRunning`, or `undefined` for anything else.
+ *
+ * Branches on `status` and `code`, never on the prose (`ApiProblem.code`). A coded 409 without a usable
+ * `runningBatchId` is **not** this refusal as far as the screen is concerned: without the id there is
+ * no run to link to, and the caller falls back to the generic failure alert, which still carries the
+ * server's sentence.
+ */
+export function importAlreadyRunningOf(error: unknown): ImportAlreadyRunningRefusal | undefined {
+  if (!(error instanceof ApiError) || error.kind !== "http") return undefined;
+  if (error.status !== HTTP_CONFLICT || error.code !== IMPORT_ALREADY_RUNNING_CODE) return undefined;
+  const runningBatchId = error.problem?.runningBatchId;
+  if (runningBatchId === undefined || runningBatchId === "") return undefined;
+  return { detail: error.problem?.detail ?? IMPORT_ALREADY_RUNNING_FALLBACK_DETAIL, runningBatchId };
+}
 
 // ---------------------------------------------------------------------------------------------
 // The template download (Task 5, client QA #470 B1, #472 Q1/Q2)

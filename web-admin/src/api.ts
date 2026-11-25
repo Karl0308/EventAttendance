@@ -183,6 +183,11 @@ export interface ApiProblem {
    */
   missingEventIds?: readonly string[];
   /**
+   * The batch that holds the school's running slot, on `409 ImportAlreadyRunning` only
+   * (`SisImportController.RunningBatchIdProperty`). Lets the roster screen link to the run in progress.
+   */
+  runningBatchId?: string;
+  /**
    * The `Retry-After` response header in whole seconds (ADR-015: the personnel and roster write
    * routes answer `503 WriteLockUnavailable` with it). It lives in a header, not the body, so
    * `readProblem` reads it off the response. Absent when the header is missing or is not a plain
@@ -473,6 +478,7 @@ async function readProblem(res: Response): Promise<ApiProblem> {
     code: optStr(row.code),
     serverTime: optStr(row.serverTime),
     missingEventIds: optStrs(row.missingEventIds),
+    runningBatchId: optStr(row.runningBatchId),
     retryAfterSeconds: parseRetryAfterSeconds(res.headers.get("Retry-After")),
     holder: optHolder(row.holder),
   };
@@ -528,6 +534,12 @@ const HTTP_SERVICE_UNAVAILABLE = 503;
 
 /** `ProblemDetails.code` of the card-UID write lock's 503 (ADR-015 D-98). The server declares the resend safe. */
 export const WRITE_LOCK_UNAVAILABLE = "WriteLockUnavailable";
+
+/**
+ * `ProblemDetails.code` of the roster run's 409 when another batch in the school is live
+ * (`SisImportRunInProgressException.Code`). Other 409s on that route carry no `code`.
+ */
+export const IMPORT_ALREADY_RUNNING_CODE = "ImportAlreadyRunning";
 
 /** "Try again in N seconds." from `Retry-After`; a header that is missing or not a number says "shortly". */
 export function tryAgainText(retryAfterSeconds: number | undefined): string {

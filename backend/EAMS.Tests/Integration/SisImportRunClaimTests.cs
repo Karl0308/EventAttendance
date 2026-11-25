@@ -1,6 +1,7 @@
 using EAMS.Application.Dtos;
 using EAMS.Application.Abstractions;
 using EAMS.Domain;
+using EAMS.Infrastructure.Data;
 using EAMS.Tests.Integration.Infrastructure;
 using Microsoft.EntityFrameworkCore;
 using Xunit;
@@ -252,10 +253,10 @@ public class SisImportRunClaimTests : IntegrationTest
     /// </para>
     ///
     /// <para>
-    /// <b>Observed after the run rather than during it, and that is what makes the assertion tight.</b>
-    /// Nothing in the pipeline writes <c>ProgressPhase</c> or <c>FailureReason</c> on a successful run
-    /// — the progress writer is a later phase — so the values read back are the claim's own, still
-    /// standing. The timestamps are compared against the planted ones rather than merely checked
+    /// <b>Observed at the claim, through <see cref="BatchProgressRecorder"/>.</b> Since the D-54.5
+    /// heartbeat, the run moves the phase on after the claim, so the row as it stands after the run no
+    /// longer shows the claim's own values. The recorder reads the row straight after the claim
+    /// statement. The timestamps are compared against the planted ones rather than merely checked
     /// non-null: <c>NotNull</c> would pass on a claim that wrote nothing at all.
     /// </para>
     /// </summary>
@@ -286,34 +287,46 @@ public class SisImportRunClaimTests : IntegrationTest
             await arrange.SaveChangesAsync();
         }
 
-        await using (var run = NewDbContext())
+        var recorder = new BatchProgressRecorder(batchId);
+
+        await using (var run = new EamsDbContext(
+            new DbContextOptionsBuilder<EamsDbContext>()
+                .UseSqlServer(Sql.ConnectionString)
+                .AddInterceptors(recorder)
+                .Options,
+            School))
         {
             var finished = await SisImportOn(run).RunAsync(batchId, world.TermId);
             Assert.Equal(SisImportStatus.CompletedWithWarnings, finished.Status);
         }
 
-        var read = await ReadBatchAsync(batchId);
+        Assert.NotEmpty(recorder.Snapshots);
+        var claimed = recorder.Snapshots[0];
+        Assert.Equal(SisImportStatus.Running, claimed.Status);
 
         // The death notice is gone. This is the one an operator sees first, and a retry that carried it
         // forward would report a completed import beside the reason the last one died.
-        Assert.Null(read.FailureReason);
+        Assert.Null(claimed.FailureReason);
 
         // The claim stamped the first working phase. Read from the list rather than named, for the
         // reason SisImportPhase.Working gives: re-ordering it re-interprets every stored position.
-        Assert.Equal(SisImportPhase.Working[0], read.ProgressPhase);
+        Assert.Equal(SisImportPhase.Working[0], claimed.Phase);
 
         // Cleared, not carried and not zeroed. Zero would be a claim that the phase has done none of
         // its units; NULL is the absence these columns are documented to mean.
-        Assert.Null(read.ProgressPhaseNumber);
-        Assert.Null(read.ProgressPhaseCount);
-        Assert.Null(read.ProgressUnitsDone);
-        Assert.Null(read.ProgressUnitsTotal);
+        Assert.Null(claimed.PhaseNumber);
+        Assert.Null(claimed.PhaseCount);
+        Assert.Null(claimed.UnitsDone);
+        Assert.Null(claimed.UnitsTotal);
+
+        var read = await ReadBatchAsync(batchId);
+        Assert.Null(read.FailureReason);
 
         // Moved, not merely present. Each of these held a value an hour old before the claim.
-        Assert.NotNull(read.ProgressUpdatedAt);
+        Assert.NotNull(claimed.UpdatedAt);
         Assert.True(
-            read.ProgressUpdatedAt > stale,
-            $"ProgressUpdatedAt is {read.ProgressUpdatedAt:O}, still the previous attempt's " +
+            claimed.UpdatedAt > stale,
+            $"ProgressUpdatedAt is {claimed.UpdatedAt:O}, still the previous attempt's " +
             $"{stale:O}. The startup sweep reads this column to decide whether a Running batch is " +
             "alive, so a claim that does not move it hands the sweep an hour-old timestamp on a run " +
             "that started a moment ago.");

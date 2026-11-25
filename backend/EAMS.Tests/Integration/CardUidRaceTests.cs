@@ -801,8 +801,19 @@ public class CardUidRaceTests : IntegrationTest
         private void Record(DbCommand command)
         {
             Commands.Add(command.CommandText);
-            if (command.CommandText.Contains("sp_getapplock", StringComparison.Ordinal)) LockCommands++;
+            if (command.CommandText.Contains("sp_getapplock", StringComparison.Ordinal) && !IsRunSlotLock(command))
+            {
+                LockCommands++;
+            }
         }
+
+        // The run's per-school claim lock (ADR-004 D-54.4) is taken once per run, before the card unit;
+        // it is not the unit's lock and must not count towards the unit's replay.
+        private static bool IsRunSlotLock(DbCommand command) =>
+            command.Parameters.Cast<DbParameter>().Any(p =>
+                p.Value is string s && s.StartsWith(RunSlotLockPrefix, StringComparison.Ordinal));
+
+        private const string RunSlotLockPrefix = "eams/sis-import-run/";
 
         public override ValueTask<InterceptionResult<int>> NonQueryExecutingAsync(
             DbCommand command, CommandEventData eventData, InterceptionResult<int> result,

@@ -296,6 +296,12 @@ public static class DependencyInjection
 
         await db.Database.MigrateAsync(ct);
 
+        // ADR-004 D-54.5: a roster import that died with the previous process is left Running, and a
+        // Running batch cannot be re-run. Every environment, because that is where processes die. It is
+        // idempotent, and it leaves a batch with a fresh progress stamp alone (see the method).
+        await Sis.SisImportRunLiveness.SweepInterruptedRunsAsync(
+            db, loggerFactory.CreateLogger("EAMS.SisImport"), DateTime.UtcNow, ct);
+
         // Reference data, every environment. Before the dev seed, because the SuperAdmin below is
         // granted a role that has to exist first.
         await RbacSeed.ApplyAsync(db, rbac, loggerFactory.CreateLogger("EAMS.Rbac"), ct);

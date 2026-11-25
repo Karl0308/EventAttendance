@@ -50,6 +50,12 @@ public class SisImportController : ControllerBase
     /// </summary>
     private const int MaxUploadBytes = 10 * 1024 * 1024;
 
+    /// <summary>The problem-body member carrying a machine-readable refusal code, as elsewhere in the API.</summary>
+    internal const string ErrorCodeProperty = "code";
+
+    /// <summary>On an <c>ImportAlreadyRunning</c> 409: the batch that holds the school's running slot.</summary>
+    internal const string RunningBatchIdProperty = "runningBatchId";
+
     /// <summary>
     /// Stages a workbook and returns what is in it. Writes nothing to the academic tables.
     /// </summary>
@@ -206,6 +212,17 @@ public class SisImportController : ControllerBase
             // what GET on the same id returns, so the two verbs now agree about what exists.
             return NotFound(ImportProblem(
                 StatusCodes.Status404NotFound, "No such import batch.", ex.Message));
+        }
+        catch (SisImportRunInProgressException ex)
+        {
+            // Still 409, but with a code: "another batch is running" is fixed by waiting and running
+            // this same batch again, where "this batch already ran" is fixed by uploading the file again.
+            // The SPA reads `code` to tell them apart and `runningBatchId` to link to the run in progress.
+            var problem = ImportProblem(
+                StatusCodes.Status409Conflict, "Another import is already running.", ex.Message);
+            problem.Extensions[ErrorCodeProperty] = SisImportRunInProgressException.Code;
+            problem.Extensions[RunningBatchIdProperty] = ex.RunningBatchId;
+            return Conflict(problem);
         }
         catch (SisImportException ex)
         {

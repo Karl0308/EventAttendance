@@ -129,9 +129,10 @@ public class SisImportBatch : Entity
     // finished, healthy, or dead.
     //
     // The atomic claim (ADR-004 D-54.4) stamps ProgressPhase and ProgressUpdatedAt when a run starts
-    // and clears the other five, so a Running batch always reports the phase it began on. The writer
-    // that moves them on between passes is a later phase; until it lands, everything but those two
-    // reads NULL — which is exactly what the paragraph above says it should mean.
+    // and clears the other five, so a Running batch always reports the phase it began on. The run's
+    // heartbeat (ADR-004 D-54.5) then stamps phase, number, count and ProgressUpdatedAt as each phase
+    // starts. The unit pair stays NULL, because nothing counts units within a phase yet, and that
+    // NULL is exactly what the paragraph above says it should mean.
     // -------------------------------------------------------------------------------------------
 
     /// <summary>

@@ -756,3 +756,41 @@ Ordered by consequence, not by effort.
       un-stubbing of §11 auth in full; ADR-002 D-11's registrar question and the `Courses.CollegeId`
       widening deadline; D-4's mapping-version retention; the §14 retention policy for
       `SisImportRowEntities`.
+
+## Implementation notes (2026-11-25)
+
+Recorded drift between this ADR and what was built on `feat/personnel-attendance`. The run is
+**still in-request**: D-54/D-54.1 (detached queue, `202`) are not built. Status stays `Proposed` until
+JJ reads it.
+
+- **D-54.4, extended: one running import per school.** The claim now refuses when another batch of the
+  same school holds the running slot. Two imports into one school write the same students, cards and
+  enrollments, and their counters and fan-outs overwrite each other. The claim stays one `UPDATE`
+  (`… AND NOT EXISTS (<another batch of the school holds the slot>)`), run inside a short transaction
+  that first takes a transaction-owned `sp_getapplock` on `eams/sis-import-run/{schoolId}`. The row
+  lock alone does not settle a race between two *different* batches. Under READ COMMITTED, each
+  claim's `NOT EXISTS` can pass before the other writes (write skew), and a negative control
+  reproduced exactly that. Lock hints on the subquery would deadlock. No schema change; this works at
+  compatibility level 110. A filtered unique index on `(SchoolId) WHERE Status='Running'` was
+  rejected: it cannot see staleness, and creating it fails wherever two zombies already share a school.
+- **What "holds the slot" means.** A live stamp, plus either status `Running`, or an outcome status
+  (`Completed*`) while the phase is `RefreshingStudentCache` or `SyncingStudentGroups`. `Tally` saves
+  the outcome before those two phases run, and they still write to the school.
+- **Open question 2 answered for this case.** The response is `409` with problem-body
+  `code: "ImportAlreadyRunning"` and `runningBatchId`, and `detail` names the running batch. Other
+  409s are unchanged.
+- **Open question 1 answered.** `StaleAfter` is 30 minutes (`SisImportRunLiveness`). The 100k-row
+  roster ran in 447 s end to end, and one command is capped at 600 s. The claim and the sweep share
+  the value, and the SPA mirrors it as `IMPORT_STALE_AFTER_MINUTES` (`web-admin/src/sisImport.ts`).
+  Change the two together.
+- **D-54.7 heartbeat.** `ProgressPhase`/`Number`/`Count`/`UpdatedAt` are stamped by `ExecuteUpdate` at the
+  start of each of the eight working phases, then `Done` (as 8 of 8). Units stay `NULL` (open question
+  4 still open). The longest gap between stamps is the longest single phase.
+- **D-54.5 sweep.** It runs once at host start, after migrations, in every environment. It fails
+  `Running` batches whose stamp is stale or `NULL`, writing an actionable `FailureReason`, and it is
+  idempotent. **The `StopAsync` hook is not built:** there is no `BackgroundService` while the run is
+  in-request.
+- **Lazy reclaim (new).** The claim also accepts the batch's *own* `Running` row when its stamp is
+  stale or `NULL`, so "run it again" works without a restart.
+- **Commit replay (new).** Each retried claim attempt first checks for its own `StartedAt == claimedAt`,
+  so a transient fault after the server committed does not refuse, and strand, the caller's own claim.

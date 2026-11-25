@@ -273,6 +273,45 @@ public class SisImportApiTests : IntegrationTest
     }
 
     /// <summary>
+    /// <b>Another batch running in the school is a 409 the SPA can tell apart</b> (ADR-004 D-54.4).
+    /// <c>code</c> is <c>ImportAlreadyRunning</c> and <c>runningBatchId</c> names the run, on the wire
+    /// in camelCase. The fix differs from "this batch already ran": wait and run the same batch again,
+    /// rather than upload the file again.
+    /// </summary>
+    [Fact]
+    public async Task Running_a_batch_while_another_runs_in_the_school_is_409_with_a_code_and_the_running_id()
+    {
+        var world = await ArrangeAsync();
+        using var factory = new EamsApiFactory(Sql.ConnectionString);
+        using var client = await SignedInClientAsync(factory);
+
+        await using var first = SyntheticRoster.Build();
+        var running = await BatchIdOfAsync(await UploadAsync(client, world.TermId, first, "running.xlsx"));
+        await using var second = SyntheticRoster.Build();
+        var waiting = await BatchIdOfAsync(await UploadAsync(client, world.TermId, second, "waiting.xlsx"));
+
+        await using (var db = NewDbContext())
+        {
+            var batch = await db.SisImportBatches.IgnoreQueryFilters().SingleAsync(b => b.Id == running);
+            batch.Status = SisImportStatus.Running;
+            batch.StartedAt = DateTime.UtcNow;
+            batch.ProgressPhase = SisImportPhase.ResolvingFacts;
+            batch.ProgressUpdatedAt = DateTime.UtcNow;
+            await db.SaveChangesAsync();
+        }
+
+        var response = await client.PostAsJsonAsync(
+            $"/api/v1/sis/import/{waiting}/run", new { termId = world.TermId });
+
+        Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
+
+        using var body = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        Assert.Equal("ImportAlreadyRunning", body.RootElement.GetProperty("code").GetString());
+        Assert.Equal(running, body.RootElement.GetProperty("runningBatchId").GetGuid());
+        Assert.Contains(running.ToString(), body.RootElement.GetProperty("detail").GetString());
+    }
+
+    /// <summary>
     /// <b>Every error body in this API carries a <c>traceId</c>, including the ones no action method
     /// ever sees.</b> <c>[ApiController]</c>'s automatic model-validation 400 is emitted by MVC before
     /// the action runs, so it never passed through <c>Program.cs</c>'s <c>CustomizeProblemDetails</c>

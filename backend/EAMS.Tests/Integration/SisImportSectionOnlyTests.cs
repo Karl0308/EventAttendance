@@ -800,10 +800,18 @@ public class SisImportSectionOnlyTests : IntegrationTest
     /// <b>AC-20. Two first-ever version 5 runs for one school may collide on the placeholder, and the
     /// documented outcome holds either way.</b> ADR-010 D-77 point 11 accepts the race: the loser's batch
     /// is marked <c>Failed</c> and a retry succeeds. The race cannot be forced from a test, so this
-    /// asserts the invariants that hold <em>whether or not it fires</em>: any batch that threw is
-    /// <c>Failed</c>, a retry of it completes, and at the end there is exactly one
+    /// asserts the invariants that hold <em>whether or not it fires</em>: a batch refused at its claim
+    /// with <see cref="SisImportRunInProgressException"/> is left <c>Pending</c>, any other batch that
+    /// threw is <c>Failed</c>, a retry of either completes, and at the end there is exactly one
     /// placeholder for the school, every offering hangs off it, and nothing is duplicated. It cannot go
     /// flaky: it never asserts that a collision happened.
+    ///
+    /// <para>
+    /// <b>Since ADR-004 D-54.4 (one running import per school), the D-77 point 11 collision is
+    /// near-impossible within one school.</b> The second run is normally refused at the claim, before
+    /// it writes anything. The <c>Failed</c> branch remains for a run that gets in anyway, for example
+    /// beside a batch whose stamp has gone stale.
+    /// </para>
     /// </summary>
     [Fact]
     public async Task Concurrent_first_v5_runs_one_placeholder_course()
@@ -834,9 +842,16 @@ public class SisImportSectionOnlyTests : IntegrationTest
         {
             await using var db = NewDbContext();
             var failed = await db.SisImportBatches.IgnoreQueryFilters().SingleAsync(b => b.Id == id);
+
+            // ADR-004 D-54.4 (one running import per school) usually stops the second run at its claim,
+            // before it writes anything. That batch is left Pending, not Failed, and the retry below
+            // still applies. A run that got in and then collided must still be Failed.
+            var expected = error is SisImportRunInProgressException
+                ? SisImportStatus.Pending
+                : SisImportStatus.Failed;
             Assert.True(
-                failed.Status == SisImportStatus.Failed,
-                $"A run that threw ({error!.GetType().Name}) must leave its batch Failed, not {failed.Status}.");
+                failed.Status == expected,
+                $"A run that threw ({error!.GetType().Name}) must leave its batch {expected}, not {failed.Status}.");
 
             // The retry: a Failed batch can be run again, and now finds the placeholder.
             var retry = await RunAsync(id, world.TermId);
