@@ -72,6 +72,7 @@ import { EmptyState, ErrorState, LoadingState } from "../components/ResourceStat
 import { WriteFailureAlert } from "../components/WriteFailureAlert";
 import {
   IMPORT_ALREADY_RUNNING,
+  IMPORT_APPEARS_STOPPED,
   ROSTER_FILE_EXTENSION,
   RUN_IS_IDEMPOTENT,
   TEMPLATE_HAS_INSTRUCTIONS_SHEET,
@@ -82,6 +83,7 @@ import {
   forgetActiveImport,
   forgetActiveImportUnlessRunning,
   importProgressPath,
+  judgeRememberedImport,
   rememberActiveImport,
   rosterFileProblem,
   saveBlob,
@@ -184,20 +186,28 @@ export default function StudentsImport() {
    * The run this browser started and may still be going. Read once, synchronously, so that a browser
    * with nothing remembered never waits on a lookup; when something is remembered it is verified
    * against the API, because a stale id must not lock the screen. Only `Running` blocks: a `Pending`
-   * batch is staged and unrun, and a terminal one is finished.
+   * batch is staged and unrun, and a terminal one is finished. A `Running` batch whose progress stamp
+   * is older than `IMPORT_STALE_AFTER_MS` is stale (the server was likely recycled mid-run and never
+   * recovers the row): it is forgotten and surfaced as a warning with a link, not as a block.
    */
   const [rememberedRun] = useState(activeImportBatchId);
-  const activeRun = useApiResource<SisImportBatch | undefined>(async () => {
+  const activeRun = useApiResource<
+    { batch: SisImportBatch; verdict: "running" | "stale" } | undefined
+  >(async () => {
     if (rememberedRun === undefined) return undefined;
     const batch = await api.getImportBatch(rememberedRun);
-    if (batch === undefined || batch.status !== SIS_IMPORT_STATUS.Running) {
+    const verdict = judgeRememberedImport(batch, Date.now());
+    if (batch === undefined || verdict === "not-running") {
       forgetActiveImport(rememberedRun);
       return undefined;
     }
-    return batch;
+    if (verdict === "stale") forgetActiveImport(rememberedRun);
+    return { batch, verdict };
   }, [rememberedRun]);
   const checkingActiveRun = rememberedRun !== undefined && activeRun.status === "loading";
-  const runningBatch = activeRun.status === "ready" ? activeRun.data : undefined;
+  const activeRunData = activeRun.status === "ready" ? activeRun.data : undefined;
+  const runningBatch = activeRunData?.verdict === "running" ? activeRunData.batch : undefined;
+  const staleBatch = activeRunData?.verdict === "stale" ? activeRunData.batch : undefined;
 
   const upload = useApiMutation((chosen: File, term: string) => api.uploadRoster(chosen, term));
   const run = useApiMutation((batchId: string, term: string) =>
@@ -425,6 +435,22 @@ export default function StudentsImport() {
             color="inherit"
           >
             Watch the running import
+          </Button>
+        </Alert>
+      )}
+
+      {staleBatch !== undefined && (
+        <Alert severity="warning" sx={{ mb: 3 }}>
+          <AlertTitle>The previous import appears to have stopped</AlertTitle>
+          <Typography variant="body2">{IMPORT_APPEARS_STOPPED}</Typography>
+          <Button
+            component={RouterLink}
+            to={importProgressPath(staleBatch.id)}
+            size="small"
+            sx={{ mt: 1 }}
+            color="inherit"
+          >
+            Open the previous import
           </Button>
         </Alert>
       )}

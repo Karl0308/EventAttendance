@@ -539,6 +539,54 @@ export const IMPORT_ALREADY_RUNNING =
   "contend for the same rows, so a new file cannot be staged until this one finishes. It cannot be " +
   "cancelled; open it to watch it.";
 
+/**
+ * How long after its last progress stamp a `Running` batch is still believed to be running: 30 minutes.
+ *
+ * Why a ceiling on the run's length rather than a heartbeat gap: today the server stamps
+ * `ProgressUpdatedAt` exactly once, when the run is claimed (`TryClaimAsync`); no progress writer
+ * refreshes it afterwards, so the stamp does not move during a healthy run and "has it moved?" would
+ * read every long run as dead. The stamp's age is therefore the run's age, and the threshold has to
+ * clear the longest legitimate run. A 100k-row roster takes about nine minutes, the manifest ceiling is
+ * 150,000 rows, and 30 minutes is a little over three times that run. If the app pool is recycled
+ * mid-run, the server leaves the batch `Running` forever (nothing recovers it), so without this the
+ * browser that started it would be locked out of importing permanently. If a progress writer later
+ * refreshes the stamp each phase, this can shrink to a few minutes with no other change.
+ */
+export const IMPORT_STALE_AFTER_MS = 30 * 60 * 1000;
+
+/** What the remembered batch means for staging a new file. */
+export type RememberedImportVerdict =
+  /** Not `Running` (or gone): nothing to guard. */
+  | "not-running"
+  /** `Running` and recent enough to be alive: block a second run. */
+  | "running"
+  /** `Running` on paper but silent past `IMPORT_STALE_AFTER_MS`: it very likely stopped. Do not block. */
+  | "stale";
+
+/**
+ * Decides whether a remembered batch should still block staging a new file.
+ *
+ * Pure: `now` is injected (epoch milliseconds). The last sign of life is `progressUpdatedAt`, falling
+ * back to `startedAt`. When neither is present or parseable the batch cannot be shown to be stale, so
+ * it stays `running` — a lock held wrongly clears on the next verified read, one dropped wrongly lets
+ * two runs contend for the same rows.
+ */
+export function judgeRememberedImport(
+  batch: Pick<SisImportBatch, "status" | "startedAt" | "progressUpdatedAt"> | undefined,
+  now: number,
+): RememberedImportVerdict {
+  if (batch === undefined || batch.status !== SIS_IMPORT_STATUS.Running) return "not-running";
+  const lastSign = Date.parse(batch.progressUpdatedAt ?? batch.startedAt ?? "");
+  if (Number.isNaN(lastSign)) return "running";
+  return now - lastSign > IMPORT_STALE_AFTER_MS ? "stale" : "running";
+}
+
+export const IMPORT_APPEARS_STOPPED =
+  "The last roster import started from this browser still says it is running, but it has not reported " +
+  "any progress for over half an hour, so it has probably stopped (for example, the server was " +
+  "restarted mid-run). You can stage a new file now. Open the previous import first to check what it " +
+  "did before you import again.";
+
 // ---------------------------------------------------------------------------------------------
 // The template download (Task 5, client QA #470 B1, #472 Q1/Q2)
 // ---------------------------------------------------------------------------------------------
