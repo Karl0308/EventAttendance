@@ -73,6 +73,13 @@ interface ReadOnlyPage {
   /** Every Create / New / Import / Record control the page offers a writer, by accessible name. */
   readonly controls: readonly RegExp[];
   readonly hasActionsColumn: boolean;
+  /**
+   * The Viewer keeps the Actions column for read-only View actions (eb8ad9a: RFID cards, audience
+   * attendees, registrants), so the column stays and only its write buttons must be gone.
+   */
+  readonly viewerKeepsViewActions?: boolean;
+  /** The read-only action a Viewer must still see in that column (accessible name). */
+  readonly viewerViewAction?: RegExp;
   /** What a writer holds in addition to the Viewer set. */
   readonly writeGrants: readonly string[];
 }
@@ -85,6 +92,8 @@ const PAGES: readonly ReadOnlyPage[] = [
     loaded: "2021-0001",
     controls: [/new student/i, /import roster/i],
     hasActionsColumn: true,
+    viewerKeepsViewActions: true,
+    viewerViewAction: /^RFID cards for /,
     writeGrants: ["students.write", "sis.import"],
   },
   {
@@ -115,6 +124,8 @@ const PAGES: readonly ReadOnlyPage[] = [
     loaded: "All Freshmen",
     controls: [/create audience/i],
     hasActionsColumn: true,
+    viewerKeepsViewActions: true,
+    viewerViewAction: /^View attendees of All Freshmen$/,
     writeGrants: ["events.write"],
   },
   {
@@ -127,6 +138,8 @@ const PAGES: readonly ReadOnlyPage[] = [
     loaded: "Orientation",
     controls: [/create session/i],
     hasActionsColumn: true,
+    viewerKeepsViewActions: true,
+    viewerViewAction: /^View registrants of Orientation$/,
     writeGrants: ["events.write"],
   },
   {
@@ -167,7 +180,20 @@ for (const target of PAGES) {
       for (const control of target.controls) {
         await expect(writeControl(page, control)).toHaveCount(0);
       }
-      await expect(page.getByRole("columnheader", { name: "Actions" })).toHaveCount(0);
+      if (target.viewerKeepsViewActions) {
+        // The column is there for the View action eb8ad9a kept, so prove that action is present...
+        if (target.viewerViewAction) {
+          await expect(page.getByRole("button", { name: target.viewerViewAction }).first()).toBeVisible();
+        }
+        // ...and that no row write action came with it, by every write verb these pages use.
+        await expect(
+          page.getByRole("button", {
+            name: /^(edit|delete|remove|manage|reopen|close|detach|deactivate|assign|unregister)\b/i,
+          }),
+        ).toHaveCount(0);
+      } else {
+        await expect(page.getByRole("columnheader", { name: "Actions" })).toHaveCount(0);
+      }
     });
   });
 

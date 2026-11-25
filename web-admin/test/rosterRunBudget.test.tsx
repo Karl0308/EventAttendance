@@ -82,7 +82,12 @@ const batchJson = (over: Record<string, unknown>) => ({
   ...over,
 });
 
-const RUNNING = batchJson({ status: SIS_IMPORT_STATUS.Running, startedAt: "2026-11-24T01:00:00Z" });
+// Relative, not a fixed date: a Running batch older than IMPORT_STALE_AFTER_MS reads as stale (728ae7b),
+// so a hard-coded start time turns this fixture into a time bomb.
+const RUNNING = batchJson({
+  status: SIS_IMPORT_STATUS.Running,
+  startedAt: new Date(Date.now() - 60_000).toISOString(),
+});
 const COMPLETED = batchJson({
   status: SIS_IMPORT_STATUS.Completed,
   isTerminal: true,

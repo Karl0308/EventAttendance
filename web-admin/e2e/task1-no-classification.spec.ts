@@ -4,7 +4,8 @@ import { studentWithBoth } from "./fixtures/students";
 import { expect, test } from "./support/mockApi";
 import { STUDENTS_GRANTS, columnHeaders, openStudents } from "./support/students";
 
-test.use({ grants: STUDENTS_GRANTS });
+// Edit is gated on students.write since 947c3a0 (RoleViewRestrictions); this spec needs a writer.
+test.use({ grants: [...STUDENTS_GRANTS, "students.write"] });
 
 test.describe("Task 1: students grid has no classification", () => {
   test("should_not_offer_a_classification_column_on_the_students_grid", async ({ page, api }) => {
