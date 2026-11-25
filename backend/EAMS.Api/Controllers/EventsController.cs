@@ -1,3 +1,4 @@
+using System.ComponentModel.DataAnnotations;
 using EAMS.Api.Authentication;
 using EAMS.Api.Authorization;
 using EAMS.Application.Abstractions;
@@ -166,6 +167,74 @@ public class EventsController : ControllerBase
     {
         var roster = await _events.GetRosterAsync(id, ct);
         return roster is null ? NotFound() : Ok(roster);
+    }
+
+    /// <summary>
+    /// <c>GET /events/{id}/untapped</c> — the expected audience, students and personnel, who have no
+    /// attendance row on this event yet: the manual-attendance picker's candidates.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Why not <c>/roster</c>.</b> The roster is the whole expected-versus-actual report with its
+    /// counts, unpaged and on <c>events.read</c>; this is the picker's input, paged and searched in SQL so a
+    /// 20,000-person audience costs one page, and on <c>attendance.write</c> because only someone who can
+    /// mark attendance needs it.
+    /// </para>
+    ///
+    /// <para>
+    /// The expected set is the one the summary counts. A <c>Closed</c> event answers from its frozen
+    /// audience, which the close has already given an <c>Absent</c> row each, so it is normally empty.
+    /// </para>
+    /// </remarks>
+    /// <param name="id">The event.</param>
+    /// <param name="search">Fragment over first name, last name and number. Blank for none.</param>
+    /// <param name="personType"><c>Student</c> or <c>Personnel</c> (any casing); leave out for both.</param>
+    /// <param name="page">1-based page number, default 1. Out-of-range values are clamped.</param>
+    /// <param name="pageSize">Rows per page. Default 50, maximum 200.</param>
+    /// <param name="ct">Cancellation token.</param>
+    /// <response code="200">One page, ordered by last name, first name, then number.</response>
+    /// <response code="400"><c>personType</c> was neither value (<c>code: UnknownPersonType</c>), or
+    /// <c>search</c> was too long.</response>
+    /// <response code="401">No token, or an expired one.</response>
+    /// <response code="403">Signed in, but without <c>attendance.write</c>.</response>
+    /// <response code="404">No such event in this tenant.</response>
+    [HttpGet("{id:guid}/untapped")]
+    [Authorize(AuthenticationSchemes = JwtBearerDefaults.AuthenticationScheme, Policy = EamsPermissions.AttendanceWrite)]
+    [HasPermissionNotEnforced(EamsPermissions.AttendanceWrite)]
+    [ProducesResponseType(typeof(PagedResult<UntappedPersonDto>), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status401Unauthorized)]
+    [ProducesResponseType(StatusCodes.Status403Forbidden)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<ActionResult<PagedResult<UntappedPersonDto>>> Untapped(
+        Guid id,
+        [FromQuery][StringLength(EventUntapped.SearchMaxLength)] string? search,
+        [FromQuery] string? personType,
+        [FromQuery] int? page, [FromQuery] int? pageSize,
+        CancellationToken ct)
+    {
+        // Refused, not ignored, as on GET /attendance: a typo read as "both" would put students in a
+        // Personnel-only picker.
+        string? canonicalPersonType = null;
+        if (!string.IsNullOrWhiteSpace(personType))
+        {
+            if (!AttendeePersonType.TryNormalize(personType, out var canonical))
+            {
+                var problem = ProblemDetailsFactory.CreateProblemDetails(
+                    HttpContext, statusCode: StatusCodes.Status400BadRequest,
+                    title: "That untapped search cannot be run.",
+                    detail: $"personType must be '{AttendeePersonType.Student}' or " +
+                            $"'{AttendeePersonType.Personnel}'. Leave it out to list both.");
+                problem.Extensions[ErrorCodeProperty] = AttendanceController.UnknownPersonTypeCode;
+                return StatusCode(StatusCodes.Status400BadRequest, problem);
+            }
+
+            canonicalPersonType = canonical;
+        }
+
+        var result = await _events.GetUntappedAsync(
+            id, search, canonicalPersonType, PageRequest.From(page, pageSize), ct);
+        return result is null ? NotFound() : Ok(result);
     }
 
     /// <summary>

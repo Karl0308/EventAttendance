@@ -478,6 +478,17 @@ public interface IEventService
     Task<EventRosterDto?> GetRosterAsync(Guid id, CancellationToken ct = default);
 
     /// <summary>
+    /// <c>GET /events/{id}/untapped</c> — one page of the expected audience (students and personnel,
+    /// resolved exactly as <see cref="GetSummaryAsync"/> resolves it) who have no attendance row on the
+    /// event. Ordered by last name, first name, number, then person type and id. Null when there is no
+    /// such event.
+    /// </summary>
+    /// <param name="search">Fragment over first name, last name and number; null or blank for none.</param>
+    /// <param name="personType">Canonical <c>Student</c> or <c>Personnel</c>, or null for both.</param>
+    Task<PagedResult<UntappedPersonDto>?> GetUntappedAsync(
+        Guid id, string? search, string? personType, PageRequest page, CancellationToken ct = default);
+
+    /// <summary>
     /// <c>GET /events/{id}/scans</c> - the scans at this event that resolved to nobody.
     /// </summary>
     /// <remarks>

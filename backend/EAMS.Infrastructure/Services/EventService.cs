@@ -975,6 +975,116 @@ internal sealed class EventService : IEventService, IEventSummaryFigures
             .ToList();
     }
 
+    /// <summary>
+    /// <inheritdoc cref="IEventService.GetUntappedAsync" path="/summary"/>
+    ///
+    /// <para>
+    /// <b>One statement per population, UNION ALLed and paged in SQL.</b> The expected sets are the same
+    /// lazy queries the summary and roster count (<see cref="ExpectedStudentIdsAsync"/>,
+    /// <see cref="ExpectedPersonnel.IdsAsync"/>), so a frozen event answers from its written-down audience
+    /// and a live one from the live resolution; "untapped" is a <c>NOT EXISTS</c> against any attendance
+    /// row on the event, occurrence-agnostic, served by the <c>UX_Attendance_Event_*_Occurrence</c>
+    /// indexes. No id list leaves the server, so there is no <c>IN</c> list to chunk on compat 110.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>A closed event answers from its frozen set and is normally empty</b>: the close staged an
+    /// <c>Absent</c> row for every frozen attendee, so only a person added to the frozen set without a
+    /// row could appear. No status is refused — the picker decides whether to ask.
+    /// </para>
+    /// </summary>
+    public async Task<PagedResult<UntappedPersonDto>?> GetUntappedAsync(
+        Guid id, string? search, string? personType, PageRequest page, CancellationToken ct = default)
+    {
+        var ev = await _db.Events.AsNoTracking()
+            .Where(x => x.Id == id && !x.IsDeleted)
+            .Select(x => new { x.SchoolId, x.Status })
+            .FirstOrDefaultAsync(ct);
+        if (ev is null) return null;
+
+        var fragment = string.IsNullOrWhiteSpace(search) ? null : search.Trim();
+        IQueryable<UntappedRow>? rows = null;
+
+        if (personType != AttendeePersonType.Personnel)
+        {
+            var expected = await ExpectedStudentIdsAsync(id, ev.SchoolId, ev.Status, ct);
+            var students = _db.Students.AsNoTracking()
+                .Where(s => expected.Contains(s.Id)
+                            && !_db.AttendanceRecords.Any(a => a.EventId == id && a.StudentId == s.Id));
+            if (fragment is not null)
+            {
+                students = students.Where(s => s.FirstName.Contains(fragment) || s.LastName.Contains(fragment)
+                                               || s.StudentNumber.Contains(fragment));
+            }
+
+            rows = students.Select(s => new UntappedRow
+            {
+                PersonType = AttendeePersonType.Student,
+                Id = s.Id,
+                StudentId = s.Id,
+                PersonnelId = null,
+                Number = s.StudentNumber,
+                FirstName = s.FirstName,
+                MiddleName = s.MiddleName,
+                LastName = s.LastName,
+                CardUid = s.Cards.Where(c => c.IsActive)
+                    .OrderBy(c => c.IssuedAt).ThenBy(c => c.Id)
+                    .Select(c => c.CardUid)
+                    .FirstOrDefault(),
+            });
+        }
+
+        if (personType != AttendeePersonType.Student)
+        {
+            var expected = await ExpectedPersonnel.IdsAsync(_db, id, ev.SchoolId, ev.Status, ct);
+            var personnel = _db.Personnel.AsNoTracking()
+                .Where(p => expected.Contains(p.Id)
+                            && !_db.AttendanceRecords.Any(a => a.EventId == id && a.PersonnelId == p.Id));
+            if (fragment is not null)
+            {
+                personnel = personnel.Where(p => p.FirstName.Contains(fragment) || p.LastName.Contains(fragment)
+                                                 || p.PersonnelNumber.Contains(fragment));
+            }
+
+            var personnelRows = personnel.Select(p => new UntappedRow
+            {
+                PersonType = AttendeePersonType.Personnel,
+                Id = p.Id,
+                StudentId = null,
+                PersonnelId = p.Id,
+                Number = p.PersonnelNumber,
+                FirstName = p.FirstName,
+                MiddleName = p.MiddleName,
+                LastName = p.LastName,
+                CardUid = p.RfidUid,
+            });
+            rows = rows is null ? personnelRows : rows.Concat(personnelRows);
+        }
+
+        // Non-null: personType is one of the two values or null, so at least one branch above assigned it.
+        return await rows!.ToPageAsync(
+            q => q.OrderBy(r => r.LastName).ThenBy(r => r.FirstName).ThenBy(r => r.Number)
+                  .ThenBy(r => r.PersonType).ThenBy(r => r.Id),
+            r => new UntappedPersonDto(
+                r.PersonType, r.StudentId, r.PersonnelId, r.Number,
+                DisplayName(r.FirstName, r.MiddleName, r.LastName), r.CardUid),
+            page, ct);
+    }
+
+    /// <summary>The shape both halves of <see cref="GetUntappedAsync"/>'s UNION ALL project to.</summary>
+    private sealed class UntappedRow
+    {
+        public string PersonType { get; init; } = "";
+        public Guid Id { get; init; }
+        public Guid? StudentId { get; init; }
+        public Guid? PersonnelId { get; init; }
+        public string Number { get; init; } = "";
+        public string FirstName { get; init; } = "";
+        public string? MiddleName { get; init; }
+        public string LastName { get; init; } = "";
+        public string? CardUid { get; init; }
+    }
+
     // ------------------------------------------------------------------- live attendance (D-29/D-30)
 
     /// <summary>

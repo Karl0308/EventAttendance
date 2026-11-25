@@ -5804,6 +5804,170 @@
         ]
       }
     },
+    "/api/v1/events/{id}/untapped": {
+      "get": {
+        "tags": [
+          "Events"
+        ],
+        "summary": "`GET /events/{id}/untapped` — the expected audience, students and personnel, who have no\r\n             attendance row on this event yet: the manual-attendance picker's candidates.",
+        "description": "\r\n\r\n  <b>Why not `/roster`.</b> The roster is the whole expected-versus-actual report with its\r\n             counts, unpaged and on `events.read`; this is the picker's input, paged and searched in SQL so a\r\n             20,000-person audience costs one page, and on `attendance.write` because only someone who can\r\n             mark attendance needs it.\r\n             \r\n\r\n\r\n             The expected set is the one the summary counts. A `Closed` event answers from its frozen\r\n             audience, which the close has already given an `Absent` row each, so it is normally empty.\r\n             ",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The event.",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "search",
+            "in": "query",
+            "description": "Fragment over first name, last name and number. Blank for none.",
+            "schema": {
+              "maxLength": 100,
+              "minLength": 0,
+              "type": "string"
+            }
+          },
+          {
+            "name": "personType",
+            "in": "query",
+            "description": "`Student` or `Personnel` (any casing); leave out for both.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "page",
+            "in": "query",
+            "description": "1-based page number, default 1. Out-of-range values are clamped.",
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          },
+          {
+            "name": "pageSize",
+            "in": "query",
+            "description": "Rows per page. Default 50, maximum 200.",
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "One page, ordered by last name, first name, then number.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/UntappedPersonDtoPagedResult"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UntappedPersonDtoPagedResult"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UntappedPersonDtoPagedResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`personType` was neither value (`code: UnknownPersonType`), or\r\n             `search` was too long.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No token, or an expired one.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Signed in, but without `attendance.write`.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such event in this tenant.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "Bearer": []
+          }
+        ]
+      }
+    },
     "/api/v1/events/{id}/scans": {
       "get": {
         "tags": [
@@ -17000,6 +17164,76 @@
         },
         "additionalProperties": false,
         "description": "The body of `POST /academic/terms` and `PUT /academic/terms/{id}` (D-53).\r\n            \r\n\r\n<b>EAMS.Application.Dtos.TermWriteRequest.Code is stored exactly as typed.</b> It is the one natural key in the academic\r\nlayer that is authored by a person rather than scraped from a spreadsheet cell, so there is no dirt\r\nto clean and `AcademicKey` never touches it. A value with leading or trailing whitespace is a\r\n`400` rather than a silent trim — see EAMS.Domain.TermText for why refusing beats\r\nnormalizing here.\r\n\r\n<b>`SchoolId` is deliberately absent</b>, exactly as it is on `EventWriteRequest` and\r\n`DeviceWriteRequest`: the tenant comes from\r\nEAMS.Application.Abstractions.ISchoolContext, never from the request.\r\n\r\n<b>`IsCurrent` is deliberately absent too, and that is not symmetry for its own sake.</b>\r\nMoving the flag is a two-row operation guarded by a filtered unique index\r\n(`UX_Terms_SchoolId_Current`), so it is `PATCH /academic/terms/{id}/current` — the same\r\nsplit `PATCH /events/{id}/status` draws for the same reason. It also keeps the create path's\r\nunique-violation arm unambiguous: with the current flag out of the body, the only index a create can\r\npossibly break is `UX_Terms_SchoolId_Code`, so answering `TermCodeExists` is a fact rather\r\nthan a guess between two indexes.\r\n"
+      },
+      "UntappedPersonDto": {
+        "type": "object",
+        "properties": {
+          "personType": {
+            "type": "string",
+            "description": "`Student` or `Personnel`, always present."
+          },
+          "studentId": {
+            "type": "string",
+            "description": "Set on a student row, null on a personnel row.",
+            "format": "uuid",
+            "nullable": true
+          },
+          "personnelId": {
+            "type": "string",
+            "description": "Set on a personnel row, null on a student row.",
+            "format": "uuid",
+            "nullable": true
+          },
+          "number": {
+            "type": "string",
+            "description": "The student number or the personnel number."
+          },
+          "name": {
+            "type": "string",
+            "description": "Display name, first-middle-last, as the roster renders it."
+          },
+          "cardUid": {
+            "type": "string",
+            "description": "A student's earliest-issued <em>active</em> card, or a personnel member's `RfidUid`; null when the\r\nperson holds none. An inactive card is never offered: tapping it is a guaranteed `CardNotFound`.",
+            "nullable": true
+          }
+        },
+        "additionalProperties": false,
+        "description": "One row of `GET /events/{id}/untapped`: a person in the event's expected audience with no\r\nattendance row on it yet — the manual-attendance picker's candidates on a large event, answered in SQL\r\ninstead of by loading every student and every attendance row into the browser."
+      },
+      "UntappedPersonDtoPagedResult": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/UntappedPersonDto"
+            },
+            "description": "This page's rows, in the endpoint's documented order. Empty is an ordinary answer — for an empty\r\nfilter and for a page past the end alike."
+          },
+          "page": {
+            "type": "integer",
+            "description": "The 1-based page actually served, which is <em>not</em> necessarily the one requested: an\r\nout-of-range `?page=` is clamped and this is where a client sees that it was.",
+            "format": "int32"
+          },
+          "pageSize": {
+            "type": "integer",
+            "description": "The page size actually applied, after the EAMS.Application.Dtos.Paging.MaxPageSize clamp. The field that\r\nmakes clamping discoverable rather than silent.",
+            "format": "int32"
+          },
+          "total": {
+            "type": "integer",
+            "description": "Rows matching the filter across every page, counted in the database against the same filter that\r\nproduced Items. This is what a grid needs to render a page count; without it a\r\ncaller can only discover the end by walking into it.",
+            "format": "int32"
+          },
+          "hasMore": {
+            "type": "boolean",
+            "description": "Whether another page exists after this one.\r\n            \r\n\r\n<b>Derived here rather than left to the client, because the client gets it wrong.</b>`page * pageSize < total` is right and `items.Count == pageSize` is the version\r\npeople write — which reports a further page whenever the last page happens to be exactly full,\r\nso a paging loop makes one extra request every time the total is a multiple of the page size.\r\nComputing it once, on the side that already holds the total, is a byte on the wire against a\r\nclass of off-by-one nobody finds in review.\r\n",
+            "readOnly": true
+          }
+        },
+        "additionalProperties": false,
+        "description": "One page of an admin list read, plus what the caller needs to ask for the next one.\r\n            \r\n\r\n<b>Every §6.2/§6.3 admin list returns this; `GET /attendance/live/{eventId}` deliberately does\r\nnot.</b> That endpoint pages by cursor (`since`/`cursor`/`hasMore`) because it is a\r\npolling delta rather than a list — a client asks \"what changed after this point\", not \"give me rows\r\n40 to 60\" — and its shape is frozen published contract under D-29/D-30/D-42. Offset paging over a\r\nlive feed also drops rows: an insert below the cursor shifts every subsequent row up by one and the\r\nnext page skips it. The two mechanisms coexisting is correct, not an inconsistency to tidy.\r\n"
       },
       "UserActiveRequest": {
         "type": "object",

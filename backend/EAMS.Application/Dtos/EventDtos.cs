@@ -444,3 +444,35 @@ public record EventRosterEntryDto(
     string PersonType,
     Guid? PersonnelId,
     string? PersonnelNumber);
+
+/// <summary>
+/// One row of <c>GET /events/{id}/untapped</c>: a person in the event's expected audience with no
+/// attendance row on it yet — the manual-attendance picker's candidates on a large event, answered in SQL
+/// instead of by loading every student and every attendance row into the browser.
+/// </summary>
+/// <param name="PersonType"><c>Student</c> or <c>Personnel</c>, always present.</param>
+/// <param name="StudentId">Set on a student row, null on a personnel row.</param>
+/// <param name="PersonnelId">Set on a personnel row, null on a student row.</param>
+/// <param name="Number">The student number or the personnel number.</param>
+/// <param name="Name">Display name, first-middle-last, as the roster renders it.</param>
+/// <param name="CardUid">
+/// A student's earliest-issued <em>active</em> card, or a personnel member's <c>RfidUid</c>; null when the
+/// person holds none. An inactive card is never offered: tapping it is a guaranteed <c>CardNotFound</c>.
+/// </param>
+public record UntappedPersonDto(
+    string PersonType,
+    Guid? StudentId,
+    Guid? PersonnelId,
+    string Number,
+    string Name,
+    string? CardUid);
+
+/// <summary>Limits of <c>GET /events/{id}/untapped</c>.</summary>
+public static class EventUntapped
+{
+    /// <summary>
+    /// The longest <c>search</c> fragment accepted: a fragment longer than any one name part cannot match
+    /// a name part, and every number column is shorter still.
+    /// </summary>
+    public const int SearchMaxLength = EAMS.Domain.StudentText.NameMaxLength;
+}
