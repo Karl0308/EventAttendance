@@ -1241,6 +1241,54 @@ export interface AttendanceFilters {
   personType?: PersonType;
 }
 
+/**
+ * One page of `GET /attendance`, for a grid that pages against the server.
+ *
+ * Closing an all-campus event writes an `Absent` row for the whole audience (21,494 at this school),
+ * so the unpaged read — which refuses past `MAX_LIST_ROWS` — cannot show a closed event at all. `total`
+ * is the server's own count behind the same filter; it is what the grid's `rowCount` and the
+ * "Live attendance (N)" heading read, and it is not `items.length`.
+ */
+export interface AttendancePage {
+  items: AttendanceRecord[];
+  /** The page actually served, 1-based and echoed by the server — a clamp is visible, not silent. */
+  page: number;
+  /** The size actually applied; the server clamps an over-large request. */
+  pageSize: number;
+  /** Every row matching the filter, not just this page's. */
+  total: number;
+}
+
+/**
+ * `UntappedPersonDto` — one person in an event's expected audience who has no attendance row on it yet:
+ * a candidate for the tap picker. Exactly one of `studentId` / `personnelId` is set, matching
+ * `personType`.
+ */
+export interface UntappedPerson {
+  personType: PersonType;
+  /** Absent on a personnel row. */
+  studentId?: string;
+  /** Absent on a student row. */
+  personnelId?: string;
+  /** The student number or the personnel number. */
+  number: string;
+  /** Display name, first-middle-last. */
+  name: string;
+  /**
+   * A student's earliest-issued active card, or a personnel member's `RfidUid`. Absent when the person
+   * holds none — such a person cannot be tapped, so the picker does not offer them.
+   */
+  cardUid?: string;
+}
+
+/** One page of `GET /events/{id}/untapped`; `total` is the count behind the same search. */
+export interface UntappedPage {
+  items: UntappedPerson[];
+  page: number;
+  pageSize: number;
+  total: number;
+}
+
 // ---------------------------------------------------------------------------------------------
 // Devices — §4.10 / §6.6, and the one DTO in this file that carries a credential
 // ---------------------------------------------------------------------------------------------

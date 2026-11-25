@@ -167,7 +167,12 @@ function serveEvent() {
     if (path === `/api/v1/events/${EVENT_ID}/attendance-codes`) return Promise.resolve(json(200, []));
     if (path === "/api/v1/pre-registration/sessions") return Promise.resolve(json(200, []));
     if (path === `/api/v1/events/${EVENT_ID}`) return Promise.resolve(json(200, EVENT_JSON));
-    if (path === "/api/v1/students" || path === "/api/v1/attendance" || path === "/api/v1/event-audiences") {
+    if (
+      path === "/api/v1/students" ||
+      path === "/api/v1/attendance" ||
+      path === "/api/v1/event-audiences" ||
+      path === `/api/v1/events/${EVENT_ID}/untapped`
+    ) {
       return Promise.resolve(json(200, EMPTY_PAGE));
     }
     throw new Error(`the event screen asked for something this stub does not serve: ${path}`);

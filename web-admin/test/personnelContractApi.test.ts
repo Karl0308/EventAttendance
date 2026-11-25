@@ -202,7 +202,9 @@ describe("GET /attendance reads the v2 record", () => {
   it("parses a personnel attendance row from GET /attendance with null student fields", async () => {
     serve(() => json(200, page([personnelRow()])));
 
-    const [record] = await api.listAttendance(EVENT_ID);
+    const {
+      items: [record],
+    } = await api.listAttendancePage(EVENT_ID, undefined, 1, 10);
 
     expect(record.personType).toBe("Personnel");
     expect(record.personnelId).toBe(PERSONNEL_ID);
@@ -217,7 +219,9 @@ describe("GET /attendance reads the v2 record", () => {
   it("parses a student row unchanged with personType Student", async () => {
     serve(() => json(200, page([studentRow()])));
 
-    const [record] = await api.listAttendance(EVENT_ID);
+    const {
+      items: [record],
+    } = await api.listAttendancePage(EVENT_ID, undefined, 1, 10);
 
     expect(record).toEqual({
       id: "a1",
@@ -239,7 +243,7 @@ describe("GET /attendance reads the v2 record", () => {
   it("fails loud on a personType this build does not know", async () => {
     serve(() => json(200, page([studentRow({ personType: "Visitor" })])));
 
-    const error = await apiErrorFrom(() => api.listAttendance(EVENT_ID));
+    const error = await apiErrorFrom(() => api.listAttendancePage(EVENT_ID, undefined, 1, 10));
 
     expect(error.kind).toBe("malformed");
     expect(error.message).toContain("personType");
@@ -250,7 +254,7 @@ describe("GET /attendance reads the v2 record", () => {
     const { personType: _dropped, ...withoutType } = studentRow();
     serve(() => json(200, page([withoutType])));
 
-    const error = await apiErrorFrom(() => api.listAttendance(EVENT_ID));
+    const error = await apiErrorFrom(() => api.listAttendancePage(EVENT_ID, undefined, 1, 10));
 
     expect(error.kind).toBe("malformed");
     expect(error.message).toContain("personType");

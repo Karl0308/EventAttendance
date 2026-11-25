@@ -46,6 +46,9 @@ import type {
   EventWriteRequest,
   AttendanceRecord,
   AttendanceFilters,
+  AttendancePage,
+  UntappedPage,
+  UntappedPerson,
   ManualAttendanceRequest,
   ManualAttendanceResult,
   EventSummary,
@@ -2604,34 +2607,56 @@ async function getEvent(id: string): Promise<EventItem | undefined> {
   return body === undefined ? undefined : toEvent(asRow(body, what), what);
 }
 
+/** The query `GET /attendance` shares between its paged and count-only reads. */
+const attendanceQuery = (eventId: string, filters?: AttendanceFilters) => ({
+  eventId,
+  studentNumber: filters?.studentNumber,
+  studentName: filters?.studentName,
+  cardUid: filters?.cardUid,
+  personType: filters?.personType,
+});
+
 /**
- * `filters` is Live Attendance's search (client QA Q7): `studentNumber`, `studentName` and `cardUid`,
- * each an optional fragment the server AND-combines with `eventId` and with each other. Omitted
- * entirely on the unfiltered call `eventDetail()` makes for the roster/summary computation below, so
- * that walk is never accidentally narrowed by a filter meant only for the grid.
+ * `GET /attendance` — **one page of it**, for the Live Attendance grid. `page` is 1-based.
  *
- * Blank strings are sent through unchanged — `buildUrl` already drops `undefined` and `""` query
- * values — so a caller does not need to turn "" into `undefined` itself.
+ * `listAttendance` stopped working on the first closed all-campus event: closing writes an `Absent`
+ * row for the whole audience (21,494), and that read refuses past `MAX_LIST_ROWS`. The grid now asks
+ * for the page it is showing and takes `total` from the server for its pager and its heading. It is the
+ * only attendance list read: the whole-list `listAttendance` it replaced had no remaining caller once
+ * the tap picker moved to `GET /events/{id}/untapped`.
  */
-async function listAttendance(
+async function listAttendancePage(
   eventId: string,
-  filters?: AttendanceFilters,
-): Promise<AttendanceRecord[]> {
-  // Unwrapped at the seam. `EventDetail.tsx` prints `Live attendance ({records.length})` next to the
-  // grid, so a partial page would render a count that contradicts the event summary beside it.
-  const what = "GET /attendance";
-  return listAll(
-    what,
+  filters: AttendanceFilters | undefined,
+  page: number,
+  pageSize: number,
+): Promise<AttendancePage> {
+  const read = await getPage(
+    "GET /attendance",
     "/attendance",
-    {
-      eventId,
-      studentNumber: filters?.studentNumber,
-      studentName: filters?.studentName,
-      cardUid: filters?.cardUid,
-      personType: filters?.personType,
-    },
+    attendanceQuery(eventId, filters),
+    page,
+    pageSize,
     toAttendance,
   );
+  // Renamed rather than spread: `hasMore` answers "is there a page after this", and a grid needs "how
+  // many rows are there" — handing a component both invites the wrong one to be wired to the pager.
+  return { items: read.items, page: read.page, pageSize: read.pageSize, total: read.total };
+}
+
+/**
+ * How many attendance rows an event has, without the rows — `total` off a one-row page, the same way
+ * `countStudents` reads it. Unfiltered on purpose: it answers "does this event have any taps at all",
+ * which the grid's own (filtered) total cannot.
+ */
+async function countAttendance(eventId: string): Promise<number> {
+  const what = "GET /attendance (count)";
+  const body = await getJson(what, "/attendance", {
+    ...attendanceQuery(eventId),
+    page: String(FIRST_PAGE),
+    pageSize: String(COUNT_ONLY_PAGE_SIZE),
+  });
+  return asPage(body, what, () => null).total;
 }
 
 /** `TapResultV2` narrowed for the manual route. `success` is deprecated on the wire and not read. */
@@ -4553,92 +4578,87 @@ async function tap(eventId: string, cardUid: string): Promise<{ ok: boolean; mes
   return simulateTapWithDeviceKey(eventId, cardUid);
 }
 
-/** One choice in the tap picker: a card that can still be tapped, and whose it is. */
-export interface UntappedCard {
-  uid: string;
-  name: string;
+/** `UntappedPersonDto` — one person in the expected audience with no attendance row yet. */
+function toUntappedPerson(row: Row, what: string): UntappedPerson {
+  return {
+    personType: reqPersonType(row, what),
+    studentId: nullableStr(row, "studentId", what),
+    personnelId: nullableStr(row, "personnelId", what),
+    number: reqStr(row, "number", what),
+    name: reqStr(row, "name", what),
+    cardUid: nullableStr(row, "cardUid", what),
+  };
 }
 
 /**
- * What the tap picker can offer, or why it can offer nothing.
+ * `GET /events/{id}/untapped` — one page of who has not tapped yet, searched in SQL: the tap picker's
+ * input. `page` is 1-based.
  *
- * A bare `UntappedCard[]` cannot carry this: an empty array is read as "everyone has tapped in", so a
- * roster that failed to load would congratulate the user on a full house. That is the same collapse
- * of "failed" into "returned nothing" that `useApiResource` exists to prevent, reappearing one level
- * down inside the payload — where the hook cannot see it, because the read as a whole succeeded.
+ * It replaces a client-side composition that read every student and every attendance row to subtract
+ * one from the other, which stopped working at this school's size (21,493 students against a 2,000-row
+ * ceiling) and left the picker "unavailable" on exactly the events that most need it. Now the server
+ * does the subtraction and a 20,000-person audience costs one page.
+ *
+ * `search` is a trimmed fragment over first name, last name and number — **not** the card UID, which the
+ * route does not search. A blank search is simply not sent. Needs `attendance.write`, so a caller
+ * without it must not call this at all (a 403 is a wrong call, not a transient failure). A `Closed`
+ * event answers an empty page, but the screen does not ask: it is not shown for a finished event.
+ *
+ * `total` is the count behind the same search, which is what lets the picker say "N more — refine
+ * your search" rather than imply the page it holds is everyone.
  */
-export type TapRoster =
-  | { status: "ready"; cards: UntappedCard[] }
-  | { status: "unavailable"; error: unknown };
+async function listUntappedPage(
+  eventId: string,
+  query: { search?: string; personType?: PersonType },
+  page: number,
+  pageSize: number,
+): Promise<UntappedPage> {
+  const read = await getPage(
+    "GET /events/{id}/untapped",
+    `/events/${encodeURIComponent(eventId)}/untapped`,
+    { search: query.search?.trim(), personType: query.personType },
+    page,
+    pageSize,
+    toUntappedPerson,
+  );
+  return { items: read.items, page: read.page, pageSize: read.pageSize, total: read.total };
+}
 
 /** Everything the event screen renders, settled together. */
 export interface EventDetailData {
   /** `undefined` when no event has that id — "no such event", which is an answer, not a failure. */
   event: EventItem | undefined;
   summary: EventSummary | undefined;
-  records: AttendanceRecord[];
-  roster: TapRoster;
+  /**
+   * How many attendance rows the event holds, unfiltered — a count, not the rows. A closed all-campus
+   * event holds one per invitee (21,494), so the rows themselves are the grid's to page through
+   * (`listAttendancePage`); the screen only needs to know whether there are any, and how many.
+   */
+  recordCount: number;
 }
 
 /**
- * Who has not tapped yet, derived from rows the caller already holds rather than fetched again.
+ * The facts the event screen asserts about an event, as one read.
  *
- * No single endpoint answers this, so it is composed from reads that exist rather than an invented
- * third. `GET /events/{id}/roster` knows who is *expected*, which would be the better source, but
- * `EventRosterEntryDto` carries no card UID at all — it cannot drive a UID picker.
- */
-function untappedFrom(students: Student[], recorded: AttendanceRecord[]): UntappedCard[] {
-  const tapped = new Set(recorded.map((record) => record.studentId));
-  return students.flatMap((student) => {
-    if (tapped.has(student.id)) return [];
-    // Only active cards: an inactive UID is a guaranteed `CardNotFound`, so offering it would put a
-    // choice in the picker that cannot succeed.
-    const card = student.cards.find((c) => c.isActive);
-    return card ? [{ uid: card.cardUid, name: student.fullName }] : [];
-  });
-}
-
-/**
- * The whole event screen as one read.
+ * **It no longer loads attendance rows or the tap picker's input.** It used to hold every row as
+ * `records` (which broke the screen for the first closed all-campus event: 21,494 rows against a 2,000
+ * ceiling) and to compose the picker from every student minus every row. Now: the "Live attendance (N)"
+ * heading and the "no taps at all" empty state read `recordCount` (a one-row count read); the grid reads
+ * its own page via `listAttendancePage`; the picker reads its own searched page via `listUntappedPage`,
+ * from the screen, because it depends on what the operator has typed.
  *
- * It replaces four separate calls from the component, one of which — `untappedCards(id)` — walked
- * the attendance list a *second* time to work out who was missing from it, while the component was
- * already fetching that same list beside it. Every mount and every refresh paged through attendance
- * twice to render one grid. Deriving the picker from `records` here settles it: attendance is walked
- * once, and the composition stays behind this seam instead of leaking into the page.
- *
- * The four reads run concurrently, so the screen still costs one round of latency rather than four.
- *
- * Three of them fail together, which is the point — `event`, `summary` and `records` are three views
- * of one fact, and a screen assembled from parts that settle independently can render half a truth
- * whose halves contradict each other on the same page. The roster is not one of those views. It is an
- * input aid for the picker: it does not appear anywhere in what the screen asserts about the event,
- * and on a Closed event the picker it feeds is never rendered at all. Letting it take the page down
- * means a roster past `MAX_LIST_ROWS` — reachable at this school's scale — makes a perfectly healthy
- * attendance grid unviewable. So it is caught into a value and reported as `TapRoster`, which the
- * picker must then say out loud; what it must never become is an empty picker.
+ * The three reads fail together, which is the point — `event`, `summary` and `recordCount` are three
+ * views of one fact, and a screen assembled from parts that settle independently can render half a
+ * truth whose halves contradict each other on the same page.
  */
 async function eventDetail(eventId: string): Promise<EventDetailData> {
-  const [event, summary, records, roster] = await Promise.all([
+  const [event, summary, recordCount] = await Promise.all([
     getEvent(eventId),
     eventSummary(eventId),
-    listAttendance(eventId),
-    // Settled, not swallowed: the rejection is captured into a value here so the picker can render it
-    // as a reason instead of it taking the whole page down with the three reads above.
-    listStudents().then(
-      (students) => ({ ok: true, students }) as const,
-      (cause: unknown) => ({ ok: false, cause }) as const,
-    ),
+    countAttendance(eventId),
   ]);
 
-  return {
-    event,
-    summary,
-    records,
-    roster: roster.ok
-      ? { status: "ready", cards: untappedFrom(roster.students, records) }
-      : { status: "unavailable", error: roster.cause },
-  };
+  return { event, summary, recordCount };
 }
 
 export const api = {
@@ -4661,7 +4681,8 @@ export const api = {
   setEventStatus,
   deleteEvent,
   getEvent,
-  listAttendance,
+  listAttendancePage,
+  listUntappedPage,
   recordManualAttendance,
   eventSummary,
   multiEventReportSummary,

@@ -70,6 +70,8 @@ import { EVENT_STATUS } from "../types";
 import type {
   AttendanceRecord,
   AttendanceMode,
+  AttendancePage,
+  UntappedPage,
   EventAudienceGroup,
   EventAudienceRequest,
   EventAudienceStudent,
@@ -87,8 +89,16 @@ const NO_SUCH_EVENT = "No event with this id. It may have been deleted, or the l
 // having tapped in is good news; a roster that would not load is not, and must never be read as it.
 const EVERYONE_TAPPED_IN = "Everyone has tapped in 🎉";
 const ROSTER_UNAVAILABLE =
-  "The student roster did not load, so there is nobody to pick from. This is not the same as everyone " +
-  "having tapped in — attendance below is unaffected.";
+  "The list of people still to tap did not load, so there is nobody to pick from. This is not the same " +
+  "as everyone having tapped in — attendance below is unaffected.";
+const PICKER_NO_MATCH = "No one yet to tap matches this search.";
+const PICKER_NO_CARDS =
+  "The people on this page hold no active card, so none of them can be tapped. Refine the search.";
+
+/** The picker asks for the first page only and tells the operator to narrow the search for the rest. */
+const PICKER_PAGE_SIZE = 50;
+/** `GET /events/{id}/untapped`'s own `search` limit (`maxLength: 100`), restated so the box refuses it. */
+const PICKER_SEARCH_MAX_LENGTH = 100;
 
 // What is left to do when the failure is one Retry cannot clear, so no button is offered. A warning
 // with no action reads as a dead end unless it says where the action actually is.
@@ -306,12 +316,30 @@ const TIME_IN_OUT: AttendanceMode = "TimeInOut";
 // Live attendance filters (client QA Q7) — student number, name and the card that tapped
 // ---------------------------------------------------------------------------------------------
 //
-// A read of its own, deliberately separate from `detail`. `eventDetail()` uses its *unfiltered*
-// `listAttendance` to compute `roster.cards` (`untappedFrom`, in `api.ts`) — a student who hasn't
-// tapped must keep appearing in the tap simulator's picker no matter what the operator has typed into
-// these three boxes, so the picker's roster and the grid's rows cannot share one read. The server
-// already guarantees a student with no row never appears through these filters (they narrow, never
-// invent, rows) — nothing here re-filters that guarantee away or duplicates it.
+// A read of its own, deliberately separate from `detail`. `eventDetail()` reads the *unfiltered*
+// attendance (a count, and on a live event the tapped set behind `roster.cards`) — a student who
+// hasn't tapped must keep appearing in the tap simulator's picker no matter what the operator has
+// typed into these three boxes, so the picker's roster and the grid's rows cannot share one read. The
+// server already guarantees a student with no row never appears through these filters (they narrow,
+// never invent, rows) — nothing here re-filters that guarantee away or duplicates it.
+//
+// The grid pages against the server. A closed all-campus event holds an `Absent` row per invitee
+// (21,494 here), far past what the unpaged read will hand a client-side grid.
+
+/** `?page=` is 1-based on the wire; the grid's own `paginationModel.page` is 0-based. */
+const FIRST_PAGE = 1;
+const ATTENDANCE_PAGE_SIZES = [10, 25, 50];
+const DEFAULT_ATTENDANCE_PAGE_SIZE = ATTENDANCE_PAGE_SIZES[0];
+
+/** A page of attendance together with the question it answers — see the `attendance` read. */
+interface AnsweredPage {
+  eventId: string;
+  /** The event and every settled filter, as `filterKey` below builds it. */
+  filterKey: string;
+  /** 0-based, as `paginationModel.page`. */
+  requestedPage: number;
+  page: AttendancePage;
+}
 
 /** Same settle time as the Students search box (`Students.tsx`'s `SEARCH_SETTLE_MS`) — one keystroke
  *  pause is long enough to collapse a typed word into one request without reading as lag. */
@@ -428,16 +456,105 @@ export default function EventDetail() {
    * so `useApiResource`'s dependency array would have to name it directly, and every other render's
    * object would be `!==` the last even when every field inside it was unchanged.
    */
+  const [paginationModel, setPaginationModel] = useState({
+    page: 0,
+    pageSize: DEFAULT_ATTENDANCE_PAGE_SIZE,
+  });
+
+  /**
+   * Any change to what is being asked — the event or any settled filter — sends the pager back to the
+   * first page, in the same render rather than in an effect. Without it a filter typed on page 40
+   * would ask the server for page 40 of three rows. Done as a state adjustment during render (React's
+   * supported "derive from a changed input" pattern, which discards this render and re-runs it with
+   * the new state) because an effect would let one request go out for the new filter at the old page
+   * before correcting it.
+   */
+  const filterKey = JSON.stringify([
+    id,
+    studentNumberQuery,
+    studentNameQuery,
+    cardUidQuery,
+    personTypeFilter,
+  ]);
+  const [pagedFor, setPagedFor] = useState(filterKey);
+  if (pagedFor !== filterKey) {
+    setPagedFor(filterKey);
+    setPaginationModel((model) => (model.page === 0 ? model : { ...model, page: 0 }));
+  }
+
+  /**
+   * The read resolves to the page *and what it was asked for* — the filter key (event + settled
+   * filters) and the 0-based page requested. Everything below that has to ask "is this page an answer to
+   * the question on screen?" (the heading, the snap to the server's page) reads it off the data itself
+   * rather than guessing from render order, where the commit in which a filter has just changed still
+   * holds the previous filter's page.
+   */
   const attendance = useApiResource(
-    () =>
-      api.listAttendance(id, {
-        studentNumber: studentNumberQuery === "" ? undefined : studentNumberQuery,
-        studentName: studentNameQuery === "" ? undefined : studentNameQuery,
-        cardUid: cardUidQuery === "" ? undefined : cardUidQuery,
-        personType: personTypeParam(personTypeFilter),
-      }),
-    [id, studentNumberQuery, studentNameQuery, cardUidQuery, personTypeFilter],
+    async (): Promise<AnsweredPage> => {
+      const requestedPage = paginationModel.page;
+      const page = await api.listAttendancePage(
+        id,
+        {
+          studentNumber: studentNumberQuery === "" ? undefined : studentNumberQuery,
+          studentName: studentNameQuery === "" ? undefined : studentNameQuery,
+          cardUid: cardUidQuery === "" ? undefined : cardUidQuery,
+          personType: personTypeParam(personTypeFilter),
+        },
+        requestedPage + FIRST_PAGE,
+        paginationModel.pageSize,
+      );
+      return { eventId: id, filterKey, requestedPage, page };
+    },
+    [
+      id,
+      studentNumberQuery,
+      studentNameQuery,
+      cardUidQuery,
+      personTypeFilter,
+      filterKey,
+      paginationModel.page,
+      paginationModel.pageSize,
+    ],
   );
+
+  /**
+   * The last page read successfully, kept so a page turn does not unmount the grid — `useApiResource`
+   * blanks to `loading` whenever its deps change, and every page turn is a new subject. The previous
+   * page stays under the grid's own loading overlay instead, as `Students.tsx` does. A *failed* read
+   * still wins the screen: this is consulted only while loading. Tagged with the event it was read
+   * for, because navigating to another event reuses this component and must not show the last one's rows.
+   */
+  const lastGoodPage = useRef<AnsweredPage | undefined>(undefined);
+  useLayoutEffect(() => {
+    if (attendance.data !== undefined) lastGoodPage.current = attendance.data;
+  });
+  const keptPage = lastGoodPage.current?.eventId === id ? lastGoodPage.current : undefined;
+  const latest = attendance.data ?? (attendance.status === "loading" ? keptPage : undefined);
+  /** What the grid shows: the newest page for *this event*, possibly one turn or one filter behind. */
+  const shownPage = latest?.eventId === id ? latest.page : undefined;
+  /**
+   * What the heading may count from: only a page that answers the filter on screen. While a new filter
+   * loads, the grid keeps the old rows under its overlay, but the heading must not keep the old filter's
+   * "X of N" — it would state a count for a question nobody is asking any more.
+   */
+  const headingPage = latest?.filterKey === filterKey ? latest.page : undefined;
+
+  /**
+   * Snap the pager to the page the server actually served. An out-of-range page is clamped, not
+   * refused (a manual change can empty the last page under the operator), and without this the pager
+   * says page 40 over rows of page 39. Only an answer to the *current* request counts — same filter,
+   * same page asked for — because the render in which the pager has just moved still holds the
+   * previous page's reply, and treating that as a clamp would send every "next" straight back.
+   */
+  const answered = attendance.data;
+  if (
+    answered !== undefined &&
+    answered.filterKey === filterKey &&
+    answered.requestedPage === paginationModel.page &&
+    answered.page.page - FIRST_PAGE !== paginationModel.page
+  ) {
+    setPaginationModel((model) => ({ ...model, page: Math.max(0, answered.page.page - FIRST_PAGE) }));
+  }
 
   /**
    * Both writes live here rather than inside the dialogs that start them, which is D1a's shape and
@@ -551,6 +668,8 @@ export default function EventDetail() {
   });
 
   const [pickUid, setPickUid] = useState("");
+  const [pickerSearch, setPickerSearch] = useState("");
+  const pickerQuery = useDebounced(pickerSearch.trim(), FILTER_SETTLE_MS);
 
   // Two pieces rather than one `Notice | undefined` driving both, as `Events.tsx` records: MUI keeps
   // a Snackbar's children mounted through its closing fade, so clearing the notice to close it would
@@ -574,10 +693,6 @@ export default function EventDetail() {
    * re-check that can never fail, which reads as defensiveness against a case that does not exist.
    */
   const event = data?.event;
-  // An empty list here means "the roster loaded and nobody is left"; `roster.status` carries the other
-  // reading, and the picker below renders the two differently.
-  const cards = data?.roster.status === "ready" ? data.roster.cards : [];
-
   /** What the presented token grants — see `PermissionGuard`'s own note on why that, and not a fresh
    *  read of the database, is the honest thing to gate a control on. */
   const user = useSignedInUser();
@@ -627,6 +742,49 @@ export default function EventDetail() {
       // a duplicate the way it would be for `edit`/`remove`/`move`.
     });
   };
+
+  /**
+   * The tap picker's own read — a searched page of who has not tapped yet, from the server. Separate
+   * from `detail` because it depends on what the operator types, and because it must not be able to take
+   * the screen down: a failure here becomes `RosterUnavailable`, never a blank page.
+   *
+   * Asked only while the picker is on screen — an `Open` event and a signed-in user who can write
+   * attendance (the route needs `attendance.write`, so a viewer calling it would only collect a 403).
+   * On a Closed or Cancelled event it makes no request at all.
+   *
+   * `data` is in the deps on purpose: every write on this page ends in `detail.reload()`, which swaps
+   * `detail.data` for a new object, so the picker re-reads whenever the screen did — a tapped person
+   * drops out of the list — without each of those call sites having to remember a second reload.
+   */
+  const pickerOn = canWriteAttendance && event?.status === EVENT_STATUS.Open;
+  const picker = useApiResource(
+    () =>
+      pickerOn && data !== undefined
+        ? api.listUntappedPage(
+            id,
+            { search: pickerQuery === "" ? undefined : pickerQuery },
+            FIRST_PAGE,
+            PICKER_PAGE_SIZE,
+          )
+        : Promise.resolve(undefined),
+    [id, pickerOn, pickerQuery, data],
+  );
+
+  /** Kept across a re-read so typing a letter does not blank the list under the operator's cursor.
+   *  A failed read still wins the screen — this is consulted only while loading. */
+  const lastGoodPicker = useRef<{ eventId: string; page: UntappedPage } | undefined>(undefined);
+  useLayoutEffect(() => {
+    if (picker.data !== undefined) lastGoodPicker.current = { eventId: id, page: picker.data };
+  });
+  const keptPicker = lastGoodPicker.current?.eventId === id ? lastGoodPicker.current.page : undefined;
+  const pickerPage = picker.data ?? (picker.status === "loading" ? keptPicker : undefined);
+
+  // Only a person with an active card can be tapped, so only they are offered. `total` still counts
+  // everyone behind the search, which is what the "N more" line is honest about.
+  const cards = (pickerPage?.items ?? []).flatMap((person) =>
+    person.cardUid === undefined ? [] : [{ uid: person.cardUid, name: person.name }],
+  );
+  const moreUntapped = pickerPage === undefined ? 0 : Math.max(0, pickerPage.total - pickerPage.items.length);
 
   // Derived at render rather than synced into state by an effect: the user's choice stands for as
   // long as that card is still on offer, and otherwise falls back to the first one a reload left.
@@ -1191,39 +1349,79 @@ export default function EventDetail() {
             {canWriteAttendance && event.status === EVENT_STATUS.Open && (
               <Card sx={{ mb: 3, bgcolor: "#fff8e1" }}>
                 <CardContent>
-                  {data.roster.status === "unavailable" ? (
-                    <RosterUnavailable error={data.roster.error} onRetry={detail.reload} />
-                  ) : (
-                    <Stack direction="row" spacing={2} alignItems="center" flexWrap="wrap">
-                      <SensorsIcon color="primary" />
-                      <Typography fontWeight={600}>Simulate RFID tap</Typography>
-                      <TextField
-                        select
-                        size="small"
-                        label="Card / student"
-                        value={pick}
-                        onChange={(e) => setPickUid(e.target.value)}
-                        sx={{ minWidth: 280 }}
-                        disabled={cards.length === 0}
-                      >
-                        {cards.map((c) => (
-                          <MenuItem key={c.uid} value={c.uid}>
-                            {c.uid} — {c.name}
-                          </MenuItem>
-                        ))}
-                      </TextField>
-                      <Button
-                        variant="contained"
-                        onClick={simulateTap}
-                        disabled={cards.length === 0}
-                      >
-                        Tap
-                      </Button>
-                      {cards.length === 0 && (
-                        <Typography color="text.secondary">{EVERYONE_TAPPED_IN}</Typography>
-                      )}
-                    </Stack>
+                  <Stack direction="row" spacing={2} alignItems="center" flexWrap="wrap">
+                    <SensorsIcon color="primary" />
+                    <Typography fontWeight={600}>Simulate RFID tap</Typography>
+                    {/* Always mounted, even while the list below is loading or failed: unmounting the
+                        box a person is typing in would drop their focus mid-word. */}
+                    <TextField
+                      size="small"
+                      label="Search people"
+                      helperText="Name or ID number"
+                      value={pickerSearch}
+                      onChange={(e) => setPickerSearch(e.target.value)}
+                      sx={{ minWidth: 200 }}
+                      inputProps={{ maxLength: PICKER_SEARCH_MAX_LENGTH }}
+                    />
+                    {picker.status !== "error" && pickerPage !== undefined && (
+                      <>
+                        <TextField
+                          select
+                          size="small"
+                          label="Card / student"
+                          value={pick}
+                          onChange={(e) => setPickUid(e.target.value)}
+                          sx={{ minWidth: 280 }}
+                          disabled={cards.length === 0}
+                        >
+                          {cards.map((c) => (
+                            <MenuItem key={c.uid} value={c.uid}>
+                              {c.uid} — {c.name}
+                            </MenuItem>
+                          ))}
+                        </TextField>
+                        <Button
+                          variant="contained"
+                          onClick={simulateTap}
+                          disabled={cards.length === 0}
+                        >
+                          Tap
+                        </Button>
+                      </>
+                    )}
+                    {picker.status === "loading" && pickerPage === undefined && (
+                      <Typography color="text.secondary">Loading people…</Typography>
+                    )}
+                  </Stack>
+
+                  {picker.status === "error" && (
+                    <Box sx={{ mt: 2 }}>
+                      <RosterUnavailable error={picker.error} onRetry={picker.reload} />
+                    </Box>
                   )}
+
+                  {/* One status region for everything the list has to say, so a screen reader hears
+                      "12 more" or "no match" as the search settles. Three different empties, kept
+                      apart: nobody left, nobody matching, and people with no card to tap. */}
+                  <Box role="status" sx={{ mt: 1, minHeight: 20 }}>
+                    {picker.status !== "error" && pickerPage !== undefined && (
+                      <>
+                        {pickerPage.total === 0 && (
+                          <Typography color="text.secondary">
+                            {pickerQuery === "" ? EVERYONE_TAPPED_IN : PICKER_NO_MATCH}
+                          </Typography>
+                        )}
+                        {pickerPage.total > 0 && cards.length === 0 && (
+                          <Typography color="text.secondary">{PICKER_NO_CARDS}</Typography>
+                        )}
+                        {moreUntapped > 0 && (
+                          <Typography variant="body2" color="text.secondary">
+                            {moreUntapped.toLocaleString()} more — refine search
+                          </Typography>
+                        )}
+                      </>
+                    )}
+                  </Box>
 
                   {/* Outside the roster branch: the key is worth setting (and clearing) whether or
                       not the picker has anything to offer, and a roster that failed to load says
@@ -1236,7 +1434,7 @@ export default function EventDetail() {
               </Card>
             )}
 
-            {/* `data.records` (unfiltered, from `detail`) is what says whether the event has any taps
+            {/* `data.recordCount` (unfiltered, from `detail`) is what says whether the event has any taps
                 at all — the fact `NO_TAPS_YET` versus `NO_TAPS_MATCH` turns on. It must not itself be
                 filtered, or a typed-but-unmatched filter would misreport "no taps yet" for an event
                 that in fact has plenty, just none matching. */}
@@ -1303,11 +1501,13 @@ export default function EventDetail() {
             <Stack direction="row" spacing={2} alignItems="center" sx={{ mb: 1 }}>
               <Typography variant="h6">
                 Live attendance (
-                {attendance.status === "ready"
+                {headingPage !== undefined
                   ? hasFilters
-                    ? `${attendance.data.length} of ${data.records.length}`
-                    : attendance.data.length
-                  : data.records.length}
+                    ? `${headingPage.total.toLocaleString()} of ${data.recordCount.toLocaleString()}`
+                    : headingPage.total.toLocaleString()
+                  : hasFilters
+                    ? "…"
+                    : data.recordCount.toLocaleString()}
                 )
               </Typography>
               {/* Mounted whether or not a re-read is running, so the live region exists in the DOM
@@ -1374,7 +1574,11 @@ export default function EventDetail() {
               )}
             </Stack>
 
-            {attendance.status === "loading" && <LoadingState label="Loading attendance…" />}
+            {/* `shownPage` rather than `status === "loading"`: a page turn keeps the previous page under
+                the grid's overlay, so the full-width spinner is for a screen with nothing on it yet. */}
+            {attendance.status === "loading" && shownPage === undefined && (
+              <LoadingState label="Loading attendance…" />
+            )}
 
             {attendance.status === "error" && (
               <Alert severity="error" role="alert" sx={{ mb: 2 }}>
@@ -1403,10 +1607,10 @@ export default function EventDetail() {
               </Alert>
             )}
 
-            {attendance.status === "ready" &&
-              (data.records.length === 0 ? (
+            {shownPage !== undefined &&
+              (data.recordCount === 0 ? (
                 <EmptyState message={NO_TAPS_YET} />
-              ) : attendance.data.length === 0 ? (
+              ) : shownPage.total === 0 ? (
                 <Box role="status" sx={{ py: 4, textAlign: "center" }}>
                   <Typography color="text.secondary">{NO_TAPS_MATCH}</Typography>
                   <Button size="small" onClick={clearFilters} sx={{ mt: 1 }}>
@@ -1416,12 +1620,22 @@ export default function EventDetail() {
               ) : (
                 <div style={{ height: 420, width: "100%" }}>
                   <DataGrid
-                    rows={attendance.data}
+                    rows={shownPage.items}
                     columns={cols}
                     getRowId={(r) => r.id}
                     disableRowSelectionOnClick
-                    pageSizeOptions={[10, 25]}
-                    initialState={{ pagination: { paginationModel: { pageSize: 10 } } }}
+                    // Server-side, all of it: `rowCount` is the filter's total, which is what gives
+                    // the pager a last page to reach.
+                    paginationMode="server"
+                    rowCount={shownPage.total}
+                    paginationModel={paginationModel}
+                    onPaginationModelChange={setPaginationModel}
+                    pageSizeOptions={ATTENDANCE_PAGE_SIZES}
+                    loading={attendance.status === "loading" || attendance.refreshing}
+                    // Both off because both would act on the 10-row page while looking like they
+                    // acted on the event's attendance.
+                    disableColumnSorting
+                    disableColumnFilter
                   />
                 </div>
               ))}

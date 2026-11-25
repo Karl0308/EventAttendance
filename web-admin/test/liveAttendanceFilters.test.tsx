@@ -12,12 +12,12 @@
 // for this event never appears through them, because they narrow rows, never invent them; nothing
 // in this screen re-filters that guarantee away, and nothing here re-implements it client-side.
 //
-// The grid's own read is deliberately separate from `eventDetail()`'s unfiltered one: the tap
-// picker's roster is computed from the *unfiltered* rows (`untappedFrom`, in `api.ts`), so an
-// operator typing into these boxes must never narrow who the picker still offers (AC11 — pinned
-// below, with its own negative control). Every test that inspects requests distinguishes the two
-// reads by their query string, not by call order — except the race test, which is white-box about
-// mount-time ordering on purpose (see its own comment).
+// The grid's own read is deliberately separate from `eventDetail()`'s unfiltered one-row count, and
+// from the tap picker's own read (`GET /events/{id}/untapped`, which knows nothing of these three
+// boxes), so an operator typing into them must never narrow who the picker still offers (AC11 — pinned
+// below, with its own negative control). Every test that inspects requests distinguishes the reads by
+// their query string, not by call order — except the race test, which is white-box about mount-time
+// ordering on purpose (see its own comment).
 //
 // Card fragments are asserted to travel **unnormalized** — case and separators intact — because the
 // server does that normalizing itself; a client that also uppercased or stripped separators would be
@@ -110,7 +110,7 @@ const AUDIENCE_JSON = {
 
 const SCANS_JSON = { eventId: EVENT_ID, totalScans: 0, distinctCards: 0, scans: [] };
 
-/** The one student the tap picker can offer — has not tapped, so `untappedFrom` keeps her listed. Her
+/** The one student the tap picker can offer — has not tapped, so the server's untapped list keeps her. Her
  *  surname is shared with `ROWS`' "Juan Dela Cruz" on purpose (item 4's hardened tap test needs one
  *  filter that matches both the already-tapped row and the student the tap adds). */
 const PICKER_STUDENT = {
@@ -216,7 +216,7 @@ let refuseCardUid: string | undefined;
 
 /**
  * The ordinal of the *n*th `GET /attendance` request overall, across every caller — `detail`'s own
- * unfiltered read (inside `eventDetail()`) is always first at mount, because `EventDetail.tsx` calls
+ * unfiltered one-row count (inside `eventDetail()`) is always first at mount, because `EventDetail.tsx` calls
  * `useApiResource` for `detail` before it calls it for `attendance`, and React runs effects in the
  * order their hooks were declared. The grid's own initial (also unfiltered, before anything is
  * typed) read is always second. Two tests below rely on that ordering being stable; both say so.
@@ -268,9 +268,23 @@ function serve() {
     if (path === `/api/v1/events/${EVENT_ID}`) {
       return Promise.resolve(json(200, eventJson()));
     }
-    if (path === "/api/v1/students") {
+    if (path === `/api/v1/events/${EVENT_ID}/untapped`) {
+      // The server's own subtraction: she is offered until a row exists for her.
+      const tapped = rows.some((row) => row.studentId === PICKER_STUDENT.id);
+      const items = tapped
+        ? []
+        : [
+            {
+              personType: "Student",
+              studentId: PICKER_STUDENT.id,
+              personnelId: null,
+              number: PICKER_STUDENT.studentNumber,
+              name: PICKER_STUDENT.fullName,
+              cardUid: PICKER_STUDENT.cards[0].cardUid,
+            },
+          ];
       return Promise.resolve(
-        json(200, { items: [PICKER_STUDENT], page: 1, pageSize: 200, total: 1, hasMore: false }),
+        json(200, { items, page: 1, pageSize: 50, total: items.length, hasMore: false }),
       );
     }
     if (path === "/api/v1/attendance") {
@@ -590,7 +604,7 @@ describe("Live Attendance filters", () => {
 
   it("a filter typed while the initial load is still in flight settles on the filtered result", async () => {
     // The grid's own initial (unfiltered) read — the second `GET /attendance` overall — is held open.
-    // `detail`'s own unfiltered read (the first) resolves immediately, so the filter bar is on screen
+    // `detail`'s own unfiltered count (the first) resolves immediately, so the filter bar is on screen
     // to type into well before this one ever answers.
     delayAttendanceCallNumber = { seq: 2, ms: 5 * FILTER_SETTLE_MS };
     await show();
@@ -626,7 +640,7 @@ describe("Live Attendance filters", () => {
     await settle();
 
     expect(pageText()).toMatch(/No taps match these filters/);
-    // The picker is computed from the unfiltered roster and must not have narrowed with the grid.
+    // The picker reads the server's untapped list, which these boxes do not feed, so it must not narrow.
     expect(screen.getByText(PICKER_OPTION_TEXT)).toBeTruthy();
     expect(screen.getByRole("button", { name: /^tap$/i })).toBeTruthy();
   });
@@ -648,7 +662,7 @@ describe("Live Attendance filters", () => {
     await act(async () => {});
 
     // Counted only among requests that actually carried the typed filter — not every `GET /attendance`
-    // the tap causes, since `simulateTap` also reloads `detail`'s unfiltered read.
+    // the tap causes, since `simulateTap` also reloads `detail`'s unfiltered count.
     expect(attendanceRequestsWith("studentName", "Cruz").length).toBeGreaterThan(
       cruzRequestsBeforeTap,
     );
