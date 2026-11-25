@@ -394,6 +394,9 @@ const WARNING_LABELS: Record<string, string> = {
   // ADR-011: the sheet's ORGANIZATION cell exceeded the column's length. The row still imported; the
   // student keeps the organization already on file, which is why the label says so.
   OrganizationTooLong: "Organization too long (kept the stored one)",
+  // JJ 2026-11-25 (option B): the REGNO belongs to a student removed in the back office — for example one
+  // moved to Personnel — so the whole row was skipped. Nothing was written for it, which the label says.
+  StudentRemoved: "Student removed (row skipped)",
 };
 
 /**

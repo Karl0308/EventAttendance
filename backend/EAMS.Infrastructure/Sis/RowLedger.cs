@@ -85,6 +85,8 @@ internal sealed class RowLedger
     /// </summary>
     private static readonly IReadOnlyList<string> WarningPrecedence =
     [
+        // First: the row was skipped whole, so every other finding on it describes nothing that happened.
+        SisImportWarningCode.StudentRemoved,
         SisImportWarningCode.ClassificationAxisUnknown,
         SisImportWarningCode.StudentIdentityConflict,
         SisImportWarningCode.ClassificationWrongAxis,
@@ -351,9 +353,11 @@ internal sealed class RowLedger
         // A skip is never a shrug. When the row's only distinguishing content was a placeholder
         // teacher, say so — that is the 27 (REGNO, COURSE_CODE) pairs, which are one enrollment
         // described twice rather than a duplicate that was thrown away.
-        row.SkipReason = entry.Warnings.Any(w => w.Code == SisImportWarningCode.InstructorPlaceholder)
-            ? SisImportSkipReason.InstructorPlaceholder
-            : SisImportSkipReason.NoChange;
+        row.SkipReason = entry.Warnings.Any(w => w.Code == SisImportWarningCode.StudentRemoved)
+            ? SisImportSkipReason.StudentRemoved
+            : entry.Warnings.Any(w => w.Code == SisImportWarningCode.InstructorPlaceholder)
+                ? SisImportSkipReason.InstructorPlaceholder
+                : SisImportSkipReason.NoChange;
     }
 
     /// <summary>

@@ -566,10 +566,11 @@ describe("describeImportWarning — the mapped set", () => {
     "ClassificationAxisUnknown",
     "ClassificationWrongAxis",
     "OrganizationTooLong",
+    "StudentRemoved",
   ];
 
-  it("mirrors exactly 16 codes — the count changes only when the backend's list does", () => {
-    expect(KNOWN_WARNING_CODES).toHaveLength(16);
+  it("mirrors exactly 17 codes — the count changes only when the backend's list does", () => {
+    expect(KNOWN_WARNING_CODES).toHaveLength(17);
   });
 
   it.each(KNOWN_WARNING_CODES)("maps %s to words, not the raw token", (code) => {
@@ -591,6 +592,10 @@ describe("describeImportWarning — the mapped set", () => {
     expect(describeImportWarning("RfidCardHeldByPersonnel")).not.toBe(
       describeImportWarning("RfidCardRevoked"),
     );
+  });
+
+  it("labels StudentRemoved as a skipped row of a removed student (JJ 2026-11-25, option B)", () => {
+    expect(describeImportWarning("StudentRemoved")).toBe("Student removed (row skipped)");
   });
 
   it("gives OrganizationTooLong a label that says the stored organization was kept", () => {

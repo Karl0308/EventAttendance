@@ -577,13 +577,27 @@ public static class SisImportWarningCode
     /// </summary>
     public const string OrganizationTooLong = "OrganizationTooLong";
 
+    /// <summary>
+    /// The row's REGNO belongs to a soft-deleted student — for example one moved to Personnel by
+    /// <c>POST /personnel/migrate-from-students</c> (JJ, 2026-11-25, option B). The row is skipped whole:
+    /// no field update, no enrollment or term record, no card. The student stays removed.
+    ///
+    /// <para>
+    /// <b>A warning, not a failure</b>, because the roster is doing nothing wrong by still listing the
+    /// person; the back office decided they are not a student. Without this skip the import would update
+    /// the deleted row in place, enroll it, and could issue it a new active card that then blocks the
+    /// same person's personnel card (ADR-015 D-98).
+    /// </para>
+    /// </summary>
+    public const string StudentRemoved = "StudentRemoved";
+
     public static readonly IReadOnlyList<string> All =
     [
         CourseTitleAlias, CourseCollegeAdopted, InstructorPlaceholder,
         SectionSpansPrograms, SectionUnspecified, StudentIdentityConflict, RfidCardRevoked,
         RfidCardHeldByPersonnel, RfidCardFromLegacyMapping, ClassificationUnavailable, ClassificationConflict,
         ClassificationMissing, ClassificationRegNoSuggestsPersonnel, ClassificationAxisUnknown,
-        ClassificationWrongAxis, OrganizationTooLong,
+        ClassificationWrongAxis, OrganizationTooLong, StudentRemoved,
     ];
 }
 
@@ -624,7 +638,14 @@ public static class SisImportSkipReason
     /// </summary>
     public const string InstructorPlaceholder = "InstructorPlaceholder";
 
-    public static readonly IReadOnlyList<string> All = [NoChange, InstructorPlaceholder];
+    /// <summary>
+    /// The row's REGNO belongs to a soft-deleted student, so nothing was written for it — see
+    /// <see cref="SisImportWarningCode.StudentRemoved"/>. Not <see cref="NoChange"/>: the row may well
+    /// have differed from what is stored; it was refused, not found identical.
+    /// </summary>
+    public const string StudentRemoved = "StudentRemoved";
+
+    public static readonly IReadOnlyList<string> All = [NoChange, InstructorPlaceholder, StudentRemoved];
 }
 
 /// <summary>

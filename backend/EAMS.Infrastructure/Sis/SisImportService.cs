@@ -632,7 +632,8 @@ internal sealed class SisImportService : ISisImportService
         await StampPhaseAsync(batchId, claimedAt, SisImportPhase.ParsingRows, ct);
         var ledger = new RowLedger(staged);
         var mapped = await ResolveMappedColumnsAsync(batch, ct);
-        var parsed = ParseRows(staged, mapped, ledger);
+        var parsed = await SkipRowsOfRemovedStudentsAsync(
+            term.SchoolId, ParseRows(staged, mapped, ledger), ledger, ct);
 
         await StampPhaseAsync(batchId, claimedAt, SisImportPhase.ResolvingDimensions, ct);
         var dimensions = await ResolveDimensionsAsync(term, parsed, mapped.SectionOnly, ledger, ct);
@@ -1938,6 +1939,57 @@ internal sealed class SisImportService : ISisImportService
         }
 
         return resolved;
+    }
+
+    // ==================================================================== removed students (option B)
+
+    /// <summary>
+    /// <b>Drops every row whose REGNO belongs to a soft-deleted student</b>, before any pass sees it, and
+    /// warns on it with <see cref="SisImportWarningCode.StudentRemoved"/> (JJ, 2026-11-25, option B).
+    ///
+    /// <para>
+    /// The fact pass loads students with <c>IgnoreQueryFilters</c> and no <c>IsDeleted</c> predicate, so
+    /// without this a later roster still listing someone moved to Personnel would update the deleted row
+    /// in place, enroll it, write its term record and — on a different serial — issue it a new active
+    /// card that would then block that person's personnel card (ADR-015 D-98). Filtering here, ahead of
+    /// the dimension pass, means the row contributes nothing at all, including to colleges, programs,
+    /// courses, offerings and the derived cache. It folds to <c>Skipped</c> with no touches.
+    /// </para>
+    /// </summary>
+    private async Task<List<ParsedRow>> SkipRowsOfRemovedStudentsAsync(
+        Guid schoolId, List<ParsedRow> parsed, RowLedger ledger, CancellationToken ct)
+    {
+        if (parsed.Count == 0) return parsed;
+
+        var regNos = parsed.Select(r => r.RegNo).Distinct(StringComparer.Ordinal).ToList();
+
+        // Chunked for the reason ResolveFactsAsync gives. The projection carries the row's Id, so the
+        // helper's de-duplication is by value and exact.
+        var removed = (await InListChunks.ToListInChunksAsync(regNos, chunk => _db.Students.IgnoreQueryFilters()
+                .AsNoTracking()
+                .Where(s => s.SchoolId == schoolId && s.IsDeleted && chunk.Contains(s.StudentNumber))
+                .Select(s => new { s.Id, s.StudentNumber }), ct))
+            // Case-insensitive, as SQL Server matched them.
+            .Select(s => s.StudentNumber)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        if (removed.Count == 0) return parsed;
+
+        var kept = new List<ParsedRow>(parsed.Count);
+        foreach (var row in parsed)
+        {
+            if (!removed.Contains(row.RegNo))
+            {
+                kept.Add(row);
+                continue;
+            }
+
+            ledger.Warn(row.Staged, SisImportWarningCode.StudentRemoved,
+                $"Student '{row.RegNo}' was removed (e.g. moved to Personnel); row skipped. Nothing was " +
+                "written for it: no update, no enrollment, no card. If they belong on the student roster again, " +
+                "ask the system administrator.");
+        }
+
+        return kept;
     }
 
     // ================================================================================ pass 2: facts
